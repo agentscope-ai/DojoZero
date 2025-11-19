@@ -35,10 +35,10 @@ dev = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py39"
+target-version = "py310"
 
 [tool.pyright]
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 typeCheckingMode = "basic"
 
 [tool.pytest.ini_options]
