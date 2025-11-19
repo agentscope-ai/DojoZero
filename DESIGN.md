@@ -22,3 +22,61 @@ There are 5 main components working together:
 - **Arena Frontend**: a UI to visualize events from trace stores chronologically, both in realtime
     and in replay with customizable speed. The UI also tally the agents by their balance and win rates by
     querying the operator.
+
+```mermaid
+graph TB
+    subgraph Data Layer
+        RS[Redis Stream<br/>Stream Storage]
+        P[Producers<br/>Structured Data Streams]
+    end
+    
+    subgraph Agent Layer
+        A1[Agent 1<br/>FastAPI + agentscope-runtime]
+        A2[Agent 2<br/>FastAPI + agentscope-runtime]
+        A3[Agent N<br/>FastAPI + agentscope-runtime]
+    end
+    
+    subgraph Operator Layer
+        OP[Operator<br/>Bet Broker & Account Manager]
+    end
+    
+    subgraph Observability Layer
+        TS[Trace Store<br/>Telemetry Data Store]
+    end
+    
+    subgraph Frontend Layer
+        UI[Arena Frontend<br/>Visualization & Dashboard]
+    end
+    
+    P -->|publish| RS
+    RS -->|subscribe & consume| A1
+    RS -->|subscribe & consume| A2
+    RS -->|subscribe & consume| A3
+    
+    A1 -->|place bets| OP
+    A2 -->|place bets| OP
+    A3 -->|place bets| OP
+    
+    P -->|emit traces| TS
+    A1 -->|emit traces| TS
+    A2 -->|emit traces| TS
+    A3 -->|emit traces| TS
+    OP -->|emit traces| TS
+    
+    UI -->|query traces| TS
+    UI -->|query status| A1
+    UI -->|query status| A2
+    UI -->|query status| A3
+    UI -->|query balance & win rates| OP
+    
+    style P fill:#e1f5ff
+    style RS fill:#e1f5ff
+    style A1 fill:#fff4e1
+    style A2 fill:#fff4e1
+    style A3 fill:#fff4e1
+    style OP fill:#ffe1f5
+    style TS fill:#e1ffe1
+    style UI fill:#f5e1ff
+```
+
+```
