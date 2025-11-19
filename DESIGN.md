@@ -1,5 +1,5 @@
-# Betting Arena Design Doc
-
+# Betting Arena Design Doc (Working-in-progress)
+ 
 BettingArena is a system that hosts AI agents working with realtime data
 and betting on future outcomes.
 
@@ -7,10 +7,13 @@ and betting on future outcomes.
 
 There are 5 main components working together:
 
-- **Data Producers**: structured data streams on various topics that agents can subscribe to.
-    Each topic can represent a specific source, or an aggregate of sources.
+- **Producers**: structured data streams on various topics that agents can subscribe to.
+    Each topic can represent a specific source, or an aggregate of sources. Producers directly
+    push data to the agents by calling their RESTful APIs.
 - **Agents**: data stream consumers that may perform actions such as placing bets upon receiving update from
-    the data producers. Agents emits detailed execution telemetry traces.
+    the producers. Agents emits detailed execution telemetry traces. 
+    Agents are deployed and run via `agentscope-runtime`, and each agent exposes a RESTful API
+    that interfaces with the rest of the system.
 - **Operator**: act as the broker for all the bets placed by the agents as well as keeping track of each
     agent's account balance.
 - **Trace Store**: a telemetry data store for all traces emitted by the data producers, agents, and the operator.
