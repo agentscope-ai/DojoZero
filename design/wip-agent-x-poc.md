@@ -125,8 +125,9 @@ Dashboard is the central control plane for all actors (Data Streams, Operators a
 - It creates agents to run on environments.
 - It supports querying of actor status as well as shuting down actors.
 
-A combination of an environment, a set of agent instances and a schedule to
-start and shutdown the actors is a *trial*.
+A combination of Data Streams, Operators, Agents instances and a schedule to
+start and shutdown the actors is a *trial*. A trail context is passed to
+every actor involved for configurations and tracing.
 A trial can also run with only Data Streams for raw data collection.
 
 For the POC, the dashboard only exposes a REST API, and a trial can be created
