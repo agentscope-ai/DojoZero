@@ -23,6 +23,8 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "pyright>=1.1.0",
+    "black>=23.0.0",
+    "pre-commit>=3.0.0",
 ]
 
 [dependency-groups]
@@ -31,15 +33,22 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "pyright>=1.1.0",
+    "black>=23.0.0",
+    "pre-commit>=3.0.0",
 ]
 
 [tool.ruff]
 line-length = 88
-target-version = "py39"
+target-version = "py310"
 
 [tool.pyright]
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 typeCheckingMode = "basic"
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+include = '\.pyi?$'
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
