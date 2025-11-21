@@ -138,3 +138,77 @@ via a YAML configuration file.
 For POC, Frontend is read-only. It uses data from the Dashboard to display
 trials, and renders activities from Trace Store.
 It can replays historical trials from traces without actually running them.
+
+## Requirements
+
+### Configurable Actors
+
+Actors (Data Streams, Operators and Agents) have a `from_dict` class method
+to construct new instances from serializable Python dictionaries.
+This allows Dashboard to create trials from serializable configuration files.
+
+### Stateful Actors
+
+Actors are stateful can they can save and load their states using 
+persistent storage. State can be exported by calling `save_state` method
+which returns a serializable Python dictionary, and can be imported
+(and overwritten) by calling `load_state` method with a serializable Python
+dictionary as the parameter.
+
+Each actor may maintain its state incrementally as part of its
+implementation detail -- this is not a concern of the overall architecture.
+The system calls `save_state` on the actors periodically and 
+during graceful shutdown, and calls `load_state` when resumes an existing
+trial.
+
+An actor state is associated 1:1 with an instance of the actor; each instance
+is associated with a single trial. The term "instance" here does not refer to 
+an object instance in memory, rather, it means a specific creation of an actor
+as part of a trial.
+
+### Resumable Trials
+
+Every trial is uniquely identified with an ID and contains the configurations of
+a set of actors and some metadata about its schedule.
+The Dashboard uses a persistent storage to store such information
+about previous and currently active trials.
+
+Periodically during the execution of a trial and when the trial shutdowns
+triggered by an external shutdown signal or its schedule,
+the system captures all the actors' state and stores it in a persistent
+storage -- we call it a *checkpoint*.
+A checkpoint is essentially collection of serializable states.
+
+When we start a trial, we can choose to resume from a previous trial and
+one of its checkpoints. This process checkes the actor configurations
+of the select trial match the state in the checkpoint.
+
+### Standalone Mode
+
+In addition to run as a service with a Fast API server for control plane,
+the system can also run directly from command line for a single trial
+in standalone mode.
+
+In this mode, the system only runs a single trial according to its schedule.
+It can be terminated with Ctrl + C which triggers the graceful shutdown
+procedure. A cold shutdown can be achieved by another Ctrl + C, which will
+crash the system with an exception.
+
+Standalone mode is useful especially for development and backtesting.
+
+### Persistent Storage
+
+For simplicity, we use a file system directory for persistent storage
+for the trials.
+
+Every trial is a sub-directory containts:
+- a configuration file for the actors and schedule
+- one file for each checkpoint
+- an index file for all checkpoints.
+
+There is an index file at the top level directory for all trials.
+
+Each actor implementation may have their own logic regarding external
+persistence. For example, Data Streams may utilize an external database
+for cached data. In this case, some kind of references to the external database
+in the serializable actor state may be required.
