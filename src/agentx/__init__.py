@@ -1,8 +1,5 @@
 """
-BettingArena - A realtime benchmark system for AI agents in betting.
-
-This package provides a platform for AI agents to place bets
-using virtual dollars, with comprehensive tracking and performance analysis.
+AgentX package.
 """
 
 import importlib.metadata
@@ -13,4 +10,4 @@ try:
 except importlib.metadata.PackageNotFoundError:
     _version = "0.0.0"  # Fallback for development mode
 __version__: Final[str] = _version
-__author__ = "BettingArena Team"
+__author__ = "AgentX Team"

@@ -1,1 +1,1 @@
-"""Tests for BettingArena package."""
+"""Tests for AgentX package."""

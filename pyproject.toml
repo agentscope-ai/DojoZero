@@ -3,18 +3,19 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "bettingarena"
+name = "agentx"
 version = "0.0.0"
-description = "A realtime benchmark system for AI agents placing bets using virtual dollars"
+description = "AgentX is a system for hosting AI agents that run continously on realtime data to reason about future outcomes and act on them, such as trading and placing bets."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "BettingArena Team"}
+    {name = "AgentX Team"}
 ]
 dependencies = [
     "agentscope",
     "agentscope-runtime",
+    "ray",
 ]
 
 [project.optional-dependencies]
