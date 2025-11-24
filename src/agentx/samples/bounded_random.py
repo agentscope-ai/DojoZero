@@ -463,4 +463,7 @@ __all__ = [
     "CounterAgent",
     "CounterOperator",
     "BoundedRandomTrialConfig",
+    "BoundedRandomStringDataStreamConfig",
+    "CounterAgentConfig",
+    "CounterOperatorConfig",
 ]
