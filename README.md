@@ -5,20 +5,170 @@ to reason about future outcomes and act on them, such as trading and placing bet
 
 *"AgentX" is a code name for this project, and the public name will be decided in the future.*
 
+> 🚧 This project is in early development. Architecture design and core features are currently being implemented.
+> See [Design](./design/) for decision records on design.
+
 ## Installation
 
-This project uses `uv` for dependency management ([install `uv`](https://docs.astral.sh/uv/getting-started/installation/)).
-To get started:
+1. Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
+2. Install the package (runtime-only dependencies) from the repo root:
 
 ```bash
-# Install dependencies
-uv sync
-
-# Install in development mode
-uv pip install -e ".[dev]"
+uv pip install . 
 ```
 
-## Development Status
+This installs AgentX for running trials only. For development workflows (tests,
+lint, editable installs), see the [Development Setup](#development-setup)
+section below.
 
-🚧 This project is in early development. Architecture design and core features are currently being implemented.
-See [Design](./design/) for decision records on design.
+## Standalone Usage
+
+AgentX trials start from an environment spec that names the builder and its
+inputs. Use `agentx list-builders` to see registered environments, then run
+`agentx get-builder <name> --create-example-config` (or author a spec directly):
+
+```yaml
+# sample_trial.yaml
+environment:
+	name: samples.bounded-random
+	config:
+		total_events: 5
+		interval_seconds: 0.0
+```
+
+Launch the trial by pointing `agentx run` at the spec (add `--trial-id` to set a
+friendly identifier, otherwise a UUID is generated):
+
+```bash
+agentx run --spec sample_trial.yaml --trial-id sample-trial
+```
+
+Use `agentx list-builders` to discover registered environments, and add imports
+with repeated `--import-module` flags whenever your builder lives outside the
+defaults.
+
+### Resuming trials
+
+Resume without re-supplying the spec by combining `--trial-id` with either a
+checkpoint id or the `--resume-latest` flag:
+
+```bash
+# Resume from a known checkpoint
+agentx run --trial-id sample-trial --checkpoint-id 3f2c6a9e
+
+# Resume from the latest checkpoint stored for the trial
+agentx run --trial-id sample-trial --resume-latest
+```
+
+You can still start a new trial from a checkpoint by supplying both `--spec` and
+`--checkpoint-id`; the CLI applies the checkpoint before launching.
+
+## Server Usage (Coming Soon)
+
+The `agentx serve` command is reserved for a FastAPI dashboard server that will
+reuse the existing `Dashboard` runtime. Use the top-level `--config` flag here
+too so the server process can share the same store/runtime settings as
+`agentx run`. The CLI already exposes placeholder flags (`--host`, `--port`) so
+future releases can add the server without breaking backward compatibility.
+
+## Runtime & Store Configuration
+
+When you need persistent dashboard storage, non-default imports, or an
+alternative runtime provider, declare those settings once in `agentx.yaml` (or
+any filename you pass to the top-level `--config` flag):
+
+```yaml
+# agentx.yaml
+store:
+	kind: filesystem
+	root: ./agentx-store
+runtime:
+	kind: local
+imports:
+	- agentx.samples
+```
+
+Launch with `agentx --config agentx.yaml run --spec sample_trial.yaml` (or the
+serve command once available) to reuse the configuration across invocations.
+
+### Using the Ray runtime
+
+Switch to Ray by setting `runtime.kind: ray` and passing any `ray.init`
+arguments through `init_kwargs`. Install the extras first via
+`uv pip install ".[ray]"`.
+
+```yaml
+runtime:
+	kind: ray
+	auto_init: false
+	init_kwargs:
+		address: auto
+		num_cpus: 8
+```
+
+Then run `agentx --config ray.yaml run --spec sample_trial.yaml` to launch the
+trial with Ray actors.
+
+## Development Setup
+
+For local development (tests, linting, pre-commit hooks):
+
+```bash
+# Install runtime + dev dependency group
+uv sync --group dev
+
+# Editable install for local changes
+uv pip install -e .
+
+# Set up git hooks (optional but recommended)
+pre-commit install
+```
+
+## Package Layout
+
+```
+agentx/
+├─ README.md                Project overview (this file)
+├─ design/                  Architecture notes and decision records
+├─ src/agentx/              Runtime, core abstractions, and CLI entry points
+│  ├─ core/                 Dashboard, registry, actor bases, and stores
+│  ├─ samples/              Reference trial builders (bounded-random, etc.)
+│  └─ ray_runtime/          Optional Ray runtime provider
+└─ tests/                   Pytest suites covering CLI, registry, samples
+```
+
+## Authoring New Environments
+
+Every environment exposes a *trial builder* that turns serialized configs into a
+`TrialSpec`. Builders are registered with a Pydantic `BaseModel` schema so the
+CLI can validate inputs, render JSON Schema, and generate ready-to-edit YAML
+templates automatically. New built-in environments that ship with AgentX should
+live inside the `agentx` package (for example, `agentx.samples`).
+
+```python
+from pydantic import BaseModel, Field
+
+from agentx.core import TrialSpec, register_trial_builder
+
+
+class MyEnvConfig(BaseModel):
+		stream_id: str = Field(default="prices")
+		window: int = Field(ge=1, default=10)
+
+
+def build_my_env(trial_id: str, config: MyEnvConfig) -> TrialSpec:
+		# construct ActorSpec/DataStreamSpec objects here
+		...
+
+
+register_trial_builder(
+		"myenv.prices",
+		MyEnvConfig,
+		build_my_env,
+		description="Example environment wiring a rolling window strategy",
+		example_config=MyEnvConfig(window=20),
+)
+```
+
+Once imported, `agentx get-builder myenv.prices` will show the schema and can
+emit a ready-made YAML spec for local experimentation.

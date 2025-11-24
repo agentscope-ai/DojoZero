@@ -13,29 +13,28 @@ authors = [
     {name = "AgentX Team"}
 ]
 dependencies = [
-    "agentscope",
-    "agentscope-runtime",
-    "ray",
+    "PyYAML>=6.0",
+    "pydantic>=2.12.4",
 ]
 
+[project.scripts]
+agentx = "agentx.cli:main"
+
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "ruff>=0.1.0",
-    "pyright>=1.1.0",
-    "black>=23.0.0",
-    "pre-commit>=3.0.0",
+ray = [
+    "ray>=2.51.1",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "pytest-asyncio>=1.3.0",
     "ruff>=0.1.0",
     "pyright>=1.1.0",
     "black>=23.0.0",
     "pre-commit>=3.0.0",
+    "ray>=2.51.1",
 ]
 
 [tool.ruff]

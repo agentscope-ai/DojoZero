@@ -149,3 +149,7 @@ uv.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# Sample environment
+agentx-store
+*.yaml

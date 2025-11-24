@@ -1,7 +1,42 @@
 repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
   - repo: https://github.com/psf/black
     rev: 24.1.1
     hooks:
       - id: black
-        language_version: python3.10
+        language_version: python3.12
 
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.386
+    hooks:
+      - id: pyright
+        additional_dependencies:
+          - pydantic
+          - pyyaml
+          - pytest
+          - ray
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+
+    
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    # uv version.
+    rev: 0.7.18
+    hooks:
+      # Update the uv lockfile
+      - id: uv-lock
+        name: Update uv lockfile
+        files: pyproject.toml
+        args: [--project, python]

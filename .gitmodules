@@ -1,6 +1,0 @@
-[submodule "agentscope"]
-	path = agentscope
-	url = https://github.com/modelscope/agentscope.git
-[submodule "agentscope-runtime"]
-	path = agentscope-runtime
-	url = https://github.com/agentscope-ai/agentscope-runtime.git
