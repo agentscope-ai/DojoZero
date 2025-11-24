@@ -16,35 +16,35 @@ from pydantic import BaseModel
 
 from ._dashboard import TrialSpec
 
-ConfigModelT = TypeVar("ConfigModelT", bound=BaseModel)
-TrialBuilderFn = Callable[[str, ConfigModelT], TrialSpec]
+ParamModelT = TypeVar("ParamModelT", bound=BaseModel)
+TrialBuilderFn = Callable[[str, ParamModelT], TrialSpec]
 
 
 @dataclass(slots=True)
-class TrialBuilderDefinition(Generic[ConfigModelT]):
+class TrialBuilderDefinition(Generic[ParamModelT]):
     """Metadata stored for each registered trial builder."""
 
     name: str
-    config_model: type[ConfigModelT]
+    param_model: type[ParamModelT]
     build_fn: TrialBuilderFn
     description: str | None = None
-    example_config: ConfigModelT | Mapping[str, Any] | None = None
+    example_params: ParamModelT | Mapping[str, Any] | None = None
 
     def build(self, trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
-        config = self.config_model.model_validate(payload)
+        config = self.param_model.model_validate(payload)
         return self.build_fn(trial_id, config)
 
     def schema(self) -> Mapping[str, Any]:
-        return self.config_model.model_json_schema()
+        return self.param_model.model_json_schema()
 
     def example_dict(self) -> Mapping[str, Any]:
-        example = self.example_config
+        example = self.example_params
         if example is not None:
             if isinstance(example, BaseModel):
                 return example.model_dump(mode="python")
             return dict(cast(Mapping[str, Any], example))
         try:
-            instance = self.config_model()
+            instance = self.param_model()
         except Exception:  # pragma: no cover - best effort default
             return {}
         return instance.model_dump(mode="python")
@@ -63,11 +63,11 @@ _REGISTRY: MutableMapping[str, TrialBuilderDefinition[Any]] = {}
 
 def register_trial_builder(
     name: str,
-    config_model: type[ConfigModelT],
+    param_model: type[ParamModelT],
     builder: TrialBuilderFn,
     *,
     description: str | None = None,
-    example_config: ConfigModelT | Mapping[str, Any] | None = None,
+    example_params: ParamModelT | Mapping[str, Any] | None = None,
     overwrite: bool = False,
 ) -> None:
     """Register *builder* under *name* for CLI discovery."""
@@ -80,10 +80,10 @@ def register_trial_builder(
         )
     _REGISTRY[name] = TrialBuilderDefinition(
         name=name,
-        config_model=config_model,
+        param_model=param_model,
         build_fn=builder,
         description=description,
-        example_config=example_config,
+        example_params=example_params,
     )
 
 
@@ -109,7 +109,7 @@ def list_trial_builders() -> Sequence[str]:
 
 
 __all__ = [
-    "ConfigModelT",
+    "ParamModelT",
     "TrialBuilderDefinition",
     "TrialBuilderRegistryError",
     "TrialBuilderNotFoundError",

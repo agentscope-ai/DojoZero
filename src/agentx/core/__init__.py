@@ -38,7 +38,7 @@ from ._runtime import (
     LocalActorRuntimeProvider,
 )
 from ._registry import (
-    ConfigModelT,
+    ParamModelT,
     TrialBuilderDefinition,
     TrialBuilderNotFoundError,
     TrialBuilderRegistryError,
@@ -80,7 +80,7 @@ __all__ = [
     "LocalActorHandler",
     "LocalActorRuntimeProvider",
     "Operator",
-    "ConfigModelT",
+    "ParamModelT",
     "TrialBuilderFn",
     "TrialBuilderDefinition",
     "TrialBuilderNotFoundError",

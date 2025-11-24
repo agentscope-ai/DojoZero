@@ -11,12 +11,12 @@ from agentx.core import (
     register_trial_builder,
     unregister_trial_builder,
 )
-from agentx.samples.bounded_random import BoundedRandomTrialConfig
+from agentx.samples.bounded_random import BoundedRandomTrialParams
 
 
 def _bounded_random_spec(trial_id: str, total_events: int) -> TrialSpec:
     builder = get_trial_builder_definition("samples.bounded-random")
-    config = BoundedRandomTrialConfig(total_events=total_events)
+    config = BoundedRandomTrialParams(total_events=total_events)
     return builder.build(trial_id, config.model_dump(mode="python"))
 
 
@@ -66,7 +66,7 @@ def test_builder_entry_exposes_schema_and_example(_cleanup_builder: str) -> None
         name,
         _TestConfig,
         _builder,
-        example_config={"total": 3},
+        example_params={"total": 3},
     )
     entry = get_trial_builder_definition(name)
     assert entry.schema()["title"] == "_TestConfig"

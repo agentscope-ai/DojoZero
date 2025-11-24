@@ -24,8 +24,10 @@ section below.
 ## Standalone Usage
 
 AgentX trials start from an environment spec that names the builder and its
-inputs. Use `agentx list-builders` to see registered environments, then run
-`agentx get-builder <name> --create-example-config` (or author a spec directly):
+inputs. We refer to this YAML as the *params file* because it lists the exact
+parameters the trial builder consumes. Use `agentx list-builders` to see
+registered environments, then run `agentx get-builder <name>
+--create-example-params` (or author the params file directly):
 
 ```yaml
 # sample_trial.yaml
@@ -36,11 +38,11 @@ environment:
 		interval_seconds: 0.0
 ```
 
-Launch the trial by pointing `agentx run` at the spec (add `--trial-id` to set a
-friendly identifier, otherwise a UUID is generated):
+Launch the trial by pointing `agentx run` at the params file (add `--trial-id`
+to set a friendly identifier, otherwise a UUID is generated):
 
 ```bash
-agentx run --spec sample_trial.yaml --trial-id sample-trial
+agentx run --params sample_trial.yaml --trial-id sample-trial
 ```
 
 Use `agentx list-builders` to discover registered environments, and add imports
@@ -60,22 +62,24 @@ agentx run --trial-id sample-trial --checkpoint-id 3f2c6a9e
 agentx run --trial-id sample-trial --resume-latest
 ```
 
-You can still start a new trial from a checkpoint by supplying both `--spec` and
-`--checkpoint-id`; the CLI applies the checkpoint before launching.
+You can still start a new trial from a checkpoint by supplying both `--params`
+and `--checkpoint-id`; the CLI applies the checkpoint before launching.
 
 ## Server Usage (Coming Soon)
 
 The `agentx serve` command is reserved for a FastAPI dashboard server that will
-reuse the existing `Dashboard` runtime. Use the top-level `--config` flag here
-too so the server process can share the same store/runtime settings as
-`agentx run`. The CLI already exposes placeholder flags (`--host`, `--port`) so
+reuse the existing `Dashboard` runtime. Use the top-level `--setting` flag here
+too so the server process can share the same dashboard settings (store/runtime
+and import wiring) as `agentx run`. The CLI already exposes placeholder flags (`--host`, `--port`) so
 future releases can add the server without breaking backward compatibility.
 
 ## Runtime & Store Configuration
 
 When you need persistent dashboard storage, non-default imports, or an
-alternative runtime provider, declare those settings once in `agentx.yaml` (or
-any filename you pass to the top-level `--config` flag):
+alternative runtime provider, declare those dashboard settings once in
+`agentx.yaml` (or any filename you pass to the top-level `--setting` flag).
+The settings file captures everything the dashboard runtime needs: store,
+runtime provider, and module imports.
 
 ```yaml
 # agentx.yaml
@@ -88,7 +92,7 @@ imports:
 	- agentx.samples
 ```
 
-Launch with `agentx --config agentx.yaml run --spec sample_trial.yaml` (or the
+Launch with `agentx --setting agentx.yaml run --params sample_trial.yaml` (or the
 serve command once available) to reuse the configuration across invocations.
 
 ### Using the Ray runtime
@@ -106,7 +110,7 @@ runtime:
 		num_cpus: 8
 ```
 
-Then run `agentx --config ray.yaml run --spec sample_trial.yaml` to launch the
+Then run `agentx --setting ray.yaml run --params sample_trial.yaml` to launch the
 trial with Ray actors.
 
 ## Development Setup

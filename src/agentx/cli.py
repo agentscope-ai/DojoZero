@@ -49,13 +49,13 @@ RUN_USAGE_EXAMPLES = dedent(
     """
      Examples:
         1. Create a new trial
-            agentx run --spec sample_trial.yaml --trial-id sample-trial
+            agentx run --params sample_trial.yaml --trial-id sample-trial
 
         2. Resume a trial from the latest checkpoint
             agentx run --trial-id sample-trial --resume-latest
 
         3. Use a custom dashboard configuration (also works with `agentx serve`)
-            agentx --config ./configs/prod.yaml run --spec sample_trial.yaml --trial-id sample-trial
+            agentx --setting ./settings/prod.yaml run --params sample_trial.yaml --trial-id sample-trial
      """
 ).strip()
 
@@ -89,9 +89,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Logging level (default: INFO).",
     )
     parser.add_argument(
-        "--config",
+        "--setting",
         type=Path,
-        help="Path to agentx CLI config file (optional).",
+        help=(
+            "Path to the dashboard settings YAML (store/runtime/imports) used by AgentX."
+        ),
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -103,9 +105,9 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=RUN_USAGE_EXAMPLES,
     )
     run_parser.add_argument(
-        "--spec",
+        "--params",
         type=Path,
-        help="Path to the environment spec YAML (required when creating a new trial).",
+        help="Path to the trial-builder params YAML (required when creating a new trial).",
     )
     run_parser.add_argument(
         "--trial-id",
@@ -132,7 +134,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     get_parser.add_argument("name", help="Registered builder name")
     get_parser.add_argument(
-        "--create-example-config",
+        "--create-example-params",
         nargs="?",
         const="",
         metavar="PATH",
@@ -431,17 +433,19 @@ def _configure_logging(level: str) -> None:
 
 
 async def _run_command(args: argparse.Namespace) -> int:
-    config_payload = _load_cli_config(args.config)
-    spec_payload = _load_yaml_mapping(args.spec, label="spec") if args.spec else None
+    config_payload = _load_cli_config(args.setting)
+    params_payload = (
+        _load_yaml_mapping(args.params, label="params") if args.params else None
+    )
 
     config_imports = _gather_imports(config_payload)
-    spec_imports = _gather_imports(spec_payload)
+    params_imports = _gather_imports(params_payload)
     requested_imports = list(args.import_modules or [])
     modules_to_import: list[str] = []
     if not args.no_default_imports:
         modules_to_import.extend(DEFAULT_IMPORTS)
     modules_to_import.extend(config_imports)
-    modules_to_import.extend(spec_imports)
+    modules_to_import.extend(params_imports)
     modules_to_import.extend(requested_imports)
     _import_modules(modules_to_import)
 
@@ -454,8 +458,8 @@ async def _run_command(args: argparse.Namespace) -> int:
     trial_id = args.trial_id or uuid4().hex
 
     spec: TrialSpec | None = None
-    if spec_payload is not None:
-        spec = _prepare_trial_spec(trial_id, spec_payload)
+    if params_payload is not None:
+        spec = _prepare_trial_spec(trial_id, params_payload)
         if checkpoint_id:
             spec.resume_from_checkpoint_id = checkpoint_id
         elif resume_latest:
@@ -463,11 +467,11 @@ async def _run_command(args: argparse.Namespace) -> int:
     else:
         if checkpoint_id is None and not resume_latest:
             raise AgentXCLIError(
-                "--spec is required unless --checkpoint-id or --resume-latest is provided"
+                "--params is required unless --checkpoint-id or --resume-latest is provided"
             )
         if args.trial_id is None:
             raise AgentXCLIError(
-                "--trial-id is required when resuming without a spec file"
+                "--trial-id is required when resuming without a params file"
             )
 
     if spec is not None:
@@ -520,7 +524,7 @@ def _get_builder_command(args: argparse.Namespace) -> int:
     schema_yaml = yaml.safe_dump(schema_dict, sort_keys=False)
     print("Schema:\n" + schema_yaml)
 
-    example_path_arg = args.create_example_config
+    example_path_arg = args.create_example_params
     if example_path_arg is not None:
         default_name = _default_example_filename(args.name)
         path = Path(example_path_arg or default_name)
@@ -528,7 +532,7 @@ def _get_builder_command(args: argparse.Namespace) -> int:
         _write_yaml_file(path, payload)
         print(f"Example YAML written to {path}")
     else:
-        print("Tip: rerun with --create-example-config [path] to emit a starter YAML")
+        print("Tip: rerun with --create-example-params [path] to emit a starter YAML")
     return 0
 
 
