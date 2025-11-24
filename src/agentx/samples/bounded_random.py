@@ -21,6 +21,7 @@ the CLI registry can discover your builder automatically:
 """
 
 import asyncio
+import logging
 import random
 import string
 from typing import Any, Mapping, Protocol, Sequence, TypedDict, cast
@@ -43,6 +44,14 @@ from agentx.core import (
 )
 
 Alphabet = string.ascii_letters + string.digits
+LOGGER = logging.getLogger("agentx.samples.bounded_random")
+
+
+def _preview_payload(value: Any, *, limit: int = 32) -> str:
+    text = value if isinstance(value, str) else repr(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 class _ActorIdConfig(TypedDict):
@@ -141,11 +150,22 @@ class BoundedRandomStringDataStream(
             return
         self._emission_complete.clear()
         self._cancelled = False
+        LOGGER.info(
+            "stream '%s' starting: emitted=%d total=%d interval=%s payload_length=%d",
+            self.actor_id,
+            self._emitted,
+            self._total_events,
+            self._interval_seconds,
+            self._payload_length,
+        )
         self._emit_task = asyncio.create_task(self._emit_events())
 
     async def stop(self) -> None:
         """Protocol hook: dashboard calls this during graceful shutdown."""
         self._cancelled = True
+        LOGGER.info(
+            "stream '%s' stopping after %d events", self.actor_id, self._emitted
+        )
         if self._emit_task is None:
             return
         self._emit_task.cancel()
@@ -177,6 +197,13 @@ class BoundedRandomStringDataStream(
         self._fast_forward_rng(self._emitted)
         if self._emitted >= self._total_events:
             self._emission_complete.set()
+        LOGGER.info(
+            "stream '%s' restored: emitted=%d total=%d payload_length=%d",
+            self.actor_id,
+            self._emitted,
+            self._total_events,
+            self._payload_length,
+        )
 
     async def _emit_events(self) -> None:
         try:
@@ -184,6 +211,14 @@ class BoundedRandomStringDataStream(
                 if self._cancelled:
                     break
                 payload = self._generate_payload()  # Keeps RNG deterministic per trial.
+                preview = _preview_payload(payload)
+                LOGGER.info(
+                    "stream '%s' emitted event %d/%d payload=%s",
+                    self.actor_id,
+                    self._emitted,
+                    self._total_events,
+                    preview,
+                )
                 await self._publish(
                     StreamEvent(
                         stream_id=self.actor_id,
@@ -197,6 +232,18 @@ class BoundedRandomStringDataStream(
         except asyncio.CancelledError:
             raise
         finally:
+            if self._cancelled:
+                LOGGER.info(
+                    "stream '%s' cancelled after %d events",
+                    self.actor_id,
+                    self._emitted,
+                )
+            else:
+                LOGGER.info(
+                    "stream '%s' completed after %d events",
+                    self.actor_id,
+                    self._emitted,
+                )
             self._emission_complete.set()
 
     def _generate_payload(self) -> str:
@@ -228,10 +275,12 @@ class CounterOperator(ActorBase, Operator[CounterOperatorConfig]):
 
     async def start(self) -> None:
         """Protocol hook: dashboard calls this before traffic is routed."""
+        LOGGER.info("operator '%s' starting", self.actor_id)
         return None
 
     async def stop(self) -> None:
         """Protocol hook: dashboard calls this during shutdown."""
+        LOGGER.info("operator '%s' stopping at count=%d", self.actor_id, self._count)
         return None
 
     async def handle_stream_event(
@@ -249,10 +298,16 @@ class CounterOperator(ActorBase, Operator[CounterOperatorConfig]):
         """Protocol hook: dashboard restores operator state on resume."""
         async with self._lock:
             self._count = int(state.get("count", 0))
+            LOGGER.info(
+                "operator '%s' restored to count=%d", self.actor_id, self._count
+            )
 
     async def count(self) -> int:
         async with self._lock:  # RPC invoked by the agent per event.
             self._count += 1
+            LOGGER.info(
+                "operator '%s' incremented count to %d", self.actor_id, self._count
+            )
             return self._count
 
     @property
@@ -295,18 +350,27 @@ class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
 
     async def start(self) -> None:
         """Protocol hook: dashboard calls this before events are dispatched."""
+        LOGGER.info("agent '%s' starting", self.actor_id)
         return None
 
     async def stop(self) -> None:
         """Protocol hook: dashboard calls this when the trial is stopping."""
+        LOGGER.info("agent '%s' stopping after %d events", self.actor_id, self._events)
         return None
 
     async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
         """Protocol hook: dashboard forwards each stream event to subscribed agents."""
-        del event
+        preview = _preview_payload(event.payload)
         self._events += 1  # One RPC per event keeps the operator authoritative.
         new_value = await self._operator.count()
         self._observed_counts.append(new_value)
+        LOGGER.info(
+            "agent '%s' handled event seq=%s operator_count=%d payload=%s",
+            self.actor_id,
+            event.sequence,
+            new_value,
+            preview,
+        )
 
     async def save_state(self) -> Mapping[str, Any]:
         """Protocol hook: dashboard snapshot for checkpoints."""
@@ -321,6 +385,12 @@ class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
         self._observed_counts = [
             int(value) for value in state.get("observed_counts", [])
         ]
+        LOGGER.info(
+            "agent '%s' restored: events=%d observed_counts=%d",
+            self.actor_id,
+            self._events,
+            len(self._observed_counts),
+        )
 
     @property
     def events_processed(self) -> int:
