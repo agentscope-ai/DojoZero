@@ -101,7 +101,7 @@ while Operators support synchronous actions by the agents.
 
 Agents are autonomous actors that consume realtime data from Data Streams
 and perform sequences of actions 
-(e.g., trades, bets and queries.) in response.
+(e.g., trades, bets and queries.) through Operators in response.
 
 Agents can have different implementations. It may choose to maintain its own 
 state of past observations and actions and summarize learnings from them.
@@ -110,7 +110,8 @@ or amount of data has been collected.
 
 Agents are implemented using the [AgentScope](https://doc.agentscope.io/)
 Python framework. We may need to wrap the underlying AgentScope agent
-to manage buffering and concurrent processing.
+to manage buffering and concurrent processing; we may also need to wrap
+each Operator with a `ToolKit` interface so the AgentScope agent can use it.
 
 ### **Trace Store**
 
@@ -139,7 +140,7 @@ For POC, Frontend is read-only. It uses data from the Dashboard to display
 trials, and renders activities from Trace Store.
 It can replays historical trials from traces without actually running them.
 
-## Requirements
+## Configuration and State Management
 
 ### Configurable Actors
 

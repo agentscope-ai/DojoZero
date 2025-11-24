@@ -1,0 +1,561 @@
+"""AgentX CLI for running trials today and hosting a FastAPI server soon."""
+
+import argparse
+import asyncio
+import importlib
+import logging
+import signal
+import sys
+from pathlib import Path
+from textwrap import dedent
+from typing import Any, Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
+from uuid import uuid4
+
+import yaml
+from pydantic import ValidationError
+
+from agentx.core import (
+    Dashboard,
+    DashboardError,
+    FileSystemDashboardStore,
+    InMemoryDashboardStore,
+    LocalActorRuntimeProvider,
+    TrialBuilderDefinition,
+    TrialSpec,
+    TrialStatus,
+    get_trial_builder_definition,
+    list_trial_builders,
+)
+from agentx.core import TrialBuilderNotFoundError as _TrialBuilderNotFoundError
+
+try:  # Optional Ray dependency
+    from agentx.ray_runtime import RayActorRuntimeProvider
+except ImportError:  # pragma: no cover - ray is optional
+    RayActorRuntimeProvider = None  # type: ignore[assignment]
+
+DEFAULT_IMPORTS: tuple[str, ...] = ("agentx.samples",)
+DEFAULT_CLI_CONFIG: Mapping[str, Any] = {
+    "store": {
+        "kind": "filesystem",
+        "root": "./agentx-store",
+    },
+    "runtime": {
+        "kind": "local",
+    },
+    "imports": ["agentx.samples"],
+}
+
+RUN_USAGE_EXAMPLES = dedent(
+    """
+     Examples:
+        1. Create a new trial
+            agentx run --spec sample_trial.yaml --trial-id sample-trial
+
+        2. Resume a trial from the latest checkpoint
+            agentx run --trial-id sample-trial --resume-latest
+
+        3. Use a custom dashboard configuration (also works with `agentx serve`)
+            agentx --config ./configs/prod.yaml run --spec sample_trial.yaml --trial-id sample-trial
+     """
+).strip()
+
+LOGGER = logging.getLogger("agentx.cli")
+
+
+class AgentXCLIError(RuntimeError):
+    """Raised for CLI usage errors that should exit with status 1."""
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="agentx",
+        description="Run AgentX trials in standalone mode.",
+    )
+    parser.add_argument(
+        "--import-module",
+        action="append",
+        dest="import_modules",
+        default=[],
+        help="Python module to import before running the sub-command (repeatable).",
+    )
+    parser.add_argument(
+        "--no-default-imports",
+        action="store_true",
+        help="Skip importing built-in helper modules (e.g. agentx.samples).",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Logging level (default: INFO).",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to agentx CLI config file (optional).",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Launch or resume a trial",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=RUN_USAGE_EXAMPLES,
+    )
+    run_parser.add_argument(
+        "--spec",
+        type=Path,
+        help="Path to the environment spec YAML (required when creating a new trial).",
+    )
+    run_parser.add_argument(
+        "--trial-id",
+        help="Override the trial id (defaults to a random UUID).",
+    )
+    run_parser.add_argument(
+        "--checkpoint-id",
+        help="Resume from a specific checkpoint id.",
+    )
+    run_parser.add_argument(
+        "--resume-latest",
+        action="store_true",
+        help="Resume from the latest checkpoint for the trial when no spec is provided.",
+    )
+
+    subparsers.add_parser(
+        "list-builders",
+        help="List all registered trial builders",
+    )
+
+    get_parser = subparsers.add_parser(
+        "get-builder",
+        help="Show schema information for a trial builder",
+    )
+    get_parser.add_argument("name", help="Registered builder name")
+    get_parser.add_argument(
+        "--create-example-config",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help="Write an example YAML spec to PATH (defaults to <name>_example.yaml)",
+    )
+
+    # Placeholder parser for the upcoming FastAPI server command.
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Start the dashboard FastAPI server (coming soon)",
+        description="Reserved for the upcoming FastAPI dashboard server command.",
+    )
+    serve_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Reserved host option for the future serve command.",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Reserved port option for the future serve command.",
+    )
+    return parser
+
+
+def _import_modules(modules: Iterable[str]) -> None:
+    for name in modules:
+        if not name:
+            continue
+        try:
+            importlib.import_module(name)
+        except ModuleNotFoundError as exc:  # pragma: no cover - depends on environment
+            raise AgentXCLIError(f"failed to import module '{name}': {exc}") from exc
+
+
+def _load_yaml_mapping(path: Path, *, label: str) -> MutableMapping[str, Any]:
+    if not path.exists():
+        raise AgentXCLIError(f"{label} file '{path}' does not exist")
+    with path.open("r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle)
+    if not isinstance(payload, MutableMapping):
+        raise AgentXCLIError(f"{label} file must contain a mapping at the top level")
+    return payload
+
+
+def _load_cli_config(path: Path | None) -> Mapping[str, Any]:
+    base = {
+        "store": dict(DEFAULT_CLI_CONFIG["store"]),
+        "runtime": dict(DEFAULT_CLI_CONFIG["runtime"]),
+        "imports": list(DEFAULT_CLI_CONFIG["imports"]),
+    }
+
+    payload: Mapping[str, Any] | None = None
+    if path is not None:
+        payload = _load_yaml_mapping(path, label="config")
+    if payload is None:
+        return base
+
+    store_cfg = payload.get("store")
+    if isinstance(store_cfg, Mapping):
+        base["store"].update(store_cfg)
+
+    runtime_cfg = payload.get("runtime")
+    if isinstance(runtime_cfg, Mapping):
+        base["runtime"].update(runtime_cfg)
+
+    imports_cfg = payload.get("imports")
+    if imports_cfg is not None:
+        if isinstance(imports_cfg, str):
+            base["imports"] = [imports_cfg]
+        elif isinstance(imports_cfg, Sequence):
+            normalized: list[str] = []
+            for item in imports_cfg:
+                if not isinstance(item, str):
+                    raise AgentXCLIError("entries in config.imports must be strings")
+                normalized.append(item)
+            base["imports"] = normalized
+        else:
+            raise AgentXCLIError(
+                "config.imports must be a string or sequence of strings"
+            )
+
+    for key, value in payload.items():
+        if key not in base:
+            base[key] = value
+    return base
+
+
+def _gather_imports(payload: Mapping[str, Any] | None) -> Sequence[str]:
+    if not payload:
+        return ()
+    imports = payload.get("imports")
+    if imports is None:
+        return ()
+    if isinstance(imports, str):
+        return (imports,)
+    if isinstance(imports, Sequence):
+        normalized: list[str] = []
+        for item in imports:
+            if not isinstance(item, str):
+                raise AgentXCLIError("entries in 'imports' must be strings")
+            normalized.append(item)
+        return tuple(normalized)
+    raise AgentXCLIError("'imports' must be a string or sequence of strings")
+
+
+def _prepare_trial_spec(trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
+    if not trial_id:
+        raise AgentXCLIError("trial_id must be provided")
+    env = payload.get("environment")
+    if not isinstance(env, Mapping):
+        raise AgentXCLIError("spec.environment must be a mapping")
+
+    module_name = env.get("module")
+    if module_name is not None:
+        if not isinstance(module_name, str):
+            raise AgentXCLIError("spec.environment.module must be a string")
+        _import_modules([module_name])
+
+    builder_name = env.get("name")
+    if not isinstance(builder_name, str) or not builder_name:
+        raise AgentXCLIError("spec.environment.name must be a non-empty string")
+
+    builder_config = env.get("config") or {}
+    if not isinstance(builder_config, Mapping):
+        raise AgentXCLIError("spec.environment.config must be a mapping when provided")
+
+    try:
+        definition = get_trial_builder_definition(builder_name)
+    except _TrialBuilderNotFoundError as exc:
+        raise AgentXCLIError(str(exc)) from exc
+    try:
+        spec = definition.build(trial_id, builder_config)
+    except ValidationError as exc:
+        raise AgentXCLIError(
+            f"invalid config for builder '{builder_name}': {exc}"
+        ) from exc
+
+    metadata = payload.get("metadata")
+    if metadata is not None:
+        if not isinstance(metadata, Mapping):
+            raise AgentXCLIError("spec.metadata must be a mapping when provided")
+        spec.metadata.update(metadata)
+
+    resume_cfg = payload.get("resume")
+    if resume_cfg is not None:
+        if not isinstance(resume_cfg, Mapping):
+            raise AgentXCLIError("spec.resume must be a mapping when provided")
+        checkpoint_id = resume_cfg.get("checkpoint_id")
+        latest_flag = resume_cfg.get("latest")
+        if checkpoint_id is not None:
+            if not isinstance(checkpoint_id, str) or not checkpoint_id:
+                raise AgentXCLIError(
+                    "spec.resume.checkpoint_id must be a non-empty string"
+                )
+            spec.resume_from_checkpoint_id = checkpoint_id
+            spec.resume_from_latest = False
+        latest = bool(latest_flag)
+        if latest and checkpoint_id is None:
+            spec.resume_from_latest = True
+        if checkpoint_id is None and not latest:
+            raise AgentXCLIError(
+                "spec.resume must specify checkpoint_id or set latest: true"
+            )
+
+    return spec
+
+
+def _create_store(
+    payload: Mapping[str, Any],
+) -> InMemoryDashboardStore | FileSystemDashboardStore:
+    store_cfg = payload.get("store") or {}
+    if not isinstance(store_cfg, Mapping):
+        raise AgentXCLIError("config.store must be a mapping when provided")
+    kind = str(store_cfg.get("kind", "memory")).lower()
+    if kind == "memory":
+        return InMemoryDashboardStore()
+    if kind == "filesystem":
+        root = store_cfg.get("root")
+        base_path = Path(str(root)) if root is not None else Path.cwd() / "agentx-store"
+        return FileSystemDashboardStore(base_path)
+    raise AgentXCLIError(f"unsupported store.kind '{kind}'")
+
+
+def _create_runtime_provider(payload: Mapping[str, Any]):
+    runtime_cfg = payload.get("runtime") or {}
+    if not isinstance(runtime_cfg, Mapping):
+        raise AgentXCLIError("config.runtime must be a mapping when provided")
+    kind = str(runtime_cfg.get("kind", "local")).lower()
+    if kind == "local":
+        return LocalActorRuntimeProvider()
+    if kind == "ray":
+        if RayActorRuntimeProvider is None:
+            raise AgentXCLIError(
+                "ray runtime requested but ray is not installed. "
+                "Please install ray dependencies with 'pip install agentx[ray]'"
+            )
+        init_kwargs = runtime_cfg.get("init_kwargs") or {}
+        if not isinstance(init_kwargs, Mapping):
+            raise AgentXCLIError(
+                "config.runtime.init_kwargs must be a mapping when provided"
+            )
+        auto_init = bool(runtime_cfg.get("auto_init", True))
+        return RayActorRuntimeProvider(auto_init=auto_init, init_kwargs=init_kwargs)
+    raise AgentXCLIError(f"unsupported runtime.kind '{kind}'")
+
+
+def _default_example_filename(builder_name: str) -> str:
+    return f"{builder_name.replace('.', '_')}_example.yaml"
+
+
+def _generate_example_spec(
+    builder_name: str, definition: TrialBuilderDefinition
+) -> MutableMapping[str, Any]:
+    return {
+        "environment": {
+            "name": builder_name,
+            "config": definition.example_dict(),
+        },
+    }
+
+
+def _write_yaml_file(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(payload, handle, sort_keys=False)
+
+
+async def _run_trial_and_monitor(
+    *,
+    dashboard: Dashboard,
+    trial_id: str,
+    start_fn: Callable[[], Awaitable["TrialStatus"]],
+) -> None:
+    status = await start_fn()
+    LOGGER.info("trial '%s' is %s", trial_id, status.phase.value)
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+    shutting_down = {"started": False}
+
+    async def _capture_checkpoint() -> None:
+        try:
+            checkpoint = await dashboard.checkpoint_trial(trial_id)
+        except DashboardError as exc:
+            LOGGER.warning("skipping checkpoint for trial '%s': %s", trial_id, exc)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            LOGGER.warning(
+                "unexpected error checkpointing trial '%s': %s",
+                trial_id,
+                exc,
+            )
+        else:
+            LOGGER.info(
+                "checkpoint '%s' created for trial '%s'",
+                checkpoint.checkpoint_id,
+                trial_id,
+            )
+
+    async def _graceful_shutdown() -> None:
+        try:
+            await _capture_checkpoint()
+            LOGGER.info("stopping trial '%s'", trial_id)
+            await dashboard.stop_trial(trial_id)
+            LOGGER.info("trial '%s' stopped", trial_id)
+        finally:
+            stop_event.set()
+
+    def _handle_signal(signame: str) -> None:
+        if not shutting_down["started"]:
+            shutting_down["started"] = True
+            loop.create_task(_graceful_shutdown())
+            LOGGER.info("received %s, initiating graceful shutdown", signame)
+        else:
+            LOGGER.error("received %s during shutdown; aborting", signame)
+            raise KeyboardInterrupt(f"forced shutdown via {signame}")
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _handle_signal, sig.name)
+        except NotImplementedError:  # pragma: no cover - Windows fallback
+            signal.signal(sig, lambda *_: _handle_signal(sig.name))
+
+    try:
+        await stop_event.wait()
+    finally:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.remove_signal_handler(sig)
+            except Exception:  # pragma: no cover - best effort
+                pass
+
+
+def _configure_logging(level: str) -> None:
+    logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO))
+
+
+async def _run_command(args: argparse.Namespace) -> int:
+    config_payload = _load_cli_config(args.config)
+    spec_payload = _load_yaml_mapping(args.spec, label="spec") if args.spec else None
+
+    config_imports = _gather_imports(config_payload)
+    spec_imports = _gather_imports(spec_payload)
+    requested_imports = list(args.import_modules or [])
+    modules_to_import: list[str] = []
+    if not args.no_default_imports:
+        modules_to_import.extend(DEFAULT_IMPORTS)
+    modules_to_import.extend(config_imports)
+    modules_to_import.extend(spec_imports)
+    modules_to_import.extend(requested_imports)
+    _import_modules(modules_to_import)
+
+    store = _create_store(config_payload)
+    runtime_provider = _create_runtime_provider(config_payload)
+    dashboard = Dashboard(store=store, runtime_provider=runtime_provider)
+
+    checkpoint_id = args.checkpoint_id
+    resume_latest = bool(args.resume_latest)
+    trial_id = args.trial_id or uuid4().hex
+
+    spec: TrialSpec | None = None
+    if spec_payload is not None:
+        spec = _prepare_trial_spec(trial_id, spec_payload)
+        if checkpoint_id:
+            spec.resume_from_checkpoint_id = checkpoint_id
+        elif resume_latest:
+            spec.resume_from_latest = True
+    else:
+        if checkpoint_id is None and not resume_latest:
+            raise AgentXCLIError(
+                "--spec is required unless --checkpoint-id or --resume-latest is provided"
+            )
+        if args.trial_id is None:
+            raise AgentXCLIError(
+                "--trial-id is required when resuming without a spec file"
+            )
+
+    if spec is not None:
+        await _run_trial_and_monitor(
+            dashboard=dashboard,
+            trial_id=trial_id,
+            start_fn=lambda: dashboard.launch_trial(spec),
+        )
+    else:
+        resume_checkpoint = checkpoint_id if checkpoint_id else None
+        await _run_trial_and_monitor(
+            dashboard=dashboard,
+            trial_id=trial_id,
+            start_fn=lambda: dashboard.resume_trial(trial_id, resume_checkpoint),
+        )
+    return 0
+
+
+def _list_builders_command(args: argparse.Namespace) -> int:
+    modules_to_import: list[str] = []
+    if not args.no_default_imports:
+        modules_to_import.extend(DEFAULT_IMPORTS)
+    modules_to_import.extend(args.import_modules or [])
+    _import_modules(modules_to_import)
+
+    builders = list_trial_builders()
+    for name in builders:
+        definition = get_trial_builder_definition(name)
+        description = f" - {definition.description}" if definition.description else ""
+        print(f"{name}{description}")
+    return 0
+
+
+def _get_builder_command(args: argparse.Namespace) -> int:
+    modules_to_import: list[str] = []
+    if not args.no_default_imports:
+        modules_to_import.extend(DEFAULT_IMPORTS)
+    modules_to_import.extend(args.import_modules or [])
+    _import_modules(modules_to_import)
+
+    try:
+        definition = get_trial_builder_definition(args.name)
+    except _TrialBuilderNotFoundError as exc:
+        raise AgentXCLIError(str(exc)) from exc
+
+    print(f"Builder: {args.name}")
+    if definition.description:
+        print(f"Description: {definition.description}")
+    schema_dict = definition.schema()
+    schema_yaml = yaml.safe_dump(schema_dict, sort_keys=False)
+    print("Schema:\n" + schema_yaml)
+
+    example_path_arg = args.create_example_config
+    if example_path_arg is not None:
+        default_name = _default_example_filename(args.name)
+        path = Path(example_path_arg or default_name)
+        payload = _generate_example_spec(args.name, definition)
+        _write_yaml_file(path, payload)
+        print(f"Example YAML written to {path}")
+    else:
+        print("Tip: rerun with --create-example-config [path] to emit a starter YAML")
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    _configure_logging(args.log_level)
+
+    try:
+        if args.command == "run":
+            return asyncio.run(_run_command(args))
+        if args.command == "list-builders":
+            return _list_builders_command(args)
+        if args.command == "get-builder":
+            return _get_builder_command(args)
+        if args.command == "serve":
+            raise AgentXCLIError(
+                "'serve' is reserved for the upcoming FastAPI dashboard and is not implemented yet"
+            )
+        raise AgentXCLIError(f"unknown command '{args.command}'")
+    except AgentXCLIError as exc:
+        LOGGER.error(str(exc))
+        return 1
+    except KeyboardInterrupt:
+        LOGGER.error("interrupted")
+        return 130
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())
