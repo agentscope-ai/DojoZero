@@ -157,7 +157,7 @@ class MyEnvConfig(BaseModel):
 
 
 def build_my_env(trial_id: str, config: MyEnvConfig) -> TrialSpec:
-		# construct ActorSpec/DataStreamSpec objects here
+		# construct ActorSpec objects (agents/operators/streams) here
 		...
 
 

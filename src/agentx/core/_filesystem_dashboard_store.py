@@ -18,7 +18,6 @@ from ._dashboard import (
     CheckpointNotFoundError,
     CheckpointSummary,
     DashboardStore,
-    DataStreamSpec,
     TrialCheckpoint,
     TrialPhase,
     TrialRecord,
@@ -178,7 +177,7 @@ class FileSystemDashboardStore(DashboardStore):
             ],
             "agents": [self._serialize_actor_spec(actor) for actor in spec.agents],
             "data_streams": [
-                self._serialize_stream_spec(stream) for stream in spec.data_streams
+                self._serialize_actor_spec(stream) for stream in spec.data_streams
             ],
         }
 
@@ -195,7 +194,7 @@ class FileSystemDashboardStore(DashboardStore):
                 self._deserialize_actor_spec(item) for item in payload.get("agents", [])
             ),
             data_streams=tuple(
-                self._deserialize_stream_spec(item)
+                self._deserialize_actor_spec(item)
                 for item in payload.get("data_streams", [])
             ),
         )
@@ -210,31 +209,17 @@ class FileSystemDashboardStore(DashboardStore):
             payload["resume_state"] = dict(spec.resume_state)
         return payload
 
-    def _serialize_stream_spec(self, spec: DataStreamSpec) -> dict[str, Any]:
-        payload = self._serialize_actor_spec(spec)
-        payload["consumers"] = list(spec.consumers)
-        return payload
-
     def _deserialize_actor_spec(self, payload: Mapping[str, Any]) -> ActorSpec[Any]:
         actor_cls = self._resolve_actor_cls(str(payload["actor_cls"]))
         resume_state = payload.get("resume_state")
         if resume_state is not None:
             resume_state = dict(resume_state)
+        config = dict(cast(Mapping[str, Any], payload.get("config", {})))
         return ActorSpec(
             actor_id=str(payload["actor_id"]),
             actor_cls=actor_cls,
-            config=dict(cast(Mapping[str, Any], payload.get("config", {}))),
+            config=config,
             resume_state=resume_state,
-        )
-
-    def _deserialize_stream_spec(self, payload: Mapping[str, Any]) -> DataStreamSpec:
-        base = self._deserialize_actor_spec(payload)
-        return DataStreamSpec(
-            actor_id=base.actor_id,
-            actor_cls=base.actor_cls,
-            config=base.config,
-            resume_state=base.resume_state,
-            consumers=tuple(payload.get("consumers", [])),
         )
 
     def _serialize_status(self, status: TrialStatus) -> dict[str, Any]:

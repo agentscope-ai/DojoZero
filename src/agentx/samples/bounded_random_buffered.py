@@ -16,7 +16,6 @@ from agentx.core import (
     ActorSpec,
     Agent,
     AgentBase,
-    DataStreamSpec,
     Operator,
     register_trial_builder,
     StreamEvent,
@@ -234,14 +233,14 @@ def _build_buffered_trial_spec(
         "total_events": config.total_events,
         "payload_length": config.payload_length,
         "interval_seconds": config.interval_seconds,
+        "consumers": (config.operator_id, config.agent_id),
     }
     if config.seed is not None:
         stream_config["seed"] = config.seed
-    stream_spec = DataStreamSpec(
+    stream_spec = ActorSpec(
         actor_id=config.stream_id,
         actor_cls=BoundedRandomStringDataStream,
         config=stream_config,
-        consumers=(config.operator_id, config.agent_id),
     )
     return TrialSpec(
         trial_id=trial_id,
