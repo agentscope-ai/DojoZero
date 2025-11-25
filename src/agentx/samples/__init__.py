@@ -1,4 +1,4 @@
-"""Sample environments package."""
+"""Sample scenarios package."""
 
 # Import sample modules to trigger builder registration on package import.
 from . import bounded_random  # noqa: F401

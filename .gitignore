@@ -150,6 +150,6 @@ uv.lock
 .DS_Store
 Thumbs.db
 
-# Sample environment
+# Sample scenario artifacts
 agentx-store
 *.yaml

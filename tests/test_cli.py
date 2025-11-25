@@ -16,7 +16,7 @@ from agentx.core import (
 
 def test_prepare_trial_spec_applies_metadata() -> None:
     payload = {
-        "environment": {
+        "scenario": {
             "name": "samples.bounded-random",
             "config": {"total_events": 2},
         },
@@ -27,6 +27,18 @@ def test_prepare_trial_spec_applies_metadata() -> None:
     assert spec.trial_id == "cli-sample"
     assert spec.metadata["extra"] == "value"
     assert spec.metadata["total_events"] == 2
+
+
+def test_prepare_trial_spec_supports_legacy_environment_key() -> None:
+    payload = {
+        "environment": {
+            "name": "samples.bounded-random",
+            "config": {"total_events": 1},
+        }
+    }
+    spec = agentx_cli._prepare_trial_spec("legacy", payload)
+    assert isinstance(spec, TrialSpec)
+    assert spec.metadata["total_events"] == 1
 
 
 def test_create_store_supports_memory_and_filesystem(tmp_path: Path) -> None:
@@ -51,7 +63,7 @@ def test_gather_spec_imports_handles_strings_and_lists() -> None:
     assert agentx_cli._gather_imports(payload) == ("foo", "bar")
 
 
-def test_prepare_trial_spec_requires_environment_mapping() -> None:
+def test_prepare_trial_spec_requires_scenario_mapping() -> None:
     payload = {
         "metadata": {"foo": "bar"},
     }
@@ -61,7 +73,7 @@ def test_prepare_trial_spec_requires_environment_mapping() -> None:
 
 def test_prepare_trial_spec_surfaces_validation_errors() -> None:
     payload = {
-        "environment": {
+        "scenario": {
             "name": "samples.bounded-random",
             "config": {"total_events": -1},
         },
@@ -73,8 +85,8 @@ def test_prepare_trial_spec_surfaces_validation_errors() -> None:
 def test_generate_example_spec_uses_entry_metadata() -> None:
     entry = get_trial_builder_definition("samples.bounded-random")
     spec = agentx_cli._generate_example_spec("samples.bounded-random", entry)
-    assert spec["environment"]["name"] == "samples.bounded-random"
-    assert "total_events" in spec["environment"]["config"]
+    assert spec["scenario"]["name"] == "samples.bounded-random"
+    assert "total_events" in spec["scenario"]["config"]
 
 
 def test_write_yaml_file_creates_parent(tmp_path: Path) -> None:

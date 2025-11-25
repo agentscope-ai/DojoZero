@@ -245,23 +245,31 @@ def _gather_imports(payload: Mapping[str, Any] | None) -> Sequence[str]:
 def _prepare_trial_spec(trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
     if not trial_id:
         raise AgentXCLIError("trial_id must be provided")
-    env = payload.get("environment")
-    if not isinstance(env, Mapping):
-        raise AgentXCLIError("spec.environment must be a mapping")
+    scenario = payload.get("scenario")
+    used_legacy_key = False
+    if scenario is None and "environment" in payload:
+        scenario = payload["environment"]
+        used_legacy_key = True
+    if not isinstance(scenario, Mapping):
+        raise AgentXCLIError("spec.scenario must be a mapping")
+    if used_legacy_key:
+        LOGGER.warning(
+            "spec.environment is deprecated; rename the params key to spec.scenario"
+        )
 
-    module_name = env.get("module")
+    module_name = scenario.get("module")
     if module_name is not None:
         if not isinstance(module_name, str):
-            raise AgentXCLIError("spec.environment.module must be a string")
+            raise AgentXCLIError("spec.scenario.module must be a string")
         _import_modules([module_name])
 
-    builder_name = env.get("name")
+    builder_name = scenario.get("name")
     if not isinstance(builder_name, str) or not builder_name:
-        raise AgentXCLIError("spec.environment.name must be a non-empty string")
+        raise AgentXCLIError("spec.scenario.name must be a non-empty string")
 
-    builder_config = env.get("config") or {}
+    builder_config = scenario.get("config") or {}
     if not isinstance(builder_config, Mapping):
-        raise AgentXCLIError("spec.environment.config must be a mapping when provided")
+        raise AgentXCLIError("spec.scenario.config must be a mapping when provided")
 
     try:
         definition = get_trial_builder_definition(builder_name)
@@ -351,7 +359,7 @@ def _generate_example_spec(
     builder_name: str, definition: TrialBuilderDefinition
 ) -> MutableMapping[str, Any]:
     return {
-        "environment": {
+        "scenario": {
             "name": builder_name,
             "config": definition.example_dict(),
         },
