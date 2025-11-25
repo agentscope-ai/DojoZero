@@ -31,6 +31,9 @@ There are 6 main components:
 - **Dashboard**: control plane
 - **Frontend**: visualization
 
+A *scenario* bundles a set of Data Streams, Operators and Agents
+to carry out the interactions among them.
+
 Data Streams, Operators and Agents follow the actor model:
 each instance runs as a background task and maintains its own state.
 We use [Ray](https://docs.ray.io/en/latest/ray-core/actors.html#actor-guide)
@@ -77,8 +80,7 @@ flowchart TB
 
 ### **Data Streams** and **Operators**
 
-Scenarios bundle Data Streams, Operators, and Agents. Data Streams and
-Operators establish the information substrate for each scenario, while the
+Data Streams and Operators establish the information substrate for each scenario, while the
 following section explains how agents act within that same bundle.
 
 Data Streams are actors that publishes data as soon as it is available.
