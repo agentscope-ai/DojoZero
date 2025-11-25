@@ -18,14 +18,14 @@ from agentx.samples.bounded_random import (
     BoundedRandomStringDataStream,
     CounterAgent,
     CounterOperator,
-    BoundedRandomTrialConfig,
+    BoundedRandomTrialParams,
 )
 from agentx.ray_runtime import RayActorRuntimeProvider
 
 StoreBuilder = Callable[[Path], DashboardStore]
 
 
-def _build_bounded_random_spec(trial_id: str, config: BoundedRandomTrialConfig):
+def _build_bounded_random_spec(trial_id: str, config: BoundedRandomTrialParams):
     builder = get_trial_builder_definition("samples.bounded-random")
     return builder.build(trial_id, config.model_dump(mode="python"))
 
@@ -48,14 +48,14 @@ def _filesystem_store(tmp_path: Path) -> DashboardStore:
         pytest.param(_filesystem_store, id="filesystem"),
     ],
 )
-async def test_sample_environment_runs_end_to_end(
+async def test_bounded_random_runs_end_to_end(
     store_builder: StoreBuilder, tmp_path: Path
 ) -> None:
     store = store_builder(tmp_path)
     dashboard = Dashboard(store=store)
     spec = _build_bounded_random_spec(
         "sample-trial",
-        BoundedRandomTrialConfig(
+        BoundedRandomTrialParams(
             total_events=5,
             payload_length=6,
             interval_seconds=0.0,
@@ -95,14 +95,14 @@ async def test_sample_environment_runs_end_to_end(
         pytest.param(_filesystem_store, id="filesystem"),
     ],
 )
-async def test_sample_environment_checkpoint_resume(
+async def test_bounded_random_checkpoint_resume(
     store_builder: StoreBuilder, tmp_path: Path
 ) -> None:
     store = store_builder(tmp_path)
     dashboard = Dashboard(store=store)
     spec = _build_bounded_random_spec(
         "sample-resume",
-        BoundedRandomTrialConfig(
+        BoundedRandomTrialParams(
             total_events=3,
             interval_seconds=0.0,
             seed=4321,
@@ -140,7 +140,7 @@ async def test_sample_environment_checkpoint_resume(
 
 
 @pytest.mark.asyncio
-async def test_sample_environment_runs_with_ray_runtime(tmp_path: Path) -> None:
+async def test_bounded_random_runs_with_ray_runtime(tmp_path: Path) -> None:
     if ray.is_initialized():
         ray.shutdown()
     namespace = f"agentx-test-{uuid4().hex}"
@@ -151,7 +151,7 @@ async def test_sample_environment_runs_with_ray_runtime(tmp_path: Path) -> None:
     dashboard = Dashboard(store=store, runtime_provider=provider)
     spec = _build_bounded_random_spec(
         "sample-ray",
-        BoundedRandomTrialConfig(
+        BoundedRandomTrialParams(
             total_events=3,
             interval_seconds=0.0,
             seed=9876,

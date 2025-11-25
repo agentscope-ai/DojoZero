@@ -36,7 +36,6 @@ from agentx.core import (
     AgentBase,
     DataStream,
     DataStreamBase,
-    DataStreamSpec,
     Operator,
     register_trial_builder,
     StreamEvent,
@@ -63,6 +62,32 @@ class BoundedRandomStringDataStreamConfig(_ActorIdConfig, total=False):
     payload_length: int
     interval_seconds: float
     seed: int
+    consumers: Sequence[str]
+
+
+def _resolve_stream_consumers(
+    consumer_ids: Sequence[str],
+    *,
+    context: ActorRuntimeContext | None,
+    stream_id: str,
+) -> tuple[Agent | Operator, ...]:
+    if not consumer_ids:
+        return ()
+    if context is None:
+        raise RuntimeError(
+            f"stream '{stream_id}' requires runtime context to resolve consumers"
+        )
+    consumers: list[Agent | Operator] = []
+    for consumer_id in consumer_ids:
+        handle: Agent | Operator | None = context.agents.get(consumer_id)
+        if handle is None:
+            handle = context.operators.get(consumer_id)
+        if handle is None:
+            raise RuntimeError(
+                f"stream '{stream_id}' could not resolve consumer '{consumer_id}'"
+            )
+        consumers.append(handle)
+    return tuple(consumers)
 
 
 class CounterOperatorConfig(_ActorIdConfig):
@@ -73,7 +98,7 @@ class CounterAgentConfig(_ActorIdConfig):
     operator_id: str
 
 
-class BoundedRandomTrialConfig(BaseModel):
+class BoundedRandomTrialParams(BaseModel):
     total_events: int = Field(default=10, ge=0)
     payload_length: int = Field(default=8, gt=0)
     interval_seconds: float = Field(default=0.0, ge=0.0)
@@ -133,8 +158,16 @@ class BoundedRandomStringDataStream(
         *,
         context: ActorRuntimeContext | None = None,
     ) -> "BoundedRandomStringDataStream":
-        # Streams often need downstream handles; the context provides them.
-        consumers = tuple(context.consumers.values()) if context is not None else ()
+        consumer_ids = tuple(config.get("consumers", ()))
+        if not consumer_ids:
+            raise RuntimeError(
+                f"BoundedRandomStringDataStream '{config['actor_id']}' requires a 'consumers' list"
+            )
+        consumers = _resolve_stream_consumers(
+            consumer_ids,
+            context=context,
+            stream_id=str(config["actor_id"]),
+        )
         return cls(
             actor_id=config["actor_id"],
             total_events=config.get("total_events", 10),
@@ -399,38 +432,38 @@ class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
 
 def _build_trial_spec(
     trial_id: str,
-    config: BoundedRandomTrialConfig,
+    params: BoundedRandomTrialParams,
 ) -> TrialSpec:
     """Return a :class:`TrialSpec` that wires the sample actors together."""
     # Each actor gets a spec that points at its class plus serialized config.
-    operator_config: CounterOperatorConfig = {"actor_id": config.operator_id}
+    operator_config: CounterOperatorConfig = {"actor_id": params.operator_id}
     operator_spec = ActorSpec(
-        actor_id=config.operator_id,
+        actor_id=params.operator_id,
         actor_cls=CounterOperator,
         config=operator_config,
     )
     agent_config: CounterAgentConfig = {
-        "actor_id": config.agent_id,
-        "operator_id": config.operator_id,
+        "actor_id": params.agent_id,
+        "operator_id": params.operator_id,
     }
     agent_spec = ActorSpec(
-        actor_id=config.agent_id,
+        actor_id=params.agent_id,
         actor_cls=CounterAgent,
         config=agent_config,
     )
     stream_config: BoundedRandomStringDataStreamConfig = {
-        "actor_id": config.stream_id,
-        "total_events": config.total_events,
-        "payload_length": config.payload_length,
-        "interval_seconds": config.interval_seconds,
+        "actor_id": params.stream_id,
+        "total_events": params.total_events,
+        "payload_length": params.payload_length,
+        "interval_seconds": params.interval_seconds,
+        "consumers": (params.operator_id, params.agent_id),
     }
-    if config.seed is not None:
-        stream_config["seed"] = config.seed
-    stream_spec = DataStreamSpec(
-        actor_id=config.stream_id,
+    if params.seed is not None:
+        stream_config["seed"] = params.seed
+    stream_spec = ActorSpec(
+        actor_id=params.stream_id,
         actor_cls=BoundedRandomStringDataStream,
         config=stream_config,
-        consumers=(config.operator_id, config.agent_id),
     )
     return TrialSpec(
         trial_id=trial_id,
@@ -439,17 +472,17 @@ def _build_trial_spec(
         agents=(agent_spec,),
         metadata={
             "sample": "bounded-random-string",
-            "total_events": config.total_events,
+            "total_events": params.total_events,
         },
     )
 
 
 register_trial_builder(
     "samples.bounded-random",
-    BoundedRandomTrialConfig,
+    BoundedRandomTrialParams,
     _build_trial_spec,
     description="Bounded random string stream feeding a counter agent/operator",
-    example_config=BoundedRandomTrialConfig(
+    example_params=BoundedRandomTrialParams(
         total_events=5,
         payload_length=6,
         interval_seconds=0.0,
@@ -462,7 +495,7 @@ __all__ = [
     "BoundedRandomStringDataStream",
     "CounterAgent",
     "CounterOperator",
-    "BoundedRandomTrialConfig",
+    "BoundedRandomTrialParams",
     "BoundedRandomStringDataStreamConfig",
     "CounterAgentConfig",
     "CounterOperatorConfig",

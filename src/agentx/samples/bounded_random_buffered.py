@@ -16,7 +16,6 @@ from agentx.core import (
     ActorSpec,
     Agent,
     AgentBase,
-    DataStreamSpec,
     Operator,
     register_trial_builder,
     StreamEvent,
@@ -26,7 +25,7 @@ from agentx.core import (
 from .bounded_random import (
     BoundedRandomStringDataStream,
     BoundedRandomStringDataStreamConfig,
-    BoundedRandomTrialConfig,
+    BoundedRandomTrialParams,
     CounterAgentConfig,
     CounterOperator,
     CounterOperatorConfig,
@@ -46,7 +45,7 @@ class CounterAgentBufferedConfig(CounterAgentConfig, total=False):
     flush_interval_seconds: float
 
 
-class BoundedRandomBufferedTrialConfig(BoundedRandomTrialConfig):
+class BoundedRandomBufferedTrialParams(BoundedRandomTrialParams):
     buffer_flush_seconds: float = Field(default=5.0, gt=0.0)
     agent_id: str = "counter-agent-buffered"
 
@@ -76,13 +75,13 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
     @classmethod
     def from_dict(
         cls,
-        config: CounterAgentBufferedConfig,
+        spec: CounterAgentBufferedConfig,
         *,
         context: ActorRuntimeContext | None = None,
     ) -> "CounterAgentBuffered":
         if context is None:
             raise RuntimeError("CounterAgentBuffered requires runtime context")
-        operator_id = str(config["operator_id"])
+        operator_id = str(spec["operator_id"])
         operator_ref = context.operators.get(operator_id)
         if operator_ref is None:
             raise RuntimeError(
@@ -90,10 +89,10 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
             )
         if not hasattr(operator_ref, "count"):
             raise TypeError(f"operator '{operator_id}' must expose a 'count' coroutine")
-        interval = float(config.get("flush_interval_seconds", 5.0))
+        interval = float(spec.get("flush_interval_seconds", 5.0))
         operator_like = cast(_CounterOperatorLike, operator_ref)
         return cls(
-            actor_id=str(config["actor_id"]),
+            actor_id=str(spec["actor_id"]),
             operator=operator_like,
             flush_interval_seconds=interval,
         )
@@ -211,37 +210,37 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
 
 def _build_buffered_trial_spec(
     trial_id: str,
-    config: BoundedRandomBufferedTrialConfig,
+    params: BoundedRandomBufferedTrialParams,
 ) -> TrialSpec:
-    operator_config: CounterOperatorConfig = {"actor_id": config.operator_id}
+    operator_config: CounterOperatorConfig = {"actor_id": params.operator_id}
     operator_spec = ActorSpec(
-        actor_id=config.operator_id,
+        actor_id=params.operator_id,
         actor_cls=CounterOperator,
         config=operator_config,
     )
     agent_config: CounterAgentBufferedConfig = {
-        "actor_id": config.agent_id,
-        "operator_id": config.operator_id,
-        "flush_interval_seconds": config.buffer_flush_seconds,
+        "actor_id": params.agent_id,
+        "operator_id": params.operator_id,
+        "flush_interval_seconds": params.buffer_flush_seconds,
     }
     agent_spec = ActorSpec(
-        actor_id=config.agent_id,
+        actor_id=params.agent_id,
         actor_cls=CounterAgentBuffered,
         config=agent_config,
     )
     stream_config: BoundedRandomStringDataStreamConfig = {
-        "actor_id": config.stream_id,
-        "total_events": config.total_events,
-        "payload_length": config.payload_length,
-        "interval_seconds": config.interval_seconds,
+        "actor_id": params.stream_id,
+        "total_events": params.total_events,
+        "payload_length": params.payload_length,
+        "interval_seconds": params.interval_seconds,
+        "consumers": (params.operator_id, params.agent_id),
     }
-    if config.seed is not None:
-        stream_config["seed"] = config.seed
-    stream_spec = DataStreamSpec(
-        actor_id=config.stream_id,
+    if params.seed is not None:
+        stream_config["seed"] = params.seed
+    stream_spec = ActorSpec(
+        actor_id=params.stream_id,
         actor_cls=BoundedRandomStringDataStream,
         config=stream_config,
-        consumers=(config.operator_id, config.agent_id),
     )
     return TrialSpec(
         trial_id=trial_id,
@@ -250,20 +249,20 @@ def _build_buffered_trial_spec(
         agents=(agent_spec,),
         metadata={
             "sample": "bounded-random-buffered",
-            "total_events": config.total_events,
-            "buffer_flush_seconds": config.buffer_flush_seconds,
+            "total_events": params.total_events,
+            "buffer_flush_seconds": params.buffer_flush_seconds,
         },
     )
 
 
 register_trial_builder(
     "samples.bounded-random-buffered",
-    BoundedRandomBufferedTrialConfig,
+    BoundedRandomBufferedTrialParams,
     _build_buffered_trial_spec,
     description=(
         "Bounded random stream with buffered agent that flushes every few seconds"
     ),
-    example_config=BoundedRandomBufferedTrialConfig(
+    example_params=BoundedRandomBufferedTrialParams(
         total_events=5,
         payload_length=6,
         interval_seconds=0.0,
@@ -274,7 +273,7 @@ register_trial_builder(
 
 
 __all__ = [
-    "BoundedRandomBufferedTrialConfig",
+    "BoundedRandomBufferedTrialParams",
     "CounterAgentBuffered",
     "CounterAgentBufferedConfig",
 ]

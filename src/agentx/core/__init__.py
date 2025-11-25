@@ -21,7 +21,6 @@ from ._dashboard import (
     Dashboard,
     DashboardError,
     DashboardStore,
-    DataStreamSpec,
     InMemoryDashboardStore,
     TrialCheckpoint,
     TrialExistsError,
@@ -39,7 +38,7 @@ from ._runtime import (
     LocalActorRuntimeProvider,
 )
 from ._registry import (
-    ConfigModelT,
+    ParamModelT,
     TrialBuilderDefinition,
     TrialBuilderNotFoundError,
     TrialBuilderRegistryError,
@@ -73,7 +72,6 @@ __all__ = [
     "DashboardStore",
     "DataStream",
     "DataStreamBase",
-    "DataStreamSpec",
     "FileSystemDashboardStore",
     "InMemoryDashboardStore",
     "JSONDict",
@@ -82,7 +80,7 @@ __all__ = [
     "LocalActorHandler",
     "LocalActorRuntimeProvider",
     "Operator",
-    "ConfigModelT",
+    "ParamModelT",
     "TrialBuilderFn",
     "TrialBuilderDefinition",
     "TrialBuilderNotFoundError",

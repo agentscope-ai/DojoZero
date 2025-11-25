@@ -89,19 +89,21 @@ class Agent(Actor[ConfigT], Protocol[ConfigT]):
 
 
 class ActorRuntimeContext:
-    """Dashboard-supplied references that should not live in actor configs."""
+    """Dashboard-supplied registry of initialized actor instances."""
 
-    __slots__ = ("operators", "consumers")
+    __slots__ = ("agents", "operators", "data_streams")
 
     def __init__(
         self,
         *,
+        agents: Mapping[str, Agent[Any]] | None = None,
         operators: Mapping[str, Operator[Any]] | None = None,
-        consumers: Mapping[str, Agent[Any] | Operator[Any]] | None = None,
+        data_streams: Mapping[str, DataStream[Any]] | None = None,
     ) -> None:
+        self.agents: Mapping[str, Agent[Any]] = MappingProxyType(dict(agents or {}))
         self.operators: Mapping[str, Operator[Any]] = MappingProxyType(
             dict(operators or {})
         )
-        self.consumers: Mapping[str, Agent[Any] | Operator[Any]] = MappingProxyType(
-            dict(consumers or {})
+        self.data_streams: Mapping[str, DataStream[Any]] = MappingProxyType(
+            dict(data_streams or {})
         )

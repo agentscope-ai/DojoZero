@@ -32,6 +32,7 @@ from ._actors import (
     ActorRuntimeContext,
     ActorState,
     Agent,
+    DataStream,
     Operator,
 )
 from ._runtime import (
@@ -50,6 +51,10 @@ def _is_operator_like(candidate: Any) -> bool:
 
 def _is_agent_like(candidate: Any) -> bool:
     return _is_operator_like(candidate) and hasattr(candidate, "operators")
+
+
+def _is_data_stream_like(candidate: Any) -> bool:
+    return hasattr(candidate, "consumers") and hasattr(candidate, "actor_id")
 
 
 ConfigSpecT = TypeVar("ConfigSpecT")
@@ -125,22 +130,11 @@ class ActorSpec(Generic[ConfigSpecT]):
 
 
 @dataclass(slots=True)
-class DataStreamSpec(ActorSpec[ConfigSpecT], Generic[ConfigSpecT]):
-    """DataStream specific configuration that includes consumer wiring."""
-
-    consumers: Sequence[str] = ()
-
-    def __post_init__(self) -> None:
-        ActorSpec.__post_init__(self)
-        self.consumers = tuple(self.consumers)
-
-
-@dataclass(slots=True)
 class TrialSpec:
     """High-level description of a trial."""
 
     trial_id: str
-    data_streams: Sequence[DataStreamSpec[Any]] = ()
+    data_streams: Sequence[ActorSpec[Any]] = ()
     operators: Sequence[ActorSpec[Any]] = ()
     agents: Sequence[ActorSpec[Any]] = ()
     metadata: JSONDict = field(default_factory=dict)
@@ -606,31 +600,68 @@ class Dashboard:
         self, spec: TrialSpec, record: TrialRecord
     ) -> TrialRuntime:
         registry: Dict[str, ActorRuntime[Any]] = {}
-        for actor_spec in spec.operators:
-            runtime = await self._materialize_actor(actor_spec, ActorRole.OPERATOR)
-            self._register_actor_runtime(registry, runtime)
-        for actor_spec in spec.agents:
-            operators = self._resolve_agent_operators(registry)
-            context = ActorRuntimeContext(
-                operators={operator.actor_id: operator for operator in operators}
+        agents: Dict[str, Agent] = {}
+        operators: Dict[str, Operator] = {}
+        data_streams: Dict[str, DataStream] = {}
+
+        def _make_context() -> ActorRuntimeContext:
+            return ActorRuntimeContext(
+                agents=agents,
+                operators=operators,
+                data_streams=data_streams,
             )
+
+        for actor_spec in spec.operators:
+            context = _make_context()
+            runtime = await self._materialize_actor(
+                actor_spec, ActorRole.OPERATOR, context=context
+            )
+            self._register_actor_runtime(registry, runtime)
+            operator_instance = runtime.instance
+            if not (
+                isinstance(operator_instance, Operator)
+                or _is_operator_like(operator_instance)
+            ):
+                raise DashboardError(
+                    f"actor '{runtime.actor_id}' registered as operator"
+                    " does not implement the Operator protocol"
+                )
+            operators[runtime.actor_id] = cast(Operator, operator_instance)
+        for actor_spec in spec.agents:
+            context = _make_context()
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.AGENT,
                 context=context,
             )
             self._register_actor_runtime(registry, runtime)
+            agent_instance = runtime.instance
+            if not (
+                isinstance(agent_instance, Agent) or _is_agent_like(agent_instance)
+            ):
+                raise DashboardError(
+                    f"actor '{runtime.actor_id}' registered as agent"
+                    " does not implement the Agent protocol"
+                )
+            agents[runtime.actor_id] = cast(Agent, agent_instance)
         for actor_spec in spec.data_streams:
-            consumers = self._resolve_stream_consumers(registry, actor_spec)
-            context = ActorRuntimeContext(
-                consumers={consumer.actor_id: consumer for consumer in consumers}
-            )
+            context = _make_context()
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.DATA_STREAM,
                 context=context,
             )
             self._register_actor_runtime(registry, runtime)
+            stream_instance = runtime.instance
+            if not (
+                isinstance(stream_instance, DataStream)
+                or _is_data_stream_like(stream_instance)
+            ):
+                raise DashboardError(
+                    f"actor '{runtime.actor_id}' registered as data stream"
+                    " does not implement the DataStream protocol"
+                )
+            data_streams[runtime.actor_id] = cast(DataStream, stream_instance)
         return TrialRuntime(spec=spec, actors=registry, record=record)
 
     async def _materialize_actor(
@@ -652,48 +683,6 @@ class Dashboard:
         if runtime.actor_id in registry:
             raise DashboardError(f"duplicate actor id '{runtime.actor_id}' detected")
         registry[runtime.actor_id] = runtime
-
-    def _resolve_stream_consumers(
-        self,
-        registry: Dict[str, ActorRuntime[Any]],
-        stream_spec: DataStreamSpec[Any],
-    ) -> Tuple[Agent | Operator, ...]:
-        consumers: list[Agent | Operator] = []
-        for consumer_id in stream_spec.consumers:
-            consumer_runtime = registry.get(consumer_id)
-            if consumer_runtime is None:
-                raise DashboardError(
-                    f"consumer '{consumer_id}' referenced by stream '{stream_spec.actor_id}' is undefined"
-                )
-            consumer = consumer_runtime.instance
-            if not (
-                isinstance(consumer, (Agent, Operator))
-                or _is_operator_like(consumer)
-                or _is_agent_like(consumer)
-            ):
-                raise DashboardError(
-                    f"consumer '{consumer_id}' must be an Agent or Operator"
-                )
-            consumers.append(cast(Agent | Operator, consumer))
-        return tuple(consumers)
-
-    def _resolve_agent_operators(
-        self, registry: Dict[str, ActorRuntime[Any]]
-    ) -> Tuple[Operator, ...]:
-        operators: list[Operator] = []
-        for actor_runtime in registry.values():
-            if actor_runtime.role is not ActorRole.OPERATOR:
-                continue
-            operator = actor_runtime.instance
-            if not (
-                isinstance(operator, Operator) or _is_operator_like(operator)
-            ):  # pragma: no cover - defensive
-                raise DashboardError(
-                    f"actor '{actor_runtime.actor_id}' registered as operator"
-                    " does not implement the Operator protocol"
-                )
-            operators.append(cast(Operator, operator))
-        return tuple(operators)
 
     async def _with_trial_lock(
         self, runtime: TrialRuntime, fn: Callable[[TrialRuntime], Awaitable[None]]
@@ -844,14 +833,7 @@ class Dashboard:
             ),
             agents=tuple(replace(agent, resume_state=None) for agent in spec.agents),
             data_streams=tuple(
-                DataStreamSpec(
-                    actor_id=stream.actor_id,
-                    actor_cls=stream.actor_cls,
-                    config=stream.config,
-                    resume_state=None,
-                    consumers=stream.consumers,
-                )
-                for stream in spec.data_streams
+                replace(stream, resume_state=None) for stream in spec.data_streams
             ),
             metadata=dict(spec.metadata),
             resume_from_checkpoint_id=None,
@@ -875,13 +857,7 @@ class Dashboard:
                 for agent in spec.agents
             ),
             data_streams=tuple(
-                DataStreamSpec(
-                    actor_id=stream.actor_id,
-                    actor_cls=stream.actor_cls,
-                    config=stream.config,
-                    resume_state=state_map.get(stream.actor_id),
-                    consumers=stream.consumers,
-                )
+                replace(stream, resume_state=state_map.get(stream.actor_id))
                 for stream in spec.data_streams
             ),
             metadata=dict(spec.metadata),
@@ -958,7 +934,6 @@ __all__ = [
     "Dashboard",
     "DashboardError",
     "DashboardStore",
-    "DataStreamSpec",
     "InMemoryDashboardStore",
     "TrialCheckpoint",
     "TrialExistsError",

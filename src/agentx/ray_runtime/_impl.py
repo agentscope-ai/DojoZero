@@ -8,7 +8,14 @@ from typing import Any, Mapping, TYPE_CHECKING, cast
 import ray
 from ray.actor import ActorHandle
 
-from agentx.core._actors import Actor, ActorRuntimeContext, ActorState, Agent, Operator
+from agentx.core._actors import (
+    Actor,
+    ActorRuntimeContext,
+    ActorState,
+    Agent,
+    DataStream,
+    Operator,
+)
 from agentx.core._runtime import ActorHandler, ActorRuntimeProvider
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -30,16 +37,23 @@ def _serialize_context(
 ) -> ContextPayload:
     if context is None:
         return None
-    return {
-        "operators": {
+    payload: dict[str, Mapping[str, _SerializedActorRef]] = {}
+    if context.agents:
+        payload["agents"] = {
+            actor_id: _encode_actor_reference(actor)
+            for actor_id, actor in context.agents.items()
+        }
+    if context.operators:
+        payload["operators"] = {
             actor_id: _encode_actor_reference(actor)
             for actor_id, actor in context.operators.items()
-        },
-        "consumers": {
+        }
+    if context.data_streams:
+        payload["data_streams"] = {
             actor_id: _encode_actor_reference(actor)
-            for actor_id, actor in context.consumers.items()
-        },
-    }
+            for actor_id, actor in context.data_streams.items()
+        }
+    return payload
 
 
 def _deserialize_context(
@@ -48,13 +62,17 @@ def _deserialize_context(
     if payload is None:
         return None
     return ActorRuntimeContext(
+        agents={
+            actor_id: cast(Agent[Any], _decode_actor_reference(ref))
+            for actor_id, ref in (payload.get("agents") or {}).items()
+        },
         operators={
             actor_id: cast(Operator[Any], _decode_actor_reference(ref))
             for actor_id, ref in (payload.get("operators") or {}).items()
         },
-        consumers={
-            actor_id: cast(Agent[Any] | Operator[Any], _decode_actor_reference(ref))
-            for actor_id, ref in (payload.get("consumers") or {}).items()
+        data_streams={
+            actor_id: cast(DataStream[Any], _decode_actor_reference(ref))
+            for actor_id, ref in (payload.get("data_streams") or {}).items()
         },
     )
 
