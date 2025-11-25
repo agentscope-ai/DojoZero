@@ -1,7 +1,7 @@
-"""Reference environment demonstrating how to wire AgentX actors together.
+"""Reference scenario demonstrating how to wire AgentX actors together.
 
 Readers can treat this module as a cookbook for authoring new built-in
-environments under ``agentx``. It highlights the minimum surface to expose so
+scenarios under ``agentx``. It highlights the minimum surface to expose so
 the CLI registry can discover your builder automatically:
 
 1. **Serializable configs.** Each actor exposes a TypedDict configuration and a

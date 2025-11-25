@@ -10,7 +10,7 @@ to reason about future outcomes and act on them, such as trading and placing bet
 Show a proof-of-concept of a system capable of hosting multiple agents and producing realtime
 data streams running on a single machine. Specifically, the system should:
 
-- operate an environment that provides realtime data and manages states such as trades and bets placed, and virtual dollar balance.
+- operate a scenario that provides realtime data and manages states such as trades and bets placed, and virtual dollar balance.
 - host AI agents written in AgentScope framework (Python)
 - leverage Open Telemetry traces for activity monitoring and collections
 - come with UI that supports viewing of realtime activities and historical replay
@@ -25,7 +25,7 @@ Non-goals:
 
 There are 6 main components:
 - **Data Streams**: data sources
-- **Operators**: environment state managers
+- **Operators**: scenario state managers
 - **Agents**: autonomous actors
 - **Trace Store**: activity data collection
 - **Dashboard**: control plane
@@ -77,7 +77,9 @@ flowchart TB
 
 ### **Data Streams** and **Operators**
 
-Data Streams and Operators together form the *environments* for agents.
+Scenarios bundle Data Streams, Operators, and Agents. Data Streams and
+Operators establish the information substrate for each scenario, while the
+following section explains how agents act within that same bundle.
 
 Data Streams are actors that publishes data as soon as it is available.
 - Each Data Stream has a list of consumers to publish to.
@@ -99,9 +101,9 @@ while Operators support synchronous actions by the agents.
 
 ### **Agents**
 
-Agents are autonomous actors that consume realtime data from Data Streams
-and perform sequences of actions 
-(e.g., trades, bets and queries.) through Operators in response.
+Agents are autonomous actors inside a scenario. They consume realtime data from
+its Data Streams and perform sequences of actions (e.g., trades, bets and
+queries) through its Operators in response.
 
 Agents can have different implementations. It may choose to maintain its own 
 state of past observations and actions and summarize learnings from them.
@@ -121,9 +123,8 @@ has no side effect.
 
 ### **Dashboard**
 
-Dashboard is the central control plane for all actors (Data Streams, Operators and Agents).
-- It creates environments of Data Streams and Operators with historical or realtime data.
-- It creates agents to run on environments.
+Dashboard is the central control plane for all actors (Data Streams, Operators, and Agents).
+- It creates scenarios by instantiating Data Streams, Operators, and Agents with historical or realtime data.
 - It supports querying of actor status as well as shuting down actors.
 
 A combination of Data Streams, Operators, Agents instances and a schedule to

@@ -23,15 +23,15 @@ section below.
 
 ## Standalone Usage
 
-AgentX trials start from an environment spec that names the builder and its
-inputs. We refer to this YAML as the *params file* because it lists the exact
-parameters the trial builder consumes. Use `agentx list-builders` to see
-registered environments, then run `agentx get-builder <name>
---create-example-params` (or author the params file directly):
+AgentX trials start from a params file that names the trial builder and its
+inputs. Each builder defines the scenario—the combination of data streams,
+operators, and agents that act together during the trial. Use `agentx
+list-builders` to see registered scenarios, then run `agentx get-builder
+<name> --create-example-params` (or author the params file directly):
 
 ```yaml
 # sample_trial.yaml
-environment:
+scenario:
 	name: samples.bounded-random
 	config:
 		total_events: 5
@@ -45,9 +45,9 @@ to set a friendly identifier, otherwise a UUID is generated):
 agentx run --params sample_trial.yaml --trial-id sample-trial
 ```
 
-Use `agentx list-builders` to discover registered environments, and add imports
-with repeated `--import-module` flags whenever your builder lives outside the
-defaults.
+Use `agentx list-builders` to discover registered scenarios (their
+data streams, operators, and agents), and add imports with repeated `--import-module`
+flags whenever your builder lives outside the defaults.
 
 ### Resuming trials
 
@@ -141,13 +141,14 @@ agentx/
 └─ tests/                   Pytest suites covering CLI, registry, samples
 ```
 
-## Authoring New Environments
+## Authoring New Scenarios
 
-Every environment exposes a *trial builder* that turns serialized configs into a
-`TrialSpec`. Builders are registered with a Pydantic `BaseModel` schema so the
-CLI can validate inputs, render JSON Schema, and generate ready-to-edit YAML
-templates automatically. New built-in environments that ship with AgentX should
-live inside the `agentx` package (for example, `agentx.samples`).
+Every scenario (a specific wiring of data streams, operators, and agents)
+exposes a *trial builder* that turns serialized configs into a `TrialSpec`.
+Builders are registered with a Pydantic `BaseModel` schema so the CLI can
+validate inputs, render JSON Schema, and generate ready-to-edit YAML templates
+automatically. New built-in scenarios that ship with AgentX should live inside
+the `agentx` package (for example, `agentx.samples`).
 
 ```python
 from pydantic import BaseModel, Field
@@ -155,22 +156,22 @@ from pydantic import BaseModel, Field
 from agentx.core import TrialSpec, register_trial_builder
 
 
-class MyEnvConfig(BaseModel):
+class MyScenarioConfig(BaseModel):
 		stream_id: str = Field(default="prices")
 		window: int = Field(ge=1, default=10)
 
 
-def build_my_env(trial_id: str, config: MyEnvConfig) -> TrialSpec:
+def build_my_scenario(trial_id: str, config: MyScenarioConfig) -> TrialSpec:
 		# construct ActorSpec objects (agents/operators/streams) here
 		...
 
 
 register_trial_builder(
 		"myenv.prices",
-		MyEnvConfig,
-		build_my_env,
-		description="Example environment wiring a rolling window strategy",
-		example_config=MyEnvConfig(window=20),
+		MyScenarioConfig,
+		build_my_scenario,
+		description="Example scenario wiring a rolling window strategy",
+		example_config=MyScenarioConfig(window=20),
 )
 ```
 

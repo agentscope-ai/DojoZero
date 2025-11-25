@@ -1,4 +1,4 @@
-"""Buffered variant of the bounded random reference environment.
+"""Buffered variant of the bounded random reference scenario.
 
 This module reuses the bounded random stream and operator actors but swaps in a
 buffered agent that batches incoming events. The buffer drains on a fixed
