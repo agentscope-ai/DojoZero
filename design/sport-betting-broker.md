@@ -204,13 +204,11 @@ async def settle_bet(
            gross_payout = bet.amount × bet.odds
         3. Credit account (if win)
         4. Update bet status
-        5. Move to history
-        6. Notify agent [BET_WON, BET_LOST]
-        7. Log settlement
+        5. Notify agent [BET_WON, BET_LOST]
+        6. Log settlement
     
     Side Effects:
         - Updates account balance (if win)
-        - Moves bet from active to history
         - Sends win/loss notification
         - Creates settlement log
     """
@@ -265,7 +263,8 @@ async def get_statistics(
 ```
 
 ---
-## Questions
+## TODO
 
 1. logging: what to log? transaction logs, bet logs, settlement_log
-2. concurrency control? One lock per agent for account balance modification operations (withdraw, deposit, place_bet, settle_bet)
+2. concurrency control? One lock per agent for account balance modification operations (`withdraw`, `deposit`, `place_bet`, `settle_bet`)
+`_agent_lock(agent_id: str)`
