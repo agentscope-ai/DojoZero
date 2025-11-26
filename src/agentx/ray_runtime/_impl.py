@@ -2,99 +2,16 @@
 
 import inspect
 import os
-from dataclasses import dataclass
 from typing import Any, Mapping, TYPE_CHECKING, cast
 
 import ray
 from ray.actor import ActorHandle
 
-from agentx.core._actors import (
-    Actor,
-    ActorRuntimeContext,
-    ActorState,
-    Agent,
-    DataStream,
-    Operator,
-)
+from agentx.core._actors import Actor, ActorState
 from agentx.core._runtime import ActorHandler, ActorRuntimeProvider
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from agentx.core._dashboard import ActorSpec
-
-
-@dataclass(slots=True)
-class _SerializedActorRef:
-    actor_id: str
-    actor_cls: type[Actor[Any]]
-    handle: ActorHandle
-
-
-ContextPayload = dict[str, Mapping[str, _SerializedActorRef]] | None
-
-
-def _serialize_context(
-    context: ActorRuntimeContext | None,
-) -> ContextPayload:
-    if context is None:
-        return None
-    payload: dict[str, Mapping[str, _SerializedActorRef]] = {}
-    if context.agents:
-        payload["agents"] = {
-            actor_id: _encode_actor_reference(actor)
-            for actor_id, actor in context.agents.items()
-        }
-    if context.operators:
-        payload["operators"] = {
-            actor_id: _encode_actor_reference(actor)
-            for actor_id, actor in context.operators.items()
-        }
-    if context.data_streams:
-        payload["data_streams"] = {
-            actor_id: _encode_actor_reference(actor)
-            for actor_id, actor in context.data_streams.items()
-        }
-    return payload
-
-
-def _deserialize_context(
-    payload: ContextPayload,
-) -> ActorRuntimeContext | None:
-    if payload is None:
-        return None
-    return ActorRuntimeContext(
-        agents={
-            actor_id: cast(Agent[Any], _decode_actor_reference(ref))
-            for actor_id, ref in (payload.get("agents") or {}).items()
-        },
-        operators={
-            actor_id: cast(Operator[Any], _decode_actor_reference(ref))
-            for actor_id, ref in (payload.get("operators") or {}).items()
-        },
-        data_streams={
-            actor_id: cast(DataStream[Any], _decode_actor_reference(ref))
-            for actor_id, ref in (payload.get("data_streams") or {}).items()
-        },
-    )
-
-
-def _encode_actor_reference(actor: Actor[Any]) -> _SerializedActorRef:
-    if isinstance(actor, RayActorProxy):
-        return _SerializedActorRef(
-            actor_id=actor.actor_id,
-            actor_cls=actor.actor_cls,
-            handle=actor.handle,
-        )
-    raise RuntimeError(
-        "Ray runtime requires actor dependencies to be RayActorProxy instances"
-    )
-
-
-def _decode_actor_reference(ref: _SerializedActorRef | Actor[Any]) -> Actor[Any]:
-    if isinstance(ref, RayActorProxy):
-        return ref
-    if isinstance(ref, _SerializedActorRef):
-        return RayActorProxy(ref.actor_id, ref.actor_cls, ref.handle)
-    raise RuntimeError("Unsupported actor reference type for Ray runtime context")
 
 
 async def _await_ref(ref: "ray.ObjectRef[Any]") -> Any:
@@ -122,8 +39,6 @@ class RayActorProxy:
     def from_dict(
         cls,
         config: Mapping[str, Any],
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> "RayActorProxy":  # pragma: no cover - defensive guard
         raise RuntimeError("RayActorProxy should not be instantiated via from_dict")
 
@@ -152,6 +67,9 @@ class RayActorProxy:
         # Treat everything else as data attribute / property value.
         return ray.get(self._handle.get_attribute.remote(name))
 
+    def __reduce__(self) -> tuple[Any, tuple[str, type[Actor[Any]], ActorHandle]]:
+        return (RayActorProxy, (self._actor_id, self._actor_cls, self._handle))
+
     async def start(self) -> None:
         await _await_ref(self._handle.start.remote())
 
@@ -177,11 +95,9 @@ class _RayActorHost:
         actor_cls: type[Actor[Any]],
         config: Mapping[str, Any],
         actor_id: str,
-        context_payload: ContextPayload,
         resume_state: ActorState | None,
     ) -> None:
-        context = _deserialize_context(context_payload)
-        actor = actor_cls.from_dict(config, context=context)
+        actor = actor_cls.from_dict(config)
         if actor.actor_id != actor_id:
             raise ValueError(
                 f"actor id mismatch: spec '{actor_id}' != instance '{actor.actor_id}'"
@@ -298,8 +214,6 @@ class RayActorRuntimeProvider(ActorRuntimeProvider):
     async def create_handler(
         self,
         spec: "ActorSpec[Any]",
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> RayActorHandler:
         self._ensure_ray()
         handle = cast(ActorHandle, _RayActorHost.remote())
@@ -308,7 +222,6 @@ class RayActorRuntimeProvider(ActorRuntimeProvider):
                 spec.actor_cls,
                 spec.config,
                 spec.actor_id,
-                _serialize_context(context),
                 spec.resume_state,
             )
         )

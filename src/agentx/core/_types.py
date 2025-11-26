@@ -21,7 +21,7 @@ def _utcnow() -> datetime:
 class StreamEvent(Generic[PayloadT]):
     """Envelope for data emitted by a :class:`DataStream`."""
 
-    stream_id: str  # Actor ID of the DataStream producing the payload.
+    stream_id: str  # Actor ID of the producer of the payload.
     payload: PayloadT
     emitted_at: datetime = field(default_factory=_utcnow)
     sequence: int | None = None

@@ -7,10 +7,10 @@ the CLI registry can discover your builder automatically:
 1. **Serializable configs.** Each actor exposes a TypedDict configuration and a
     ``from_dict`` constructor so trials can be reconstructed from YAML specs or
     checkpoints. Stick to JSON-serializable values.
-2. **Runtime context usage.** The dashboard injects an
-    :class:`ActorRuntimeContext` with already-instantiated dependencies. This
-    sample shows how an agent locates its operator and how a stream receives its
-    consumer handles.
+2. **Dependency wiring.** Trial specs declare dependent actor IDs so the
+    dashboard can invoke the ``register_xxx`` hooks automatically. This sample
+    shows how an agent validates its operator registration and how a stream fans
+    out events to its consumers.
 3. **Checkpoint-friendly state.** Every actor implements ``save_state`` and
     ``load_state`` with plain dictionaries so trials can pause/resume on both the
     local and Ray runtimes without bespoke persistence code.
@@ -29,14 +29,15 @@ from typing import Any, Mapping, Protocol, Sequence, TypedDict, cast
 from pydantic import BaseModel, Field
 
 from agentx.core import (
-    ActorBase,
-    ActorRuntimeContext,
-    ActorSpec,
     Agent,
     AgentBase,
+    AgentSpec,
     DataStream,
     DataStreamBase,
+    DataStreamSpec,
     Operator,
+    OperatorBase,
+    OperatorSpec,
     register_trial_builder,
     StreamEvent,
     TrialSpec,
@@ -62,32 +63,6 @@ class BoundedRandomStringDataStreamConfig(_ActorIdConfig, total=False):
     payload_length: int
     interval_seconds: float
     seed: int
-    consumers: Sequence[str]
-
-
-def _resolve_stream_consumers(
-    consumer_ids: Sequence[str],
-    *,
-    context: ActorRuntimeContext | None,
-    stream_id: str,
-) -> tuple[Agent | Operator, ...]:
-    if not consumer_ids:
-        return ()
-    if context is None:
-        raise RuntimeError(
-            f"stream '{stream_id}' requires runtime context to resolve consumers"
-        )
-    consumers: list[Agent | Operator] = []
-    for consumer_id in consumer_ids:
-        handle: Agent | Operator | None = context.agents.get(consumer_id)
-        if handle is None:
-            handle = context.operators.get(consumer_id)
-        if handle is None:
-            raise RuntimeError(
-                f"stream '{stream_id}' could not resolve consumer '{consumer_id}'"
-            )
-        consumers.append(handle)
-    return tuple(consumers)
 
 
 class CounterOperatorConfig(_ActorIdConfig):
@@ -127,9 +102,8 @@ class BoundedRandomStringDataStream(
         payload_length: int,
         interval_seconds: float,
         seed: int | None,
-        consumers: Sequence[Agent | Operator] | None = None,
     ) -> None:
-        super().__init__(actor_id, consumers=consumers)
+        super().__init__(actor_id)
         if total_events < 0:
             raise ValueError("total_events must be non-negative")
         if payload_length <= 0:
@@ -155,26 +129,13 @@ class BoundedRandomStringDataStream(
     def from_dict(
         cls,
         config: BoundedRandomStringDataStreamConfig,
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> "BoundedRandomStringDataStream":
-        consumer_ids = tuple(config.get("consumers", ()))
-        if not consumer_ids:
-            raise RuntimeError(
-                f"BoundedRandomStringDataStream '{config['actor_id']}' requires a 'consumers' list"
-            )
-        consumers = _resolve_stream_consumers(
-            consumer_ids,
-            context=context,
-            stream_id=str(config["actor_id"]),
-        )
         return cls(
             actor_id=config["actor_id"],
             total_events=config.get("total_events", 10),
             payload_length=config.get("payload_length", 8),
             interval_seconds=config.get("interval_seconds", 0.0),
             seed=config.get("seed"),
-            consumers=consumers,
         )
 
     async def start(self) -> None:
@@ -288,7 +249,7 @@ class BoundedRandomStringDataStream(
             self._generate_payload()
 
 
-class CounterOperator(ActorBase, Operator[CounterOperatorConfig]):
+class CounterOperator(OperatorBase, Operator[CounterOperatorConfig]):
     """Operator that exposes a ""count"" RPC."""
 
     def __init__(self, actor_id: str) -> None:
@@ -300,10 +261,7 @@ class CounterOperator(ActorBase, Operator[CounterOperatorConfig]):
     def from_dict(
         cls,
         config: CounterOperatorConfig,
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> "CounterOperator":
-        del context
         return cls(actor_id=str(config["actor_id"]))
 
     async def start(self) -> None:
@@ -351,13 +309,10 @@ class CounterOperator(ActorBase, Operator[CounterOperatorConfig]):
 class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
     """Agent that increments the shared operator counter per event."""
 
-    def __init__(
-        self,
-        actor_id: str,
-        operator: _CounterOperatorLike,
-    ) -> None:
-        super().__init__(actor_id, operators=(operator,))
-        self._operator = operator
+    def __init__(self, actor_id: str, operator_id: str) -> None:
+        super().__init__(actor_id)
+        self._operator_id = operator_id
+        self._operator: _CounterOperatorLike | None = None
         self._events = 0
         self._observed_counts: list[int] = []
 
@@ -365,21 +320,27 @@ class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
     def from_dict(
         cls,
         config: CounterAgentConfig,
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> "CounterAgent":
-        if context is None:
-            raise RuntimeError("CounterAgent requires runtime context")
-        operator_id = str(config["operator_id"])
-        operator_ref = context.operators.get(operator_id)
-        if operator_ref is None:
+        return cls(
+            actor_id=str(config["actor_id"]),
+            operator_id=str(config["operator_id"]),
+        )
+
+    def register_operators(self, operators: Sequence[Operator]) -> None:
+        super().register_operators(operators)
+        if not operators:
+            raise RuntimeError("CounterAgent requires at least one operator")
+        operator = operators[0]
+        if operator.actor_id != self._operator_id:
             raise RuntimeError(
-                f"CounterAgent could not find operator '{operator_id}' in context"
+                f"CounterAgent expected operator '{self._operator_id}'"
+                f" but received '{operator.actor_id}'"
             )
-        if not hasattr(operator_ref, "count"):
-            raise TypeError(f"operator '{operator_id}' must expose a 'count' coroutine")
-        operator_like = cast(_CounterOperatorLike, operator_ref)
-        return cls(actor_id=str(config["actor_id"]), operator=operator_like)
+        if not hasattr(operator, "count"):
+            raise TypeError(
+                f"operator '{operator.actor_id}' must expose a 'count' coroutine"
+            )
+        self._operator = cast(_CounterOperatorLike, operator)
 
     async def start(self) -> None:
         """Protocol hook: dashboard calls this before events are dispatched."""
@@ -395,7 +356,8 @@ class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
         """Protocol hook: dashboard forwards each stream event to subscribed agents."""
         preview = _preview_payload(event.payload)
         self._events += 1  # One RPC per event keeps the operator authoritative.
-        new_value = await self._operator.count()
+        operator = self._require_operator()
+        new_value = await operator.count()
         self._observed_counts.append(new_value)
         LOGGER.info(
             "agent '%s' handled event seq=%s operator_count=%d payload=%s",
@@ -429,6 +391,11 @@ class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
     def events_processed(self) -> int:
         return self._events
 
+    def _require_operator(self) -> _CounterOperatorLike:
+        if self._operator is None:
+            raise RuntimeError(f"agent '{self.actor_id}' has no registered operator")
+        return self._operator
+
 
 def _build_trial_spec(
     trial_id: str,
@@ -437,33 +404,35 @@ def _build_trial_spec(
     """Return a :class:`TrialSpec` that wires the sample actors together."""
     # Each actor gets a spec that points at its class plus serialized config.
     operator_config: CounterOperatorConfig = {"actor_id": params.operator_id}
-    operator_spec = ActorSpec(
+    operator_spec = OperatorSpec(
         actor_id=params.operator_id,
         actor_cls=CounterOperator,
         config=operator_config,
+        agent_ids=(params.agent_id,),
     )
     agent_config: CounterAgentConfig = {
         "actor_id": params.agent_id,
         "operator_id": params.operator_id,
     }
-    agent_spec = ActorSpec(
+    agent_spec = AgentSpec(
         actor_id=params.agent_id,
         actor_cls=CounterAgent,
         config=agent_config,
+        operator_ids=(params.operator_id,),
     )
     stream_config: BoundedRandomStringDataStreamConfig = {
         "actor_id": params.stream_id,
         "total_events": params.total_events,
         "payload_length": params.payload_length,
         "interval_seconds": params.interval_seconds,
-        "consumers": (params.operator_id, params.agent_id),
     }
     if params.seed is not None:
         stream_config["seed"] = params.seed
-    stream_spec = ActorSpec(
+    stream_spec = DataStreamSpec(
         actor_id=params.stream_id,
         actor_cls=BoundedRandomStringDataStream,
         config=stream_config,
+        consumer_ids=(params.operator_id, params.agent_id),
     )
     return TrialSpec(
         trial_id=trial_id,
