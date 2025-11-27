@@ -96,10 +96,12 @@ For examples, an Operator may:
 - support querying of these state by agents (e.g., tools for looking up account balance)
 
 Each Operator may also consume Data Streams to build its own database of historical data
-to support querying from agents. 
+to support querying from agents, it may also send asynchronous notification to agents
+about events regarding to state changes, e.g., a bet is settled in a betting market.
 
 In short, Data Streams enable asynchronous delivery of data to agents,
-while Operators support synchronous actions by the agents.
+while Operators support synchronous actions by the agents as well as asynchronous
+notification to the agents.
 
 ### **Agents**
 

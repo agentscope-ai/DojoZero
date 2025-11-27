@@ -7,16 +7,17 @@ interval so the operator's counter increments in bursts rather than per-event.
 
 import asyncio
 import logging
-from typing import Any, Mapping, Protocol, cast
+from typing import Any, Mapping, Protocol, Sequence, cast
 
 from pydantic import Field
 
 from agentx.core import (
-    ActorRuntimeContext,
-    ActorSpec,
     Agent,
     AgentBase,
+    AgentSpec,
+    DataStreamSpec,
     Operator,
+    OperatorSpec,
     register_trial_builder,
     StreamEvent,
     TrialSpec,
@@ -60,11 +61,12 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
     def __init__(
         self,
         actor_id: str,
-        operator: _CounterOperatorLike,
+        operator_id: str,
         flush_interval_seconds: float,
     ) -> None:
-        super().__init__(actor_id, operators=(operator,))
-        self._operator = operator
+        super().__init__(actor_id)
+        self._operator_id = operator_id
+        self._operator: _CounterOperatorLike | None = None
         self._flush_interval = max(float(flush_interval_seconds), 0.001)
         self._events = 0
         self._observed_counts: list[int] = []
@@ -76,26 +78,29 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
     def from_dict(
         cls,
         spec: CounterAgentBufferedConfig,
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> "CounterAgentBuffered":
-        if context is None:
-            raise RuntimeError("CounterAgentBuffered requires runtime context")
-        operator_id = str(spec["operator_id"])
-        operator_ref = context.operators.get(operator_id)
-        if operator_ref is None:
-            raise RuntimeError(
-                f"CounterAgentBuffered could not find operator '{operator_id}' in context"
-            )
-        if not hasattr(operator_ref, "count"):
-            raise TypeError(f"operator '{operator_id}' must expose a 'count' coroutine")
         interval = float(spec.get("flush_interval_seconds", 5.0))
-        operator_like = cast(_CounterOperatorLike, operator_ref)
         return cls(
             actor_id=str(spec["actor_id"]),
-            operator=operator_like,
+            operator_id=str(spec["operator_id"]),
             flush_interval_seconds=interval,
         )
+
+    def register_operators(self, operators: Sequence[Operator]) -> None:
+        super().register_operators(operators)
+        if not operators:
+            raise RuntimeError("CounterAgentBuffered requires at least one operator")
+        operator = operators[0]
+        if operator.actor_id != self._operator_id:
+            raise RuntimeError(
+                f"CounterAgentBuffered expected operator '{self._operator_id}'"
+                f" but received '{operator.actor_id}'"
+            )
+        if not hasattr(operator, "count"):
+            raise TypeError(
+                f"operator '{operator.actor_id}' must expose a 'count' coroutine"
+            )
+        self._operator = cast(_CounterOperatorLike, operator)
 
     async def start(self) -> None:
         LOGGER.info(
@@ -196,7 +201,8 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
         for record in batch:
             preview = _preview_payload(record.get("payload"))
             self._events += 1
-            new_value = await self._operator.count()
+            operator = self._require_operator()
+            new_value = await operator.count()
             self._observed_counts.append(new_value)
             LOGGER.info(
                 "buffered agent '%s' processed buffered seq=%s operator_count=%d reason=%s payload=%s",
@@ -207,40 +213,47 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
                 preview,
             )
 
+    def _require_operator(self) -> _CounterOperatorLike:
+        if self._operator is None:
+            raise RuntimeError(f"agent '{self.actor_id}' has no registered operator")
+        return self._operator
+
 
 def _build_buffered_trial_spec(
     trial_id: str,
     params: BoundedRandomBufferedTrialParams,
 ) -> TrialSpec:
     operator_config: CounterOperatorConfig = {"actor_id": params.operator_id}
-    operator_spec = ActorSpec(
+    operator_spec = OperatorSpec(
         actor_id=params.operator_id,
         actor_cls=CounterOperator,
         config=operator_config,
+        agent_ids=(params.agent_id,),
     )
     agent_config: CounterAgentBufferedConfig = {
         "actor_id": params.agent_id,
         "operator_id": params.operator_id,
         "flush_interval_seconds": params.buffer_flush_seconds,
     }
-    agent_spec = ActorSpec(
+    agent_spec = AgentSpec(
         actor_id=params.agent_id,
         actor_cls=CounterAgentBuffered,
         config=agent_config,
+        operator_ids=(params.operator_id,),
     )
     stream_config: BoundedRandomStringDataStreamConfig = {
         "actor_id": params.stream_id,
         "total_events": params.total_events,
         "payload_length": params.payload_length,
         "interval_seconds": params.interval_seconds,
-        "consumers": (params.operator_id, params.agent_id),
     }
     if params.seed is not None:
         stream_config["seed"] = params.seed
-    stream_spec = ActorSpec(
+    stream_spec = DataStreamSpec(
         actor_id=params.stream_id,
         actor_cls=BoundedRandomStringDataStream,
         config=stream_config,
+        consumer_ids=(params.operator_id, params.agent_id),
     )
     return TrialSpec(
         trial_id=trial_id,

@@ -1,18 +1,20 @@
-from typing import Any, Mapping, Sequence, TypedDict
+from typing import Any, Mapping, TypedDict
 
 import pytest
 
 from agentx.core import (
-    ActorBase,
-    ActorRuntimeContext,
-    ActorSpec,
     Agent,
+    AgentBase,
+    AgentSpec,
     Dashboard,
     DataStream,
     DataStreamBase,
+    DataStreamSpec,
     FileSystemDashboardStore,
     InMemoryDashboardStore,
     Operator,
+    OperatorBase,
+    OperatorSpec,
     StreamEvent,
     TrialPhase,
     TrialSpec,
@@ -40,10 +42,9 @@ class DummyAgentConfig(TypedDict):
 
 class DummyStreamConfig(TypedDict):
     actor_id: str
-    consumers: Sequence[str]
 
 
-class DummyOperator(ActorBase, Operator[DummyOperatorConfig]):
+class DummyOperator(OperatorBase, Operator[DummyOperatorConfig]):
     def __init__(self, actor_id: str) -> None:
         super().__init__(actor_id)
         self.events_handled = 0
@@ -53,10 +54,7 @@ class DummyOperator(ActorBase, Operator[DummyOperatorConfig]):
     def from_dict(
         cls,
         config: DummyOperatorConfig,
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> "DummyOperator":
-        del context
         return cls(actor_id=str(config["actor_id"]))
 
     async def start(self) -> None:
@@ -76,7 +74,7 @@ class DummyOperator(ActorBase, Operator[DummyOperatorConfig]):
         self.events_handled = self.restored_events
 
 
-class DummyAgent(ActorBase, Agent[DummyAgentConfig]):
+class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     def __init__(self, actor_id: str) -> None:
         super().__init__(actor_id)
         self.event_count = 0
@@ -86,10 +84,7 @@ class DummyAgent(ActorBase, Agent[DummyAgentConfig]):
     def from_dict(
         cls,
         config: DummyAgentConfig,
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> "DummyAgent":
-        del context
         return cls(actor_id=str(config["actor_id"]))
 
     async def start(self) -> None:
@@ -110,13 +105,8 @@ class DummyAgent(ActorBase, Agent[DummyAgentConfig]):
 
 
 class DummyDataStream(DataStreamBase, DataStream[DummyStreamConfig]):
-    def __init__(
-        self,
-        actor_id: str,
-        *,
-        consumers: Sequence[Agent | Operator] | None = None,
-    ) -> None:
-        super().__init__(actor_id, consumers=consumers)
+    def __init__(self, actor_id: str) -> None:
+        super().__init__(actor_id)
         self.emitted = 0
         self.restored_emissions = 0
 
@@ -124,24 +114,8 @@ class DummyDataStream(DataStreamBase, DataStream[DummyStreamConfig]):
     def from_dict(
         cls,
         config: DummyStreamConfig,
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> "DummyDataStream":
-        consumer_ids = tuple(config.get("consumers", ()))
-        if consumer_ids and context is None:
-            raise RuntimeError("DummyDataStream requires runtime context")
-        consumers: list[Agent | Operator] = []
-        if context is not None:
-            for consumer_id in consumer_ids:
-                handle: Agent | Operator | None = context.agents.get(consumer_id)
-                if handle is None:
-                    handle = context.operators.get(consumer_id)
-                if handle is None:
-                    raise RuntimeError(
-                        f"DummyDataStream could not resolve consumer '{consumer_id}'"
-                    )
-                consumers.append(handle)
-        return cls(actor_id=str(config["actor_id"]), consumers=tuple(consumers))
+        return cls(actor_id=str(config["actor_id"]))
 
     async def start(self) -> None:
         _record(self.actor_id, "start")
@@ -304,34 +278,34 @@ def _build_trial_spec(
     resume_states = resume_states or {}
     operator_config: DummyOperatorConfig = {"actor_id": "op-1"}
     agent_config: DummyAgentConfig = {"actor_id": "agent-1"}
-    stream_config: DummyStreamConfig = {
-        "actor_id": "stream-1",
-        "consumers": ("op-1", "agent-1"),
-    }
+    stream_config: DummyStreamConfig = {"actor_id": "stream-1"}
     return TrialSpec(
         trial_id=trial_id,
         operators=(
-            ActorSpec(
+            OperatorSpec(
                 actor_id="op-1",
                 actor_cls=DummyOperator,
                 config=operator_config,
                 resume_state=resume_states.get("op-1"),
+                agent_ids=("agent-1",),
             ),
         ),
         agents=(
-            ActorSpec(
+            AgentSpec(
                 actor_id="agent-1",
                 actor_cls=DummyAgent,
                 config=agent_config,
                 resume_state=resume_states.get("agent-1"),
+                operator_ids=("op-1",),
             ),
         ),
         data_streams=(
-            ActorSpec(
+            DataStreamSpec(
                 actor_id="stream-1",
                 actor_cls=DummyDataStream,
                 config=stream_config,
                 resume_state=resume_states.get("stream-1"),
+                consumer_ids=("op-1", "agent-1"),
             ),
         ),
         metadata={"env": "test"},
