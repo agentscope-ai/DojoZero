@@ -81,7 +81,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-default-imports",
         action="store_true",
-        help="Skip importing built-in helper modules (e.g. agentx.samples).",
+        help="Skip importing built-in helper modules (e.g. samples).",
     )
     parser.add_argument(
         "--log-level",
