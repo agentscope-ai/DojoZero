@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any, Protocol, TYPE_CHECKING
 
-from ._actors import Actor, ActorRuntimeContext, ActorState
+from ._actors import Actor, ActorState
 
 if TYPE_CHECKING:  # pragma: no cover - import-time circular guard
     from ._dashboard import ActorSpec
@@ -30,12 +30,7 @@ class ActorHandler(Protocol):
 class ActorRuntimeProvider(Protocol):
     """Factory that turns :class:`ActorSpec` declarations into handlers."""
 
-    async def create_handler(
-        self,
-        spec: "ActorSpec[Any]",
-        *,
-        context: ActorRuntimeContext | None = None,
-    ) -> ActorHandler: ...
+    async def create_handler(self, spec: "ActorSpec[Any]") -> ActorHandler: ...
 
 
 @dataclass(slots=True)
@@ -71,10 +66,8 @@ class LocalActorRuntimeProvider(ActorRuntimeProvider):
     async def create_handler(
         self,
         spec: "ActorSpec[Any]",
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> LocalActorHandler:
-        actor = spec.actor_cls.from_dict(spec.config, context=context)
+        actor = spec.actor_cls.from_dict(spec.config)
         if actor.actor_id != spec.actor_id:
             raise ValueError(
                 f"actor id mismatch: spec '{spec.actor_id}' != instance '{actor.actor_id}'"

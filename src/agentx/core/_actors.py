@@ -1,6 +1,5 @@
 """Protocol definitions for AgentX actors and supporting interfaces."""
 
-from types import MappingProxyType
 from typing import (
     Any,
     Mapping,
@@ -29,13 +28,8 @@ class Actor(Protocol[ConfigT]):
         ...
 
     @classmethod
-    def from_dict(
-        cls: Type[ActorT],
-        config: ConfigT,
-        *,
-        context: "ActorRuntimeContext | None" = None,
-    ) -> ActorT:
-        """Build a configured actor from a serialized configuration payload and runtime context."""
+    def from_dict(cls: Type[ActorT], config: ConfigT) -> ActorT:
+        """Build a configured actor from a serialized configuration payload."""
         ...
 
     async def start(self) -> None:
@@ -59,6 +53,12 @@ class Actor(Protocol[ConfigT]):
 class DataStream(Actor[ConfigT], Protocol[ConfigT]):
     """Actor that publishes :class:`StreamEvent` objects to interested consumers."""
 
+    def register_consumers(self, consumers: Sequence["Agent | Operator"]) -> None:
+        """Register consumers to receive stream events.
+
+        This method is called by the dashboard to set up initial subscriptions."""
+        ...
+
     @property
     def consumers(self) -> Sequence[str]:
         """Return the actor IDs currently subscribed to this stream."""
@@ -73,6 +73,17 @@ class Operator(Actor[ConfigT], Protocol[ConfigT]):
         """Process asynchronous data delivered by a :class:`DataStream`."""
         ...
 
+    def register_agents(self, agents: Sequence["Agent"]) -> None:
+        """Register agents that can be notified of stream events.
+
+        This method is called by the dashboard to set up initial subscriptions."""
+        ...
+
+    @property
+    def agents(self) -> Sequence[str]:
+        """Return the agent IDs that can be notified of stream events."""
+        ...
+
 
 @runtime_checkable
 class Agent(Actor[ConfigT], Protocol[ConfigT]):
@@ -82,28 +93,13 @@ class Agent(Actor[ConfigT], Protocol[ConfigT]):
         """Process asynchronous data delivered by a :class:`DataStream`."""
         ...
 
+    def register_operators(self, operators: Sequence[Operator]) -> None:
+        """Register operators that the agent can reach.
+
+        This method is called by the dashboard to set up initial connections."""
+        ...
+
     @property
     def operators(self) -> Sequence[str]:
         """Return the operator IDs the agent can reach."""
         ...
-
-
-class ActorRuntimeContext:
-    """Dashboard-supplied registry of initialized actor instances."""
-
-    __slots__ = ("agents", "operators", "data_streams")
-
-    def __init__(
-        self,
-        *,
-        agents: Mapping[str, Agent[Any]] | None = None,
-        operators: Mapping[str, Operator[Any]] | None = None,
-        data_streams: Mapping[str, DataStream[Any]] | None = None,
-    ) -> None:
-        self.agents: Mapping[str, Agent[Any]] = MappingProxyType(dict(agents or {}))
-        self.operators: Mapping[str, Operator[Any]] = MappingProxyType(
-            dict(operators or {})
-        )
-        self.data_streams: Mapping[str, DataStream[Any]] = MappingProxyType(
-            dict(data_streams or {})
-        )

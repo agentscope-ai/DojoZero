@@ -7,6 +7,7 @@ lifecycle (start, stop, checkpoint, resume).
 """
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -29,7 +30,6 @@ from uuid import uuid4
 
 from ._actors import (
     Actor,
-    ActorRuntimeContext,
     ActorState,
     Agent,
     DataStream,
@@ -129,14 +129,47 @@ class ActorSpec(Generic[ConfigSpecT]):
             self.resume_state = dict(self.resume_state)
 
 
+@dataclass
+class OperatorSpec(ActorSpec[ConfigSpecT]):
+    """Specialized :class:`ActorSpec` for operator actors."""
+
+    agent_ids: Sequence[str] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.agent_ids = tuple(self.agent_ids)
+
+
+@dataclass
+class AgentSpec(ActorSpec[ConfigSpecT]):
+    """Specialized :class:`ActorSpec` for agent actors."""
+
+    operator_ids: Sequence[str] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.operator_ids = tuple(self.operator_ids)
+
+
+@dataclass
+class DataStreamSpec(ActorSpec[ConfigSpecT]):
+    """Specialized :class:`ActorSpec` for data stream actors."""
+
+    consumer_ids: Sequence[str] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.consumer_ids = tuple(self.consumer_ids)
+
+
 @dataclass(slots=True)
 class TrialSpec:
     """High-level description of a trial."""
 
     trial_id: str
-    data_streams: Sequence[ActorSpec[Any]] = ()
-    operators: Sequence[ActorSpec[Any]] = ()
-    agents: Sequence[ActorSpec[Any]] = ()
+    data_streams: Sequence[DataStreamSpec[Any]] = ()
+    operators: Sequence[OperatorSpec[Any]] = ()
+    agents: Sequence[AgentSpec[Any]] = ()
     metadata: JSONDict = field(default_factory=dict)
     resume_from_checkpoint_id: str | None = None
     resume_from_latest: bool = False
@@ -604,17 +637,10 @@ class Dashboard:
         operators: Dict[str, Operator] = {}
         data_streams: Dict[str, DataStream] = {}
 
-        def _make_context() -> ActorRuntimeContext:
-            return ActorRuntimeContext(
-                agents=agents,
-                operators=operators,
-                data_streams=data_streams,
-            )
-
         for actor_spec in spec.operators:
-            context = _make_context()
             runtime = await self._materialize_actor(
-                actor_spec, ActorRole.OPERATOR, context=context
+                actor_spec,
+                ActorRole.OPERATOR,
             )
             self._register_actor_runtime(registry, runtime)
             operator_instance = runtime.instance
@@ -628,11 +654,9 @@ class Dashboard:
                 )
             operators[runtime.actor_id] = cast(Operator, operator_instance)
         for actor_spec in spec.agents:
-            context = _make_context()
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.AGENT,
-                context=context,
             )
             self._register_actor_runtime(registry, runtime)
             agent_instance = runtime.instance
@@ -645,11 +669,9 @@ class Dashboard:
                 )
             agents[runtime.actor_id] = cast(Agent, agent_instance)
         for actor_spec in spec.data_streams:
-            context = _make_context()
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.DATA_STREAM,
-                context=context,
             )
             self._register_actor_runtime(registry, runtime)
             stream_instance = runtime.instance
@@ -662,17 +684,21 @@ class Dashboard:
                     " does not implement the DataStream protocol"
                 )
             data_streams[runtime.actor_id] = cast(DataStream, stream_instance)
+        await self._wire_actor_dependencies(
+            spec,
+            agents=agents,
+            operators=operators,
+            data_streams=data_streams,
+        )
         return TrialRuntime(spec=spec, actors=registry, record=record)
 
     async def _materialize_actor(
         self,
         spec: ActorSpec[Any],
         role: ActorRole,
-        *,
-        context: ActorRuntimeContext | None = None,
     ) -> ActorRuntime[Any]:
         try:
-            handler = await self._runtime_provider.create_handler(spec, context=context)
+            handler = await self._runtime_provider.create_handler(spec)
         except Exception as exc:  # pragma: no cover - defensive translation
             raise DashboardError(str(exc)) from exc
         return ActorRuntime(spec=spec, handler=handler, role=role)
@@ -683,6 +709,132 @@ class Dashboard:
         if runtime.actor_id in registry:
             raise DashboardError(f"duplicate actor id '{runtime.actor_id}' detected")
         registry[runtime.actor_id] = runtime
+
+    async def _wire_actor_dependencies(
+        self,
+        spec: TrialSpec,
+        *,
+        agents: Mapping[str, Agent[Any]],
+        operators: Mapping[str, Operator[Any]],
+        data_streams: Mapping[str, DataStream[Any]],
+    ) -> None:
+        await self._wire_operator_agents(spec.operators, operators, agents)
+        await self._wire_agent_operators(spec.agents, agents, operators)
+        await self._wire_stream_consumers(
+            spec.data_streams,
+            data_streams,
+            agents,
+            operators,
+        )
+
+    async def _wire_operator_agents(
+        self,
+        operator_specs: Sequence[OperatorSpec[Any]],
+        operators: Mapping[str, Operator[Any]],
+        agents: Mapping[str, Agent[Any]],
+    ) -> None:
+        for operator_spec in operator_specs:
+            if not operator_spec.agent_ids:
+                continue
+            operator = operators.get(operator_spec.actor_id)
+            if operator is None:  # pragma: no cover - defensive
+                raise DashboardError(
+                    f"operator '{operator_spec.actor_id}' missing from runtime registry"
+                )
+            dependencies: list[Agent[Any]] = []
+            for agent_id in operator_spec.agent_ids:
+                agent = agents.get(agent_id)
+                if agent is None:
+                    raise DashboardError(
+                        f"operator '{operator_spec.actor_id}' requires agent '{agent_id}'"
+                    )
+                dependencies.append(agent)
+            await self._invoke_registration(
+                operator,
+                "register_agents",
+                tuple(dependencies),
+                actor_id=operator_spec.actor_id,
+            )
+
+    async def _wire_agent_operators(
+        self,
+        agent_specs: Sequence[AgentSpec[Any]],
+        agents: Mapping[str, Agent[Any]],
+        operators: Mapping[str, Operator[Any]],
+    ) -> None:
+        for agent_spec in agent_specs:
+            if not agent_spec.operator_ids:
+                continue
+            agent = agents.get(agent_spec.actor_id)
+            if agent is None:  # pragma: no cover - defensive
+                raise DashboardError(
+                    f"agent '{agent_spec.actor_id}' missing from runtime registry"
+                )
+            dependencies: list[Operator[Any]] = []
+            for operator_id in agent_spec.operator_ids:
+                operator = operators.get(operator_id)
+                if operator is None:
+                    raise DashboardError(
+                        f"agent '{agent_spec.actor_id}' requires operator '{operator_id}'"
+                    )
+                dependencies.append(operator)
+            await self._invoke_registration(
+                agent,
+                "register_operators",
+                tuple(dependencies),
+                actor_id=agent_spec.actor_id,
+            )
+
+    async def _wire_stream_consumers(
+        self,
+        stream_specs: Sequence[DataStreamSpec[Any]],
+        data_streams: Mapping[str, DataStream[Any]],
+        agents: Mapping[str, Agent[Any]],
+        operators: Mapping[str, Operator[Any]],
+    ) -> None:
+        for stream_spec in stream_specs:
+            if not stream_spec.consumer_ids:
+                continue
+            stream = data_streams.get(stream_spec.actor_id)
+            if stream is None:  # pragma: no cover - defensive
+                raise DashboardError(
+                    f"data stream '{stream_spec.actor_id}' missing from runtime registry"
+                )
+            dependencies: list[Agent[Any] | Operator[Any]] = []
+            for consumer_id in stream_spec.consumer_ids:
+                consumer: Agent[Any] | Operator[Any] | None = agents.get(consumer_id)
+                if consumer is None:
+                    consumer = operators.get(consumer_id)
+                if consumer is None:
+                    raise DashboardError(
+                        f"stream '{stream_spec.actor_id}' requires consumer '{consumer_id}'"
+                    )
+                dependencies.append(consumer)
+            await self._invoke_registration(
+                stream,
+                "register_consumers",
+                tuple(dependencies),
+                actor_id=stream_spec.actor_id,
+            )
+
+    async def _invoke_registration(
+        self,
+        actor: Any,
+        method_name: str,
+        payload: Sequence[Any],
+        *,
+        actor_id: str,
+    ) -> None:
+        if not payload:
+            return
+        registrar = getattr(actor, method_name, None)
+        if registrar is None:
+            raise DashboardError(
+                f"actor '{actor_id}' missing required '{method_name}' method"
+            )
+        result = registrar(payload)
+        if inspect.isawaitable(result):
+            await cast(Awaitable[Any], result)
 
     async def _with_trial_lock(
         self, runtime: TrialRuntime, fn: Callable[[TrialRuntime], Awaitable[None]]
@@ -929,12 +1081,15 @@ __all__ = [
     "ActorPhase",
     "ActorRole",
     "ActorSpec",
+    "AgentSpec",
     "ActorStatus",
     "ActorLifecycleError",
     "Dashboard",
     "DashboardError",
     "DashboardStore",
+    "DataStreamSpec",
     "InMemoryDashboardStore",
+    "OperatorSpec",
     "TrialCheckpoint",
     "TrialExistsError",
     "TrialNotFoundError",

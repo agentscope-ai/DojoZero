@@ -162,7 +162,7 @@ class MyScenarioConfig(BaseModel):
 
 
 def build_my_scenario(trial_id: str, config: MyScenarioConfig) -> TrialSpec:
-		# construct ActorSpec objects (agents/operators/streams) here
+		# construct AgentSpec / OperatorSpec / DataStreamSpec objects here
 		...
 
 
