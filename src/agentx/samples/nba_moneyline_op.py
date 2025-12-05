@@ -11,9 +11,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, Sequence, TypedDict
 
 from agentx.core import (
+    Agent,
     Operator,
     OperatorBase,
     StreamEvent,
@@ -32,15 +33,6 @@ class BetOutcome(Enum):
 
     WIN = "WIN"
     LOSS = "LOSS"
-
-
-class NotificationType(Enum):
-    """Types of notifications sent to agents"""
-
-    BET_PLACED = "BET_PLACED"
-    BET_REJECTED = "BET_REJECTED"
-    BET_WON = "BET_WON"
-    BET_LOST = "BET_LOST"
 
 
 # =============================================================================
@@ -157,27 +149,6 @@ class Bet:
 
 
 @dataclass
-class EventResult:
-    """Event result from datastream to broker"""
-
-    event_id: str
-    winner: str  # "home" or "away"
-    final_data: Dict[str, Any]
-    timestamp: datetime
-
-    @classmethod
-    def from_stream_event(cls, event: StreamEvent[Any]) -> "EventResult":
-        """Create EventResult from StreamEvent"""
-        data = event.payload
-        return cls(
-            event_id=data["event_id"],
-            winner=data["winner"],
-            final_data=data.get("final_data", {}),
-            timestamp=event.emitted_at,
-        )
-
-
-@dataclass
 class Statistics:
     """Agent performance statistics"""
 
@@ -202,16 +173,6 @@ class Statistics:
         }
 
 
-@dataclass
-class Notification:
-    """Notification to agent"""
-
-    notification_type: NotificationType
-    agent_id: str
-    data: Dict[str, Any]
-    timestamp: datetime
-
-
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -224,7 +185,7 @@ class _ActorIdConfig(TypedDict):
 class BrokerOperatorConfig(_ActorIdConfig, total=False):
     """Configuration for BrokerOperator"""
 
-    initial_balances: Dict[str, str]  # agent_id -> balance (as string for Decimal)
+    initial_balance: str  # the initial balance of all agents (as string for Decimal)
 
 
 # =============================================================================
@@ -244,10 +205,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     """
 
     def __init__(self, config: BrokerOperatorConfig):
-        # Pass actor_id string to parent class
-        # Parent class will set self.actor_id as a property
         super().__init__(config["actor_id"])
-        self._config = config
+        self._agent_registry: Dict[str, Agent] = {}  # agent_id -> Agent
 
         # Account management
         self._accounts: Dict[str, Account] = {}  # agent_id -> Account
@@ -265,27 +224,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             list
         )  # event_id -> [bet_ids]
 
-        # Notifications queue (for async notifications to agents)
-        self._notifications: List[Notification] = []
-
         # Initialize accounts if provided in config
-        initial_balances = config.get("initial_balances", {})
-        for agent_id, balance_str in initial_balances.items():
-            balance = Decimal(balance_str)
-            now = datetime.now()
-            self._accounts[agent_id] = Account(
-                agent_id=agent_id,
-                balance=balance,
-                created_at=now,
-                last_updated=now,
-            )
+        self.initial_balance = config.get("initial_balance", "0")
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "BrokerOperator":
         # Create typed config
         broker_config: BrokerOperatorConfig = {
             "actor_id": config["actor_id"],
-            "initial_balances": config.get("initial_balances", {}),
+            "initial_balance": config.get("initial_balance", "0"),
         }
 
         return cls(broker_config)
@@ -305,36 +252,45 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         )
         return None
 
+    def register_agents(self, agents: Sequence[Agent]) -> None:
+        """Register agents that can be notified of stream events."""
+        super().register_agents(agents)
+        # Create accounts for newly registered agents
+        for agent in agents:
+            self.create_account(agent.actor_id, Decimal(self.initial_balance))
+
     async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
         """Protocol hook: dashboard forwards stream payloads here when routed."""
-        await self.on_event(event)
+        try:
+            await self.settle_event(event)
+        except Exception as e:
+            print(f"Error handling event: {e}")
 
     # =========================================================================
     # Account Management
     # =========================================================================
 
-    async def create_account(self, agent_id: str, initial_balance: Decimal) -> Account:
+    def create_account(self, agent_id: str, initial_balance: Decimal) -> Account:
         """Initialize a new agent account."""
         if initial_balance < 0:
             raise ValueError(
                 f"Initial balance must be non-negative, got {initial_balance}"
             )
 
-        async with self._agent_locks[agent_id]:
-            if agent_id in self._accounts:
-                raise ValueError(f"Account for agent {agent_id} already exists")
+        if agent_id in self._accounts:
+            raise ValueError(f"Account for agent {agent_id} already exists")
 
-            now = datetime.now()
-            account = Account(
-                agent_id=agent_id,
-                balance=initial_balance,
-                created_at=now,
-                last_updated=now,
-            )
-            self._accounts[agent_id] = account
+        now = datetime.now()
+        account = Account(
+            agent_id=agent_id,
+            balance=initial_balance,
+            created_at=now,
+            last_updated=now,
+        )
+        self._accounts[agent_id] = account
 
-            self._log_transaction(agent_id, "ACCOUNT_CREATED", initial_balance)
-            return account
+        self._log_transaction(agent_id, "ACCOUNT_CREATED", initial_balance)
+        return account
 
     async def get_balance(self, agent_id: str) -> Decimal:
         """Retrieve current account balance."""
@@ -398,7 +354,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # Bet Management
     # =========================================================================
 
-    async def place_bet(self, agent_id: str, bet_request: BetRequest) -> Bet:
+    async def place_bet(self, agent_id: str, bet_request: BetRequest) -> Optional[Bet]:
         """
         Accept and process a new bet from an agent.
 
@@ -462,31 +418,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 # Log bet placement
                 self._log_bet(agent_id, "BET_PLACED", bet)
 
-                # Notify agent
-                self._notify_agent(
-                    agent_id, NotificationType.BET_PLACED, {"bet": bet.to_dict()}
-                )
-
+                # If bet was successfully placed, return the bet
                 return bet
 
         except (ValueError, Exception) as e:
-            # Notify agent of rejection
-            self._notify_agent(
-                agent_id,
-                NotificationType.BET_REJECTED,
-                {
-                    "bet_request": {
-                        "amount": str(bet_request.amount),
-                        "selection": bet_request.selection,
-                        "odds": str(bet_request.odds),
-                        "event_id": bet_request.event_id,
-                    },
-                    "reason": str(e),
-                },
-            )
-            raise
+            # If the bet was rejected, return None to the agent
+            print(f"Bet rejected for {agent_id}: {e}")
+            return None
 
-    async def settle_bet(self, bet: Bet, result: EventResult) -> None:
+    async def settle_bet(self, bet: Bet, event: StreamEvent[Any]) -> None:
         """
         Resolve a bet based on event outcome.
 
@@ -500,12 +440,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         Side Effects:
             - Updates account balance (if win)
-            - Sends win/loss notification
+            - Push the event to the agent
             - Creates settlement log
         """
         async with self._agent_locks[bet.agent_id]:
             # Determine outcome
-            is_win = bet.selection == result.winner
+            winner = event.payload["winner"]
+            event_id = event.payload["event_id"]
+
+            is_win = bet.selection == winner
             outcome = BetOutcome.WIN if is_win else BetOutcome.LOSS
 
             # Calculate payout
@@ -528,40 +471,34 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             self._bet_history[bet.agent_id].append(bet.bet_id)
 
             # Log settlement
-            self._log_settlement(bet, result)
+            self._log_settlement(bet, event)
 
-            # Notify agent
-            notification_type = (
-                NotificationType.BET_WON if is_win else NotificationType.BET_LOST
+            # Push the streamevent to the agent
+            print(
+                f"[NOTIFICATION] Settling Bet {bet.bet_id} for Agent {bet.agent_id} - "
+                f"Event {event_id} (Winner: {winner})"
             )
-            self._notify_agent(
-                bet.agent_id,
-                notification_type,
-                {
-                    "bet": bet.to_dict(),
-                    "result": {
-                        "event_id": result.event_id,
-                        "winner": result.winner,
-                    },
-                },
-            )
+            """
+                We assume a StreamEvent[Any] object has the following attributes:
+                - stream_id
+                - payload: Dict[str, Any] - The event data containing:
+                    - "event_id": str - Unique identifier for the game/event
+                    - "winner": str - Result of the game, either "home" or "away"
+                    - "final_data": Dict[str, Any] (optional) - Additional game metadata
+                - emitted_at: datetime - Timestamp when the event was emitted
+            """
 
-    async def settle_event(self, event_id: str, winner: str) -> int:
+            await self._notify_agent(bet.agent_id, event)
+
+    async def settle_event(self, event: StreamEvent[Any]) -> int:
         """Settle all bets for a given event."""
-
-        result = EventResult(
-            event_id=event_id,
-            winner=winner,
-            final_data={},
-            timestamp=datetime.now(),
-        )
-
+        event_id = event.payload["event_id"]
         bet_ids = self._event_bets.get(event_id, []).copy()
 
         for bet_id in bet_ids:
             bet = self._bets[bet_id]
             if bet.status == BetStatus.ACTIVE:
-                await self.settle_bet(bet, result)
+                await self.settle_bet(bet, event)
 
         return len(bet_ids)
 
@@ -649,27 +586,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         return self._accounts[agent_id]
 
     # =========================================================================
-    # Event Handling (from DataStream)
-    # =========================================================================
-
-    async def on_event(self, event: StreamEvent[Any]) -> None:
-        """
-        Handle incoming events from data streams.
-
-        Expected event data format:
-        {
-            "event_id": str,
-            "winner": str,  # "home" or "away"
-            "final_data": dict (optional)
-        }
-        """
-        try:
-            result = EventResult.from_stream_event(event)
-            await self.settle_event(result.event_id, result.winner)
-        except Exception as e:
-            print(f"Error handling event: {e}")
-
-    # =========================================================================
     # State Management
     # =========================================================================
 
@@ -715,23 +631,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # Helper Methods
     # =========================================================================
 
-    def _notify_agent(
-        self, agent_id: str, notification_type: NotificationType, data: Dict[str, Any]
-    ) -> None:
-        """
-        Send notification to agent (async).
-
-        In production, this would publish to a message queue or callback.
-        For now, we store in a notifications list.
-        """
-        notification = Notification(
-            notification_type=notification_type,
-            agent_id=agent_id,
-            data=data,
-            timestamp=datetime.now(),
-        )
-        self._notifications.append(notification)
-
     def _log_transaction(
         self, agent_id: str, transaction_type: str, amount: Decimal
     ) -> None:
@@ -751,12 +650,14 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             f"Selection: {bet.selection}, Odds: {bet.odds}"
         )
 
-    def _log_settlement(self, bet: Bet, result: EventResult) -> None:
+    def _log_settlement(self, bet: Bet, event: StreamEvent[Any]) -> None:
         """Log bet settlement"""
+        event_id = event.payload["event_id"]
+        winner = event.payload["winner"]
         outcome_str = bet.outcome.value if bet.outcome else "UNKNOWN"
         print(
             f"[SETTLEMENT] {datetime.now().isoformat()} - "
-            f"BetID: {bet.bet_id}, EventID: {result.event_id}, "
-            f"Winner: {result.winner}, Outcome: {outcome_str}, "
+            f"BetID: {bet.bet_id}, EventID: {event_id}, "
+            f"Winner: {winner}, Outcome: {outcome_str}, "
             f"Payout: {bet.actual_payout}"
         )
