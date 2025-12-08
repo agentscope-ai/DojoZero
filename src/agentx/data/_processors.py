@@ -1,0 +1,55 @@
+"""Data processors for transforming events."""
+
+from abc import ABC, abstractmethod
+from typing import Sequence
+
+from agentx.data._models import DataEvent, DataFact
+
+
+class DataProcessor(ABC):
+    """Base class for processors that transform events.
+    
+    Processors can transform raw events into cooked events or facts.
+    They are registered in DataStores for stream processing.
+    """
+    
+    @abstractmethod
+    async def process(self, events: Sequence[DataEvent]) -> DataEvent | DataFact | None:
+        """Process events and return transformed event or fact.
+        
+        Args:
+            events: Sequence of input events
+            
+        Returns:
+            Transformed event, fact, or None
+        """
+        ...
+
+
+class CompositeProcessor(DataProcessor):
+    """Processor that chains multiple processors together."""
+    
+    def __init__(self, processors: Sequence[DataProcessor]):
+        """Initialize composite processor.
+        
+        Args:
+            processors: Sequence of processors to chain
+        """
+        self.processors = processors
+    
+    async def process(self, events: Sequence[DataEvent]) -> DataEvent | DataFact | None:
+        """Process events through all processors in sequence."""
+        result = events
+        for processor in self.processors:
+            if isinstance(result, Sequence):
+                processed = await processor.process(result)
+                if processed is None:
+                    return None
+                if isinstance(processed, DataEvent):
+                    result = [processed]
+                elif isinstance(processed, DataFact):
+                    return processed
+            else:
+                break
+        return result[0] if result and isinstance(result, Sequence) and len(result) == 1 else None
+
