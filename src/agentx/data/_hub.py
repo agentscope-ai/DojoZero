@@ -192,32 +192,23 @@ class DataHub:
         if not event_type:
             return None
         
-        # Try to import and reconstruct event class
-        # This is a simplified version - in practice, you'd have a registry
         try:
+            # Get event class from registry
+            from agentx.data._models import get_event_class
+            
+            event_class = get_event_class(event_type)
+            if not event_class:
+                print(f"Event class not found for event_type: {event_type}")
+                return None
+            
             # Parse timestamp
-            timestamp_str = event_dict.get("timestamp", "")
-            if isinstance(timestamp_str, str):
-                timestamp = datetime.fromisoformat(timestamp_str)
-            else:
-                timestamp = datetime.now(timezone.utc)
+            event_data = {k: v for k, v in event_dict.items() if k != "event_type"}
+            if "timestamp" in event_data:
+                if isinstance(event_data["timestamp"], str):
+                    event_data["timestamp"] = datetime.fromisoformat(event_data["timestamp"])
             
-            # Create event with remaining data
-            event_data = {k: v for k, v in event_dict.items() if k not in ["event_type", "timestamp"]}
-            event_data["timestamp"] = timestamp
-            
-            # For now, return a generic event
-            # In practice, you'd have event class registry
-            from agentx.data._models import DataEvent as BaseEvent
-            
-            class ReconstructedEvent(BaseEvent):
-                def __init__(self, **kwargs):
-                    super().__init__(**kwargs)
-                    for k, v in kwargs.items():
-                        if k != "timestamp":
-                            object.__setattr__(self, k, v)
-            
-            return ReconstructedEvent(**event_data)
+            # Use the event class's from_dict method
+            return event_class.from_dict(event_data)
         except Exception as e:
             print(f"Error reconstructing event: {e}")
             return None

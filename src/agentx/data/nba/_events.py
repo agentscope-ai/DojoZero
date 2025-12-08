@@ -2,9 +2,10 @@
 
 from dataclasses import dataclass, field
 
-from agentx.data._models import DataEvent
+from agentx.data._models import DataEvent, register_event
 
 
+@register_event
 @dataclass(slots=True, frozen=True)
 class RawPlayByPlayEvent(DataEvent):
     """Raw NBA play-by-play event from API."""
@@ -20,6 +21,7 @@ class RawPlayByPlayEvent(DataEvent):
         return "raw_play_by_play"
 
 
+@register_event
 @dataclass(slots=True, frozen=True)
 class PlayByPlayEvent(DataEvent):
     """Processed NBA play-by-play event."""

@@ -1,13 +1,14 @@
 """Data infrastructure: Events, Facts, Stores, Processors, and DataHub."""
 
 # Core base classes
-from agentx.data._models import DataEvent, DataFact
+from agentx.data._models import DataEvent, DataFact, register_event
 from agentx.data._processors import CompositeProcessor, DataProcessor
 from agentx.data._replay import ReplayCoordinator
 from agentx.data._stores import DataStore, ExternalAPI
 from agentx.data._hub import DataHub
 
 # Domain-specific implementations
+# Import all event classes to trigger auto-registration
 from agentx.data.nba import (
     NBAExternalAPI,
     NBAStore,
@@ -27,10 +28,14 @@ from agentx.data.websearch import (
     RawWebSearchEvent,
 )
 
+# Event classes are auto-registered via @register_event decorator
+# No manual registration needed
+
 __all__ = [
     # Core base classes
     "DataEvent",
     "DataFact",
+    "register_event",
     "DataStore",
     "ExternalAPI",
     "DataProcessor",

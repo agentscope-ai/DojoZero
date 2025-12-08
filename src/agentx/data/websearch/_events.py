@@ -3,9 +3,10 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from agentx.data._models import DataEvent
+from agentx.data._models import DataEvent, register_event
 
 
+@register_event
 @dataclass(slots=True, frozen=True)
 class RawWebSearchEvent(DataEvent):
     """Raw web search result event from API."""
@@ -18,6 +19,7 @@ class RawWebSearchEvent(DataEvent):
         return "raw_web_search"
 
 
+@register_event
 @dataclass(slots=True, frozen=True)
 class WebSearchEvent(DataEvent):
     """Processed web search result event."""

@@ -3,9 +3,10 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from agentx.data._models import DataEvent
+from agentx.data._models import DataEvent, register_event
 
 
+@register_event
 @dataclass(slots=True, frozen=True)
 class RawOddsChangeEvent(DataEvent):
     """Raw odds change event from Polymarket API."""
@@ -18,6 +19,7 @@ class RawOddsChangeEvent(DataEvent):
         return "raw_odds_change"
 
 
+@register_event
 @dataclass(slots=True, frozen=True)
 class OddsChangeEvent(DataEvent):
     """Processed odds change event."""

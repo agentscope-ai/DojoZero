@@ -53,14 +53,14 @@ async def demo_websearch_stack():
     print(f"  Persistence file: {hub.persistence_file}")
     print()
     
-    # Step 2: Create WebSearchAPI with Tavily SDK
-    print("Step 2: Creating WebSearchAPI with Tavily SDK integration")
+    # Step 2: Create WebSearchAPI
+    print("Step 2: Creating WebSearchAPI")
     print("-" * 70)
     try:
         api = WebSearchAPI(
-            use_tavily=True,  # Use real Tavily SDK
+            use_tavily=True,  # Use Tavily as the search engine
         )
-        print(f"  Created WebSearchAPI with Tavily SDK")
+        print(f"  Created WebSearchAPI")
         print(f"  Tavily enabled: {api.use_tavily}")
         print(f"  Tavily adapter: {'Available' if api.tavily_adapter else 'Not available'}")
         if not api.tavily_adapter:
