@@ -1,7 +1,7 @@
 """Core data models: DataEvent and DataFact."""
 
 from abc import ABC
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,10 +23,12 @@ class DataEvent(ABC):
     
     def to_dict(self) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""
+        # Use dataclasses.asdict() to handle slots=True dataclasses
+        event_dict = asdict(self)
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
-            **{k: v for k, v in self.__dict__.items() if k != "timestamp"},
+            **{k: v for k, v in event_dict.items() if k != "timestamp"},
         }
     
     @classmethod
@@ -55,8 +57,10 @@ class DataFact(ABC):
     
     def to_dict(self) -> dict[str, Any]:
         """Convert fact to dictionary for serialization."""
+        # Use dataclasses.asdict() to handle slots=True dataclasses
+        fact_dict = asdict(self)
         return {
             "fact_type": self.fact_type,
             "timestamp": self.timestamp.isoformat(),
-            **{k: v for k, v in self.__dict__.items() if k != "timestamp"},
+            **{k: v for k, v in fact_dict.items() if k != "timestamp"},
         }

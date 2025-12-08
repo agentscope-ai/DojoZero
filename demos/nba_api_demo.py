@@ -393,11 +393,12 @@ EVENT_MSG_TYPE = {
 if __name__ == "__main__":
     import json
 
-    #
-    print("-" * 50)
-    print("ALL TEAMS:")
-    print(teams.get_teams())
-    print("-" * 50)
+    print_teams = False
+    if print_teams:
+        print("-" * 50)
+        print("ALL TEAMS:")
+        print(teams.get_teams())
+        print("-" * 50)
 
     # Get current games
     print("="*80)

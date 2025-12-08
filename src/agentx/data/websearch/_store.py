@@ -38,10 +38,25 @@ class WebSearchStore(DataStore):
         # Fetch from API
         data = await self._api.fetch("search", {"query": query})
         
-        # Parse and emit events
-        events = self._parse_api_response(data)
-        for event in events:
-            await self.emit_event(event)
+        # Parse raw events
+        raw_events = self._parse_api_response(data)
+        
+        # Process through registered streams (same logic as poll loop)
+        for raw_event in raw_events:
+            # Emit raw event
+            await self.emit_event(raw_event)
+            
+            # Process through registered streams
+            for stream_id, (processor, source_types) in self._stream_registry.items():
+                if raw_event.event_type in source_types:
+                    if processor:
+                        # Process event through processor
+                        processed = await processor.process([raw_event])
+                        if processed and isinstance(processed, DataEvent):
+                            await self.emit_event(processed)
+                    else:
+                        # No processor, just pass through
+                        await self.emit_event(raw_event)
     
     def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
         """Parse Web Search API response into DataEvents."""

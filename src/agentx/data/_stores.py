@@ -12,14 +12,17 @@ from agentx.data._processors import DataProcessor
 class ExternalAPI(ABC):
     """Abstraction layer for managing external service API connections."""
     
+    def __init__(self, kwargs: dict[str, Any] | None = None):
+        """Initialize external API.
+        
+        Args:
+            api_key: Optional API key (for real implementation)
+        """
+        self.kwargs = kwargs
+
     @abstractmethod
     async def fetch(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Fetch data from external API."""
-        ...
-    
-    @abstractmethod
-    async def place_bet(self, market_id: str, outcome: str, amount: float) -> dict[str, Any]:
-        """Place a bet (for operators)."""
         ...
 
 

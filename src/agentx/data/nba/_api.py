@@ -35,7 +35,4 @@ class NBAExternalAPI(ExternalAPI):
             }
         return {}
     
-    async def place_bet(self, market_id: str, outcome: str, amount: float) -> dict[str, Any]:
-        """Not applicable for NBA API."""
-        raise NotImplementedError("NBA API does not support betting")
 
