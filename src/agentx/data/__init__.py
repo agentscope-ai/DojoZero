@@ -1,7 +1,7 @@
 """Data infrastructure: Events, Facts, Stores, Processors, and DataHub."""
 
 # Core base classes
-from agentx.data._models import DataEvent, DataFact, register_event
+from agentx.data._models import DataEvent, DataEventFactory, DataFact, register_event
 from agentx.data._processors import CompositeProcessor, DataProcessor
 from agentx.data._replay import ReplayCoordinator
 from agentx.data._stores import DataStore, ExternalAPI
@@ -22,8 +22,10 @@ from agentx.data.polymarket import (
     RawOddsChangeEvent,
 )
 from agentx.data.websearch import (
+    ExpertPredictionEvent,
     InjurySummaryEvent,
     InjurySummaryProcessor,
+    PowerRankingEvent,
     WebSearchAPI,
     WebSearchStore,
     RawWebSearchEvent,
@@ -35,6 +37,7 @@ from agentx.data.websearch import (
 __all__ = [
     # Core base classes
     "DataEvent",
+    "DataEventFactory",
     "DataFact",
     "register_event",
     "DataStore",
@@ -56,6 +59,8 @@ __all__ = [
     # Web Search
     "RawWebSearchEvent",
     "InjurySummaryEvent",
+    "PowerRankingEvent",
+    "ExpertPredictionEvent",
     "InjurySummaryProcessor",
     "WebSearchAPI",
     "WebSearchStore",

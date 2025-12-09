@@ -5,7 +5,7 @@ from typing import Any, Sequence
 from agentx.data._models import DataEvent
 from agentx.data._stores import DataStore, ExternalAPI
 from agentx.data.websearch._api import WebSearchAPI
-from agentx.data.websearch._events import RawWebSearchEvent
+from agentx.data.websearch._events import RawWebSearchEvent, WebSearchIntent
 
 
 class WebSearchStore(DataStore):
@@ -21,25 +21,30 @@ class WebSearchStore(DataStore):
         """Initialize Web Search store."""
         super().__init__(store_id, api or WebSearchAPI(), poll_interval_seconds, event_emitter)
     
-    async def search(self, query: str, **search_params: Any) -> None:
+    async def search(
+        self,
+        query: str,
+        intent: WebSearchIntent | str | None = None,
+        **search_params: Any,
+    ) -> None:
         """Trigger a search and emit events.
         
         Args:
             query: Search query
+            intent: Optional query intent (WebSearchIntent enum or string).
+                   When provided, routes to specific processors, overriding should_process() logic.
             **search_params: Additional search parameters (e.g., max_results, chunks_per_source)
         """
-        # For injury-related queries, request more content chunks
-        # Note: Tavily limits chunks_per_source to 1-5, so we use max value
-        if "injury" in query.lower() or "injured" in query.lower():
-            search_params.setdefault("chunks_per_source", 5)  # Max allowed by Tavily
-            search_params.setdefault("search_depth", "advanced")
-            search_params.setdefault("include_raw_content", True)
+        # Use optimal settings for all queries to get complete content
+        search_params.setdefault("search_depth", "advanced")
+        search_params.setdefault("max_results", 5)
+        search_params.setdefault("include_raw_content", True)
         
         # Fetch from API
         data = await self._api.fetch("search", {"query": query, **search_params})
         
-        # Parse raw events
-        raw_events = self._parse_api_response(data)
+        # Parse raw events with intent
+        raw_events = self._parse_api_response(data, intent=intent)
         
         # Process through registered streams (same logic as poll loop)
         for raw_event in raw_events:
@@ -60,8 +65,15 @@ class WebSearchStore(DataStore):
                         # No processor, just pass through
                         await self.emit_event(raw_event)
     
-    def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
-        """Parse Web Search API response into DataEvents."""
+    def _parse_api_response(
+        self, data: dict[str, Any], intent: str | None = None
+    ) -> Sequence[DataEvent]:
+        """Parse Web Search API response into DataEvents.
+        
+        Args:
+            data: API response data
+            intent: Optional query intent to attach to the event
+        """
         from datetime import datetime, timezone
         
         query = data.get("query", "")
@@ -72,6 +84,7 @@ class WebSearchStore(DataStore):
                 timestamp=datetime.now(timezone.utc),
                 query=query,
                 results=results,
+                intent=intent,
             )
         ]
 

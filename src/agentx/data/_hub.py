@@ -193,22 +193,10 @@ class DataHub:
             return None
         
         try:
-            # Get event class from registry
-            from agentx.data._models import get_event_class
+            # Use DataEventFactory to deserialize
+            from agentx.data._models import DataEventFactory
             
-            event_class = get_event_class(event_type)
-            if not event_class:
-                print(f"Event class not found for event_type: {event_type}")
-                return None
-            
-            # Parse timestamp
-            event_data = {k: v for k, v in event_dict.items() if k != "event_type"}
-            if "timestamp" in event_data:
-                if isinstance(event_data["timestamp"], str):
-                    event_data["timestamp"] = datetime.fromisoformat(event_data["timestamp"])
-            
-            # Use the event class's from_dict method
-            return event_class.from_dict(event_data)
+            return DataEventFactory.from_dict(event_dict)
         except Exception as e:
             print(f"Error reconstructing event: {e}")
             return None

@@ -1,9 +1,22 @@
 """Web Search-specific event types."""
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from agentx.data._models import DataEvent, register_event
+
+
+class WebSearchIntent(str, Enum):
+    """Web search query intent types.
+    
+    These intents specify the type of processing expected for a query,
+    allowing explicit routing to specific processors.
+    """
+    
+    INJURY_SUMMARY = "injury_summary"
+    POWER_RANKING = "power_ranking"
+    EXPERT_PREDICTION = "expert_prediction"
 
 
 @register_event
@@ -13,6 +26,13 @@ class RawWebSearchEvent(DataEvent):
     
     query: str = field(default="")
     results: list[dict[str, Any]] = field(default_factory=list)
+    intent: WebSearchIntent | str | None = field(default=None)
+    """Optional query intent.
+    
+    When present, this intent can be used to route events to specific processors,
+    overriding the default should_process() logic.
+    Can be a WebSearchIntent enum value or a string (for backward compatibility).
+    """
     
     @property
     def event_type(self) -> str:
@@ -35,4 +55,39 @@ class InjurySummaryEvent(DataEvent):
     @property
     def event_type(self) -> str:
         return "injury_summary"
+
+
+@register_event
+@dataclass(slots=True, frozen=True)
+class PowerRankingEvent(DataEvent):
+    """Power ranking event from NBA and ESPN sources.
+    
+    Contains power rankings from multiple sources (NBA.com, ESPN, etc.)
+    with structured data for easy comparison.
+    """
+    
+    query: str = field(default="")
+    rankings: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # Format: {"nba.com": [{"rank": 1, "team": "Lakers", ...}, ...], "espn.com": [...]}
+    
+    @property
+    def event_type(self) -> str:
+        return "power_ranking"
+
+
+@register_event
+@dataclass(slots=True, frozen=True)
+class ExpertPredictionEvent(DataEvent):
+    """Expert prediction event from credible sources (NBA.com, ESPN, etc.).
+    
+    Contains expert predictions and analysis from authoritative sources.
+    """
+    
+    query: str = field(default="")
+    predictions: list[dict[str, Any]] = field(default_factory=list)
+    # Format: [{"source": "nba.com", "expert": "...", "prediction": "...", ...}, ...]
+    
+    @property
+    def event_type(self) -> str:
+        return "expert_prediction"
 

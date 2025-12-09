@@ -8,8 +8,18 @@ from typing import Any, Sequence, cast
 
 from agentx.data._models import DataEvent
 from agentx.data._processors import DataProcessor
-from agentx.data._utils import call_dashscope_model, initialize_dashscope
-from agentx.data.websearch._events import InjurySummaryEvent, RawWebSearchEvent
+from agentx.data._utils import (
+    call_dashscope_model,
+    extract_json_from_dashscope_response,
+    initialize_dashscope,
+)
+from agentx.data.websearch._events import (
+    ExpertPredictionEvent,
+    InjurySummaryEvent,
+    PowerRankingEvent,
+    RawWebSearchEvent,
+    WebSearchIntent,
+)
 
 
 class InjurySummaryProcessor(DataProcessor):
@@ -18,28 +28,28 @@ class InjurySummaryProcessor(DataProcessor):
     This processor extracts and summarizes injury information from raw web search results.
     """
     
+    intended_intent = WebSearchIntent.INJURY_SUMMARY  # Intent this processor handles
+    
     def __init__(
         self,
         api_key: str | None = None,
         model: str = "qwen-turbo",
-        max_tokens: int = 500,
     ):
         """Initialize injury summary processor.
         
         Args:
             api_key: Dashscope API key (defaults to DASHSCOPE_API_KEY env var)
             model: Dashscope model to use for summarization
-            max_tokens: Maximum tokens for the summary
         """
         # Initialize Dashscope (will raise if not available or key missing)
         self.api_key = initialize_dashscope(api_key)
         self.model = model
-        self.max_tokens = max_tokens
     
     def should_process(self, event: DataEvent) -> bool:
         """Check if this processor should handle the event.
         
         Only processes raw web search events with injury-related queries.
+        If event has intent, uses intent-based routing (via base class); otherwise uses keyword matching.
         
         Args:
             event: Event to check
@@ -51,7 +61,12 @@ class InjurySummaryProcessor(DataProcessor):
         if event.event_type != "raw_web_search":
             return False
         
-        # Check if query is injury-related
+        # Use base class intent checking first
+        event_intent = getattr(event, "intent", None)
+        if event_intent is not None:
+            return super().should_process(event)
+        
+        # Fallback to keyword-based filtering when no intent
         query = getattr(event, "query", "")
         if not query:
             return False
@@ -71,15 +86,8 @@ class InjurySummaryProcessor(DataProcessor):
         if not events:
             return None
         
-        # Get the latest raw event by checking event_type
-        raw_event: RawWebSearchEvent | None = None  # type: ignore[valid-type]
-        for event in events:
-            if event.event_type == "raw_web_search":
-                raw_event = cast(RawWebSearchEvent, event)  # type: ignore[arg-type]
-                break
-        
-        if not raw_event:
-            return None
+        # should_process() already ensures this is a raw_web_search event
+        raw_event = cast(RawWebSearchEvent, events[0])  # type: ignore[arg-type]
         
         # Extract text from search results
         result_texts = []
@@ -122,7 +130,6 @@ Only include players who are confirmed to be injured/out."""
             response = await call_dashscope_model(
                 prompt=prompt,
                 model=self.model,
-                max_tokens=self.max_tokens,
             )
             
             # Extract summary and structured data from response
@@ -147,24 +154,25 @@ Only include players who are confirmed to be injured/out."""
                     else:
                         summary = full_text
                 
-                # Extract structured JSON data
+                # Extract structured JSON data using utility function
+                # First extract the STRUCTURED_DATA section, then use utility to parse
                 structured_match = re.search(r"STRUCTURED_DATA:\s*(\{.*\})", full_text, re.DOTALL | re.IGNORECASE)
                 if structured_match:
-                    try:
-                        json_str = structured_match.group(1).strip()
-                        injured_players = json.loads(json_str)
-                        # Validate structure: should be dict[str, list[str]]
-                        if not isinstance(injured_players, dict):
-                            injured_players = {}
-                        else:
-                            # Ensure all values are lists
-                            injured_players = {
-                                k: v if isinstance(v, list) else [v] if isinstance(v, str) else []
-                                for k, v in injured_players.items()
-                            }
-                    except (json.JSONDecodeError, AttributeError):
-                        # JSON parsing failed, leave as empty dict
-                        injured_players = {}
+                    json_str = structured_match.group(1).strip()
+                    # Create a mock response structure for the utility function
+                    mock_response = {
+                        "status_code": 200,
+                        "output": {"text": json_str}
+                    }
+                    extracted = extract_json_from_dashscope_response(
+                        mock_response, expected_type=dict
+                    )
+                    if extracted and isinstance(extracted, dict):
+                        # Ensure all values are lists
+                        injured_players = {
+                            k: v if isinstance(v, list) else [v] if isinstance(v, str) else []
+                            for k, v in extracted.items()
+                        }
             else:
                 error_msg = response.get("message", "Unknown error")
                 summary = f"Error generating summary: {error_msg}"
@@ -180,5 +188,315 @@ Only include players who are confirmed to be injured/out."""
             query=raw_event.query,
             summary=summary,
             injured_players=injured_players,
+        )
+
+
+class PowerRankingProcessor(DataProcessor):
+    """Processor that extracts power rankings from web search results.
+    
+    Extracts structured power rankings from NBA.com, ESPN, and other sources.
+    If team names are mentioned in the query, filters results to only those teams.
+    """
+    
+    intended_intent = WebSearchIntent.POWER_RANKING  # Intent this processor handles
+    
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "qwen-turbo",
+    ):
+        """Initialize power ranking processor.
+        
+        Args:
+            api_key: Dashscope API key (defaults to DASHSCOPE_API_KEY env var)
+            model: Dashscope model to use for extraction
+        """
+        # Initialize Dashscope (will raise if not available or key missing)
+        self.api_key = initialize_dashscope(api_key)
+        self.model = model
+    
+    def should_process(self, event: DataEvent) -> bool:
+        """Check if this processor should handle the event.
+        
+        Only processes raw web search events with power ranking-related queries.
+        If event has intent, uses intent-based routing (via base class); otherwise uses keyword matching.
+        
+        Args:
+            event: Event to check
+            
+        Returns:
+            True if event is power ranking-related raw web search, False otherwise
+        """
+        # Only process raw web search events
+        if event.event_type != "raw_web_search":
+            return False
+        
+        # Use base class intent checking first
+        event_intent = getattr(event, "intent", None)
+        if event_intent is not None:
+            return super().should_process(event)
+        
+        # Fallback to keyword-based filtering when no intent
+        query = getattr(event, "query", "")
+        if not query:
+            return False
+        
+        query_lower = query.lower()
+        return "power ranking" in query_lower or "power rankings" in query_lower
+    
+    async def process(self, events: Sequence[DataEvent]) -> DataEvent | None:
+        """Process raw web search events and extract power rankings.
+        
+        Args:
+            events: Sequence of raw web search events
+            
+        Returns:
+            Power ranking event or None
+        """
+        if not events:
+            return None
+        
+        # should_process() already ensures this is a raw_web_search event
+        raw_event = cast(RawWebSearchEvent, events[0])  # type: ignore[arg-type]
+        
+        # Extract text from search results
+        result_texts = []
+        for result in raw_event.results:
+            title = result.get("title", "")
+            snippet = result.get("snippet", "")
+            url = result.get("url", "")
+            if title or snippet:
+                # Include URL to identify source
+                result_texts.append(f"Source: {url}\nTitle: {title}\nContent: {snippet}")
+        
+        if not result_texts:
+            return None
+        
+        # Combine results into context
+        context = "\n\n".join(result_texts)
+        
+        # Create prompt for power ranking extraction (concise to save tokens)
+        prompt = f"""Extract NBA power rankings from these search results. Return JSON only.
+
+Results:
+{context}
+
+Format:
+{{
+  "nba.com": [{{"rank": 1, "team": "Lakers", "record": "15-5", "notes": "..."}}],
+  "espn.com": [{{"rank": 1, "team": "Lakers", "record": "15-5", "notes": "..."}}]
+}}
+
+Rules:
+- Each team appears ONCE per source
+- Extract full ranking
+- Use URL domain as key (e.g., "nba.com")
+- Skip sources without clear rankings"""
+        
+        # Call Dashscope API
+        try:
+            response = await call_dashscope_model(
+                prompt=prompt,
+                model=self.model,
+            )
+
+            # Extract rankings from response using utility function
+            extracted = extract_json_from_dashscope_response(
+                response, expected_type=dict
+            )
+            
+            rankings: dict[str, list[dict[str, Any]]] = {}
+            if extracted and isinstance(extracted, dict):
+                # Clean and validate rankings: remove duplicates, ensure proper format
+                cleaned_rankings: dict[str, list[dict[str, Any]]] = {}
+                for source, teams in extracted.items():
+                    if not isinstance(teams, list):
+                        continue
+                    
+                    # Filter out invalid entries and remove duplicates
+                    seen_teams: set[str] = set()
+                    valid_teams = []
+                    for team_data in teams:
+                        if not isinstance(team_data, dict):
+                            continue
+                        
+                        team_name = team_data.get("team", "").strip()
+                        if not team_name:
+                            continue
+                        
+                        # Skip if we've seen this team already (duplicate)
+                        if team_name.lower() in seen_teams:
+                            continue
+                        
+                        seen_teams.add(team_name.lower())
+                        valid_teams.append(team_data)
+                    
+                    # Only include if we have at least 1 team (relaxed threshold)
+                    if len(valid_teams) >= 1:
+                        cleaned_rankings[source] = valid_teams
+                
+                rankings = cleaned_rankings
+                if rankings:
+                    print(f"DEBUG: Successfully extracted rankings from {len(rankings)} sources")
+            
+        except Exception as e:
+            print(f"DEBUG: Error extracting rankings: {e}")
+            rankings = {}
+        
+        # Create power ranking event
+        event_class: type[PowerRankingEvent] = PowerRankingEvent  # type: ignore[assignment]
+        return event_class(
+            timestamp=raw_event.timestamp,
+            query=raw_event.query,
+            rankings=rankings,
+        )
+
+
+class ExpertPredictionProcessor(DataProcessor):
+    """Processor that extracts expert predictions from web search results.
+    
+    Extracts expert predictions and analysis from NBA.com, ESPN, and other credible sources.
+    """
+    
+    intended_intent = WebSearchIntent.EXPERT_PREDICTION  # Intent this processor handles
+    
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "qwen-turbo",
+    ):
+        """Initialize expert prediction processor.
+        
+        Args:
+            api_key: Dashscope API key (defaults to DASHSCOPE_API_KEY env var)
+            model: Dashscope model to use for extraction
+        """
+        # Initialize Dashscope (will raise if not available or key missing)
+        self.api_key = initialize_dashscope(api_key)
+        self.model = model
+    
+    def should_process(self, event: DataEvent) -> bool:
+        """Check if this processor should handle the event.
+        
+        Only processes raw web search events with prediction/expert-related queries.
+        If event has intent, uses intent-based routing (via base class); otherwise uses keyword matching.
+        
+        Args:
+            event: Event to check
+            
+        Returns:
+            True if event is prediction-related raw web search, False otherwise
+        """
+        # Only process raw web search events
+        if event.event_type != "raw_web_search":
+            return False
+        
+        # Use base class intent checking first
+        event_intent = getattr(event, "intent", None)
+        if event_intent is not None:
+            return super().should_process(event)
+        
+        # Fallback to keyword-based filtering when no intent
+        query = getattr(event, "query", "")
+        if not query:
+            return False
+        
+        query_lower = query.lower()
+        prediction_keywords = [
+            "expert predictions", "expert prediction", "expert pick", "expert picks",
+            "prediction", "predictions", "expert", "pick", "picks",
+            "forecast", "analysis", "preview"
+        ]
+        return any(keyword in query_lower for keyword in prediction_keywords)
+    
+    async def process(self, events: Sequence[DataEvent]) -> DataEvent | None:
+        """Process raw web search events and extract expert predictions.
+        
+        Args:
+            events: Sequence of raw web search events
+            
+        Returns:
+            Expert prediction event or None
+        """
+        if not events:
+            return None
+        
+        # should_process() already ensures this is a raw_web_search event
+        raw_event = cast(RawWebSearchEvent, events[0])  # type: ignore[arg-type]
+        
+        # Extract text from search results
+        result_texts = []
+        for result in raw_event.results:
+            title = result.get("title", "")
+            snippet = result.get("snippet", "")
+            url = result.get("url", "")
+            if title or snippet:
+                # Include URL to identify source
+                result_texts.append(f"Source: {url}\nTitle: {title}\nContent: {snippet}")
+        
+        if not result_texts:
+            return None
+        
+        # Combine results into context
+        context = "\n\n".join(result_texts)
+        
+        # Create prompt for expert prediction extraction
+        prompt = f"""Based on the following web search results about NBA expert predictions, extract structured prediction data.
+
+Search Results:
+{context}
+
+Please extract expert predictions from each source (NBA.com, ESPN, etc.) and provide in the following JSON format:
+
+[
+  {{
+    "source": "nba.com",
+    "expert": "Expert Name (if mentioned)",
+    "prediction": "Main prediction text",
+    "reasoning": "Expert's reasoning/analysis",
+    "confidence": "High/Medium/Low (if mentioned)"
+  }},
+  {{
+    "source": "espn.com",
+    "expert": "Expert Name",
+    "prediction": "Main prediction text",
+    "reasoning": "Expert's reasoning/analysis",
+    "confidence": "High/Medium/Low"
+  }}
+]
+
+Extract predictions from all credible sources mentioned. If expert name is not mentioned, use "Anonymous" or omit the field.
+Focus on game predictions, matchup analysis, and expert picks."""
+        
+        # Call Dashscope API
+        try:
+            response = await call_dashscope_model(
+                prompt=prompt,
+                model=self.model
+            )
+            
+            # Extract predictions from response using utility function
+            extracted = extract_json_from_dashscope_response(
+                response, expected_type=list
+            )
+            
+            predictions: list[dict[str, Any]] = []
+            if extracted and isinstance(extracted, list):
+                # Ensure all items are dicts
+                predictions = [
+                    p if isinstance(p, dict) else {}
+                    for p in extracted
+                ]
+            
+        except Exception as e:
+            print(f"DEBUG: Error extracting predictions: {e}")
+            predictions = []
+        
+        # Create expert prediction event
+        event_class: type[ExpertPredictionEvent] = ExpertPredictionEvent  # type: ignore[assignment]
+        return event_class(
+            timestamp=raw_event.timestamp,
+            query=raw_event.query,
+            predictions=predictions,
         )
 

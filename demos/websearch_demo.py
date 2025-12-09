@@ -11,8 +11,17 @@ import asyncio
 
 from agentx.core import AgentBase
 from agentx.data import DataHub, WebSearchAPI, WebSearchStore
-from agentx.data.websearch._processors import InjurySummaryProcessor
+from agentx.data.websearch._events import WebSearchIntent
+from agentx.data.websearch._processors import (
+    ExpertPredictionProcessor,
+    InjurySummaryProcessor,
+    PowerRankingProcessor,
+)
 
+team1 = "Miami Heat"
+team2 = "Orlando Magic"
+game_date = "2025-12-09"
+game_info = f"{team1} vs {team2} on {game_date}"
 
 class DemoAgent(AgentBase):
     """Simple demo agent that subscribes to web search events."""
@@ -38,67 +47,70 @@ async def demo_websearch_stack():
     # Setup
     hub = DataHub(
         hub_id="demo_hub",
-        persistence_file="data/demo_events.jsonl",
+        persistence_file="outputs/demo_events.jsonl",
         enable_persistence=True,
     )
     print(f"✓ DataHub: {hub.hub_id} (persist: {hub.persistence_file})")
     
-    try:
-        api = WebSearchAPI(use_tavily=True)
-        if not api.tavily_adapter:
-            raise ValueError(
-                "Tavily SDK not available. Install: pip install tavily-python\n"
-                "Set TAVILY_API_KEY in .env file"
-            )
-        print("✓ WebSearchAPI: Tavily enabled")
-    except (ValueError, ImportError) as e:
-        print(f"✗ Error: {e}")
-        raise
+    api = WebSearchAPI()
+    store = WebSearchStore(store_id="demo_websearch_store", api=api, poll_interval_seconds=30.0)
     
-    store = WebSearchStore(store_id="demo_websearch_store", api=api, poll_interval_seconds=1.0)
+    # Register processors
+    store.register_stream("injury_summary", InjurySummaryProcessor(), ["raw_web_search"])
+    store.register_stream("power_ranking", PowerRankingProcessor(), ["raw_web_search"])
+    store.register_stream("expert_prediction", ExpertPredictionProcessor(), ["raw_web_search"])
     
-    # Register injury summary processor
-    try:
-        store.register_stream(
-            "injury_summary",
-            InjurySummaryProcessor(),
-            ["raw_web_search"],
-        )
-        print("✓ Injury summary processing enabled")
-    except (ImportError, ValueError) as e:
-        print(f"⚠ Injury summary processing not available: {e}")
-    
+    # Connect store to DataHub
     hub.connect_store(store)
     print(f"✓ WebSearchStore: {store.store_id} (streams: {', '.join(store.list_registered_streams())})")
     
     # Agents
     agent1 = DemoAgent("Agent1")
     agent2 = DemoAgent("Agent2")
-    hub.subscribe_agent("Agent1", event_types=["raw_web_search", "injury_summary"], callback=agent1.handle_event)
+    hub.subscribe_agent(
+        "Agent1",
+        event_types=["raw_web_search", "injury_summary", "power_ranking", "expert_prediction"],
+        callback=agent1.handle_event,
+    )
     hub.subscribe_agent("Agent2", event_types=["raw_web_search"], callback=agent2.handle_event)
-    print("✓ Agents subscribed: Agent1 (all), Agent2 (raw only)\n")
+    print("✓ Agents subscribed: Agent1 (all processed events), Agent2 (raw only)\n")
     
     # Perform searches
     print("Searching...")
-    game_info = "Heat vs Magic on 12/09/2025"
     search_queries = [
-        f"NBA betting odds for {game_info}",
-        f"NBA injury updates for {game_info}",
-        f"Polymarket prediction markets for {game_info}",
+        # (f"NBA betting odds for {game_info}", None, None),  # No intent - will use keyword matching
+        (f"NBA injury updates for {game_info}", WebSearchIntent.INJURY_SUMMARY, {"time_range": "week"}),  # Explicit intent
+        (f"NBA power rankings", WebSearchIntent.POWER_RANKING, {"time_range": "week"}),  # Explicit intent
+        (f"NBA expert predictions for {team1} and {team2}", WebSearchIntent.EXPERT_PREDICTION, {"time_range": "week"}),  # Explicit intent
     ]
     
-    for query in search_queries:
-        print(f"  • {query}")
-        await store.search(query)
+    for query, intent, search_params in search_queries:
+        intent_str = intent.value if intent else None
+        print(f"  • {query}" + (f" [intent: {intent_str}]" if intent else ""))
+        await store.search(query, intent=intent, **search_params if search_params else {})
         await asyncio.sleep(0.3)
     
-    # Results
-    print(f"\nResults:")
-    raw_count = sum(1 for e in agent1.received_events if e.event_type == "raw_web_search")
-    injury_count = sum(1 for e in agent1.received_events if e.event_type == "injury_summary")
-    raw_count2 = sum(1 for e in agent2.received_events if e.event_type == "raw_web_search")
-    print(f"  Agent1: {len(agent1.received_events)} events ({raw_count} raw, {injury_count} injury summaries)")
-    print(f"  Agent2: {len(agent2.received_events)} events ({raw_count2} raw)")
+    # Results summary
+    print(f"\nResults: Agent1={len(agent1.received_events)} events, Agent2={len(agent2.received_events)} events")
+    
+    # Summary of processed events (non-raw)
+    processed_events = [e for e in agent1.received_events if e.event_type != "raw_web_search"]
+    if processed_events:
+        print(f"\nProcessed Events Summary ({len(processed_events)}):")
+        for event in processed_events:
+            event_type = event.event_type  # type: ignore[attr-defined]
+            if event_type == "injury_summary":
+                injury_event = event  # type: ignore[assignment]
+                teams = list(injury_event.injured_players.keys()) if injury_event.injured_players else []  # type: ignore[attr-defined]
+                print(f"  • Injury: {len(teams)} teams, {sum(len(p) for p in injury_event.injured_players.values())} players")  # type: ignore[attr-defined]
+            elif event_type == "power_ranking":
+                ranking_event = event  # type: ignore[assignment]
+                sources = list(ranking_event.rankings.keys()) if ranking_event.rankings else []  # type: ignore[attr-defined]
+                total_teams = sum(len(teams) for teams in ranking_event.rankings.values())  # type: ignore[attr-defined]
+                print(f"  • Rankings: {len(sources)} sources, {total_teams} teams")
+            elif event_type == "expert_prediction":
+                prediction_event = event  # type: ignore[assignment]
+                print(f"  • Predictions: {len(prediction_event.predictions)} predictions")  # type: ignore[attr-defined]
     
     # Persistence
     if hub.persistence_file.exists():

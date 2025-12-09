@@ -19,12 +19,29 @@ class DataProcessor(ABC):
         This method allows processors to filter events before processing,
         enabling efficient routing and avoiding unnecessary processing.
         
+        Processors can override this to implement custom filtering logic.
+        If the event has an 'intent' attribute, it will be checked first
+        against the processor's intended_intent (if set).
+        
         Args:
             event: Event to check
             
         Returns:
             True if processor should process this event, False otherwise
         """
+        # Check intent first if both event and processor have intent
+        event_intent = getattr(event, "intent", None)
+        processor_intent = getattr(self, "intended_intent", None)
+        
+        if event_intent is not None and processor_intent is not None:
+            # Intent-based routing: normalize to string for comparison
+            # Handles both enum and string values
+            from enum import Enum
+            event_intent_str = event_intent.value if isinstance(event_intent, Enum) else str(event_intent)
+            processor_intent_str = processor_intent.value if isinstance(processor_intent, Enum) else str(processor_intent)
+            return event_intent_str == processor_intent_str
+        
+        # Fallback to default behavior (process all)
         return True  # Default: process all events
     
     @abstractmethod

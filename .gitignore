@@ -155,4 +155,4 @@ agentx-store
 *.yaml
 
 # Data
-data/
+outputs/

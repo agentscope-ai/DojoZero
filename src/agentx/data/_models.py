@@ -68,6 +68,42 @@ def get_event_class(event_type: str) -> type["DataEvent"] | None:
     return _EVENT_REGISTRY.get(event_type)
 
 
+class DataEventFactory:
+    """Factory for creating DataEvent instances from dictionaries.
+    
+    Handles automatic dispatch to the correct event subclass based on event_type.
+    """
+    
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> "DataEvent | None":
+        """Create event from dictionary by automatically dispatching to the correct subclass.
+        
+        Uses the event registry to look up the correct event class based on 'event_type'.
+        This is useful when you don't know the specific event class ahead of time.
+        
+        Args:
+            data: Dictionary containing event data (must include 'event_type')
+            
+        Returns:
+            Instance of the correct event subclass, or None if event_type not found
+            
+        Example:
+            >>> data = {"event_type": "raw_web_search", "query": "test", ...}
+            >>> event = DataEventFactory.from_dict(data)
+            >>> assert isinstance(event, RawWebSearchEvent)
+        """
+        event_type = data.get("event_type")
+        if not event_type:
+            return None
+        
+        event_class = get_event_class(event_type)
+        if not event_class:
+            return None
+        
+        # Use the class's from_dict method
+        return event_class.from_dict(data)
+
+
 @dataclass(slots=True, frozen=True)
 class DataEvent(ABC):
     """Base class for push-based incremental updates (events).
@@ -96,11 +132,29 @@ class DataEvent(ABC):
     
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DataEvent":
-        """Create event from dictionary."""
-        if "timestamp" in data:
-            if isinstance(data["timestamp"], str):
-                data["timestamp"] = datetime.fromisoformat(data["timestamp"])
-        return cls(**data)
+        """Create event from dictionary.
+        
+        When called on a specific subclass (e.g., RawWebSearchEvent.from_dict(data)),
+        creates an instance of that subclass.
+        
+        Args:
+            data: Dictionary containing event data (may include 'event_type')
+            
+        Returns:
+            Instance of the class this method is called on
+        """
+        # Create a copy to avoid mutating the original
+        event_data = data.copy()
+        
+        # Remove event_type as it's a property, not a field
+        event_data.pop("event_type", None)
+        
+        # Parse timestamp if it's a string
+        if "timestamp" in event_data:
+            if isinstance(event_data["timestamp"], str):
+                event_data["timestamp"] = datetime.fromisoformat(event_data["timestamp"])
+        
+        return cls(**event_data)
 
 
 @dataclass(slots=True, frozen=True)
