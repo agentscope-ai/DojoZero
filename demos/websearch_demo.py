@@ -11,7 +11,7 @@ import asyncio
 
 from agentx.core import AgentBase
 from agentx.data import DataHub, WebSearchAPI, WebSearchStore
-from agentx.data.websearch._events import RawWebSearchEvent, WebSearchEvent
+from agentx.data.websearch._processors import InjurySummaryProcessor
 
 
 class DemoAgent(AgentBase):
@@ -25,7 +25,7 @@ class DemoAgent(AgentBase):
     def handle_event(self, event):
         """Handle received event."""
         self.received_events.append(event)
-        if event.event_type == "web_search":  # type: ignore[attr-defined]
+        if event.event_type == "raw_web_search":  # type: ignore[attr-defined]
             # Type checker issue with decorator, but runtime works correctly
             web_event = event  # type: ignore[assignment]
             print(f"  [{self.agent_id}] {event.event_type}: '{web_event.query}' ({len(web_event.results)} results)")  # type: ignore[attr-defined]
@@ -56,22 +56,35 @@ async def demo_websearch_stack():
         raise
     
     store = WebSearchStore(store_id="demo_websearch_store", api=api, poll_interval_seconds=1.0)
+    
+    # Register injury summary processor
+    try:
+        store.register_stream(
+            "injury_summary",
+            InjurySummaryProcessor(),
+            ["raw_web_search"],
+        )
+        print("✓ Injury summary processing enabled")
+    except (ImportError, ValueError) as e:
+        print(f"⚠ Injury summary processing not available: {e}")
+    
     hub.connect_store(store)
     print(f"✓ WebSearchStore: {store.store_id} (streams: {', '.join(store.list_registered_streams())})")
     
     # Agents
     agent1 = DemoAgent("Agent1")
     agent2 = DemoAgent("Agent2")
-    hub.subscribe_agent("Agent1", event_types=["web_search", "raw_web_search"], callback=agent1.handle_event)
-    hub.subscribe_agent("Agent2", event_types=["web_search"], callback=agent2.handle_event)
-    print("✓ Agents subscribed: Agent1 (all), Agent2 (cooked only)\n")
+    hub.subscribe_agent("Agent1", event_types=["raw_web_search", "injury_summary"], callback=agent1.handle_event)
+    hub.subscribe_agent("Agent2", event_types=["raw_web_search"], callback=agent2.handle_event)
+    print("✓ Agents subscribed: Agent1 (all), Agent2 (raw only)\n")
     
     # Perform searches
     print("Searching...")
+    game_info = "Heat vs Magic on 12/09/2025"
     search_queries = [
-        "Lakers vs Celtics betting odds",
-        "NBA injury updates",
-        "Polymarket prediction markets",
+        f"NBA betting odds for {game_info}",
+        f"NBA injury updates for {game_info}",
+        f"Polymarket prediction markets for {game_info}",
     ]
     
     for query in search_queries:
@@ -82,10 +95,10 @@ async def demo_websearch_stack():
     # Results
     print(f"\nResults:")
     raw_count = sum(1 for e in agent1.received_events if e.event_type == "raw_web_search")
-    cooked_count = sum(1 for e in agent1.received_events if e.event_type == "web_search")
-    cooked_count2 = sum(1 for e in agent2.received_events if e.event_type == "web_search")
-    print(f"  Agent1: {len(agent1.received_events)} events ({raw_count} raw, {cooked_count} cooked)")
-    print(f"  Agent2: {len(agent2.received_events)} events ({cooked_count2} cooked)")
+    injury_count = sum(1 for e in agent1.received_events if e.event_type == "injury_summary")
+    raw_count2 = sum(1 for e in agent2.received_events if e.event_type == "raw_web_search")
+    print(f"  Agent1: {len(agent1.received_events)} events ({raw_count} raw, {injury_count} injury summaries)")
+    print(f"  Agent2: {len(agent2.received_events)} events ({raw_count2} raw)")
     
     # Persistence
     if hub.persistence_file.exists():
@@ -98,7 +111,7 @@ async def demo_websearch_stack():
         print("\nReplaying events...")
         await hub.start_replay(str(hub.persistence_file))
         replay_agent = DemoAgent("ReplayAgent")
-        hub.subscribe_agent("ReplayAgent", event_types=["web_search"], callback=replay_agent.handle_event)
+        hub.subscribe_agent("ReplayAgent", event_types=["raw_web_search"], callback=replay_agent.handle_event)
         await hub.replay_all()
         print(f"  ReplayAgent: {len(replay_agent.received_events)} events")
         hub.stop_replay()

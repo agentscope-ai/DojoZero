@@ -128,10 +128,12 @@ class DataStore(ABC):
                     for stream_id, (processor, source_types) in self._stream_registry.items():
                         if raw_event.event_type in source_types:
                             if processor:
-                                # Process event through processor
-                                processed = await processor.process([raw_event])
-                                if processed and isinstance(processed, DataEvent):
-                                    await self.emit_event(processed)
+                                # Check if processor should handle this event
+                                if processor.should_process(raw_event):
+                                    # Process event through processor
+                                    processed = await processor.process([raw_event])
+                                    if processed and isinstance(processed, DataEvent):
+                                        await self.emit_event(processed)
                             else:
                                 # No processor, just pass through
                                 await self.emit_event(raw_event)

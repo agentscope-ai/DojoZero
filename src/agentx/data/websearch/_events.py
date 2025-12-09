@@ -21,13 +21,19 @@ class RawWebSearchEvent(DataEvent):
 
 @register_event
 @dataclass(slots=True, frozen=True)
-class WebSearchEvent(DataEvent):
-    """Processed web search result event."""
+class InjurySummaryEvent(DataEvent):
+    """Injury summary event generated from web search results.
+    
+    Hybrid format: contains both human-readable summary and
+    structured machine-readable data (team -> list of injured players).
+    """
     
     query: str = field(default="")
-    results: list[dict[str, Any]] = field(default_factory=list)
+    summary: str = field(default="")
+    injured_players: dict[str, list[str]] = field(default_factory=dict)
+    source_results_count: int = field(default=0)
     
     @property
     def event_type(self) -> str:
-        return "web_search"
+        return "injury_summary"
 

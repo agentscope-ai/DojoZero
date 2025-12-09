@@ -22,8 +22,9 @@ from agentx.data.polymarket import (
     RawOddsChangeEvent,
 )
 from agentx.data.websearch import (
+    InjurySummaryEvent,
+    InjurySummaryProcessor,
     WebSearchAPI,
-    WebSearchEvent,
     WebSearchStore,
     RawWebSearchEvent,
 )
@@ -53,8 +54,9 @@ __all__ = [
     "PolymarketAPI",
     "PolymarketStore",
     # Web Search
-    "WebSearchEvent",
     "RawWebSearchEvent",
+    "InjurySummaryEvent",
+    "InjurySummaryProcessor",
     "WebSearchAPI",
     "WebSearchStore",
 ]

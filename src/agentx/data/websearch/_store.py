@@ -6,7 +6,6 @@ from agentx.data._models import DataEvent
 from agentx.data._stores import DataStore, ExternalAPI
 from agentx.data.websearch._api import WebSearchAPI
 from agentx.data.websearch._events import RawWebSearchEvent
-from agentx.data.websearch._processors import WebSearchProcessor
 
 
 class WebSearchStore(DataStore):
@@ -21,22 +20,23 @@ class WebSearchStore(DataStore):
     ):
         """Initialize Web Search store."""
         super().__init__(store_id, api or WebSearchAPI(), poll_interval_seconds, event_emitter)
-        
-        # Register stream: raw_web_search -> processor -> web_search
-        self.register_stream(
-            "web_search",
-            WebSearchProcessor(),
-            ["raw_web_search"],
-        )
     
-    async def search(self, query: str) -> None:
+    async def search(self, query: str, **search_params: Any) -> None:
         """Trigger a search and emit events.
         
         Args:
             query: Search query
+            **search_params: Additional search parameters (e.g., max_results, chunks_per_source)
         """
+        # For injury-related queries, request more content chunks
+        # Note: Tavily limits chunks_per_source to 1-5, so we use max value
+        if "injury" in query.lower() or "injured" in query.lower():
+            search_params.setdefault("chunks_per_source", 5)  # Max allowed by Tavily
+            search_params.setdefault("search_depth", "advanced")
+            search_params.setdefault("include_raw_content", True)
+        
         # Fetch from API
-        data = await self._api.fetch("search", {"query": query})
+        data = await self._api.fetch("search", {"query": query, **search_params})
         
         # Parse raw events
         raw_events = self._parse_api_response(data)
@@ -50,10 +50,12 @@ class WebSearchStore(DataStore):
             for stream_id, (processor, source_types) in self._stream_registry.items():
                 if raw_event.event_type in source_types:
                     if processor:
-                        # Process event through processor
-                        processed = await processor.process([raw_event])
-                        if processed and isinstance(processed, DataEvent):
-                            await self.emit_event(processed)
+                        # Check if processor should handle this event
+                        if processor.should_process(raw_event):
+                            # Process event through processor
+                            processed = await processor.process([raw_event])
+                            if processed and isinstance(processed, DataEvent):
+                                await self.emit_event(processed)
                     else:
                         # No processor, just pass through
                         await self.emit_event(raw_event)

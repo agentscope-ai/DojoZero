@@ -38,7 +38,8 @@ dev = [
     "ray>=2.51.1",
     "nba_api",
     "python-dotenv",
-    "tavily-python"
+    "tavily-python",
+    "dashscope"
 ]
 
 [tool.ruff]

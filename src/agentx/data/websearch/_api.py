@@ -92,10 +92,12 @@ class TavilySearchAdapter:
         normalized = []
         
         for item in results:
+            # Prefer raw_content if available (more complete), otherwise use content
+            content = item.get("raw_content") or item.get("content", "")
             normalized.append({
                 "title": item.get("title", ""),
                 "url": item.get("url", ""),
-                "snippet": item.get("content", ""),
+                "snippet": content,
             })
         
         return {

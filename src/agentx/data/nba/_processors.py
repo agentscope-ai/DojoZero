@@ -10,6 +10,19 @@ from agentx.data.nba._events import PlayByPlayEvent, RawPlayByPlayEvent
 class PlayByPlayProcessor(DataProcessor):
     """Processor that transforms raw play-by-play events to cooked events."""
     
+    def should_process(self, event: DataEvent) -> bool:
+        """Check if this processor should handle the event.
+        
+        Only processes raw play-by-play events.
+        
+        Args:
+            event: Event to check
+            
+        Returns:
+            True if event is raw play-by-play, False otherwise
+        """
+        return isinstance(event, RawPlayByPlayEvent)
+    
     async def process(self, events: Sequence[DataEvent]) -> DataEvent | None:
         """Process raw play-by-play events.
         

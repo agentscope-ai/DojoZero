@@ -13,6 +13,20 @@ class DataProcessor(ABC):
     They are registered in DataStores for stream processing.
     """
     
+    def should_process(self, event: DataEvent) -> bool:
+        """Check if this processor should handle the given event.
+        
+        This method allows processors to filter events before processing,
+        enabling efficient routing and avoiding unnecessary processing.
+        
+        Args:
+            event: Event to check
+            
+        Returns:
+            True if processor should process this event, False otherwise
+        """
+        return True  # Default: process all events
+    
     @abstractmethod
     async def process(self, events: Sequence[DataEvent]) -> DataEvent | DataFact | None:
         """Process events and return transformed event or fact.
@@ -36,6 +50,10 @@ class CompositeProcessor(DataProcessor):
             processors: Sequence of processors to chain
         """
         self.processors = processors
+    
+    def should_process(self, event: DataEvent) -> bool:
+        """Check if any processor in the chain should process this event."""
+        return any(processor.should_process(event) for processor in self.processors)
     
     async def process(self, events: Sequence[DataEvent]) -> DataEvent | DataFact | None:
         """Process events through all processors in sequence."""

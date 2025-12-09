@@ -10,6 +10,19 @@ from agentx.data.polymarket._events import OddsChangeEvent, RawOddsChangeEvent
 class OddsChangeProcessor(DataProcessor):
     """Processor that transforms raw odds change events to cooked events."""
     
+    def should_process(self, event: DataEvent) -> bool:
+        """Check if this processor should handle the event.
+        
+        Only processes raw odds change events.
+        
+        Args:
+            event: Event to check
+            
+        Returns:
+            True if event is raw odds change, False otherwise
+        """
+        return isinstance(event, RawOddsChangeEvent)
+    
     async def process(self, events: Sequence[DataEvent]) -> DataEvent | None:
         """Process raw odds change events.
         
