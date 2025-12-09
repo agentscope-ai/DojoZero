@@ -180,6 +180,5 @@ Only include players who are confirmed to be injured/out."""
             query=raw_event.query,
             summary=summary,
             injured_players=injured_players,
-            source_results_count=len(raw_event.results),
         )
 

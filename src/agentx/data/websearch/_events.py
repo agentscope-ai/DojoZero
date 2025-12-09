@@ -31,7 +31,6 @@ class InjurySummaryEvent(DataEvent):
     query: str = field(default="")
     summary: str = field(default="")
     injured_players: dict[str, list[str]] = field(default_factory=dict)
-    source_results_count: int = field(default=0)
     
     @property
     def event_type(self) -> str:
