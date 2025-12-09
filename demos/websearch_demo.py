@@ -25,100 +25,49 @@ class DemoAgent(AgentBase):
     def handle_event(self, event):
         """Handle received event."""
         self.received_events.append(event)
-        print(f"  [{self.agent_id}] Received event: {event.event_type}")
-        if isinstance(event, WebSearchEvent):
-            print(f"    Query: {event.query}")
-            print(f"    Results: {len(event.results)}")
-            for i, result in enumerate(event.results[:2], 1):  # Show first 2
-                print(f"      {i}. {result.get('title', 'N/A')}")
-                print(f"         {result.get('url', 'N/A')}")
+        if event.event_type == "web_search":  # type: ignore[attr-defined]
+            # Type checker issue with decorator, but runtime works correctly
+            web_event = event  # type: ignore[assignment]
+            print(f"  [{self.agent_id}] {event.event_type}: '{web_event.query}' ({len(web_event.results)} results)")  # type: ignore[attr-defined]
 
 
 async def demo_websearch_stack():
     """Demonstrate the complete websearch stack."""
-    print("=" * 70)
-    print("WEBSEARCH STACK DEMO")
-    print("=" * 70)
-    print()
+    print("WebSearch Stack Demo\n")
     
-    # Step 1: Create DataHub
-    print("Step 1: Creating DataHub")
-    print("-" * 70)
+    # Setup
     hub = DataHub(
         hub_id="demo_hub",
         persistence_file="data/demo_events.jsonl",
         enable_persistence=True,
     )
-    print(f"  Created DataHub: {hub.hub_id}")
-    print(f"  Persistence file: {hub.persistence_file}")
-    print()
+    print(f"✓ DataHub: {hub.hub_id} (persist: {hub.persistence_file})")
     
-    # Step 2: Create WebSearchAPI
-    print("Step 2: Creating WebSearchAPI")
-    print("-" * 70)
     try:
-        api = WebSearchAPI(
-            use_tavily=True,  # Use Tavily as the search engine
-        )
-        print(f"  Created WebSearchAPI")
-        print(f"  Tavily enabled: {api.use_tavily}")
-        print(f"  Tavily adapter: {'Available' if api.tavily_adapter else 'Not available'}")
+        api = WebSearchAPI(use_tavily=True)
         if not api.tavily_adapter:
             raise ValueError(
-                "Tavily SDK not available. Please install with: pip install tavily-python\n"
-                "And set TAVILY_API_KEY in your .env file."
+                "Tavily SDK not available. Install: pip install tavily-python\n"
+                "Set TAVILY_API_KEY in .env file"
             )
+        print("✓ WebSearchAPI: Tavily enabled")
     except (ValueError, ImportError) as e:
-        print(f"  Error: {e}")
-        print("\n  To run this demo:")
-        print("  1. Install Tavily SDK: pip install tavily-python")
-        print("  2. Set TAVILY_API_KEY in your .env file")
+        print(f"✗ Error: {e}")
         raise
-    print()
     
-    # Step 3: Create WebSearchStore
-    print("Step 3: Creating WebSearchStore")
-    print("-" * 70)
-    store = WebSearchStore(
-        store_id="demo_websearch_store",
-        api=api,
-        poll_interval_seconds=1.0,
-    )
-    print(f"  Created WebSearchStore: {store.store_id}")
-    print(f"  Registered streams: {store.list_registered_streams()}")
-    print()
-    
-    # Step 4: Connect Store to Hub
-    print("Step 4: Connecting Store to DataHub")
-    print("-" * 70)
+    store = WebSearchStore(store_id="demo_websearch_store", api=api, poll_interval_seconds=1.0)
     hub.connect_store(store)
-    print("  Store connected to DataHub")
-    print()
+    print(f"✓ WebSearchStore: {store.store_id} (streams: {', '.join(store.list_registered_streams())})")
     
-    # Step 5: Create and subscribe agents
-    print("Step 5: Creating and subscribing agents")
-    print("-" * 70)
+    # Agents
     agent1 = DemoAgent("Agent1")
     agent2 = DemoAgent("Agent2")
+    hub.subscribe_agent("Agent1", event_types=["web_search", "raw_web_search"], callback=agent1.handle_event)
+    hub.subscribe_agent("Agent2", event_types=["web_search"], callback=agent2.handle_event)
+    print("✓ Agents subscribed: Agent1 (all), Agent2 (cooked only)\n")
     
-    # Subscribe agents to web search events
-    hub.subscribe_agent(
-        "Agent1",
-        event_types=["web_search", "raw_web_search"],
-        callback=agent1.handle_event,
-    )
-    hub.subscribe_agent(
-        "Agent2",
-        event_types=["web_search"],  # Only cooked events
-        callback=agent2.handle_event,
-    )
-    print("  Agent1 subscribed to: web_search, raw_web_search")
-    print("  Agent2 subscribed to: web_search only")
-    print()
-    
-    # Step 6: Perform searches
-    print("Step 6: Performing searches")
-    print("-" * 70)
+    # Perform searches
+    print("Searching...")
     search_queries = [
         "Lakers vs Celtics betting odds",
         "NBA injury updates",
@@ -126,71 +75,35 @@ async def demo_websearch_stack():
     ]
     
     for query in search_queries:
-        print(f"\n  Searching: {query}")
+        print(f"  • {query}")
         await store.search(query)
-        # Give time for events to flow through the system
-        await asyncio.sleep(0.3)  # Small delay for async processing
+        await asyncio.sleep(0.3)
     
-    print()
+    # Results
+    print(f"\nResults:")
+    raw_count = sum(1 for e in agent1.received_events if e.event_type == "raw_web_search")
+    cooked_count = sum(1 for e in agent1.received_events if e.event_type == "web_search")
+    cooked_count2 = sum(1 for e in agent2.received_events if e.event_type == "web_search")
+    print(f"  Agent1: {len(agent1.received_events)} events ({raw_count} raw, {cooked_count} cooked)")
+    print(f"  Agent2: {len(agent2.received_events)} events ({cooked_count2} cooked)")
     
-    # Step 7: Show results
-    print("Step 7: Results summary")
-    print("-" * 70)
-    print(f"  Agent1 received {len(agent1.received_events)} events")
-    print(f"  Agent2 received {len(agent2.received_events)} events")
-    print()
-    
-    # Show event breakdown
-    raw_count = sum(1 for e in agent1.received_events if isinstance(e, RawWebSearchEvent))
-    cooked_count = sum(1 for e in agent1.received_events if isinstance(e, WebSearchEvent))
-    print(f"  Agent1 breakdown:")
-    print(f"    Raw events: {raw_count}")
-    print(f"    Cooked events: {cooked_count}")
-    print()
-    
-    cooked_count2 = sum(1 for e in agent2.received_events if isinstance(e, WebSearchEvent))
-    print(f"  Agent2 breakdown:")
-    print(f"    Cooked events: {cooked_count2}")
-    print()
-    
-    # Step 8: Show persistence
-    print("Step 8: Checking persistence")
-    print("-" * 70)
+    # Persistence
     if hub.persistence_file.exists():
         with open(hub.persistence_file, "r") as f:
             lines = f.readlines()
-        print(f"  Persisted {len(lines)} events to {hub.persistence_file}")
-        print(f"  File size: {hub.persistence_file.stat().st_size} bytes")
-    else:
-        print("  No events persisted yet")
-    print()
+        print(f"  Persisted: {len(lines)} events ({hub.persistence_file.stat().st_size} bytes)")
     
-    # Step 9: Demonstrate replay
-    print("Step 9: Demonstrating replay")
-    print("-" * 70)
+    # Replay
     if hub.persistence_file.exists():
-        print("  Starting replay from file...")
+        print("\nReplaying events...")
         await hub.start_replay(str(hub.persistence_file))
-        
         replay_agent = DemoAgent("ReplayAgent")
-        hub.subscribe_agent(
-            "ReplayAgent",
-            event_types=["web_search"],
-            callback=replay_agent.handle_event,
-        )
-        
-        # Replay all events
+        hub.subscribe_agent("ReplayAgent", event_types=["web_search"], callback=replay_agent.handle_event)
         await hub.replay_all()
-        
-        print(f"  ReplayAgent received {len(replay_agent.received_events)} events during replay")
+        print(f"  ReplayAgent: {len(replay_agent.received_events)} events")
         hub.stop_replay()
-    else:
-        print("  No events to replay")
-    print()
     
-    print("=" * 70)
-    print("DEMO COMPLETE")
-    print("=" * 70)
+    print("\n✓ Demo complete")
 
 
 

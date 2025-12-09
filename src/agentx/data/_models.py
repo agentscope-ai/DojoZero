@@ -3,13 +3,16 @@
 from abc import ABC
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+# Type variable for event classes
+EventT = TypeVar("EventT", bound="DataEvent")
 
 # Event registry for reconstruction during replay
 _EVENT_REGISTRY: dict[str, type["DataEvent"]] = {}
 
 
-def register_event(event_class: type["DataEvent"] | None = None):
+def register_event(event_class: type[EventT] | None = None) -> type[EventT] | Callable[[type[EventT]], type[EventT]]:
     """Decorator to register an event class in the registry.
     
     Usage:
@@ -32,7 +35,7 @@ def register_event(event_class: type["DataEvent"] | None = None):
     Returns:
         The decorated class
     """
-    def decorator(cls: type["DataEvent"]) -> type["DataEvent"]:
+    def decorator(cls: type[EventT]) -> type[EventT]:
         # Create a minimal instance to get the actual event_type
         # All event classes have default values for their fields
         try:
