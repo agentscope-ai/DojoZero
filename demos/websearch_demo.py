@@ -19,9 +19,9 @@ from agentx.data.websearch._processors import (
 )
 
 
-team1 = "Miami Heat"
-team2 = "Orlando Magic"
-game_date = "2025-12-09"
+team1 = "Los Angeles Lakers"
+team2 = "San Antonio Spurs"
+game_date = "2025-12-10"
 game_info = f"{team1} vs {team2} on {game_date}"
 
 

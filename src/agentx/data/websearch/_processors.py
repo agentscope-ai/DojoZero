@@ -283,7 +283,7 @@ Format:
 
 Rules:
 - Each team appears ONCE per source
-- Extract full ranking
+- Extract full ranking, all 30 teams should be included
 - Use URL domain as key (e.g., "nba.com")
 - Skip sources without clear rankings"""
         
@@ -330,8 +330,6 @@ Rules:
                         cleaned_rankings[source] = valid_teams
                 
                 rankings = cleaned_rankings
-                if rankings:
-                    print(f"DEBUG: Successfully extracted rankings from {len(rankings)} sources")
             
         except Exception as e:
             print(f"DEBUG: Error extracting rankings: {e}")
@@ -357,7 +355,7 @@ class ExpertPredictionProcessor(DataProcessor):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "qwen-turbo",
+        model: str = "qwen-max",
     ):
         """Initialize expert prediction processor.
         
