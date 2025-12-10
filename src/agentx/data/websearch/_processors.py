@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Sequence, cast
+from typing import Any, cast
 
 from agentx.data._models import DataEvent
 from agentx.data._processors import DataProcessor
@@ -74,20 +74,17 @@ class InjurySummaryProcessor(DataProcessor):
         query_lower = query.lower()
         return "injury" in query_lower or "injured" in query_lower
     
-    async def process(self, events: Sequence[DataEvent]) -> DataEvent | None:
-        """Process raw web search events and generate injury summary.
+    async def process(self, event: DataEvent) -> DataEvent | None:
+        """Process raw web search event and generate injury summary.
         
         Args:
-            events: Sequence of raw web search events
+            event: Raw web search event
             
         Returns:
             Injury summary event or None
         """
-        if not events:
-            return None
-        
         # should_process() already ensures this is a raw_web_search event
-        raw_event = cast(RawWebSearchEvent, events[0])  # type: ignore[arg-type]
+        raw_event = cast(RawWebSearchEvent, event)  # type: ignore[arg-type]
         
         # Extract text from search results
         result_texts = []
@@ -244,20 +241,17 @@ class PowerRankingProcessor(DataProcessor):
         query_lower = query.lower()
         return "power ranking" in query_lower or "power rankings" in query_lower
     
-    async def process(self, events: Sequence[DataEvent]) -> DataEvent | None:
-        """Process raw web search events and extract power rankings.
+    async def process(self, event: DataEvent) -> DataEvent | None:
+        """Process raw web search event and extract power rankings.
         
         Args:
-            events: Sequence of raw web search events
+            event: Raw web search event
             
         Returns:
             Power ranking event or None
         """
-        if not events:
-            return None
-        
         # should_process() already ensures this is a raw_web_search event
-        raw_event = cast(RawWebSearchEvent, events[0])  # type: ignore[arg-type]
+        raw_event = cast(RawWebSearchEvent, event)  # type: ignore[arg-type]
         
         # Extract text from search results
         result_texts = []
@@ -409,20 +403,17 @@ class ExpertPredictionProcessor(DataProcessor):
         ]
         return any(keyword in query_lower for keyword in prediction_keywords)
     
-    async def process(self, events: Sequence[DataEvent]) -> DataEvent | None:
-        """Process raw web search events and extract expert predictions.
+    async def process(self, event: DataEvent) -> DataEvent | None:
+        """Process raw web search event and extract expert predictions.
         
         Args:
-            events: Sequence of raw web search events
+            event: Raw web search event
             
         Returns:
             Expert prediction event or None
         """
-        if not events:
-            return None
-        
         # should_process() already ensures this is a raw_web_search event
-        raw_event = cast(RawWebSearchEvent, events[0])  # type: ignore[arg-type]
+        raw_event = cast(RawWebSearchEvent, event)  # type: ignore[arg-type]
         
         # Extract text from search results
         result_texts = []

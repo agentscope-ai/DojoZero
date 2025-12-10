@@ -131,7 +131,7 @@ class DataStore(ABC):
                                 # Check if processor should handle this event
                                 if processor.should_process(raw_event):
                                     # Process event through processor
-                                    processed = await processor.process([raw_event])
+                                    processed = await processor.process(raw_event)
                                     if processed and isinstance(processed, DataEvent):
                                         await self.emit_event(processed)
                             else:

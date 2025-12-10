@@ -1,6 +1,6 @@
 """Polymarket-specific processors."""
 
-from typing import Sequence
+from typing import cast
 
 from agentx.data._models import DataEvent
 from agentx.data._processors import DataProcessor
@@ -21,32 +21,24 @@ class OddsChangeProcessor(DataProcessor):
         Returns:
             True if event is raw odds change, False otherwise
         """
-        return isinstance(event, RawOddsChangeEvent)
+        return event.event_type == "raw_odds_change"
     
-    async def process(self, events: Sequence[DataEvent]) -> DataEvent | None:
-        """Process raw odds change events.
+    async def process(self, event: DataEvent) -> DataEvent | None:
+        """Process raw odds change event.
         
         Args:
-            events: Sequence of raw odds change events
+            event: Raw odds change event
             
         Returns:
             Processed odds change event or None
         """
-        if not events:
+        if event.event_type != "raw_odds_change":
             return None
         
-        # Get the latest raw event
-        raw_event = None
-        for event in events:
-            if isinstance(event, RawOddsChangeEvent):
-                raw_event = event
-                break
-        
-        if not raw_event:
-            return None
+        raw_event = cast(RawOddsChangeEvent, event)  # type: ignore[arg-type]
         
         # Transform to cooked event (could add validation, enrichment, etc.)
-        return OddsChangeEvent(
+        return OddsChangeEvent(  # type: ignore[call-arg]
             timestamp=raw_event.timestamp,
             market_id=raw_event.market_id,
             outcomes=raw_event.outcomes,

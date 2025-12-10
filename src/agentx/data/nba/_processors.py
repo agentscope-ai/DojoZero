@@ -1,6 +1,6 @@
 """NBA-specific processors."""
 
-from typing import Sequence
+from typing import cast
 
 from agentx.data._models import DataEvent
 from agentx.data._processors import DataProcessor
@@ -21,32 +21,24 @@ class PlayByPlayProcessor(DataProcessor):
         Returns:
             True if event is raw play-by-play, False otherwise
         """
-        return isinstance(event, RawPlayByPlayEvent)
+        return event.event_type == "raw_play_by_play"
     
-    async def process(self, events: Sequence[DataEvent]) -> DataEvent | None:
-        """Process raw play-by-play events.
+    async def process(self, event: DataEvent) -> DataEvent | None:
+        """Process raw play-by-play event.
         
         Args:
-            events: Sequence of raw play-by-play events
+            event: Raw play-by-play event
             
         Returns:
             Processed play-by-play event or None
         """
-        if not events:
+        if event.event_type != "raw_play_by_play":
             return None
         
-        # Get the latest raw event
-        raw_event = None
-        for event in events:
-            if isinstance(event, RawPlayByPlayEvent):
-                raw_event = event
-                break
-        
-        if not raw_event:
-            return None
+        raw_event = cast(RawPlayByPlayEvent, event)  # type: ignore[arg-type]
         
         # Transform to cooked event (could add validation, enrichment, etc.)
-        return PlayByPlayEvent(
+        return PlayByPlayEvent(  # type: ignore[call-arg]
             timestamp=raw_event.timestamp,
             game_id=raw_event.game_id,
             points=raw_event.points,
