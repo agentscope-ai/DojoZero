@@ -134,54 +134,56 @@ Bet {
 
 All events from the datastream are wrapped in a `StreamEvent` object:
 ```python
-StreamEvent {
-    stream_id: String
-    payload: Dict[str, Any]  # Event-specific data (see below)
-    emitted_at: Timestamp
-}
+@dataclass
+class StreamEvent(Generic[PayloadT]):
+    """Envelope for data emitted by a :class:`DataStream`."""
+
+    stream_id: str  # Actor ID of the producer of the payload.
+    payload: PayloadT
+    emitted_at: datetime = field(default_factory=_utcnow)
+    sequence: int | None = None
+    metadata: JSONDict = field(default_factory=dict)
+
 ```
 
 **Payload Types**
 
 *Pregame Event Payload (initializes odds)*
 ```python
-payload = {
-    "type": "pregame",
-    "event_id": String,
-    "home_team": String,
-    "away_team": String,
-    "game_time": String (ISO format),
-    "initial_home_odds": Float,
-    "initial_away_odds": Float
-}
+
+@dataclass
+class PregamePayload:
+    event_id: str
+    home_team: str
+    away_team: str
+    game_time: str
+    initial_home_odds: float
+    initial_away_odds: float
 ```
 
 *Odds Update Event Payload*
 ```python
-payload = {
-    "type": "odds_update",
-    "event_id": String,
-    "home_odds": Float,
-    "away_odds": Float
-}
+@dataclass
+class OddsUpdatePayload:
+    event_id: str
+    home_odds: float
+    away_odds: float
 ```
 
 *Game Start Event Payload*
 ```python
-payload = {
-    "type": "game_start",
-    "event_id": String
-}
+@dataclass
+class GameStartPayload:
+    event_id: str
 ```
 
 *Game Result Event Payload*
 ```python
-payload = {
-    "type": "game_result",
-    "event_id": String,
-    "winner": String,  # "home" or "away"
-    "final_score": Dict[String, Int],  # e.g., {"home": 108, "away": 102}
-}
+@dataclass
+class GameResultPayload:
+    event_id: str
+    winner: str  # "home" or "away"
+    final_score: dict[str, int]  # e.g., {"home": 108, "away": 102}
 ```
 
 ---
