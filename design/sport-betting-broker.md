@@ -268,3 +268,15 @@ async def get_statistics(
 1. logging: what to log? transaction logs, bet logs, settlement_log
 2. concurrency control? One lock per agent for account balance modification operations (`withdraw`, `deposit`, `place_bet`, `settle_bet`)
 `_agent_lock(agent_id: str)`
+
+
+## Discussion:
+1. How to pull data from datastream to obtain the current odds? Or Datastream should push the updated odds to operator?
+2. Do the place bet operator need to connect to polymarket api? Or just update the ._bets?
+
+
+## TODO: 
+1. Add two place_order method: limit order and market order (BetRequest does not specifies a bet odds)
+2. handle_stream_event: also handles the update of the bet odds.
+3. Double check the resume logic
+4. To explore: more betting logic as available in different market..

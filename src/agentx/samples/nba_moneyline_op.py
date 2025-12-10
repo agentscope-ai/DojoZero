@@ -484,7 +484,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 - payload: Dict[str, Any] - The event data containing:
                     - "event_id": str - Unique identifier for the game/event
                     - "winner": str - Result of the game, either "home" or "away"
-                    - "final_data": Dict[str, Any] (optional) - Additional game metadata
+                    - "s": Dict[str, Any] (optional) - Additional game metadata
                 - emitted_at: datetime - Timestamp when the event was emitted
             """
 
