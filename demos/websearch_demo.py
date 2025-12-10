@@ -118,15 +118,23 @@ async def demo_websearch_stack():
             lines = f.readlines()
         print(f"  Persisted: {len(lines)} events ({hub.persistence_file.stat().st_size} bytes)")
     
-    # Replay
+    # Replay with a new hub instance
     if hub.persistence_file.exists():
-        print("\nReplaying events...")
-        await hub.start_replay(str(hub.persistence_file))
-        replay_agent = DemoAgent("ReplayAgent")
-        hub.subscribe_agent("ReplayAgent", event_types=["raw_web_search"], callback=replay_agent.handle_event)
-        await hub.replay_all()
-        print(f"  ReplayAgent: {len(replay_agent.received_events)} events")
-        hub.stop_replay()
+        print("\nReplaying events with new hub...")
+        replay_hub = DataHub(
+            hub_id="replay_hub",
+            persistence_file=hub.persistence_file,
+            enable_persistence=False,  # Don't persist during replay
+        )
+        await replay_hub.start_replay(str(hub.persistence_file))
+        replay_agent_1 = DemoAgent("ReplayAgent")
+        replay_hub.subscribe_agent("ReplayAgent", event_types=["raw_web_search"], callback=replay_agent_1.handle_event)
+        replay_agent_2 = DemoAgent("ReplayAgent")
+        replay_hub.subscribe_agent("ReplayAgent", event_types=["injury_summary", "power_ranking", "expert_prediction"], callback=replay_agent_2.handle_event)
+        await replay_hub.replay_all()
+        print(f"  ReplayAgent1: {len(replay_agent_1.received_events)} events")
+        print(f"  ReplayAgent2: {len(replay_agent_2.received_events)} events")
+        replay_hub.stop_replay()
     
     print("\n✓ Demo complete")
 
