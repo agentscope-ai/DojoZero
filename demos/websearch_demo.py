@@ -18,10 +18,12 @@ from agentx.data.websearch._processors import (
     PowerRankingProcessor,
 )
 
+
 team1 = "Miami Heat"
 team2 = "Orlando Magic"
 game_date = "2025-12-09"
 game_info = f"{team1} vs {team2} on {game_date}"
+
 
 class DemoAgent(AgentBase):
     """Simple demo agent that subscribes to web search events."""
@@ -73,7 +75,7 @@ async def demo_websearch_stack():
         callback=agent1.handle_event,
     )
     hub.subscribe_agent("Agent2", event_types=["raw_web_search"], callback=agent2.handle_event)
-    print("✓ Agents subscribed: Agent1 (all processed events), Agent2 (raw only)\n")
+    print("✓ Agents subscribed: Agent1 (all events including raw), Agent2 (raw only)\n")
     
     # Perform searches
     print("Searching...")
@@ -127,17 +129,16 @@ async def demo_websearch_stack():
             enable_persistence=False,  # Don't persist during replay
         )
         await replay_hub.start_replay(str(hub.persistence_file))
-        replay_agent_1 = DemoAgent("ReplayAgent")
-        replay_hub.subscribe_agent("ReplayAgent", event_types=["raw_web_search"], callback=replay_agent_1.handle_event)
-        replay_agent_2 = DemoAgent("ReplayAgent")
-        replay_hub.subscribe_agent("ReplayAgent", event_types=["injury_summary", "power_ranking", "expert_prediction"], callback=replay_agent_2.handle_event)
-        await replay_hub.replay_all()
+        replay_agent_1 = DemoAgent("ReplayAgent1")
+        replay_hub.subscribe_agent("ReplayAgent1", event_types=["raw_web_search"], callback=replay_agent_1.handle_event)
+        replay_agent_2 = DemoAgent("ReplayAgent2")
+        replay_hub.subscribe_agent("ReplayAgent2", event_types=["injury_summary", "power_ranking", "expert_prediction"], callback=replay_agent_2.handle_event)
+        await replay_hub.replay_all()   
         print(f"  ReplayAgent1: {len(replay_agent_1.received_events)} events")
         print(f"  ReplayAgent2: {len(replay_agent_2.received_events)} events")
         replay_hub.stop_replay()
     
     print("\n✓ Demo complete")
-
 
 
 if __name__ == "__main__":
