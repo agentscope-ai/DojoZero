@@ -39,7 +39,8 @@ dev = [
     "nba_api",
     "python-dotenv",
     "tavily-python",
-    "dashscope"
+    "dashscope",
+    "py-clob-client",
 ]
 
 [tool.ruff]
