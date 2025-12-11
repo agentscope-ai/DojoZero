@@ -74,15 +74,19 @@ def _build_trial_spec(
 ) -> TrialSpec:
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
 
-    # Get game information from game_id to extract team tricodes
+    # Get game information from game_id to extract team tricodes and names
     game_info = get_game_info_by_id(params.game_id)
     home_team_tricode: str | None = None
     away_team_tricode: str | None = None
+    home_team_name: str | None = None
+    away_team_name: str | None = None
     game_date: str | None = None
 
     if game_info:
         home_team_tricode = game_info.get("home_team_tricode")
         away_team_tricode = game_info.get("away_team_tricode")
+        home_team_name = game_info.get("home_team")
+        away_team_name = game_info.get("away_team")
         game_date = game_info.get("game_date")
         LOGGER.info(
             "Found game info: %s @ %s on %s",
@@ -151,10 +155,12 @@ def _build_trial_spec(
         stream_store_registry[params.websearch_store_id] = store
 
         # Add team metadata and store reference for raw_web_search stream
-        if stream_id == "raw_web_search" and home_team_tricode and away_team_tricode:
+        if stream_id == "raw_web_search" and home_team_name and away_team_name:
             stream_config["websearch_store_id"] = params.websearch_store_id
             stream_config["home_team_tricode"] = home_team_tricode
             stream_config["away_team_tricode"] = away_team_tricode
+            stream_config["home_team_name"] = home_team_name
+            stream_config["away_team_name"] = away_team_name
             if game_date:
                 stream_config["game_date"] = game_date
 

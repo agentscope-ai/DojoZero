@@ -23,6 +23,8 @@ class NBAPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
     websearch_store_id: str  # Store ID for triggering searches (only for raw_web_search stream)
     home_team_tricode: str  # Team metadata for generating queries
     away_team_tricode: str
+    home_team_name: str  # Full team name for search queries
+    away_team_name: str
     game_date: str
 
 
@@ -45,15 +47,17 @@ class NBAPreGameBettingDataHubDataStream(
         store: WebSearchStore | None = None,
         home_team_tricode: str | None = None,
         away_team_tricode: str | None = None,
+        home_team_name: str | None = None,
+        away_team_name: str | None = None,
         game_date: str | None = None,
     ) -> None:
-        # Create initializer if store and tricodes are provided
+        # Create initializer if store and team names are provided
         initializer: NBAStreamInitializer | None = None
-        if store and home_team_tricode and away_team_tricode:
+        if store and home_team_name and away_team_name:
             initializer = NBAStreamInitializer(
                 store=store,
-                home_team_tricode=home_team_tricode,
-                away_team_tricode=away_team_tricode,
+                home_team_name=home_team_name,
+                away_team_name=away_team_name,
                 game_date=game_date,
             )
         
@@ -100,5 +104,7 @@ class NBAPreGameBettingDataHubDataStream(
             store=store,
             home_team_tricode=config.get("home_team_tricode"),
             away_team_tricode=config.get("away_team_tricode"),
+            home_team_name=config.get("home_team_name"),
+            away_team_name=config.get("away_team_name"),
             game_date=config.get("game_date"),
         )

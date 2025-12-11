@@ -20,21 +20,21 @@ class NBAStreamInitializer:
     def __init__(
         self,
         store: WebSearchStore,
-        home_team_tricode: str | None = None,
-        away_team_tricode: str | None = None,
+        home_team_name: str | None = None,
+        away_team_name: str | None = None,
         game_date: str | None = None,
     ) -> None:
         """Initialize the NBA stream initializer.
         
         Args:
             store: WebSearchStore instance to use for searches
-            home_team_tricode: Home team tricode (e.g., "LAL")
-            away_team_tricode: Away team tricode (e.g., "SAS")
+            home_team_name: Home team full name (e.g., "Los Angeles Lakers")
+            away_team_name: Away team full name (e.g., "San Antonio Spurs")
             game_date: Game date string (e.g., "2025-01-15")
         """
         self._store = store
-        self._home_team_tricode = home_team_tricode
-        self._away_team_tricode = away_team_tricode
+        self._home_team_name = home_team_name
+        self._away_team_name = away_team_name
         self._game_date = game_date
     
     async def initialize(self, stream: DataHubDataStream) -> None:
@@ -46,10 +46,10 @@ class NBAStreamInitializer:
         if self._store is None:
             return
         
-        # Build team context for queries using tricodes
+        # Build team context for queries using team names
         teams_str = ""
-        if self._home_team_tricode and self._away_team_tricode:
-            teams_str = f"{self._away_team_tricode} @ {self._home_team_tricode}"
+        if self._home_team_name and self._away_team_name:
+            teams_str = f"{self._away_team_name} vs {self._home_team_name}"
         
         date_str = ""
         if self._game_date:
