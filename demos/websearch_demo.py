@@ -55,7 +55,7 @@ async def demo_websearch_stack():
     print(f"✓ DataHub: {hub.hub_id} (persist: {hub.persistence_file})")
     
     api = WebSearchAPI()
-    store = WebSearchStore(store_id="demo_websearch_store", api=api, poll_interval_seconds=30.0)
+    store = WebSearchStore(store_id="demo_websearch_store", api=api)
     
     # Register processors
     store.register_stream("injury_summary", InjurySummaryProcessor(), ["raw_web_search"])
