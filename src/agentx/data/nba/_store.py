@@ -40,7 +40,8 @@ class NBAStore(DataStore):
             if isinstance(timestamp_str, str):
                 try:
                     timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                except:
+                except ValueError:
+                    # Log the error or handle it appropriately
                     timestamp = datetime.now(timezone.utc)
             else:
                 timestamp = datetime.now(timezone.utc)
