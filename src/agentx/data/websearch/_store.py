@@ -15,26 +15,13 @@ class WebSearchStore(DataStore):
         self,
         store_id: str = "web_search_store",
         api: ExternalAPI | None = None,
-        poll_interval_seconds: float = 5.0,
         event_emitter=None,
     ):
         """Initialize Web Search store."""
-        super().__init__(store_id, api or WebSearchAPI(), poll_interval_seconds, event_emitter)
+        super().__init__(store_id, api=api or WebSearchAPI(), event_emitter=event_emitter)
     
-    async def search(
-        self,
-        query: str,
-        intent: WebSearchIntent | str | None = None,
-        **search_params: Any,
-    ) -> None:
-        """Trigger a search and emit events.
-        
-        Args:
-            query: Search query
-            intent: Optional query intent (WebSearchIntent enum or string).
-                   When provided, routes to specific processors, overriding should_process() logic.
-            **search_params: Additional search parameters (e.g., max_results, chunks_per_source)
-        """
+    async def search(self, query: str, intent: WebSearchIntent | str | None = None, **search_params: Any) -> None:
+        """Trigger a search and emit events."""
         # Use optimal settings for all queries to get complete content
         search_params.setdefault("search_depth", "advanced")
         search_params.setdefault("max_results", 5)

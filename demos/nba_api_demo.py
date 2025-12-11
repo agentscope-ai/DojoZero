@@ -15,23 +15,11 @@ try:
 except ImportError:
     pass  # python-dotenv not installed, skip .env loading
 
+# Import proxy utilities from agentx
+from agentx.data.nba._utils import with_nba_api_proxy, get_game_info_by_id
 
-def get_proxy():
-    """
-    Get proxy configuration from environment variables or .env file.
-    
-    Looks for PROXY_URL environment variable. If not found, returns None.
-    Supports .env file loading if python-dotenv is installed.
-    
-    Returns: 
-        str: Proxy URL string, or None if not configured
-    """
-    proxy_url = os.getenv('PROXY_URL')
-    if not proxy_url:
-        raise ValueError("PROXY_URL environment variable is not set")
-    print(f"Using proxy: {proxy_url}")
-    return proxy_url
 
+game_id = "0022501205"
 
 def get_current_games():
     """
@@ -63,20 +51,20 @@ def get_current_games():
     return get_games_for_date(datetime.now(), print_games=False)
 
 
-def get_games_for_date(game_date: datetime | str, print_games: bool = False):
+@with_nba_api_proxy
+def get_games_for_date(game_date: datetime | str, print_games: bool = False, proxy: str | None = None):
     """
     Get games for a specific date using ScoreboardV3 endpoint.
     
     Args:
         game_date: Date as datetime object or string in 'YYYY-MM-DD' format
         print_games: Whether to print game information (default: False)
+        proxy: Optional proxy URL (automatically set from PROXY_URL env var if not provided)
     
     Returns:
         list[dict]: List of game dictionaries, or empty list if no games found
     """
     try:
-        # Get proxy configuration
-        proxy = get_proxy()
         
         # Parse the requested date
         if isinstance(game_date, datetime):
@@ -98,7 +86,10 @@ def get_games_for_date(game_date: datetime | str, print_games: bool = False):
         date_str = requested_date.strftime('%Y-%m-%d')
         
         # Use ScoreboardV3 for all dates
-        board = scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy)
+        if proxy:
+            board = scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy)
+        else:
+            board = scoreboardv3.ScoreboardV3(game_date=date_str)
         games_data = board.get_dict()
         
         if not games_data or 'scoreboard' not in games_data:
@@ -263,13 +254,15 @@ def get_most_recent_finished_games(max_days_back: int = 7, print_games: bool = T
     return None, None
 
 
-def get_play_by_play(game_id: str, include_player_names: bool = True):
+@with_nba_api_proxy
+def get_play_by_play(game_id: str, include_player_names: bool = True, proxy: str | None = None):
     """
     Get real-time play-by-play data for a specific game.
     
     Args:
         game_id (str): The NBA game ID (e.g., '0022500290')
         include_player_names (bool): Whether to include player full names (default: True)
+        proxy: Optional proxy URL (automatically set from PROXY_URL env var if not provided)
     
     Returns:
         dict: Play-by-play data with the following structure:
@@ -300,7 +293,6 @@ def get_play_by_play(game_id: str, include_player_names: bool = True):
         return None
     
     try:
-        proxy = get_proxy()
         pbp = playbyplay.PlayByPlay(game_id, proxy=proxy) if proxy else playbyplay.PlayByPlay(game_id)
         pbp_dict = pbp.get_dict()
         
@@ -400,6 +392,27 @@ if __name__ == "__main__":
         print(teams.get_teams())
         print("-" * 50)
 
+    # Test get_game_info_by_id utility function
+    print("="*80)
+    print("TESTING get_game_info_by_id UTILITY")
+    print("="*80)
+    print(f"Looking up game info for game_id: {game_id}")
+    game_info = get_game_info_by_id(game_id)
+    if game_info:
+        print(f"✓ Found game info:")
+        print(f"  Game ID: {game_info['game_id']}")
+        print(f"  Matchup: {game_info['away_team']} @ {game_info['home_team']}")
+        print(f"  Date: {game_info['game_date']}")
+        print(f"  Time (UTC): {game_info['game_time_utc']}")
+        print(f"  Away Team Tricode: {game_info['away_team_tricode']}")
+        print(f"  Home Team Tricode: {game_info['home_team_tricode']}")
+    else:
+        print(f"✗ Game not found for game_id: {game_id}")
+        print("  (This is expected if the game is older than 7 days or doesn't exist)")
+    print()
+
+    exit()
+
     # Get current games
     print("="*80)
     print("CHECKING FOR STARTED OR FINISHED GAMES TODAY")
@@ -412,7 +425,14 @@ if __name__ == "__main__":
     
     if games:
         print(f"Found {len(games)} game(s)")
-        print(games)
+        # If we got a list of games, show first one's info using the utility
+        if isinstance(games, list) and len(games) > 0:
+            first_game_id = games[0].get('gameId')
+            if first_game_id:
+                print(f"\nTesting utility with first game ID: {first_game_id}")
+                first_game_info = get_game_info_by_id(first_game_id)
+                if first_game_info:
+                    print(f"  {first_game_info['away_team']} @ {first_game_info['home_team']} on {first_game_info['game_date']}")
     else:
         print("No games found")
     

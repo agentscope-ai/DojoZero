@@ -6,8 +6,7 @@ This directory contains sample scenarios and examples for AgentX.
 
 - `bounded_random.py` - Basic bounded random scenario example
 - `bounded_random_buffered.py` - Buffered version of bounded random scenario
-- `data/_google_search_example.py` - Example demonstrating Google Search → LLM Processing → SearchResultFact flow
-- `data/_nba_api_example.py` - Example demonstrating NBA API → Data Streamer → Aggregation → Facts flow
+- `nba_pregame_betting.py` - Conduct web searchs for certain game
 
 ## Usage
 
