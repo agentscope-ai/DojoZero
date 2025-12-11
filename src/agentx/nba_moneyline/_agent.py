@@ -1,6 +1,7 @@
-"""Dummy agent that counts events from DataHub streams."""
+"""Agent implementations for NBA moneyline betting."""
 
 import logging
+from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, TypedDict, cast
 
 from agentx.core import Agent, AgentBase, StreamEvent
@@ -121,3 +122,24 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     @property
     def events_processed(self) -> int:
         return self._events_processed
+
+
+# ============================================================================
+# NBABettingAgent - LLM-based agent that inherits from BettingAgent
+# ============================================================================
+
+
+from agentx.agents import BettingAgent
+from agentx.agents.config import BettingAgentConfig
+
+
+# Config type alias for clarity
+NBABettingAgentConfig = BettingAgentConfig
+
+
+class NBABettingAgent(BettingAgent):
+    """LLM-based betting agent for NBA moneyline betting.
+    
+    Inherits from BettingAgent. Uses agent_config_path to load config from YAML.
+    """
+    pass

@@ -46,7 +46,8 @@ scenario:
       
     agents:
     - id: betting_agent
-      class: DummyAgent
+      class: NBABettingAgent
+      agent_config_path: configs/agents/basic.yaml
       operators:
       - event_counter
       - betting_broker

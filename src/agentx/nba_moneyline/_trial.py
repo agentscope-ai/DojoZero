@@ -24,6 +24,8 @@ from agentx.data.websearch._processors import (
 from agentx.nba_moneyline._agent import (
     DummyAgent,
     DummyAgentConfig,
+    NBABettingAgent,
+    NBABettingAgentConfig,
 )
 from agentx.nba_moneyline._datastream import (
     NBAPreGameBettingDataHubDataStream,
@@ -484,7 +486,7 @@ def _build_trial_spec(
 
     # Create agent specs from agents config
     agent_specs = []
-    
+
     if params.agents:
         for agent_dict in params.agents:
             agent_id = agent_dict.get("id")
@@ -496,25 +498,60 @@ def _build_trial_spec(
             data_stream_ids = agent_dict.get("data_streams", [])
             
             # Map class name to class
-            agent_class_map = {
+            agent_class_map: dict[str, type] = {
                 "DummyAgent": DummyAgent,
+                "NBABettingAgent": NBABettingAgent,
             }
             agent_cls = agent_class_map.get(agent_class_name)
             if agent_cls is None:
                 raise ValueError(f"Unknown agent class: {agent_class_name}")
             
-            # Create agent config dict
-            agent_config: DummyAgentConfig = {
+            # Create agent config dict based on agent class
+            if agent_class_name == "NBABettingAgent":
+                agent_config_path = agent_dict.get("agent_config_path")
+                if not agent_config_path:
+                    raise ValueError(
+                        f"agent_config_path is required for NBABettingAgent '{agent_id}'"
+                    )
+                nba_agent_config: NBABettingAgentConfig = {
+                    "actor_id": agent_id,
+                    "agent_config_path": agent_config_path,
+                }
+                agent_spec = AgentSpec[NBABettingAgentConfig](
+                    actor_id=agent_id,
+                    actor_cls=agent_cls,
+                    config=nba_agent_config,
+                    operator_ids=tuple(operator_ids) if operator_ids else ("event_counter",),
+                    data_stream_ids=tuple(data_stream_ids),
+                )
+            else:
+                agent_config: DummyAgentConfig = {
+                    "actor_id": agent_id,
+                    "operator_id": operator_ids[0] if operator_ids else "event_counter",
+                }
+                agent_spec = AgentSpec[DummyAgentConfig](
+                    actor_id=agent_id,
+                    actor_cls=agent_cls,
+                    config=agent_config,
+                    operator_ids=tuple(operator_ids) if operator_ids else ("event_counter",),
+                    data_stream_ids=tuple(data_stream_ids),
+                )
+            agent_specs.append(agent_spec)
+    elif params.agent_ids:
+        # Legacy: simple agent_ids list
+        for agent_id in params.agent_ids:
+            legacy_agent_config: DummyAgentConfig = {
                 "actor_id": agent_id,
-                "operator_id": operator_ids[0] if operator_ids else "event_counter",
+                "operator_id": "event_counter",
             }
-            
+            # Infer data_stream_ids from all created streams
+            all_stream_ids = [f"{et}_stream" for et in event_types_list]
             agent_spec = AgentSpec[DummyAgentConfig](
                 actor_id=agent_id,
-                actor_cls=agent_cls,
-                config=agent_config,
-                operator_ids=tuple(operator_ids) if operator_ids else ("event_counter",),
-                data_stream_ids=tuple(data_stream_ids),
+                actor_cls=DummyAgent,
+                config=legacy_agent_config,
+                operator_ids=("event_counter",),
+                data_stream_ids=tuple(all_stream_ids),
             )
             agent_specs.append(agent_spec)
     else:

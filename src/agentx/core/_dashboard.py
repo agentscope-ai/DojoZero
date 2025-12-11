@@ -772,8 +772,8 @@ class Dashboard:
         operators: Mapping[str, Operator[Any]],
         data_streams: Mapping[str, DataStream[Any]],
     ) -> None:
-        await self._wire_operator_agents(spec.operators, operators, agents)
         await self._wire_agent_operators(spec.agents, agents, operators)
+        await self._wire_operator_agents(spec.operators, operators, agents)
         # Agent-centric wiring: agents register themselves with streams
         await self._wire_agent_streams(spec.agents, agents, data_streams)
         # Operator-centric wiring: operators register themselves with streams
@@ -793,7 +793,12 @@ class Dashboard:
         agents: Mapping[str, Agent[Any]],
     ) -> None:
         for operator_spec in operator_specs:
-            if not operator_spec.agent_ids:
+            # Derive agent_ids: agents that have this operator in their operators list
+            agent_ids = operator_spec.agent_ids or [
+                a.actor_id for a in agents.values() 
+                if operator_spec.actor_id in a.operators
+            ]
+            if not agent_ids:
                 continue
             operator = operators.get(operator_spec.actor_id)
             if operator is None:  # pragma: no cover - defensive
@@ -801,7 +806,7 @@ class Dashboard:
                     f"operator '{operator_spec.actor_id}' missing from runtime registry"
                 )
             dependencies: list[Agent[Any]] = []
-            for agent_id in operator_spec.agent_ids:
+            for agent_id in agent_ids:
                 agent = agents.get(agent_id)
                 if agent is None:
                     raise DashboardError(
