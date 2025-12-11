@@ -1,6 +1,35 @@
 # Data Infrastructure Design
 
+**Date**: 2025-12-10
+
 ## Design Principles
+
+1. **Support Pull and Push Models**
+   - Agents can subscribe to push streams or trigger pull queries via operators
+
+2. **Support Replay**
+   - Data streams and queries can be replayed deterministically for backtesting
+   - Use file-based data stores for replay
+   - Should also support multi-store inter replay
+
+3. **Support Data Processing with LLM Integration**
+   - Allows data transformation with DataJuicer and LLMs
+
+4. **Separation of Concerns**
+   - Data API management should be separated from data persistence/caching/replay logic
+   - Data processor logic should be separate from stream or query infra logic and can be reused
+
+5. **Use Proper Data Models for All Kinds of Data Inputs**
+   - Richer info makes agent building easier and context richer
+   - Easier to strip away all the metadata if not needed later
+
+6. **Support Data Aggregation**
+   - Specifically for more generic scenarios; like NBA play by play aggregates to in-game stats
+   - The aggregators have to support both stateless and stateful to deal with different situations
+
+## Architecture Overview
+
+### Core Principles
 
 1. **Event-Driven Architecture**: All data flows as events through centralized DataHub
 2. **Replay Support**: Events persisted to file, replayed deterministically for backtesting
@@ -12,6 +41,73 @@
    - Processors: Event transformation logic (raw → cooked)
 5. **Schema-Based Data Models**: Rich, typed schemas for all data inputs
 6. **Stream Processing**: Raw events → processors → cooked events → DataHub
+
+## Architecture Diagram
+
+```mermaid
+---
+config:
+  theme: redux
+  layout: elk
+---
+flowchart TB
+ subgraph APIs["External APIs"]
+        NBAAPI1["NBADataAPI"]
+        WebSearchAPI1["WebSearchAPI"]
+        PolyAPI1["PolymarketAPI"]
+        more1["..."]
+  end
+ subgraph NBADataStore["NBADataStore"]
+        NBAAPI2["NBADataAPI"]
+        Processor1["Processor"]
+  end
+ subgraph WebSearchStore["WebSearchStore"]
+        WebSearchAPI2["WebSearchAPI"]
+        Processor2["Processor"]
+  end
+ subgraph PolyDataStore["PolyDataStore"]
+        PolyAPI2["PolymarketAPI"]
+        Processor3["Processor"]
+  end
+ subgraph Stores["Data Stores<br>(manages/polls APIs, emit events)"]
+        NBADataStore
+        WebSearchStore
+        PolyDataStore
+        more2["..."]
+  end
+ subgraph DataHub["DataHub<br>(persistence, delivery)"]
+        DataBus[("DataBus")]
+        DataPersister["DataPersister"]
+  end
+ subgraph Agents["Agents"]
+        Agent1["Aggressive Player"]
+        Agent2["Zen Player"]
+        Agent3["Balanced Player"]
+  end
+ subgraph MarketBroker["MarketBroker"]
+        PolyAPI3["PolymarketAPI"]
+  end
+ subgraph Operators["Operators"]
+        MarketBroker
+  end
+ subgraph Replay["Replay Coordinator"]
+        ReplayFiles["replay files"]
+  end
+    NBADataStore -- events --> DataHub
+    WebSearchStore -- events --> DataHub
+    PolyDataStore -- events --> DataHub
+    DataHub -- events --> Agents
+    DataHub -- persistence --> Replay
+    Replay -- replay events --> DataHub
+    Operators -- serves --> Agents
+
+    style DataBus fill:#d4edda
+    style Agents fill:#ace4ee
+    style Replay fill:#f8d7da
+    style Operators fill:#fce4ec
+    style APIs fill:#e1f5ff
+    style Stores fill:#fff4e1
+```
 
 ## Core Components
 
@@ -266,10 +362,6 @@ Note: Facts are not persisted, not available in backtest
 5. No queries, no additional data - only persisted events
 ```
 
-## Architecture Diagram
-
-See [data-infra-diagram.md](./data-infra-diagram.md) for the complete architecture diagram.
-
 ## Key Flows Summary
 
 **Live Event Flow**: 
@@ -305,32 +397,34 @@ See [data-infra-diagram.md](./data-infra-diagram.md) for the complete architectu
 - **ReplayCoordinator**: Orchestrates replay from files
 - **Agents/Operators**: Business logic and decision-making
 
-### Design choices and reasonings ###
+## Design Choices and Reasoning
 
-#### Which component is responsible for polling data from external services and APIs? ####
+### Which component is responsible for polling data from external services and APIs?
+
 **DataStore** is responsible for polling, with benefits:
 - API efficiency: one poll serves all downstream consumers
 - Timestamp consistency: single source of truth for last_poll_time
 - Event ordering: guaranteed consistent order
 - Transformation: raw events processed before emission
 
-#### Why centralized DataHub instead of per-store persistence? ####
+### Why centralized DataHub instead of per-store persistence?
+
 - **Single source of truth**: One chronological event log
 - **Simplified replay**: One file format, one replay path
 - **Cross-store ordering**: Global chronological ordering
 - **Centralized delivery**: One subscription point for agents
 - **Decoupled stores**: Stores focus on API/polling, hub handles persistence
 
+### Why no queries in backtest mode?
 
-#### Why no queries in backtest mode? ####
 - **Determinism**: Backtest should only use persisted events, no external queries
 - **Reproducibility**: Same events → same results
 - **Simplicity**: One code path for replay (events only)
 - **Performance**: No need to maintain query infrastructure for backtest
 
-#### Where do processors live? ####
+### Where do processors live?
+
 - **Event transformation**: In DataStores (raw → cooked events)
 - **Stream processing**: Registered in stores, process events before emission
 - **Fact generation**: In stores (for live queries only, not persisted)
 - **Cross-store processing**: Could be in DataHub or separate layer (future enhancement)
-
