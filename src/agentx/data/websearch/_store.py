@@ -9,7 +9,7 @@ from agentx.data.websearch._events import RawWebSearchEvent, WebSearchIntent
 
 
 class WebSearchStore(DataStore):
-    """Web Search data store for polling search API and emitting events."""
+    """Web Search data store for querying search API and emitting events."""
     
     def __init__(
         self,

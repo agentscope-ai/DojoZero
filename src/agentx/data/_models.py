@@ -138,16 +138,21 @@ class DataEvent(ABC):
         creates an instance of that subclass.
         
         Args:
-            data: Dictionary containing event data (may include 'event_type')
+            data: Dictionary containing event data (may include 'event_type' and extra fields)
             
         Returns:
             Instance of the class this method is called on
+            
+        Note:
+            Only fields defined on the dataclass are used. Extra fields in the dictionary
+            are ignored to support forward compatibility (e.g., events from newer versions).
         """
-        # Create a copy to avoid mutating the original
-        event_data = data.copy()
+        # Get field names defined on this dataclass
+        field_names = {f.name for f in fields(cls)}
         
-        # Remove event_type as it's a property, not a field
-        event_data.pop("event_type", None)
+        # Filter data to only include fields defined on the dataclass
+        # This prevents TypeError when dictionary contains extra fields
+        event_data = {k: v for k, v in data.items() if k in field_names}
         
         # Parse timestamp if it's a string
         if "timestamp" in event_data:
@@ -181,3 +186,33 @@ class DataFact(ABC):
             "timestamp": self.timestamp.isoformat(),
             **{k: v for k, v in fact_dict.items() if k != "timestamp"},
         }
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DataFact":
+        """Create fact from dictionary.
+        
+        When called on a specific subclass, creates an instance of that subclass.
+        
+        Args:
+            data: Dictionary containing fact data (may include 'fact_type' and extra fields)
+            
+        Returns:
+            Instance of the class this method is called on
+            
+        Note:
+            Only fields defined on the dataclass are used. Extra fields in the dictionary
+            are ignored to support forward compatibility (e.g., facts from newer versions).
+        """
+        # Get field names defined on this dataclass
+        field_names = {f.name for f in fields(cls)}
+        
+        # Filter data to only include fields defined on the dataclass
+        # This prevents TypeError when dictionary contains extra fields
+        fact_data = {k: v for k, v in data.items() if k in field_names}
+        
+        # Parse timestamp if it's a string
+        if "timestamp" in fact_data:
+            if isinstance(fact_data["timestamp"], str):
+                fact_data["timestamp"] = datetime.fromisoformat(fact_data["timestamp"])
+        
+        return cls(**fact_data)

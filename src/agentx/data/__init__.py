@@ -6,6 +6,11 @@ from agentx.data._processors import CompositeProcessor, DataProcessor
 from agentx.data._replay import ReplayCoordinator
 from agentx.data._stores import DataStore, ExternalAPI
 from agentx.data._hub import DataHub
+from agentx.data._streams import (
+    DataHubDataStream,
+    DataHubDataStreamConfig,
+    StreamInitializer,
+)
 
 # Domain-specific implementations
 # Import all event classes to trigger auto-registration
@@ -46,6 +51,9 @@ __all__ = [
     "CompositeProcessor",
     "DataHub",
     "ReplayCoordinator",
+    "DataHubDataStream",
+    "DataHubDataStreamConfig",
+    "StreamInitializer",
     # NBA
     "PlayByPlayEvent",
     "RawPlayByPlayEvent",

@@ -1,0 +1,104 @@
+"""NBA pre-game betting DataStream with search initialization."""
+
+import logging
+from typing import Any, Mapping, TypedDict
+
+from agentx.data import DataHub, WebSearchStore
+from agentx.data._streams import DataHubDataStream as BaseDataHubDataStream
+from agentx.nba_moneyline._initializer import NBAStreamInitializer
+
+LOGGER = logging.getLogger("agentx.nba_moneyline.datastream")
+
+
+class _ActorIdConfig(TypedDict):
+    actor_id: str
+
+
+class NBAPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
+    """Configuration for NBA pre-game betting DataHubDataStream."""
+    hub_id: str
+    persistence_file: str
+    stream_id: str  # Which stream_id to subscribe to in DataHub
+    event_types: list[str]  # Which event_types to subscribe to (alternative to stream_id)
+    websearch_store_id: str  # Store ID for triggering searches (only for raw_web_search stream)
+    home_team_tricode: str  # Team metadata for generating queries
+    away_team_tricode: str
+    game_date: str
+
+
+class NBAPreGameBettingDataHubDataStream(
+    BaseDataHubDataStream
+):
+    """NBA pre-game betting DataStream that extends generic DataHubDataStream.
+    
+    Adds NBA-specific initialization logic (triggering web searches) via
+    NBAStreamInitializer.
+    """
+
+    def __init__(
+        self,
+        *,
+        actor_id: str,
+        hub: DataHub | None = None,
+        stream_id: str | None = None,
+        event_types: list[str] | None = None,
+        store: WebSearchStore | None = None,
+        home_team_tricode: str | None = None,
+        away_team_tricode: str | None = None,
+        game_date: str | None = None,
+    ) -> None:
+        # Create initializer if store and tricodes are provided
+        initializer: NBAStreamInitializer | None = None
+        if store and home_team_tricode and away_team_tricode:
+            initializer = NBAStreamInitializer(
+                store=store,
+                home_team_tricode=home_team_tricode,
+                away_team_tricode=away_team_tricode,
+                game_date=game_date,
+            )
+        
+        super().__init__(
+            actor_id=actor_id,
+            hub=hub,
+            stream_id=stream_id,
+            event_types=event_types,
+            initializer=initializer,
+        )
+
+    @classmethod
+    def from_dict(
+        cls,
+        config: NBAPreGameBettingDataHubDataStreamConfig,
+    ) -> "NBAPreGameBettingDataHubDataStream":
+        # Get hub and store from registry (set by trial builder)
+        hub: DataHub | None = None
+        store: WebSearchStore | None = None
+        
+        hub_registry: dict[str, DataHub] = getattr(cls, "_hub_registry", {})
+        store_registry: dict[str, WebSearchStore] = getattr(cls, "_store_registry", {})
+        
+        if hub_registry:
+            hub_id = config.get("hub_id", "default_hub")
+            hub = hub_registry.get(hub_id)
+        
+        if store_registry:
+            store_id = config.get("websearch_store_id")
+            if store_id:
+                store = store_registry.get(store_id)
+
+        if hub is None:
+            # Fallback: create new hub (shouldn't happen in normal flow)
+            hub_id = config.get("hub_id", "default_hub")
+            persistence_file = config.get("persistence_file", "outputs/events.jsonl")
+            hub = DataHub(hub_id=hub_id, persistence_file=persistence_file)
+
+        return cls(
+            actor_id=config["actor_id"],
+            hub=hub,
+            stream_id=config.get("stream_id"),
+            event_types=config.get("event_types", []),
+            store=store,
+            home_team_tricode=config.get("home_team_tricode"),
+            away_team_tricode=config.get("away_team_tricode"),
+            game_date=config.get("game_date"),
+        )
