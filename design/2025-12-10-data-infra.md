@@ -128,6 +128,26 @@ class DataEvent:
     metadata: dict[str, Any]
 ```
 
+#### Event Registration
+
+Event classes are registered using the `@register_event` decorator to enable automatic deserialization during replay:
+
+```python
+from agentx.data._models import DataEvent, register_event
+
+@register_event
+@dataclass(slots=True, frozen=True)
+class RawWebSearchEvent(DataEvent):
+    query: str
+    results: list[dict[str, Any]]
+    intent: str | None = None
+    
+    @property
+    def event_type(self) -> str:
+        return "raw_web_search"
+```
+
+
 ### DataFact
 
 **Pull-based snapshots** representing current state at a point in time.
@@ -267,6 +287,8 @@ store.register_stream("play_by_play", PlayByPlayProcessor(), ["raw_play_by_play"
 - `WebSearchProcessor`: `RawWebSearchEvent` → `WebSearchEvent`
 - `OddsChangeProcessor`: `RawOddsChangeEvent` → `OddsChangeEvent`
 
+**Note**: All event classes returned by processors must be decorated with `@register_event` to support proper deserialization during replay.
+
 ### ReplayCoordinator
 
 **Orchestrates replay from files through DataHub** for backtesting.
@@ -295,6 +317,7 @@ await coordinator.replay_all()  # Replay all events to agents
 - Events are replayed through DataHub (same delivery path as live mode)
 - No queries, no additional data - pure event replay
 - Agents receive events as if they were live
+- **Event deserialization**: Uses `DataEventFactory.from_dict()` which relies on the `@register_event` decorator to automatically reconstruct the correct event subclass from persisted JSON data
 
 ### Agents & Operators
 
@@ -428,3 +451,11 @@ Note: Facts are not persisted, not available in backtest
 - **Stream processing**: Registered in stores, process events before emission
 - **Fact generation**: In stores (for live queries only, not persisted)
 - **Cross-store processing**: Could be in DataHub or separate layer (future enhancement)
+
+### How are event types registered and deserialized?
+
+- **Event registration**: Use `@register_event` decorator on all event classes
+- **Automatic registration**: Events are registered when their module is imported
+- **Deserialization**: `DataEventFactory.from_dict()` uses the registry to automatically dispatch to the correct event class based on `event_type`
+- **Replay support**: During replay, persisted events are automatically reconstructed as the correct event subclass
+- **Type safety**: Ensures events maintain proper typing and validation when deserialized from JSON
