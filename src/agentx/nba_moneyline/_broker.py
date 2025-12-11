@@ -715,24 +715,23 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
     async def _cancel_pending_order(self, bet: Bet) -> None:
         """Cancel a pending order and refund"""
-        async with self._agent_locks[bet.agent_id]:
-            # Refund locked funds
-            account = self._accounts[bet.agent_id]
-            account.balance += bet.amount
-            account.last_updated = datetime.now()
+        # Refund locked funds
+        account = self._accounts[bet.agent_id]
+        account.balance += bet.amount
+        account.last_updated = datetime.now()
 
-            # Update bet status
-            bet.status = BetStatus.CANCELLED
+        # Update bet status
+        bet.status = BetStatus.CANCELLED
 
-            # Remove from collections
-            self._pending_orders[bet.agent_id].remove(bet.bet_id)
-            self._event_pending_orders[bet.event_id].discard(bet.bet_id)
-            self._bet_history[bet.agent_id].append(bet.bet_id)
+        # Remove from collections
+        self._pending_orders[bet.agent_id].remove(bet.bet_id)
+        self._event_pending_orders[bet.event_id].discard(bet.bet_id)
+        self._bet_history[bet.agent_id].append(bet.bet_id)
 
-            print(
-                f"[CANCEL] Bet {bet.bet_id} cancelled - "
-                f"Refunded {bet.amount} to {bet.agent_id}"
-            )
+        print(
+            f"[CANCEL] Bet {bet.bet_id} cancelled - "
+            f"Refunded {bet.amount} to {bet.agent_id}"
+        )
 
     # =========================================================================
     # Account Management
@@ -1036,8 +1035,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         total_wagered = Decimal(0)
         wins = 0
         losses = 0
-        total_won = Decimal(0)
-        total_lost = Decimal(0)
+        total_payout = Decimal(0)  # Changed: track total payouts
 
         for bet_id in all_bet_ids:
             bet = self._bets[bet_id]
@@ -1046,15 +1044,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             if bet.status == BetStatus.SETTLED:
                 if bet.outcome == BetOutcome.WIN:
                     wins += 1
-                    total_won += bet.actual_payout or Decimal(0)
+                    total_payout += bet.actual_payout or Decimal(0)  # Add payout
                 elif bet.outcome == BetOutcome.LOSS:
                     losses += 1
-                    total_lost += bet.amount
+                    # Don't add to total_payout (it's 0 for losses)
 
         # Calculate metrics
         settled_bets = wins + losses
         win_rate = wins / settled_bets if settled_bets > 0 else 0.0
-        net_profit = total_won - total_lost
+        net_profit = total_payout - total_wagered  # Fixed: payout - wagered
         roi = float(net_profit / total_wagered) if total_wagered > 0 else 0.0
 
         return Statistics(
