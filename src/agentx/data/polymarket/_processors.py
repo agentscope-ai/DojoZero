@@ -32,8 +32,9 @@ class OddsChangeProcessor(DataProcessor):
         Returns:
             Processed odds change event or None
         """
-        if event.event_type != "raw_odds_change":
-            return None
+        # 此处应由should_process保证event.event_type为"raw_odds_change"
+        # 若仍需校验，建议改为异常处理
+        pass
         
         raw_event = cast(RawOddsChangeEvent, event)  # type: ignore[arg-type]
         
