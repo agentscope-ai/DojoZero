@@ -6,7 +6,6 @@ This directory contains sample scenarios and examples for AgentX.
 
 - `bounded_random.py` - Basic bounded random scenario example
 - `bounded_random_buffered.py` - Buffered version of bounded random scenario
-- `nba_pregame_betting.py` - Conduct web searchs for certain game
 
 ## Usage
 
@@ -24,10 +23,6 @@ When running from the project root, samples can be imported as:
 ```python
 import agentx.samples
 from agentx.samples.bounded_random import BoundedRandomTrialParams
-
-# Data-related examples are in the data subdirectory
-from agentx.samples.data._google_search_example import example_google_search_flow
-from agentx.samples.data._nba_api_example import example_nba_api_data_streamer, example_aggregation_to_facts
 ```
 
 ## Note
