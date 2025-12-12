@@ -1,0 +1,40 @@
+scenario:
+  name: nba-pregame-betting
+  config:
+    game_id: '0022501215'
+
+    hub:
+      persistence_file: outputs/nba_pregame_events.jsonl
+      enable_persistence: true
+
+    data_streams:
+    - id: raw_web_search_stream
+      event_type: raw_web_search
+      initializer:
+        search_queries:
+        - template: NBA injury updates for {teams} on {date}
+          intent: injury_summary
+        - template: NBA power rankings
+          intent: power_ranking
+        - template: NBA expert predictions for {teams}
+          intent: expert_prediction
+    - id: injury_summary_stream
+      event_type: injury_summary
+    - id: power_ranking_stream
+      event_type: power_ranking
+    - id: expert_prediction_stream
+      event_type: expert_prediction
+
+    operators:
+    - id: event_counter
+      class: EventCounterOperator
+      
+    agents:
+    - id: betting_agent
+      class: DummyAgent
+      operators:
+      - event_counter
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream

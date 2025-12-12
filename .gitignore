@@ -152,7 +152,6 @@ Thumbs.db
 
 # Sample scenario artifacts
 agentx-store
-*.yaml
 
 # Data
 outputs/
