@@ -73,22 +73,20 @@ class NBAPreGameBettingDataHubDataStream(
     def from_dict(
         cls,
         config: NBAPreGameBettingDataHubDataStreamConfig,
+        context: dict[str, Any] | None = None,
     ) -> "NBAPreGameBettingDataHubDataStream":
-        # Get hub and store from registry (set by trial builder)
+        # Get hub and store from context (provided by dashboard during materialization)
         hub: DataHub | None = None
         store: WebSearchStore | None = None
         
-        hub_registry: dict[str, DataHub] = getattr(cls, "_hub_registry", {})
-        store_registry: dict[str, WebSearchStore] = getattr(cls, "_store_registry", {})
-        
-        if hub_registry:
+        if context and "data_hubs" in context:
             hub_id = config.get("hub_id", "default_hub")
-            hub = hub_registry.get(hub_id)
+            hub = context["data_hubs"].get(hub_id)
         
-        if store_registry:
+        if context and "stores" in context:
             store_id = config.get("websearch_store_id")
             if store_id:
-                store = store_registry.get(store_id)
+                store = context["stores"].get(store_id)
 
         if hub is None:
             # Fallback: create new hub (shouldn't happen in normal flow)

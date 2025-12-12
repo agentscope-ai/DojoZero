@@ -632,6 +632,10 @@ class Dashboard:
     async def _build_runtime(
         self, spec: TrialSpec, record: TrialRecord
     ) -> TrialRuntime:
+        # Build runtime context with DataHub and Store instances
+        # Extract from stream configs to recreate hub/store instances
+        context = self._build_runtime_context(spec)
+        
         registry: Dict[str, ActorRuntime[Any]] = {}
         agents: Dict[str, Agent] = {}
         operators: Dict[str, Operator] = {}
@@ -641,6 +645,7 @@ class Dashboard:
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.OPERATOR,
+                context=context,
             )
             self._register_actor_runtime(registry, runtime)
             operator_instance = runtime.instance
@@ -657,6 +662,7 @@ class Dashboard:
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.AGENT,
+                context=context,
             )
             self._register_actor_runtime(registry, runtime)
             agent_instance = runtime.instance
@@ -672,6 +678,7 @@ class Dashboard:
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.DATA_STREAM,
+                context=context,
             )
             self._register_actor_runtime(registry, runtime)
             stream_instance = runtime.instance
@@ -696,12 +703,42 @@ class Dashboard:
         self,
         spec: ActorSpec[Any],
         role: ActorRole,
+        context: dict[str, Any] | None = None,
     ) -> ActorRuntime[Any]:
         try:
-            handler = await self._runtime_provider.create_handler(spec)
+            handler = await self._runtime_provider.create_handler(spec, context=context)
         except Exception as exc:  # pragma: no cover - defensive translation
             raise DashboardError(str(exc)) from exc
         return ActorRuntime(spec=spec, handler=handler, role=role)
+    
+    def _build_runtime_context(self, spec: TrialSpec) -> dict[str, Any]:
+        """Build runtime context using context builder from trial builder registry.
+        
+        If the trial builder provides a context_builder, use it. Otherwise,
+        return empty context for trials without data infrastructure.
+        
+        Args:
+            spec: Trial specification
+            
+        Returns:
+            Context dictionary (typically with 'data_hubs' and 'stores' keys)
+        """
+        # Try to get context builder from trial builder registry
+        # Extract builder name from spec metadata
+        builder_name = spec.metadata.get("builder_name")
+        
+        if builder_name and isinstance(builder_name, str):
+            try:
+                from ._registry import get_trial_builder_definition
+                builder_def = get_trial_builder_definition(builder_name)
+                if builder_def.context_builder:
+                    return builder_def.context_builder(spec)
+            except Exception:
+                # Builder not found or no context builder - fall through to default
+                pass
+        
+        # Default: empty context for trials without data infrastructure
+        return {}
 
     def _register_actor_runtime(
         self, registry: Dict[str, ActorRuntime[Any]], runtime: ActorRuntime[Any]

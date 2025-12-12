@@ -70,15 +70,14 @@ class DataHubDataStream(
     def from_dict(
         cls,
         config: DataHubDataStreamConfig,
+        context: dict[str, Any] | None = None,
     ) -> "DataHubDataStream":
-        # Get hub from registry (set by trial builder)
+        # Get hub from context (provided by dashboard during materialization)
         hub: DataHub | None = None
         
-        hub_registry: dict[str, DataHub] = getattr(cls, "_hub_registry", {})
-        
-        if hub_registry:
+        if context and "data_hubs" in context:
             hub_id = config.get("hub_id", "default_hub")
-            hub = hub_registry.get(hub_id)
+            hub = context["data_hubs"].get(hub_id)
 
         if hub is None:
             # Fallback: create new hub (shouldn't happen in normal flow)

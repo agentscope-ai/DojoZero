@@ -30,7 +30,9 @@ class ActorHandler(Protocol):
 class ActorRuntimeProvider(Protocol):
     """Factory that turns :class:`ActorSpec` declarations into handlers."""
 
-    async def create_handler(self, spec: "ActorSpec[Any]") -> ActorHandler: ...
+    async def create_handler(
+        self, spec: "ActorSpec[Any]", context: dict[str, Any] | None = None
+    ) -> ActorHandler: ...
 
 
 @dataclass(slots=True)
@@ -66,8 +68,20 @@ class LocalActorRuntimeProvider(ActorRuntimeProvider):
     async def create_handler(
         self,
         spec: "ActorSpec[Any]",
+        context: dict[str, Any] | None = None,
     ) -> LocalActorHandler:
-        actor = spec.actor_cls.from_dict(spec.config)
+        # Pass context to from_dict if the method accepts it
+        if hasattr(spec.actor_cls, "from_dict"):
+            from_dict_method = getattr(spec.actor_cls, "from_dict")
+            import inspect
+            sig = inspect.signature(from_dict_method)
+            if "context" in sig.parameters:
+                actor = from_dict_method(spec.config, context=context)
+            else:
+                actor = from_dict_method(spec.config)
+        else:
+            raise TypeError(f"actor class {spec.actor_cls} has no from_dict method")
+        
         if actor.actor_id != spec.actor_id:
             raise ValueError(
                 f"actor id mismatch: spec '{spec.actor_id}' != instance '{actor.actor_id}'"

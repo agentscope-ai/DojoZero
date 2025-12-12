@@ -141,24 +141,20 @@ def _build_trial_spec(
             "stream_id": stream_id,
             "event_types": event_types,
         }
-
-        # Store hub and store references in registry so from_dict can access them
-        # This is a workaround - in production, hub would be in runtime context
-        if not hasattr(NBAPreGameBettingDataHubDataStream, "_hub_registry"):
-            setattr(NBAPreGameBettingDataHubDataStream, "_hub_registry", {})
-        if not hasattr(NBAPreGameBettingDataHubDataStream, "_store_registry"):
-            setattr(NBAPreGameBettingDataHubDataStream, "_store_registry", {})
         
-        stream_hub_registry: dict[str, DataHub] = getattr(NBAPreGameBettingDataHubDataStream, "_hub_registry", {})
-        stream_store_registry: dict[str, WebSearchStore] = getattr(NBAPreGameBettingDataHubDataStream, "_store_registry", {})
-        stream_hub_registry[params.hub_id] = hub
-        stream_store_registry[params.websearch_store_id] = store
+        # Add optional fields only if they have values
+        if home_team_tricode:
+            stream_config["home_team_tricode"] = home_team_tricode
+        if away_team_tricode:
+            stream_config["away_team_tricode"] = away_team_tricode
 
         # Add team metadata and store reference for raw_web_search stream
         if stream_id == "raw_web_search" and home_team_name and away_team_name:
             stream_config["websearch_store_id"] = params.websearch_store_id
-            stream_config["home_team_tricode"] = home_team_tricode
-            stream_config["away_team_tricode"] = away_team_tricode
+            if home_team_tricode:
+                stream_config["home_team_tricode"] = home_team_tricode
+            if away_team_tricode:
+                stream_config["away_team_tricode"] = away_team_tricode
             stream_config["home_team_name"] = home_team_name
             stream_config["away_team_name"] = away_team_name
             if game_date:
@@ -222,13 +218,92 @@ def _build_trial_spec(
     )
 
 
+def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
+    """Build runtime context for NBA pre-game betting trial.
+    
+    Creates DataHub and WebSearchStore instances from stream configs.
+    This allows from_dict() methods to access these dependencies via context.
+    
+    Args:
+        spec: Trial specification
+        
+    Returns:
+        Context dictionary with 'data_hubs' and 'stores' keys
+    """
+    context: dict[str, Any] = {
+        "data_hubs": {},
+        "stores": {},
+    }
+    
+    # Extract hub/store info from stream configs
+    hub_configs: dict[str, dict[str, Any]] = {}
+    store_configs: dict[str, dict[str, Any]] = {}
+    
+    for stream_spec in spec.data_streams:
+        config = stream_spec.config
+        hub_id = config.get("hub_id")
+        persistence_file = config.get("persistence_file")
+        websearch_store_id = config.get("websearch_store_id")
+        
+        if hub_id and persistence_file:
+            if hub_id not in hub_configs:
+                hub_configs[hub_id] = {
+                    "hub_id": hub_id,
+                    "persistence_file": persistence_file,
+                    "enable_persistence": config.get("enable_persistence", True),
+                }
+        
+        if websearch_store_id:
+            if websearch_store_id not in store_configs:
+                store_configs[websearch_store_id] = {
+                    "store_id": websearch_store_id,
+                }
+    
+    # Create DataHub instances
+    for hub_id, hub_config in hub_configs.items():
+        if hub_id not in context["data_hubs"]:
+            hub = DataHub(
+                hub_id=hub_config["hub_id"],
+                persistence_file=hub_config["persistence_file"],
+                enable_persistence=hub_config.get("enable_persistence", True),
+            )
+            context["data_hubs"][hub_id] = hub
+    
+    # Create Store instances (WebSearchStore for NBA trial)
+    for store_id, store_config in store_configs.items():
+        if store_id not in context["stores"]:
+            api = WebSearchAPI()
+            store = WebSearchStore(
+                store_id=store_config["store_id"],
+                api=api,
+            )
+            # Register processors (same as trial builder)
+            store.register_stream("injury_summary", InjurySummaryProcessor(), ["raw_web_search"])
+            store.register_stream("power_ranking", PowerRankingProcessor(), ["raw_web_search"])
+            store.register_stream(
+                "expert_prediction", ExpertPredictionProcessor(), ["raw_web_search"]
+            )
+            # Connect store to hub
+            hub_id = None
+            for stream_spec in spec.data_streams:
+                if stream_spec.config.get("websearch_store_id") == store_id:
+                    hub_id = stream_spec.config.get("hub_id")
+                    break
+            if hub_id and hub_id in context["data_hubs"]:
+                context["data_hubs"][hub_id].connect_store(store)
+            context["stores"][store_id] = store
+    
+    return context
+
+
 register_trial_builder(
     "nba-pregame-betting",
     NBAPreGameBettingTrialParams,
     _build_trial_spec,
     description="NBA pre-game betting scenario with relevant data inputs",
+    context_builder=_build_nba_runtime_context,
     example_params=NBAPreGameBettingTrialParams(
-        game_id="0022501205",  # Example NBA game ID
+        game_id="0022501215",  # Example NBA game ID
         hub_id="nba_pregame_hub",
         persistence_file="outputs/nba_pregame_events.jsonl",
         stream_ids=["raw_web_search", "injury_summary", "power_ranking"],
