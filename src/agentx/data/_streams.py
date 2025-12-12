@@ -19,8 +19,8 @@ class DataHubDataStreamConfig(_ActorIdConfig, total=False):
     """Configuration for DataHubDataStream."""
     hub_id: str
     persistence_file: str
-    stream_id: str  # Which stream_id to subscribe to in DataHub
-    event_types: list[str]  # Which event_types to subscribe to (alternative to stream_id)
+    event_type: str  # Which event_type to subscribe to in DataHub
+    event_types: list[str]  # Which event_types to subscribe to (alternative to event_type)
 
 
 class StreamInitializer(Protocol):
@@ -53,13 +53,13 @@ class DataHubDataStream(
         *,
         actor_id: str,
         hub: DataHub | None = None,
-        stream_id: str | None = None,
+        event_type: str | None = None,
         event_types: list[str] | None = None,
         initializer: StreamInitializer | None = None,
     ) -> None:
         super().__init__(actor_id)
         self._hub = hub
-        self._stream_id = stream_id
+        self._event_type = event_type
         self._event_types = event_types or []
         self._initializer = initializer
         self._sequence = 0
@@ -88,7 +88,7 @@ class DataHubDataStream(
         return cls(
             actor_id=config["actor_id"],
             hub=hub,
-            stream_id=config.get("stream_id"),
+            event_type=config.get("event_type"),
             event_types=config.get("event_types", []),
         )
 
@@ -98,9 +98,9 @@ class DataHubDataStream(
             raise RuntimeError(f"stream '{self.actor_id}' has no DataHub instance")
 
         LOGGER.info(
-            "stream '%s' starting: stream_id=%s event_types=%s",
+            "stream '%s' starting: event_type=%s event_types=%s",
             self.actor_id,
-            self._stream_id,
+            self._event_type,
             self._event_types,
         )
 
@@ -113,7 +113,7 @@ class DataHubDataStream(
         def event_callback(event: DataEvent) -> None:
             # Check if this event matches our subscription
             should_forward = False
-            if self._stream_id and event.event_type == self._stream_id:
+            if self._event_type and event.event_type == self._event_type:
                 should_forward = True
             elif self._event_types and event.event_type in self._event_types:
                 should_forward = True
@@ -125,8 +125,8 @@ class DataHubDataStream(
 
         # Determine event types to subscribe to
         subscribe_event_types = self._event_types.copy()
-        if self._stream_id and self._stream_id not in subscribe_event_types:
-            subscribe_event_types.append(self._stream_id)
+        if self._event_type and self._event_type not in subscribe_event_types:
+            subscribe_event_types.append(self._event_type)
 
         # Subscribe to DataHub using subscribe_agent mechanism
         # We use the stream's actor_id as the agent_id for subscription

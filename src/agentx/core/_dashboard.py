@@ -145,10 +145,12 @@ class AgentSpec(ActorSpec[ConfigSpecT]):
     """Specialized :class:`ActorSpec` for agent actors."""
 
     operator_ids: Sequence[str] = field(default_factory=tuple)
+    data_stream_ids: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.operator_ids = tuple(self.operator_ids)
+        self.data_stream_ids = tuple(self.data_stream_ids)
 
 
 @dataclass
@@ -757,6 +759,9 @@ class Dashboard:
     ) -> None:
         await self._wire_operator_agents(spec.operators, operators, agents)
         await self._wire_agent_operators(spec.agents, agents, operators)
+        # Agent-centric wiring: agents register themselves with streams
+        await self._wire_agent_streams(spec.agents, agents, data_streams)
+        # Legacy stream-centric wiring (for backward compatibility)
         await self._wire_stream_consumers(
             spec.data_streams,
             data_streams,
@@ -822,6 +827,41 @@ class Dashboard:
                 actor_id=agent_spec.actor_id,
             )
 
+    async def _wire_agent_streams(
+        self,
+        agent_specs: Sequence[AgentSpec[Any]],
+        agents: Mapping[str, Agent[Any]],
+        data_streams: Mapping[str, DataStream[Any]],
+    ) -> None:
+        """Wire agents to data streams (agent-centric approach).
+        
+        Agents declare which streams they subscribe to via data_stream_ids.
+        """
+        for agent_spec in agent_specs:
+            if not agent_spec.data_stream_ids:
+                continue
+            agent = agents.get(agent_spec.actor_id)
+            if agent is None:  # pragma: no cover - defensive
+                raise DashboardError(
+                    f"agent '{agent_spec.actor_id}' missing from runtime registry"
+                )
+            dependencies: list[DataStream[Any]] = []
+            for stream_id in agent_spec.data_stream_ids:
+                stream = data_streams.get(stream_id)
+                if stream is None:
+                    raise DashboardError(
+                        f"agent '{agent_spec.actor_id}' requires data stream '{stream_id}'"
+                    )
+                dependencies.append(stream)
+            # Register agent as consumer of these streams
+            for stream in dependencies:
+                await self._invoke_registration(
+                    stream,
+                    "register_consumers",
+                    (agent,),
+                    actor_id=stream.actor_id,
+                )
+
     async def _wire_stream_consumers(
         self,
         stream_specs: Sequence[DataStreamSpec[Any]],
@@ -829,6 +869,11 @@ class Dashboard:
         agents: Mapping[str, Agent[Any]],
         operators: Mapping[str, Operator[Any]],
     ) -> None:
+        """Wire streams to consumers (stream-centric approach, legacy).
+        
+        Only used if consumer_ids are explicitly set on streams.
+        Agent-centric wiring (via agent.data_stream_ids) takes precedence.
+        """
         for stream_spec in stream_specs:
             if not stream_spec.consumer_ids:
                 continue
