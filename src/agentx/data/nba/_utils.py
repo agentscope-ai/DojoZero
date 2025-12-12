@@ -16,7 +16,7 @@ def get_proxy() -> str | None:
     return os.getenv("PROXY_URL")
 
 
-def with_nba_api_proxy(func: F) -> F:
+def with_proxy(func: F) -> F:
     """Decorator to ensure PROXY_URL is set up for NBA API calls.
     
     This decorator:
@@ -135,7 +135,7 @@ def normalize_team_name(team_name: str) -> str | None:
     return None
 
 
-@with_nba_api_proxy
+@with_proxy
 def get_game_info_by_id(game_id: str, proxy: str | None = None) -> dict[str, Any] | None:
     """Get team names and game date for a given NBA game ID.
     

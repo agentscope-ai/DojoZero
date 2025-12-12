@@ -16,7 +16,7 @@ except ImportError:
     pass  # python-dotenv not installed, skip .env loading
 
 # Import proxy utilities from agentx
-from agentx.data.nba._utils import with_nba_api_proxy, get_game_info_by_id
+from agentx.data.nba._utils import with_proxy, get_game_info_by_id
 
 
 game_id = "0022501205"
@@ -51,7 +51,7 @@ def get_current_games():
     return get_games_for_date(datetime.now(), print_games=False)
 
 
-@with_nba_api_proxy
+@with_proxy
 def get_games_for_date(game_date: datetime | str, print_games: bool = False, proxy: str | None = None):
     """
     Get games for a specific date using ScoreboardV3 endpoint.
@@ -254,7 +254,7 @@ def get_most_recent_finished_games(max_days_back: int = 7, print_games: bool = T
     return None, None
 
 
-@with_nba_api_proxy
+@with_proxy
 def get_play_by_play(game_id: str, include_player_names: bool = True, proxy: str | None = None):
     """
     Get real-time play-by-play data for a specific game.
