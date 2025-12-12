@@ -164,7 +164,12 @@ class WebSearchAPI(ExternalAPI):
                 # Normalize result
                 if isinstance(result, dict) and "results" in result:
                     return result
-                return {"query": query, "results": result.get("results", []), "total_results": len(result.get("results", []))}
+                if hasattr(result, 'get'):
+                    return {"query": query, "results": result.get("results", []), "total_results": len(result.get("results", []))}
+                else:
+                    # Handle case where result is a list or other iterable
+                    results_list = list(result) if hasattr(result, '__iter__') and not isinstance(result, (str, bytes)) else []
+                    return {"query": query, "results": results_list, "total_results": len(results_list)}
             
             # Use Tavily SDK if available
             if self.use_tavily and self.tavily_adapter:
