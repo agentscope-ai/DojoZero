@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from agentx.data._models import DataEvent, register_event
+from agentx.data._models import DataEvent, EventTypes, register_event
 
 
 class WebSearchIntent(str, Enum):
@@ -14,9 +14,9 @@ class WebSearchIntent(str, Enum):
     allowing explicit routing to specific processors.
     """
     
-    INJURY_SUMMARY = "injury_summary"
-    POWER_RANKING = "power_ranking"
-    EXPERT_PREDICTION = "expert_prediction"
+    INJURY_SUMMARY = EventTypes.INJURY_SUMMARY.value
+    POWER_RANKING = EventTypes.POWER_RANKING.value
+    EXPERT_PREDICTION = EventTypes.EXPERT_PREDICTION.value
 
 
 @register_event
@@ -36,7 +36,7 @@ class RawWebSearchEvent(DataEvent):
     
     @property
     def event_type(self) -> str:
-        return "raw_web_search"
+        return EventTypes.RAW_WEB_SEARCH.value
 
 
 @register_event
@@ -54,7 +54,7 @@ class InjurySummaryEvent(DataEvent):
     
     @property
     def event_type(self) -> str:
-        return "injury_summary"
+        return EventTypes.INJURY_SUMMARY.value
 
 
 @register_event
@@ -72,7 +72,7 @@ class PowerRankingEvent(DataEvent):
     
     @property
     def event_type(self) -> str:
-        return "power_ranking"
+        return EventTypes.POWER_RANKING.value
 
 
 @register_event
@@ -89,5 +89,5 @@ class ExpertPredictionEvent(DataEvent):
     
     @property
     def event_type(self) -> str:
-        return "expert_prediction"
+        return EventTypes.EXPERT_PREDICTION.value
 

@@ -21,20 +21,25 @@ def with_proxy(func: F) -> F:
     
     This decorator:
     1. Checks if PROXY_URL is available
-    2. Passes proxy parameter to functions that need it
+    2. Passes proxy parameter to functions that accept it (checks function signature)
     3. Handles ImportError if nba_api is not available
     
     Usage:
-        @with_nba_api_proxy
-        def my_nba_function(game_id: str, proxy: str | None = None):
+        @with_proxy
+        def my_nba_function(game_id: str):
+            from agentx.data.nba._utils import get_proxy
+            proxy = get_proxy()
             from nba_api.stats.endpoints import scoreboardv3
-            board = scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy)
+            board = scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy) if proxy else scoreboardv3.ScoreboardV3(game_date=date_str)
             ...
     """
+    import inspect
+    
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        # Get proxy from environment if not provided
-        if "proxy" not in kwargs:
+        # Check if function accepts 'proxy' parameter
+        sig = inspect.signature(func)
+        if "proxy" in sig.parameters and "proxy" not in kwargs:
             kwargs["proxy"] = get_proxy()
         
         try:

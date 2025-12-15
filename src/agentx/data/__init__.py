@@ -18,13 +18,11 @@ from agentx.data.nba import (
     NBAExternalAPI,
     NBAStore,
     PlayByPlayEvent,
-    RawPlayByPlayEvent,
 )
 from agentx.data.polymarket import (
-    OddsChangeEvent,
+    OddsUpdateEvent,
     PolymarketAPI,
     PolymarketStore,
-    RawOddsChangeEvent,
 )
 from agentx.data.websearch import (
     ExpertPredictionEvent,
@@ -56,12 +54,10 @@ __all__ = [
     "StreamInitializer",
     # NBA
     "PlayByPlayEvent",
-    "RawPlayByPlayEvent",
     "NBAExternalAPI",
     "NBAStore",
     # Polymarket
-    "OddsChangeEvent",
-    "RawOddsChangeEvent",
+    "OddsUpdateEvent",
     "PolymarketAPI",
     "PolymarketStore",
     # Web Search

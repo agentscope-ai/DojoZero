@@ -3,6 +3,7 @@
 from abc import ABC
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Callable, TypeVar
 
 # Type variable for event classes
@@ -12,7 +13,47 @@ EventT = TypeVar("EventT", bound="DataEvent")
 _EVENT_REGISTRY: dict[str, type["DataEvent"]] = {}
 
 
-def register_event(event_class: type[EventT] | None = None) -> type[EventT] | Callable[[type[EventT]], type[EventT]]:
+class EventTypes(str, Enum):
+    """Centralized event type identifiers.
+
+    These constants should be used wherever event_type strings are compared
+    (e.g., in operators, processors, or stores) to avoid magic strings.
+
+    Organized by domain for maintainability:
+    - Polymarket/betting: odds updates
+    - NBA: game lifecycle events
+    - Web search: raw search results and processed summaries
+    """
+
+    # =========================================================================
+    # Polymarket / Betting
+    # =========================================================================
+    ODDS_UPDATE = "odds_update"
+
+    # =========================================================================
+    # NBA Game Lifecycle
+    # =========================================================================
+    GAME_START = "game_start"
+    GAME_RESULT = "game_result"
+    GAME_UPDATE = "game_update"
+    PLAY_BY_PLAY = "play_by_play"
+    IN_GAME_CRITICAL = "in_game_critical"
+
+    # =========================================================================
+    # Web Search
+    # =========================================================================
+    # Raw search results from API
+    RAW_WEB_SEARCH = "raw_web_search"
+
+    # Processed summaries (generated from raw_web_search)
+    INJURY_SUMMARY = "injury_summary"
+    POWER_RANKING = "power_ranking"
+    EXPERT_PREDICTION = "expert_prediction"
+
+
+def register_event(
+    event_class: type[EventT] | None = None,
+) -> type[EventT] | Callable[[type[EventT]], type[EventT]]:
     """Decorator to register an event class in the registry.
     
     Usage:

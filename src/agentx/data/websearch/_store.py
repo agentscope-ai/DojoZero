@@ -9,7 +9,11 @@ from agentx.data.websearch._events import RawWebSearchEvent, WebSearchIntent
 
 
 class WebSearchStore(DataStore):
-    """Web Search data store for querying search API and emitting events."""
+    """Web Search data store for querying search API and emitting events.
+    
+    Note: This store does not poll automatically. It only emits events when
+    search() is called explicitly (e.g., by a stream initializer).
+    """
     
     def __init__(
         self,
@@ -19,6 +23,15 @@ class WebSearchStore(DataStore):
     ):
         """Initialize Web Search store."""
         super().__init__(store_id, api=api or WebSearchAPI(), event_emitter=event_emitter)
+    
+    async def start_polling(self) -> None:
+        """Override to prevent automatic polling.
+        
+        WebSearchStore should only be triggered by explicit search() calls,
+        not by polling. This prevents errors when DataHub.start() is called.
+        """
+        # Do nothing - WebSearchStore doesn't poll
+        pass
     
     async def search(self, query: str, intent: WebSearchIntent | str | None = None, **search_params: Any) -> None:
         """Trigger a search and emit events."""

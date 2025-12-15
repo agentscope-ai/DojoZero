@@ -40,7 +40,7 @@ class DataStore(ABC):
         self,
         store_id: str,
         api: ExternalAPI | None = None,
-        poll_interval_seconds: float = 5.0,
+        poll_intervals: dict[str, float] | None = None,
         event_emitter: Callable[[DataEvent], None] | None = None,
     ):
         """Initialize data store.
@@ -48,12 +48,15 @@ class DataStore(ABC):
         Args:
             store_id: Unique identifier for this data store
             api: ExternalAPI instance
-            poll_interval_seconds: How often to poll the API
+            poll_intervals: Per-endpoint polling intervals (e.g., {"scoreboard": 5.0, "play_by_play": 2.0})
+                           If not provided, defaults to empty dict (no polling)
             event_emitter: Callback to emit events to DataHub
         """
         self.store_id = store_id
         self._api = api
-        self.poll_interval_seconds = poll_interval_seconds
+        self.poll_intervals = poll_intervals or {}
+        # Calculate base interval from poll_intervals (minimum value, or 5.0 if empty)
+        self.poll_interval_seconds = min(self.poll_intervals.values()) if self.poll_intervals else 5.0
         self._event_emitter = event_emitter
         
         # Stream registry: stream_id -> (processor, source_event_types)
@@ -63,6 +66,8 @@ class DataStore(ABC):
         # Polling state
         self._running = False
         self._last_poll_time: datetime | None = None
+        self._last_poll_times: dict[str, datetime] = {}  # Per-endpoint last poll times
+        self._poll_identifier: dict[str, Any] = {}  # Identifier for polling (e.g., {"game_id": "123"})
     
     def register_stream(
         self,
@@ -91,6 +96,14 @@ class DataStore(ABC):
         """
         self._event_emitter = emitter
     
+    def set_poll_identifier(self, identifier: dict[str, Any]) -> None:
+        """Set identifier for polling (e.g., game_id, event_id).
+        
+        Args:
+            identifier: Dictionary with identifiers (e.g., {"game_id": "123"})
+        """
+        self._poll_identifier = identifier
+    
     async def emit_event(self, event: DataEvent) -> None:
         """Emit an event to DataHub.
         
@@ -112,12 +125,56 @@ class DataStore(ABC):
         """Stop polling the API."""
         self._running = False
     
+    def _get_poll_interval(self, endpoint: str | None = None) -> float:
+        """Get polling interval for a specific endpoint.
+        
+        Args:
+            endpoint: Endpoint name (e.g., "scoreboard", "play_by_play")
+                    If None, returns the base interval
+        
+        Returns:
+            Polling interval in seconds
+        """
+        if endpoint and endpoint in self.poll_intervals:
+            return self.poll_intervals[endpoint]
+        # Return base interval (calculated from poll_intervals in __init__)
+        return self.poll_interval_seconds
+    
+    def _should_poll_endpoint(self, endpoint: str) -> bool:
+        """Check if enough time has passed to poll an endpoint.
+        
+        Args:
+            endpoint: Endpoint name (e.g., "scoreboard", "play_by_play")
+        
+        Returns:
+            True if endpoint should be polled, False otherwise
+        """
+        if endpoint not in self._last_poll_times:
+            return True  # Never polled, should poll now
+        
+        interval = self._get_poll_interval(endpoint)
+        last_poll = self._last_poll_times[endpoint]
+        elapsed = (datetime.now(timezone.utc) - last_poll).total_seconds()
+        return elapsed >= interval
+    
+    def _record_poll_time(self, endpoint: str) -> None:
+        """Record the current time as the last poll time for an endpoint.
+        
+        Args:
+            endpoint: Endpoint name
+        """
+        self._last_poll_times[endpoint] = datetime.now(timezone.utc)
+    
     async def _poll_loop(self) -> None:
         """Main polling loop that fetches from API and emits events."""
+        # Calculate loop interval: use minimum of all intervals
+        # poll_interval_seconds is already calculated as min(poll_intervals.values()) in __init__
+        loop_interval = self.poll_interval_seconds
+        
         while self._running:
             try:
-                # Poll for updates
-                raw_events = await self._poll_api()
+                # Poll for updates (pass poll identifier)
+                raw_events = await self._poll_api(identifier=self._poll_identifier)
                 
                 # Process raw events through registered streams
                 for raw_event in raw_events:
@@ -144,8 +201,8 @@ class DataStore(ABC):
             except Exception as e:
                 print(f"Error in poll loop for store {self.store_id}: {e}")
             
-            # Wait before next poll
-            await asyncio.sleep(self.poll_interval_seconds)
+            # Wait before next poll (use minimum interval)
+            await asyncio.sleep(loop_interval)
     
     async def _poll_api(
         self,

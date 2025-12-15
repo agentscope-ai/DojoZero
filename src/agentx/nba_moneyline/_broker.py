@@ -13,8 +13,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, Optional
 
-
 import asyncio
+import logging
 import uuid
 from collections import defaultdict
 from typing import List, Sequence, Set, TypedDict
@@ -26,36 +26,10 @@ from agentx.core import (
     StreamEvent,
 )
 
+from agentx.data._models import EventTypes
 
-# Define the game event payloads (if not in a separate module)
-@dataclass
-class PregamePayload:
-    event_id: str
-    home_team: str
-    away_team: str
-    game_time: str
-    initial_home_odds: float
-    initial_away_odds: float
-
-
-@dataclass
-class OddsUpdatePayload:
-    event_id: str
-    home_odds: float
-    away_odds: float
-
-
-@dataclass
-class GameStartPayload:
-    event_id: str
-
-
-@dataclass
-class GameResultPayload:
-    event_id: str
-    winner: str
-    final_score: dict[str, int]
-
+# Logger for broker operations
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Enums
@@ -392,6 +366,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Event management
         self._events: Dict[str, Event] = {}
         self._event_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        
+        # Pending team info from GameUpdateEvent (waiting for OddsUpdateEvent)
+        # Maps event_id -> {"home_team": str, "away_team": str, "game_time": datetime}
+        self._pending_team_info: Dict[str, Dict[str, Any]] = {}
 
         # Bet management
         self._bets: Dict[str, Bet] = {}
@@ -441,52 +419,178 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # =========================================================================
 
     async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
-        """Process incoming stream events and delegate to appropriate handlers"""
+        """Process incoming stream events and delegate to appropriate handlers.
+        
+        Expects StreamEvent.payload to be a DataEvent (OddsUpdateEvent, GameStartEvent, GameResultEvent, etc.)
+        """
         try:
-            payload = event.payload
-            event_id = payload.event_id
-
+            data_event = event.payload
+            
+            # Type check - ensure it's one of our game events
+            if not hasattr(data_event, "event_id"):
+                logger.warning(
+                    "Event missing event_id attribute: type=%s, payload=%s",
+                    type(data_event),
+                    data_event,
+                )
+                return
+            
+            event_id = data_event.event_id
             if not event_id:
-                print(f"[ERROR] Event missing event_id: {payload}")
+                logger.error("Event missing event_id: %s", data_event)
                 return
 
             async with self._event_locks[
                 event_id
             ]:  # avoid multiple streamEvent change the same event
-                if isinstance(event.payload, PregamePayload):
-                    await self.initialize_event(
-                        event_id=payload.event_id,
-                        home_team=payload.home_team,
-                        away_team=payload.away_team,
-                        game_time=datetime.fromisoformat(payload.game_time),
-                        initial_home_odds=Decimal(str(payload.initial_home_odds)),
-                        initial_away_odds=Decimal(str(payload.initial_away_odds)),
+                # Use event_type property to determine event type (DataEvents have this)
+                event_type = getattr(data_event, "event_type", None)
+                if not event_type:
+                    logger.warning(
+                        "Event missing event_type property: type=%s, event_id=%s",
+                        type(data_event),
+                        event_id,
                     )
+                    return
+                
+                # Log every incoming event
+                logger.info(
+                    "Received event: type=%s, event_id=%s, stream_id=%s, timestamp=%s",
+                    event_type,
+                    event_id,
+                    event.stream_id,
+                    getattr(data_event, "timestamp", None),
+                )
+                
+                if event_type == EventTypes.ODDS_UPDATE.value:
+                    # Only process odds if we have team info (either from existing event or pending GameUpdateEvent)
+                    if event_id in self._events:
+                        # Event exists - update odds
+                        logger.info(
+                            "Updating odds: event_id=%s, home_odds=%s, away_odds=%s",
+                            event_id,
+                            getattr(data_event, "home_odds", None),
+                            getattr(data_event, "away_odds", None),
+                        )
+                        await self.update_odds(
+                            event_id=data_event.event_id,
+                            home_odds=Decimal(str(data_event.home_odds)),
+                            away_odds=Decimal(str(data_event.away_odds)),
+                        )
+                    elif event_id in self._pending_team_info:
+                        # We have team info from GameUpdateEvent - initialize event with odds
+                        team_info = self._pending_team_info[event_id]
+                        logger.info(
+                            "Initializing event from OddsUpdateEvent (team info already available): event_id=%s, home_team=%s, away_team=%s, home_odds=%s, away_odds=%s",
+                            event_id,
+                            team_info.get("home_team"),
+                            team_info.get("away_team"),
+                            getattr(data_event, "home_odds", None),
+                            getattr(data_event, "away_odds", None),
+                        )
+                        await self.initialize_event(
+                            event_id=event_id,
+                            home_team=team_info["home_team"],
+                            away_team=team_info["away_team"],
+                            game_time=team_info["game_time"],
+                            initial_home_odds=Decimal(str(data_event.home_odds)),
+                            initial_away_odds=Decimal(str(data_event.away_odds)),
+                        )
+                        # Clear pending team info
+                        del self._pending_team_info[event_id]
+                    else:
+                        # No team info yet - ignore this odds update
+                        logger.debug(
+                            "Ignoring OddsUpdateEvent (no team info available yet): event_id=%s, home_odds=%s, away_odds=%s",
+                            event_id,
+                            getattr(data_event, "home_odds", None),
+                            getattr(data_event, "away_odds", None),
+                        )
 
-                elif isinstance(event.payload, OddsUpdatePayload):
-                    await self.update_odds(
-                        event_id=event.payload.event_id,
-                        home_odds=Decimal(str(event.payload.home_odds)),
-                        away_odds=Decimal(str(event.payload.away_odds)),
-                    )
+                elif event_type == EventTypes.GAME_UPDATE.value:
+                    # Extract team names and game time from GameUpdateEvent
+                    home_team_str = None
+                    away_team_str = None
+                    game_time_dt = None
+                    
+                    if hasattr(data_event, "home_team") and isinstance(data_event.home_team, dict):
+                        home_city = data_event.home_team.get("teamCity", "")
+                        home_name = data_event.home_team.get("teamName", "")
+                        if home_city or home_name:
+                            home_team_str = f"{home_city} {home_name}".strip()
+                    
+                    if hasattr(data_event, "away_team") and isinstance(data_event.away_team, dict):
+                        away_city = data_event.away_team.get("teamCity", "")
+                        away_name = data_event.away_team.get("teamName", "")
+                        if away_city or away_name:
+                            away_team_str = f"{away_city} {away_name}".strip()
+                    
+                    # Extract game_time_utc if available
+                    if hasattr(data_event, "game_time_utc") and data_event.game_time_utc:
+                        try:
+                            from datetime import timezone
+                            game_time_dt = datetime.fromisoformat(data_event.game_time_utc.replace("Z", "+00:00"))
+                        except (ValueError, AttributeError):
+                            pass
+                    
+                    # Only process if we have both team names
+                    if not home_team_str or not away_team_str:
+                        logger.debug(
+                            "GameUpdateEvent missing team info: event_id=%s, home_team=%s, away_team=%s",
+                            event_id,
+                            home_team_str,
+                            away_team_str,
+                        )
+                        return
+                    
+                    # Use current time as fallback if game_time_utc not available
+                    if not game_time_dt:
+                        game_time_dt = datetime.now()
+                    
+                    if event_id in self._events:
+                        # Event exists - update team names and game_time
+                        broker_event = self._events[event_id]
+                        broker_event.home_team = home_team_str
+                        broker_event.away_team = away_team_str
+                        broker_event.game_time = game_time_dt
+                        logger.info(
+                            "Updated event from GameUpdateEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s",
+                            event_id,
+                            home_team_str,
+                            away_team_str,
+                            game_time_dt,
+                        )
+                    else:
+                        # Event doesn't exist yet - store team info for when OddsUpdateEvent arrives
+                        self._pending_team_info[event_id] = {
+                            "home_team": home_team_str,
+                            "away_team": away_team_str,
+                            "game_time": game_time_dt,
+                        }
+                        logger.info(
+                            "Stored team info from GameUpdateEvent (waiting for OddsUpdateEvent): event_id=%s, home_team=%s, away_team=%s, game_time=%s",
+                            event_id,
+                            home_team_str,
+                            away_team_str,
+                            game_time_dt,
+                        )
 
-                elif isinstance(event.payload, GameStartPayload):
+                elif event_type == EventTypes.GAME_START.value:
                     await self.update_event_status(
-                        event_id=event.payload.event_id, status=EventStatus.LIVE
+                        event_id=data_event.event_id, status=EventStatus.LIVE
                     )
 
-                elif isinstance(event.payload, GameResultPayload):
+                elif event_type == EventTypes.GAME_RESULT.value:
                     await self.update_event_status(
-                        event_id=event.payload.event_id, status=EventStatus.CLOSED
+                        event_id=data_event.event_id, status=EventStatus.CLOSED
                     )
                     await self.settle_event(
-                        event_id=event.payload.event_id,
-                        winner=event.payload.winner,
-                        final_score=event.payload.final_score,
+                        event_id=data_event.event_id,
+                        winner=data_event.winner,
+                        final_score=data_event.final_score,
                     )
-
                 else:
-                    print("[WARNING] Unknown event")
+                    print(f"[WARNING] Unknown event type: {event_type}")
 
         except Exception as e:
             print(f"[ERROR] Failed to handle stream event: {e}")

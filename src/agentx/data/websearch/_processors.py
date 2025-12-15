@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, cast
 
-from agentx.data._models import DataEvent
+from agentx.data._models import DataEvent, EventTypes
 from agentx.data._processors import DataProcessor
 from agentx.data._utils import (
     call_dashscope_model,
@@ -20,6 +21,8 @@ from agentx.data.websearch._events import (
     RawWebSearchEvent,
     WebSearchIntent,
 )
+
+logger = logging.getLogger("agentx.data.websearch._processors")
 
 
 class InjurySummaryProcessor(DataProcessor):
@@ -58,7 +61,7 @@ class InjurySummaryProcessor(DataProcessor):
             True if event is injury-related raw web search, False otherwise
         """
         # Only process raw web search events
-        if event.event_type != "raw_web_search":
+        if event.event_type != EventTypes.RAW_WEB_SEARCH.value:
             return False
         
         # Use base class intent checking first
@@ -124,6 +127,11 @@ Only include players who are confirmed to be injured/out."""
         
         # Call Dashscope API
         try:
+            logger.debug(
+                "Processing injury summary: query=%s, results_count=%d",
+                raw_event.query,
+                len(result_texts),
+            )
             response = await call_dashscope_model(
                 prompt=prompt,
                 model=self.model,
@@ -172,9 +180,20 @@ Only include players who are confirmed to be injured/out."""
                         }
             else:
                 error_msg = response.get("message", "Unknown error")
+                logger.warning(
+                    "Dashscope API returned non-200 status for injury summary: status=%d, message=%s",
+                    response.get("status_code", 0),
+                    error_msg,
+                )
                 summary = f"Error generating summary: {error_msg}"
             
         except Exception as e:
+            logger.error(
+                "Error processing injury summary: query=%s, error=%s",
+                raw_event.query,
+                e,
+                exc_info=True,
+            )
             summary = f"Error calling Dashscope API: {str(e)}"
             injured_players = {}
         
@@ -225,7 +244,7 @@ class PowerRankingProcessor(DataProcessor):
             True if event is power ranking-related raw web search, False otherwise
         """
         # Only process raw web search events
-        if event.event_type != "raw_web_search":
+        if event.event_type != EventTypes.RAW_WEB_SEARCH.value:
             return False
         
         # Use base class intent checking first
@@ -289,6 +308,11 @@ Rules:
         
         # Call Dashscope API
         try:
+            logger.debug(
+                "Processing power rankings: query=%s, results_count=%d",
+                raw_event.query,
+                len(result_texts),
+            )
             response = await call_dashscope_model(
                 prompt=prompt,
                 model=self.model,
@@ -298,6 +322,13 @@ Rules:
             extracted = extract_json_from_dashscope_response(
                 response, expected_type=dict
             )
+            
+            if not extracted:
+                logger.warning(
+                    "Failed to extract power rankings from response: query=%s, status=%d",
+                    raw_event.query,
+                    response.get("status_code", 0),
+                )
             
             rankings: dict[str, list[dict[str, Any]]] = {}
             if extracted and isinstance(extracted, dict):
@@ -332,7 +363,11 @@ Rules:
                 rankings = cleaned_rankings
             
         except Exception as e:
-            print(f"DEBUG: Error extracting rankings: {e}")
+            logger.warning(
+                "Error extracting power rankings from Dashscope response: %s",
+                e,
+                exc_info=True,
+            )
             rankings = {}
         
         # Create power ranking event
@@ -355,13 +390,13 @@ class ExpertPredictionProcessor(DataProcessor):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "qwen-max",
+        model: str = "qwen-turbo",
     ):
         """Initialize expert prediction processor.
         
         Args:
             api_key: Dashscope API key (defaults to DASHSCOPE_API_KEY env var)
-            model: Dashscope model to use for extraction
+            model: Dashscope model to use for extraction (default: "qwen-turbo")
         """
         # Initialize Dashscope (will raise if not available or key missing)
         self.api_key = initialize_dashscope(api_key)
@@ -380,7 +415,7 @@ class ExpertPredictionProcessor(DataProcessor):
             True if event is prediction-related raw web search, False otherwise
         """
         # Only process raw web search events
-        if event.event_type != "raw_web_search":
+        if event.event_type != EventTypes.RAW_WEB_SEARCH.value:
             return False
         
         # Use base class intent checking first
@@ -459,6 +494,11 @@ Focus on game predictions, matchup analysis, and expert picks."""
         
         # Call Dashscope API
         try:
+            logger.debug(
+                "Processing expert predictions: query=%s, results_count=%d",
+                raw_event.query,
+                len(result_texts),
+            )
             response = await call_dashscope_model(
                 prompt=prompt,
                 model=self.model
@@ -469,6 +509,13 @@ Focus on game predictions, matchup analysis, and expert picks."""
                 response, expected_type=list
             )
             
+            if not extracted:
+                logger.warning(
+                    "Failed to extract expert predictions from response: query=%s, status=%d",
+                    raw_event.query,
+                    response.get("status_code", 0),
+                )
+            
             predictions: list[dict[str, Any]] = []
             if extracted and isinstance(extracted, list):
                 # Ensure all items are dicts
@@ -478,7 +525,11 @@ Focus on game predictions, matchup analysis, and expert picks."""
                 ]
             
         except Exception as e:
-            print(f"DEBUG: Error extracting predictions: {e}")
+            logger.warning(
+                "Error extracting expert predictions from Dashscope response: %s",
+                e,
+                exc_info=True,
+            )
             predictions = []
         
         # Create expert prediction event

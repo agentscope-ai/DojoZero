@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from typing import Any
@@ -24,6 +25,9 @@ except ImportError:
     DASHSCOPE_AVAILABLE = False
     dashscope = None  # type: ignore[assignment]
     Generation = None  # type: ignore[assignment, misc]
+
+# Logger for Dashscope API calls
+logger = logging.getLogger(__name__)
 
 
 def initialize_dashscope(api_key: str | None = None) -> str:
@@ -58,13 +62,17 @@ def initialize_dashscope(api_key: str | None = None) -> str:
 async def call_dashscope_model(
     prompt: str,
     model: str = "qwen-turbo",
+    max_retries: int = 3,
+    retry_delay_base: float = 1.0,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Call Dashscope Generation API asynchronously.
+    """Call Dashscope Generation API asynchronously with retry logic.
     
     Args:
         prompt: The prompt to send to the model
         model: Model name to use (default: "qwen-turbo")
+        max_retries: Maximum number of retry attempts (default: 3)
+        retry_delay_base: Base delay in seconds for exponential backoff (default: 1.0)
         **kwargs: Additional parameters to pass to Generation.call
         
     Returns:
@@ -73,6 +81,7 @@ async def call_dashscope_model(
     Raises:
         ImportError: If Dashscope SDK is not installed
         RuntimeError: If Dashscope is not initialized (api_key not set)
+        Exception: If all retry attempts fail
     """
     if not DASHSCOPE_AVAILABLE:
         raise ImportError(
@@ -93,8 +102,75 @@ async def call_dashscope_model(
         )
         return response  # type: ignore[no-any-return]
     
-    # Run in thread pool since Dashscope SDK is synchronous
-    return await asyncio.to_thread(_call)
+    # Retry logic with exponential backoff
+    last_exception: Exception | None = None
+    prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
+    
+    for attempt in range(max_retries):
+        try:
+            if attempt == 0:
+                logger.debug(
+                    "Calling Dashscope API: model=%s, prompt_preview=%s",
+                    model,
+                    prompt_preview,
+                )
+            else:
+                logger.info(
+                    "Retrying Dashscope API call (attempt %d/%d): model=%s",
+                    attempt + 1,
+                    max_retries,
+                    model,
+                )
+            
+            # Run in thread pool since Dashscope SDK is synchronous
+            response = await asyncio.to_thread(_call)
+            
+            # Log response status
+            status_code = response.get("status_code", 0)
+            if status_code == 200:
+                output_length = len(str(response.get("output", {}).get("text", "")))
+                logger.debug(
+                    "Dashscope API call succeeded: model=%s, status=%d, output_length=%d",
+                    model,
+                    status_code,
+                    output_length,
+                )
+                return response
+            else:
+                error_msg = response.get("message", "Unknown error")
+                logger.warning(
+                    "Dashscope API returned error: model=%s, status=%d, message=%s",
+                    model,
+                    status_code,
+                    error_msg,
+                )
+                # Treat non-200 status as retryable error
+                last_exception = RuntimeError(f"API returned status {status_code}: {error_msg}")
+                
+        except Exception as e:
+            last_exception = e
+            logger.warning(
+                "Dashscope API call failed (attempt %d/%d): model=%s, error=%s",
+                attempt + 1,
+                max_retries,
+                model,
+                str(e),
+            )
+        
+        # If not the last attempt, wait before retrying
+        if attempt < max_retries - 1:
+            delay = retry_delay_base * (2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+            logger.debug("Waiting %.1f seconds before retry...", delay)
+            await asyncio.sleep(delay)
+    
+    # All retries failed
+    logger.error(
+        "Dashscope API call failed after %d attempts: model=%s, error=%s",
+        max_retries,
+        model,
+        str(last_exception) if last_exception else "Unknown error",
+    )
+    raise last_exception or RuntimeError("Dashscope API call failed after all retries")
 
 
 def extract_json_from_dashscope_response(
@@ -162,9 +238,14 @@ def extract_json_from_dashscope_response(
         # Validate type
         if isinstance(parsed, expected_type):
             return parsed
+        logger.debug(
+            "Parsed JSON type mismatch: expected=%s, got=%s",
+            expected_type.__name__,
+            type(parsed).__name__,
+        )
         return None
     except Exception as e:
-        print(f"DEBUG: Could not parse JSON: {e}")
+        logger.debug("Could not parse JSON from Dashscope response: %s", e)
         return None
 
 

@@ -134,10 +134,12 @@ class OperatorSpec(ActorSpec[ConfigSpecT]):
     """Specialized :class:`ActorSpec` for operator actors."""
 
     agent_ids: Sequence[str] = field(default_factory=tuple)
+    data_stream_ids: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.agent_ids = tuple(self.agent_ids)
+        self.data_stream_ids = tuple(self.data_stream_ids)
 
 
 @dataclass
@@ -638,6 +640,14 @@ class Dashboard:
         # Extract from stream configs to recreate hub/store instances
         context = self._build_runtime_context(spec)
         
+        # Call startup function if provided by context builder (e.g., to start DataStore polling)
+        if "_startup" in context and callable(context["_startup"]):
+            startup_fn = context["_startup"]
+            if asyncio.iscoroutinefunction(startup_fn):
+                await startup_fn()
+            else:
+                startup_fn()
+        
         registry: Dict[str, ActorRuntime[Any]] = {}
         agents: Dict[str, Agent] = {}
         operators: Dict[str, Operator] = {}
@@ -761,6 +771,8 @@ class Dashboard:
         await self._wire_agent_operators(spec.agents, agents, operators)
         # Agent-centric wiring: agents register themselves with streams
         await self._wire_agent_streams(spec.agents, agents, data_streams)
+        # Operator-centric wiring: operators register themselves with streams
+        await self._wire_operator_streams(spec.operators, operators, data_streams)
         # Legacy stream-centric wiring (for backward compatibility)
         await self._wire_stream_consumers(
             spec.data_streams,
@@ -859,6 +871,41 @@ class Dashboard:
                     stream,
                     "register_consumers",
                     (agent,),
+                    actor_id=stream.actor_id,
+                )
+
+    async def _wire_operator_streams(
+        self,
+        operator_specs: Sequence[OperatorSpec[Any]],
+        operators: Mapping[str, Operator[Any]],
+        data_streams: Mapping[str, DataStream[Any]],
+    ) -> None:
+        """Wire operators to data streams (operator-centric approach).
+        
+        Operators declare which streams they subscribe to via data_stream_ids.
+        """
+        for operator_spec in operator_specs:
+            if not operator_spec.data_stream_ids:
+                continue
+            operator = operators.get(operator_spec.actor_id)
+            if operator is None:  # pragma: no cover - defensive
+                raise DashboardError(
+                    f"operator '{operator_spec.actor_id}' missing from runtime registry"
+                )
+            dependencies: list[DataStream[Any]] = []
+            for stream_id in operator_spec.data_stream_ids:
+                stream = data_streams.get(stream_id)
+                if stream is None:
+                    raise DashboardError(
+                        f"operator '{operator_spec.actor_id}' requires data stream '{stream_id}'"
+                    )
+                dependencies.append(stream)
+            # Register operator as consumer of these streams
+            for stream in dependencies:
+                await self._invoke_registration(
+                    stream,
+                    "register_consumers",
+                    (operator,),
                     actor_id=stream.actor_id,
                 )
 

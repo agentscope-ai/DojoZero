@@ -59,6 +59,9 @@ class DataHub:
         self._replay_mode = False
         self._replay_events: list[DataEvent] = []
         self._replay_index = 0
+        
+        # Track connected stores for lifecycle management
+        self._connected_stores: list["DataStore"] = []
     
     def subscribe_agent(
         self,
@@ -151,6 +154,10 @@ class DataHub:
             asyncio.create_task(self.receive_event(event))
         
         store.set_event_emitter(emit_wrapper)
+        
+        # Track connected store for lifecycle management
+        if store not in self._connected_stores:
+            self._connected_stores.append(store)
     
     async def start_replay(self, replay_file: Path | str) -> None:
         """Start replay mode from a file.
@@ -228,4 +235,18 @@ class DataHub:
         self._replay_mode = False
         self._replay_events = []
         self._replay_index = 0
+    
+    async def start(self) -> None:
+        """Start all connected stores (begin polling).
+        
+        This should be called after all stores are connected and configured
+        (e.g., after poll identifiers are set).
+        """
+        for store in self._connected_stores:
+            await store.start_polling()
+    
+    async def stop(self) -> None:
+        """Stop all connected stores (stop polling)."""
+        for store in self._connected_stores:
+            await store.stop_polling()
 
