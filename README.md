@@ -65,6 +65,18 @@ agentx run --trial-id sample-trial --resume-latest
 You can still start a new trial from a checkpoint by supplying both `--params`
 and `--checkpoint-id`; the CLI applies the checkpoint before launching.
 
+### Replay Mode (Backtesting)
+
+Replay historical events from a JSONL file for backtesting:
+
+```bash
+agentx replay \
+  --replay-file outputs/nba_betting_events.jsonl \
+  --params configs/nba-pregame-betting.yaml \
+  --replay-speed-up 2.0 \
+  --replay-max-sleep 20.0
+```
+
 ## Server Usage (Coming Soon)
 
 The `agentx serve` command is reserved for a FastAPI dashboard server that will

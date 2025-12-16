@@ -164,10 +164,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the trial id (defaults to a random UUID)",
     )
     replay_parser.add_argument(
-        "--speed",
+        "--replay-speed-up",
         type=float,
         default=1.0,
+        dest="replay_speed_up",
         help="Replay speed multiplier (e.g., 2.0 for 2x speed, 0.5 for half speed). Default: 1.0 (real-time)",
+    )
+    replay_parser.add_argument(
+        "--replay-max-sleep",
+        type=float,
+        default=20.0,
+        dest="replay_max_sleep",
+        help="Maximum sleep time in seconds between events (caps long delays). Default: 20.0 seconds",
     )
 
     # Placeholder parser for the upcoming FastAPI server command.
@@ -552,13 +560,17 @@ async def _replay_command(args: argparse.Namespace) -> int:
     
     trial_id = args.trial_id or uuid4().hex
     replay_file = args.replay_file
-    speed = args.speed
+    speed_up = args.replay_speed_up
+    max_sleep = args.replay_max_sleep
     
     if not replay_file.exists():
         raise AgentXCLIError(f"Replay file not found: {replay_file}")
     
-    if speed <= 0:
-        raise AgentXCLIError(f"Speed must be positive, got: {speed}")
+    if speed_up <= 0:
+        raise AgentXCLIError(f"Replay speed-up must be positive, got: {speed_up}")
+    
+    if max_sleep <= 0:
+        raise AgentXCLIError(f"Replay max-sleep must be positive, got: {max_sleep}")
     
     # Prepare trial spec from params
     spec = _prepare_trial_spec(trial_id, params_payload)
@@ -572,7 +584,8 @@ async def _replay_command(args: argparse.Namespace) -> int:
     # Add replay metadata
     spec.metadata["replay_file"] = str(replay_file)
     spec.metadata["replay_mode"] = True
-    spec.metadata["replay_speed"] = speed
+    spec.metadata["replay_speed_up"] = speed_up
+    spec.metadata["replay_max_sleep"] = max_sleep
     spec.metadata["builder_name"] = builder_name  # Ensure it's in metadata
     
     # Extract hub_id from spec (from stream configs)
@@ -585,7 +598,11 @@ async def _replay_command(args: argparse.Namespace) -> int:
     
     if not hub_id:
         # Fallback: use default hub_id from params or metadata
-        hub_id = spec.metadata.get("hub_id", "data_hub")
+        hub_id_raw = spec.metadata.get("hub_id", "data_hub")
+        hub_id = str(hub_id_raw) if hub_id_raw else "data_hub"
+    
+    # Ensure hub_id is a string
+    hub_id = str(hub_id)
     
     # Create DataHub in replay mode (disable persistence, will load events from file)
     hub = DataHub(
@@ -628,8 +645,8 @@ async def _replay_command(args: argparse.Namespace) -> int:
         raise AgentXCLIError(f"Failed to set up replay: {e}") from e
     
     # Start replay with speed control and progress tracking
-    LOGGER.info("Starting replay at %.1fx speed", speed)
-    await _replay_events_with_progress(hub, speed)
+    LOGGER.info("Starting replay at %.1fx speed (max sleep: %.1fs)", speed_up, max_sleep)
+    await _replay_events_with_progress(hub, speed_up, max_sleep)
     
     # Stop trial
     LOGGER.info("Stopping trial '%s'", trial_id)
@@ -642,12 +659,13 @@ async def _replay_command(args: argparse.Namespace) -> int:
 
 
 
-async def _replay_events_with_progress(hub: DataHub, speed: float) -> None:
+async def _replay_events_with_progress(hub: DataHub, speed_up: float, max_sleep: float) -> None:
     """Replay events with speed control and progress tracking.
     
     Args:
         hub: DataHub instance in replay mode
-        speed: Speed multiplier (1.0 = real-time, 2.0 = 2x speed, etc.)
+        speed_up: Speed multiplier (1.0 = real-time, 2.0 = 2x speed, etc.)
+        max_sleep: Maximum sleep time in seconds between events (caps long delays)
     """
     from datetime import datetime, timezone
     
@@ -663,7 +681,7 @@ async def _replay_events_with_progress(hub: DataHub, speed: float) -> None:
     start_time = datetime.now(timezone.utc)
     last_event_time: datetime | None = None
     
-    LOGGER.info("Replaying %d events at %.1fx speed", total_events, speed)
+    LOGGER.info("Replaying %d events at %.1fx speed (max sleep: %.1fs)", total_events, speed_up, max_sleep)
     
     # Use replay_next for consistency
     event_count = 0
@@ -675,11 +693,13 @@ async def _replay_events_with_progress(hub: DataHub, speed: float) -> None:
         event_count += 1
         
         # Calculate delay based on speed (only if we have a previous event)
-        if last_event_time is not None and speed > 0:
+        if last_event_time is not None and speed_up > 0:
             # Calculate time difference between events
             time_diff = (event.timestamp - last_event_time).total_seconds()
             # Adjust for speed
-            delay = time_diff / speed
+            delay = time_diff / speed_up
+            # Cap delay at max_sleep to prevent very long waits
+            delay = min(delay, max_sleep)
             if delay > 0:
                 await asyncio.sleep(delay)
         
