@@ -42,6 +42,7 @@ scenario:
       data_streams:
       - game_status_change_stream
       - odds_update_stream
+      - game_update_stream
       
     agents:
     - id: betting_agent
