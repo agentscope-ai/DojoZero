@@ -611,9 +611,23 @@ async def _replay_command(args: argparse.Namespace) -> int:
         enable_persistence=False,
     )
     
+    # Create ReplayCoordinator with speed control
+    from agentx.data import ReplayCoordinator
+    
+    coordinator = ReplayCoordinator(data_hub=hub, replay_file=replay_file)
+    coordinator.set_speed(speed_up=speed_up, max_sleep=max_sleep)
+    
+    # Set up progress callback
+    def progress_callback(current: int, total: int) -> None:
+        if current % max(1, min(100, total // 10)) == 0:
+            progress_pct = (current / total) * 100
+            LOGGER.info("Replay progress: %d/%d events (%.1f%%)", current, total, progress_pct)
+    
+    coordinator.set_progress_callback(progress_callback)
+    
     # Load events into hub
     LOGGER.info("Loading events from replay file: %s", replay_file)
-    await hub.start_replay(str(replay_file))
+    await coordinator.start_replay()
     
     # Create a replay-specific context builder that returns our replay hub
     # We'll temporarily override the context builder in the trial builder registry
@@ -646,85 +660,15 @@ async def _replay_command(args: argparse.Namespace) -> int:
     
     # Start replay with speed control and progress tracking
     LOGGER.info("Starting replay at %.1fx speed (max sleep: %.1fs)", speed_up, max_sleep)
-    await _replay_events_with_progress(hub, speed_up, max_sleep)
+    await coordinator.replay_all()
     
     # Stop trial
     LOGGER.info("Stopping trial '%s'", trial_id)
     await dashboard.stop_trial(trial_id)
-    hub.stop_replay()
+    coordinator.stop_replay()
     
     LOGGER.info("Replay complete for trial '%s'", trial_id)
     return 0
-
-
-
-
-async def _replay_events_with_progress(hub: DataHub, speed_up: float, max_sleep: float) -> None:
-    """Replay events with speed control and progress tracking.
-    
-    Args:
-        hub: DataHub instance in replay mode
-        speed_up: Speed multiplier (1.0 = real-time, 2.0 = 2x speed, etc.)
-        max_sleep: Maximum sleep time in seconds between events (caps long delays)
-    """
-    from datetime import datetime, timezone
-    
-    if not hub._replay_mode or not hub._replay_events:
-        LOGGER.warning("Hub is not in replay mode or has no events")
-        return
-    
-    total_events = len(hub._replay_events)
-    if total_events == 0:
-        LOGGER.info("No events to replay")
-        return
-    
-    start_time = datetime.now(timezone.utc)
-    last_event_time: datetime | None = None
-    
-    LOGGER.info("Replaying %d events at %.1fx speed (max sleep: %.1fs)", total_events, speed_up, max_sleep)
-    
-    # Use replay_next for consistency
-    event_count = 0
-    while True:
-        event = await hub.replay_next()
-        if event is None:
-            break
-        
-        event_count += 1
-        
-        # Calculate delay based on speed (only if we have a previous event)
-        if last_event_time is not None and speed_up > 0:
-            # Calculate time difference between events
-            time_diff = (event.timestamp - last_event_time).total_seconds()
-            # Adjust for speed
-            delay = time_diff / speed_up
-            # Cap delay at max_sleep to prevent very long waits
-            delay = min(delay, max_sleep)
-            if delay > 0:
-                await asyncio.sleep(delay)
-        
-        # Progress tracking (every 10% or every 100 events, whichever is more frequent)
-        if event_count % max(1, min(100, total_events // 10)) == 0 or event_count == total_events:
-            percent = 100.0 * event_count / total_events
-            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
-            rate = event_count / elapsed if elapsed > 0 else 0
-            LOGGER.info(
-                "Progress: %d/%d events (%.1f%%) | Rate: %.1f events/sec",
-                event_count,
-                total_events,
-                percent,
-                rate,
-            )
-        
-        last_event_time = event.timestamp
-    
-    elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
-    LOGGER.info(
-        "Replay complete: %d events in %.1f seconds (%.1f events/sec)",
-        event_count,
-        elapsed,
-        event_count / elapsed if elapsed > 0 else 0,
-    )
 
 
 def _list_builders_command(args: argparse.Namespace) -> int:

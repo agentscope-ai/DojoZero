@@ -8,7 +8,7 @@ from agentx.core import DataStream, DataStreamBase, StreamEvent
 from agentx.data import DataHub
 from agentx.data._models import DataEvent
 
-LOGGER = logging.getLogger("agentx.data.streams")
+logger = logging.getLogger(__name__)
 
 
 class _ActorIdConfig(TypedDict):
@@ -97,7 +97,7 @@ class DataHubDataStream(
         if self._hub is None:
             raise RuntimeError(f"stream '{self.actor_id}' has no DataHub instance")
 
-        LOGGER.info(
+        logger.info(
             "stream '%s' starting: event_type=%s event_types=%s",
             self.actor_id,
             self._event_type,
@@ -151,7 +151,7 @@ class DataHubDataStream(
 
     async def stop(self) -> None:
         """Protocol hook: unsubscribe from DataHub."""
-        LOGGER.info(
+        logger.info(
             "stream '%s' stopping after %d events",
             self.actor_id,
             len(self._received_events),
@@ -172,7 +172,7 @@ class DataHubDataStream(
         """Protocol hook: dashboard restores a checkpoint before resuming."""
         self._sequence = int(state.get("sequence", 0))
         self._initialized = bool(state.get("initialized", False))
-        LOGGER.info(
+        logger.info(
             "stream '%s' restored: sequence=%d initialized=%s",
             self.actor_id,
             self._sequence,

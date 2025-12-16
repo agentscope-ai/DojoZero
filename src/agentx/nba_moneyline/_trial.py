@@ -39,7 +39,7 @@ from agentx.nba_moneyline._broker import (
     BrokerOperatorConfig,
 )
 
-LOGGER = logging.getLogger("agentx.nba_moneyline.trial")
+logger = logging.getLogger(__name__)
 
 # Mapping from event_type to (processor_class, source_event_types)
 # This defines which processors are needed for each event type and what they depend on.
@@ -183,13 +183,13 @@ def _build_trial_spec(
         home_team_name = game_info.get("home_team")
         away_team_name = game_info.get("away_team")
         game_date = game_info.get("game_date")
-        LOGGER.info(
+        logger.info(
             "Found game info: %s on %s",
             f"{away_team_tricode} @ {home_team_tricode}",
             game_date,
         )
     else:
-        LOGGER.error(
+        logger.error(
             "Could not find game info for game_id=%s. Exiting.",
             params.game_id,
         )
@@ -240,20 +240,20 @@ def _build_trial_spec(
     # Extract event_types from data_streams if provided, otherwise use event_types field
     if params.data_streams:
         event_types_list = [ds.event_type for ds in params.data_streams]
-        LOGGER.info(
+        logger.info(
             "Extracted event types from data_streams config: %s",
             event_types_list,
         )
     elif params.event_types:
         event_types_list = params.event_types
-        LOGGER.info(
+        logger.info(
             "Using event_types from params: %s",
             event_types_list,
         )
     else:
         # Default event types
         event_types_list = ["raw_web_search", "injury_summary", "power_ranking", "expert_prediction"]
-        LOGGER.info(
+        logger.info(
             "Using default event types: %s",
             event_types_list,
         )
@@ -280,14 +280,14 @@ def _build_trial_spec(
                 processor = processor_class() if processor_class else None
                 websearch_store.register_stream(event_type, processor, source_event_types)
                 registered_event_types.add(event_type)
-                LOGGER.debug(
+                logger.debug(
                     "Registered event_type '%s' with processor %s (sources: %s)",
                     event_type,
                     processor_class.__name__ if processor_class else "None",
                     source_event_types,
                 )
         else:
-            LOGGER.warning(
+            logger.warning(
                 "Unknown event_type '%s' not in EVENT_TYPE_PROCESSOR_MAP, skipping processor registration",
                 event_type,
             )
@@ -465,7 +465,7 @@ def _build_trial_spec(
                 data_stream_ids=tuple(data_stream_ids),
             )
             operator_specs.append(operator_spec)
-            LOGGER.info(
+            logger.info(
                 "Created operator '%s' of class '%s' with stream subscriptions: %s",
                 op_config.id,
                 op_config.class_name,
@@ -480,7 +480,7 @@ def _build_trial_spec(
             config=default_op_config,
         )
         operator_specs.append(operator_spec)
-        LOGGER.info("Created event counter operator")
+        logger.info("Created event counter operator")
 
     # Create agent specs from agents config
     agent_specs = []

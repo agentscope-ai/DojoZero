@@ -22,7 +22,7 @@ from agentx.data.websearch._events import (
     WebSearchIntent,
 )
 
-logger = logging.getLogger("agentx.data.websearch._processors")
+logger = logging.getLogger(__name__)
 
 
 class InjurySummaryProcessor(DataProcessor):

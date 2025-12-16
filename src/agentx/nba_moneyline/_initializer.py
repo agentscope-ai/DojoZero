@@ -7,7 +7,7 @@ from agentx.data import WebSearchStore
 from agentx.data._streams import DataHubDataStream, StreamInitializer
 from agentx.data.websearch._events import WebSearchIntent
 
-LOGGER = logging.getLogger("agentx.nba_moneyline.initializer")
+logger = logging.getLogger(__name__)
 
 
 class NBAStreamInitializer:
@@ -76,13 +76,13 @@ class NBAStreamInitializer:
             queries = self._generate_default_queries()
         
         # Execute searches
-        LOGGER.info(
+        logger.info(
             "stream '%s' triggering initial searches to bootstrap event chain",
             stream.actor_id,
         )
         for query, intent in queries:
             try:
-                LOGGER.info(
+                logger.info(
                     "stream '%s' searching: '%s' (intent: %s)",
                     stream.actor_id,
                     query,
@@ -90,7 +90,7 @@ class NBAStreamInitializer:
                 )
                 await self._store.search(query, intent=intent)
             except Exception as e:
-                LOGGER.error(
+                logger.error(
                     "stream '%s' failed to search '%s': %s",
                     stream.actor_id,
                     query,
@@ -125,7 +125,7 @@ class NBAStreamInitializer:
                 try:
                     query_str = self._render_template(template)
                 except ValueError as e:
-                    LOGGER.error(
+                    logger.error(
                         "Failed to render query template '%s': %s. Skipping.",
                         template,
                         e,
@@ -134,14 +134,14 @@ class NBAStreamInitializer:
             elif literal_query:
                 # Use literal query as-is
                 if not isinstance(literal_query, str):
-                    LOGGER.warning(
+                    logger.warning(
                         "Skipping invalid search query (invalid 'query' field): %s",
                         query_dict,
                     )
                     continue
                 query_str = literal_query
             else:
-                LOGGER.warning(
+                logger.warning(
                     "Skipping invalid search query (missing 'template' or 'query' field): %s",
                     query_dict,
                 )
@@ -154,7 +154,7 @@ class NBAStreamInitializer:
                 try:
                     intent = WebSearchIntent(intent_str)
                 except (ValueError, TypeError):
-                    LOGGER.warning(
+                    logger.warning(
                         "Invalid intent '%s' in search query, using None",
                         intent_str,
                     )
