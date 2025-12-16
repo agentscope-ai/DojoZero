@@ -45,6 +45,8 @@ class NBAStore(DataStore):
         )
         # Track previous game status to detect transitions
         self._previous_game_status: dict[str, int] = {}  # game_id -> gameStatus
+        # Track last processed action number per game for deduplication
+        self._last_action_number: dict[str, int] = {}  # game_id -> last_action_number
     
     def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
         """Parse NBA API response into DataEvents."""
@@ -224,7 +226,17 @@ class NBAStore(DataStore):
             game_id = play_by_play_data.get("gameId", "")
             actions = play_by_play_data.get("actions", [])
             
-            for action in actions:
+            # Deduplication: filter out actions we've already processed
+            last_seen_action = self._last_action_number.get(game_id, -1)
+            new_actions = [
+                action for action in actions
+                if isinstance(action, dict) and action.get("actionNumber", 0) > last_seen_action
+            ]
+            
+            # Track the maximum action number we'll process in this batch
+            max_action_number = last_seen_action
+            
+            for action in new_actions:
                 # Parse timestamp from action
                 # NBA API actions have actionNumber, period, clock, etc.
                 # Try to parse timeActual if available, otherwise use current time
@@ -286,6 +298,13 @@ class NBAStore(DataStore):
                                 action_number=action_number,
                             )
                         )
+                
+                # Update max action number seen in this batch
+                max_action_number = max(max_action_number, action_number)
+            
+            # Update last processed action number for this game
+            if new_actions:
+                self._last_action_number[game_id] = max_action_number
         
         return events
     

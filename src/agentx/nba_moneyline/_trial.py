@@ -113,7 +113,7 @@ class NBAPreGameBettingTrialParams(BaseModel):
     # Operators configuration (optional, hierarchical)
     operators: list[OperatorConfig] | None = Field(default=None)
 
-    # Agent configuration (new structure with full agent configs)
+    # Agent configuration
     agents: list[dict[str, Any]] = Field(
         default_factory=lambda: [
             {
@@ -130,12 +130,6 @@ class NBAPreGameBettingTrialParams(BaseModel):
             "  - 'operators': list[str] (optional) - Operator IDs to register\n"
             "  - 'data_streams': list[str] (optional) - DataStream actor IDs to subscribe to"
         ),
-    )
-    
-    # Legacy: agent_ids for backward compatibility (deprecated)
-    agent_ids: list[str] | None = Field(
-        default=None,
-        description="Deprecated: Use 'agents' config instead. If provided, creates simple agents.",
     )
 
     # Polymarket configuration
@@ -488,12 +482,10 @@ def _build_trial_spec(
         operator_specs.append(operator_spec)
         LOGGER.info("Created event counter operator")
 
-    # Create agent specs from agents config (agent-centric)
+    # Create agent specs from agents config
     agent_specs = []
     
-    # Support both new agents config and legacy agent_ids
     if params.agents:
-        # New structure: agents config with full agent definitions
         for agent_dict in params.agents:
             agent_id = agent_dict.get("id")
             if not agent_id:
@@ -512,7 +504,7 @@ def _build_trial_spec(
                 raise ValueError(f"Unknown agent class: {agent_class_name}")
             
             # Create agent config dict
-            new_agent_config: DummyAgentConfig = {
+            agent_config: DummyAgentConfig = {
                 "actor_id": agent_id,
                 "operator_id": operator_ids[0] if operator_ids else "event_counter",
             }
@@ -520,30 +512,13 @@ def _build_trial_spec(
             agent_spec = AgentSpec[DummyAgentConfig](
                 actor_id=agent_id,
                 actor_cls=agent_cls,
-                config=new_agent_config,
+                config=agent_config,
                 operator_ids=tuple(operator_ids) if operator_ids else ("event_counter",),
                 data_stream_ids=tuple(data_stream_ids),
             )
             agent_specs.append(agent_spec)
-    elif params.agent_ids:
-        # Legacy: simple agent_ids list
-        for agent_id in params.agent_ids:
-            legacy_agent_config: DummyAgentConfig = {
-                "actor_id": agent_id,
-                "operator_id": "event_counter",
-            }
-            # Infer data_stream_ids from all created streams
-            all_stream_ids = [f"{et}_stream" for et in event_types_list]
-            agent_spec = AgentSpec[DummyAgentConfig](
-                actor_id=agent_id,
-                actor_cls=DummyAgent,
-                config=legacy_agent_config,
-                operator_ids=("event_counter",),
-                data_stream_ids=tuple(all_stream_ids),
-            )
-            agent_specs.append(agent_spec)
     else:
-        # Default: create one agent
+        # Default: create one agent if no agents specified
         default_agent_config: DummyAgentConfig = {
             "actor_id": "betting_agent",
             "operator_id": "event_counter",

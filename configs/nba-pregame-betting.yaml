@@ -1,7 +1,7 @@
 scenario:
   name: nba-pregame-betting
   config:
-    game_id: '0022501226'
+    game_id: '0022501227'
 
     hub:
       persistence_file: outputs/nba_betting_events.jsonl
