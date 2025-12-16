@@ -34,6 +34,7 @@ class PlayByPlayEvent(DataEvent):
     """
     
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    event_id: str = field(default="")  # Unique event ID: {game_id}_pbp_{action_number}
     game_id: str = field(default="")
     action_type: str = field(default="")  # Action type string (e.g., "rebound", "shot", "foul", "turnover", "substitution", "timeout")
     action_number: int = field(default=0)
