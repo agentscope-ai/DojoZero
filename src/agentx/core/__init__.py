@@ -50,7 +50,7 @@ from ._registry import (
     register_trial_builder,
     unregister_trial_builder,
 )
-from ._types import JSONDict, JSONPrimitive, JSONValue, StreamEvent
+from ._types import JSONDict, JSONPrimitive, JSONValue, QueryResult, StreamEvent
 
 __all__ = [
     "Agent",
@@ -101,5 +101,6 @@ __all__ = [
     "list_trial_builders",
     "register_trial_builder",
     "StreamEvent",
+    "QueryResult",
     "unregister_trial_builder",
 ]

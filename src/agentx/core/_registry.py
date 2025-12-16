@@ -17,7 +17,8 @@ from pydantic import BaseModel
 from ._dashboard import TrialSpec
 
 ParamModelT = TypeVar("ParamModelT", bound=BaseModel)
-TrialBuilderFn = Callable[[str, ParamModelT], TrialSpec]
+TrialBuilderFn = Callable[[str, ParamModelT], TrialSpec]  # trial_id, params
+RuntimeContextBuilder = Callable[["TrialSpec"], dict[str, Any]]
 
 
 @dataclass(slots=True)
@@ -29,10 +30,14 @@ class TrialBuilderDefinition(Generic[ParamModelT]):
     build_fn: TrialBuilderFn
     description: str | None = None
     example_params: ParamModelT | Mapping[str, Any] | None = None
+    context_builder: RuntimeContextBuilder | None = None
 
     def build(self, trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
         config = self.param_model.model_validate(payload)
-        return self.build_fn(trial_id, config)
+        spec = self.build_fn(trial_id, config)
+        # Automatically add builder_name to metadata
+        spec.metadata["builder_name"] = self.name
+        return spec
 
     def schema(self) -> Mapping[str, Any]:
         return self.param_model.model_json_schema()
@@ -68,9 +73,20 @@ def register_trial_builder(
     *,
     description: str | None = None,
     example_params: ParamModelT | Mapping[str, Any] | None = None,
+    context_builder: RuntimeContextBuilder | None = None,
     overwrite: bool = False,
 ) -> None:
-    """Register *builder* under *name* for CLI discovery."""
+    """Register *builder* under *name* for CLI discovery.
+    
+    Args:
+        name: Builder identifier
+        param_model: Pydantic model for trial parameters
+        builder: Function that builds TrialSpec from params
+        description: Optional description of the builder
+        example_params: Optional example parameters
+        context_builder: Optional function to build runtime context (DataHub/Store instances)
+        overwrite: Whether to overwrite existing registration
+    """
 
     if not name:
         raise ValueError("builder name cannot be empty")
@@ -84,6 +100,7 @@ def register_trial_builder(
         build_fn=builder,
         description=description,
         example_params=example_params,
+        context_builder=context_builder,
     )
 
 

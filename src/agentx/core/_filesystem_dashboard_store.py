@@ -206,12 +206,16 @@ class FileSystemDashboardStore(DashboardStore):
         payload = self._serialize_actor_spec_common(spec)
         if spec.agent_ids:
             payload["agent_ids"] = list(spec.agent_ids)
+        if spec.data_stream_ids:
+            payload["data_stream_ids"] = list(spec.data_stream_ids)
         return payload
 
     def _serialize_agent_spec(self, spec: AgentSpec[Any]) -> dict[str, Any]:
         payload = self._serialize_actor_spec_common(spec)
         if spec.operator_ids:
             payload["operator_ids"] = list(spec.operator_ids)
+        if spec.data_stream_ids:
+            payload["data_stream_ids"] = list(spec.data_stream_ids)
         return payload
 
     def _serialize_data_stream_spec(self, spec: DataStreamSpec[Any]) -> dict[str, Any]:
@@ -235,12 +239,14 @@ class FileSystemDashboardStore(DashboardStore):
     ) -> OperatorSpec[Any]:
         base_kwargs = self._deserialize_actor_spec_common(payload)
         agent_ids = tuple(str(value) for value in payload.get("agent_ids", ()))
-        return OperatorSpec(agent_ids=agent_ids, **base_kwargs)
+        data_stream_ids = tuple(str(value) for value in payload.get("data_stream_ids", ()))
+        return OperatorSpec(agent_ids=agent_ids, data_stream_ids=data_stream_ids, **base_kwargs)
 
     def _deserialize_agent_spec(self, payload: Mapping[str, Any]) -> AgentSpec[Any]:
         base_kwargs = self._deserialize_actor_spec_common(payload)
         operator_ids = tuple(str(value) for value in payload.get("operator_ids", ()))
-        return AgentSpec(operator_ids=operator_ids, **base_kwargs)
+        data_stream_ids = tuple(str(value) for value in payload.get("data_stream_ids", ()))
+        return AgentSpec(operator_ids=operator_ids, data_stream_ids=data_stream_ids, **base_kwargs)
 
     def _deserialize_data_stream_spec(
         self, payload: Mapping[str, Any]

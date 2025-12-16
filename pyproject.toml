@@ -15,6 +15,7 @@ authors = [
 dependencies = [
     "PyYAML>=6.0",
     "pydantic>=2.12.4",
+    "aiohttp>=3.9.0",
 ]
 
 [project.scripts]
@@ -35,6 +36,11 @@ dev = [
     "black>=23.0.0",
     "pre-commit>=3.0.0",
     "ray>=2.51.1",
+    "nba_api",
+    "python-dotenv",
+    "tavily-python",
+    "dashscope",
+    "py-clob-client",
 ]
 
 [tool.ruff]

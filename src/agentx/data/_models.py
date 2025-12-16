@@ -1,0 +1,259 @@
+"""Core data models: DataEvent and DataFact."""
+
+from abc import ABC
+from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Callable, TypeVar
+
+# Type variable for event classes
+EventT = TypeVar("EventT", bound="DataEvent")
+
+# Event registry for reconstruction during replay
+_EVENT_REGISTRY: dict[str, type["DataEvent"]] = {}
+
+
+class EventTypes(str, Enum):
+    """Centralized event type identifiers.
+
+    These constants should be used wherever event_type strings are compared
+    (e.g., in operators, processors, or stores) to avoid magic strings.
+
+    Organized by domain for maintainability:
+    - Polymarket/betting: odds updates
+    - NBA: game lifecycle events
+    - Web search: raw search results and processed summaries
+    """
+
+    # =========================================================================
+    # Polymarket / Betting
+    # =========================================================================
+    ODDS_UPDATE = "odds_update"
+
+    # =========================================================================
+    # NBA Game Lifecycle
+    # =========================================================================
+    GAME_START = "game_start"
+    GAME_RESULT = "game_result"
+    GAME_UPDATE = "game_update"
+    PLAY_BY_PLAY = "play_by_play"
+    IN_GAME_CRITICAL = "in_game_critical"
+
+    # =========================================================================
+    # Web Search
+    # =========================================================================
+    # Raw search results from API
+    RAW_WEB_SEARCH = "raw_web_search"
+
+    # Processed summaries (generated from raw_web_search)
+    INJURY_SUMMARY = "injury_summary"
+    POWER_RANKING = "power_ranking"
+    EXPERT_PREDICTION = "expert_prediction"
+
+
+def register_event(
+    event_class: type[EventT] | None = None,
+) -> type[EventT] | Callable[[type[EventT]], type[EventT]]:
+    """Decorator to register an event class in the registry.
+    
+    Usage:
+        @register_event
+        @dataclass(slots=True, frozen=True)
+        class MyEvent(DataEvent):
+            ...
+    
+    Or with explicit event_type:
+        @register_event
+        @dataclass(slots=True, frozen=True)
+        class MyEvent(DataEvent):
+            @property
+            def event_type(self) -> str:
+                return "custom_type"
+    
+    Args:
+        event_class: Event class to register (when used as decorator)
+        
+    Returns:
+        The decorated class
+    """
+    def decorator(cls: type[EventT]) -> type[EventT]:
+        # Create a minimal instance to get the actual event_type
+        # All event classes have default values for their fields
+        try:
+            instance = cls()
+            event_type = instance.event_type
+            _EVENT_REGISTRY[event_type] = cls
+        except Exception:
+            # Fallback: use class name if instantiation fails
+            class_name = cls.__name__
+            event_type = class_name.lower().replace("event", "")
+            _EVENT_REGISTRY[event_type] = cls
+        return cls
+    
+    # Support both @register_event and @register_event()
+    if event_class is None:
+        return decorator
+    else:
+        return decorator(event_class)
+
+
+def get_event_class(event_type: str) -> type["DataEvent"] | None:
+    """Get event class by event type.
+    
+    Args:
+        event_type: Event type string
+        
+    Returns:
+        Event class or None if not found
+    """
+    return _EVENT_REGISTRY.get(event_type)
+
+
+class DataEventFactory:
+    """Factory for creating DataEvent instances from dictionaries.
+    
+    Handles automatic dispatch to the correct event subclass based on event_type.
+    """
+    
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> "DataEvent | None":
+        """Create event from dictionary by automatically dispatching to the correct subclass.
+        
+        Uses the event registry to look up the correct event class based on 'event_type'.
+        This is useful when you don't know the specific event class ahead of time.
+        
+        Args:
+            data: Dictionary containing event data (must include 'event_type')
+            
+        Returns:
+            Instance of the correct event subclass, or None if event_type not found
+            
+        Example:
+            >>> data = {"event_type": "raw_web_search", "query": "test", ...}
+            >>> event = DataEventFactory.from_dict(data)
+            >>> assert isinstance(event, RawWebSearchEvent)
+        """
+        event_type = data.get("event_type")
+        if not event_type:
+            return None
+        
+        event_class = get_event_class(event_type)
+        if not event_class:
+            return None
+        
+        # Use the class's from_dict method
+        return event_class.from_dict(data)
+
+
+@dataclass(slots=True, frozen=True)
+class DataEvent(ABC):
+    """Base class for push-based incremental updates (events).
+    
+    Events represent raw or processed data updates that flow through the system.
+    They are timestamped and typed for proper routing and processing.
+    """
+    
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    
+    @property
+    def event_type(self) -> str:
+        """Return the event type identifier."""
+        return self.__class__.__name__.lower().replace("event", "")
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert event to dictionary for serialization."""
+        # Use dataclasses.asdict() to handle slots=True dataclasses
+        event_dict = asdict(self)
+        return {
+            "event_type": self.event_type,
+            "timestamp": self.timestamp.isoformat(),
+            **{k: v for k, v in event_dict.items() if k != "timestamp"},
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DataEvent":
+        """Create event from dictionary.
+        
+        When called on a specific subclass (e.g., RawWebSearchEvent.from_dict(data)),
+        creates an instance of that subclass.
+        
+        Args:
+            data: Dictionary containing event data (may include 'event_type' and extra fields)
+            
+        Returns:
+            Instance of the class this method is called on
+            
+        Note:
+            Only fields defined on the dataclass are used. Extra fields in the dictionary
+            are ignored to support forward compatibility (e.g., events from newer versions).
+        """
+        # Get field names defined on this dataclass
+        field_names = {f.name for f in fields(cls)}
+        
+        # Filter data to only include fields defined on the dataclass
+        # This prevents TypeError when dictionary contains extra fields
+        event_data = {k: v for k, v in data.items() if k in field_names}
+        
+        # Parse timestamp if it's a string
+        if "timestamp" in event_data:
+            if isinstance(event_data["timestamp"], str):
+                event_data["timestamp"] = datetime.fromisoformat(event_data["timestamp"])
+        
+        return cls(**event_data)
+
+
+@dataclass(slots=True, frozen=True)
+class DataFact(ABC):
+    """Base class for pull-based state snapshots (facts).
+    
+    Facts represent processed/aggregated data that agents can query.
+    They are computed from events by processors.
+    """
+    
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    @property
+    def fact_type(self) -> str:
+        """Return the fact type identifier."""
+        return self.__class__.__name__.lower().replace("fact", "")
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert fact to dictionary for serialization."""
+        # Use dataclasses.asdict() to handle slots=True dataclasses
+        fact_dict = asdict(self)
+        return {
+            "fact_type": self.fact_type,
+            "timestamp": self.timestamp.isoformat(),
+            **{k: v for k, v in fact_dict.items() if k != "timestamp"},
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DataFact":
+        """Create fact from dictionary.
+        
+        When called on a specific subclass, creates an instance of that subclass.
+        
+        Args:
+            data: Dictionary containing fact data (may include 'fact_type' and extra fields)
+            
+        Returns:
+            Instance of the class this method is called on
+            
+        Note:
+            Only fields defined on the dataclass are used. Extra fields in the dictionary
+            are ignored to support forward compatibility (e.g., facts from newer versions).
+        """
+        # Get field names defined on this dataclass
+        field_names = {f.name for f in fields(cls)}
+        
+        # Filter data to only include fields defined on the dataclass
+        # This prevents TypeError when dictionary contains extra fields
+        fact_data = {k: v for k, v in data.items() if k in field_names}
+        
+        # Parse timestamp if it's a string
+        if "timestamp" in fact_data:
+            if isinstance(fact_data["timestamp"], str):
+                fact_data["timestamp"] = datetime.fromisoformat(fact_data["timestamp"])
+        
+        return cls(**fact_data)

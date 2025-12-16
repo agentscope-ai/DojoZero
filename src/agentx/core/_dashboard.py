@@ -134,10 +134,12 @@ class OperatorSpec(ActorSpec[ConfigSpecT]):
     """Specialized :class:`ActorSpec` for operator actors."""
 
     agent_ids: Sequence[str] = field(default_factory=tuple)
+    data_stream_ids: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.agent_ids = tuple(self.agent_ids)
+        self.data_stream_ids = tuple(self.data_stream_ids)
 
 
 @dataclass
@@ -145,10 +147,12 @@ class AgentSpec(ActorSpec[ConfigSpecT]):
     """Specialized :class:`ActorSpec` for agent actors."""
 
     operator_ids: Sequence[str] = field(default_factory=tuple)
+    data_stream_ids: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.operator_ids = tuple(self.operator_ids)
+        self.data_stream_ids = tuple(self.data_stream_ids)
 
 
 @dataclass
@@ -632,6 +636,18 @@ class Dashboard:
     async def _build_runtime(
         self, spec: TrialSpec, record: TrialRecord
     ) -> TrialRuntime:
+        # Build runtime context with DataHub and Store instances
+        # Extract from stream configs to recreate hub/store instances
+        context = self._build_runtime_context(spec)
+        
+        # Call startup function if provided by context builder (e.g., to start DataStore polling)
+        if "_startup" in context and callable(context["_startup"]):
+            startup_fn = context["_startup"]
+            if asyncio.iscoroutinefunction(startup_fn):
+                await startup_fn()
+            else:
+                startup_fn()
+        
         registry: Dict[str, ActorRuntime[Any]] = {}
         agents: Dict[str, Agent] = {}
         operators: Dict[str, Operator] = {}
@@ -641,6 +657,7 @@ class Dashboard:
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.OPERATOR,
+                context=context,
             )
             self._register_actor_runtime(registry, runtime)
             operator_instance = runtime.instance
@@ -657,6 +674,7 @@ class Dashboard:
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.AGENT,
+                context=context,
             )
             self._register_actor_runtime(registry, runtime)
             agent_instance = runtime.instance
@@ -672,6 +690,7 @@ class Dashboard:
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.DATA_STREAM,
+                context=context,
             )
             self._register_actor_runtime(registry, runtime)
             stream_instance = runtime.instance
@@ -696,12 +715,42 @@ class Dashboard:
         self,
         spec: ActorSpec[Any],
         role: ActorRole,
+        context: dict[str, Any] | None = None,
     ) -> ActorRuntime[Any]:
         try:
-            handler = await self._runtime_provider.create_handler(spec)
+            handler = await self._runtime_provider.create_handler(spec, context=context)
         except Exception as exc:  # pragma: no cover - defensive translation
             raise DashboardError(str(exc)) from exc
         return ActorRuntime(spec=spec, handler=handler, role=role)
+    
+    def _build_runtime_context(self, spec: TrialSpec) -> dict[str, Any]:
+        """Build runtime context using context builder from trial builder registry.
+        
+        If the trial builder provides a context_builder, use it. Otherwise,
+        return empty context for trials without data infrastructure.
+        
+        Args:
+            spec: Trial specification
+            
+        Returns:
+            Context dictionary (typically with 'data_hubs' and 'stores' keys)
+        """
+        # Try to get context builder from trial builder registry
+        # Extract builder name from spec metadata
+        builder_name = spec.metadata.get("builder_name")
+        
+        if builder_name and isinstance(builder_name, str):
+            try:
+                from ._registry import get_trial_builder_definition
+                builder_def = get_trial_builder_definition(builder_name)
+                if builder_def.context_builder:
+                    return builder_def.context_builder(spec)
+            except Exception:
+                # Builder not found or no context builder - fall through to default
+                pass
+        
+        # Default: empty context for trials without data infrastructure
+        return {}
 
     def _register_actor_runtime(
         self, registry: Dict[str, ActorRuntime[Any]], runtime: ActorRuntime[Any]
@@ -720,6 +769,11 @@ class Dashboard:
     ) -> None:
         await self._wire_operator_agents(spec.operators, operators, agents)
         await self._wire_agent_operators(spec.agents, agents, operators)
+        # Agent-centric wiring: agents register themselves with streams
+        await self._wire_agent_streams(spec.agents, agents, data_streams)
+        # Operator-centric wiring: operators register themselves with streams
+        await self._wire_operator_streams(spec.operators, operators, data_streams)
+        # Legacy stream-centric wiring (for backward compatibility)
         await self._wire_stream_consumers(
             spec.data_streams,
             data_streams,
@@ -785,6 +839,76 @@ class Dashboard:
                 actor_id=agent_spec.actor_id,
             )
 
+    async def _wire_agent_streams(
+        self,
+        agent_specs: Sequence[AgentSpec[Any]],
+        agents: Mapping[str, Agent[Any]],
+        data_streams: Mapping[str, DataStream[Any]],
+    ) -> None:
+        """Wire agents to data streams (agent-centric approach).
+        
+        Agents declare which streams they subscribe to via data_stream_ids.
+        """
+        for agent_spec in agent_specs:
+            if not agent_spec.data_stream_ids:
+                continue
+            agent = agents.get(agent_spec.actor_id)
+            if agent is None:  # pragma: no cover - defensive
+                raise DashboardError(
+                    f"agent '{agent_spec.actor_id}' missing from runtime registry"
+                )
+            dependencies: list[DataStream[Any]] = []
+            for stream_id in agent_spec.data_stream_ids:
+                stream = data_streams.get(stream_id)
+                if stream is None:
+                    raise DashboardError(
+                        f"agent '{agent_spec.actor_id}' requires data stream '{stream_id}'"
+                    )
+                dependencies.append(stream)
+            # Register agent as consumer of these streams
+            for stream in dependencies:
+                await self._invoke_registration(
+                    stream,
+                    "register_consumers",
+                    (agent,),
+                    actor_id=stream.actor_id,
+                )
+
+    async def _wire_operator_streams(
+        self,
+        operator_specs: Sequence[OperatorSpec[Any]],
+        operators: Mapping[str, Operator[Any]],
+        data_streams: Mapping[str, DataStream[Any]],
+    ) -> None:
+        """Wire operators to data streams (operator-centric approach).
+        
+        Operators declare which streams they subscribe to via data_stream_ids.
+        """
+        for operator_spec in operator_specs:
+            if not operator_spec.data_stream_ids:
+                continue
+            operator = operators.get(operator_spec.actor_id)
+            if operator is None:  # pragma: no cover - defensive
+                raise DashboardError(
+                    f"operator '{operator_spec.actor_id}' missing from runtime registry"
+                )
+            dependencies: list[DataStream[Any]] = []
+            for stream_id in operator_spec.data_stream_ids:
+                stream = data_streams.get(stream_id)
+                if stream is None:
+                    raise DashboardError(
+                        f"operator '{operator_spec.actor_id}' requires data stream '{stream_id}'"
+                    )
+                dependencies.append(stream)
+            # Register operator as consumer of these streams
+            for stream in dependencies:
+                await self._invoke_registration(
+                    stream,
+                    "register_consumers",
+                    (operator,),
+                    actor_id=stream.actor_id,
+                )
+
     async def _wire_stream_consumers(
         self,
         stream_specs: Sequence[DataStreamSpec[Any]],
@@ -792,6 +916,11 @@ class Dashboard:
         agents: Mapping[str, Agent[Any]],
         operators: Mapping[str, Operator[Any]],
     ) -> None:
+        """Wire streams to consumers (stream-centric approach, legacy).
+        
+        Only used if consumer_ids are explicitly set on streams.
+        Agent-centric wiring (via agent.data_stream_ids) takes precedence.
+        """
         for stream_spec in stream_specs:
             if not stream_spec.consumer_ids:
                 continue

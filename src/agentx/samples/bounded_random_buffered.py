@@ -5,6 +5,7 @@ buffered agent that batches incoming events. The buffer drains on a fixed
 interval so the operator's counter increments in bursts rather than per-event.
 """
 
+from agentx.samples.bounded_random import BoundedRandomStringDataStreamConfig
 import asyncio
 import logging
 from typing import Any, Mapping, Protocol, Sequence, cast
@@ -249,7 +250,7 @@ def _build_buffered_trial_spec(
     }
     if params.seed is not None:
         stream_config["seed"] = params.seed
-    stream_spec = DataStreamSpec(
+    stream_spec = DataStreamSpec[BoundedRandomStringDataStreamConfig](
         actor_id=params.stream_id,
         actor_cls=BoundedRandomStringDataStream,
         config=stream_config,

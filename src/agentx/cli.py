@@ -33,7 +33,7 @@ try:  # Optional Ray dependency
 except ImportError:  # pragma: no cover - ray is optional
     RayActorRuntimeProvider = None  # type: ignore[assignment]
 
-DEFAULT_IMPORTS: tuple[str, ...] = ("agentx.samples",)
+DEFAULT_IMPORTS: tuple[str, ...] = ("agentx.samples", "agentx.nba_moneyline")
 DEFAULT_CLI_CONFIG: Mapping[str, Any] = {
     "store": {
         "kind": "filesystem",
@@ -42,7 +42,7 @@ DEFAULT_CLI_CONFIG: Mapping[str, Any] = {
     "runtime": {
         "kind": "local",
     },
-    "imports": ["agentx.samples"],
+    "imports": ["agentx.samples", "agentx.nba_moneyline"],
 }
 
 RUN_USAGE_EXAMPLES = dedent(
@@ -81,7 +81,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-default-imports",
         action="store_true",
-        help="Skip importing built-in helper modules (e.g. agentx.samples).",
+        help="Skip importing built-in helper modules (e.g. samples).",
     )
     parser.add_argument(
         "--log-level",
