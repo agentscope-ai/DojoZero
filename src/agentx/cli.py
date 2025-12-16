@@ -26,6 +26,7 @@ from agentx.core import (
     get_trial_builder_definition,
     list_trial_builders,
 )
+from agentx.data import DataHub
 from agentx.core import TrialBuilderNotFoundError as _TrialBuilderNotFoundError
 
 try:  # Optional Ray dependency
@@ -139,6 +140,34 @@ def _build_parser() -> argparse.ArgumentParser:
         const="",
         metavar="PATH",
         help="Write an example YAML spec to PATH (defaults to <name>_example.yaml)",
+    )
+
+    replay_parser = subparsers.add_parser(
+        "replay",
+        help="Replay events from a file for backtesting",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    replay_parser.add_argument(
+        "--replay-file",
+        type=Path,
+        required=True,
+        help="Path to JSONL replay file containing events",
+    )
+    replay_parser.add_argument(
+        "--params",
+        type=Path,
+        required=True,
+        help="Path to the trial-builder params YAML (required for agent/stream setup)",
+    )
+    replay_parser.add_argument(
+        "--trial-id",
+        help="Override the trial id (defaults to a random UUID)",
+    )
+    replay_parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="Replay speed multiplier (e.g., 2.0 for 2x speed, 0.5 for half speed). Default: 1.0 (real-time)",
     )
 
     # Placeholder parser for the upcoming FastAPI server command.
@@ -498,6 +527,186 @@ async def _run_command(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _replay_command(args: argparse.Namespace) -> int:
+    """Handle replay command."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    
+    config_payload = _load_cli_config(args.setting)
+    params_payload = _load_yaml_mapping(args.params, label="params")
+    
+    config_imports = _gather_imports(config_payload)
+    params_imports = _gather_imports(params_payload)
+    requested_imports = list(args.import_modules or [])
+    modules_to_import: list[str] = []
+    if not args.no_default_imports:
+        modules_to_import.extend(DEFAULT_IMPORTS)
+    modules_to_import.extend(config_imports)
+    modules_to_import.extend(params_imports)
+    modules_to_import.extend(requested_imports)
+    _import_modules(modules_to_import)
+    
+    store = _create_store(config_payload)
+    runtime_provider = _create_runtime_provider(config_payload)
+    dashboard = Dashboard(store=store, runtime_provider=runtime_provider)
+    
+    trial_id = args.trial_id or uuid4().hex
+    replay_file = args.replay_file
+    speed = args.speed
+    
+    if not replay_file.exists():
+        raise AgentXCLIError(f"Replay file not found: {replay_file}")
+    
+    if speed <= 0:
+        raise AgentXCLIError(f"Speed must be positive, got: {speed}")
+    
+    # Prepare trial spec from params
+    spec = _prepare_trial_spec(trial_id, params_payload)
+    
+    # Extract builder_name from scenario (it's not in metadata by default)
+    scenario = params_payload.get("scenario", {})
+    builder_name = scenario.get("name") if isinstance(scenario, dict) else None
+    if not builder_name:
+        raise AgentXCLIError("Could not determine builder name from params")
+    
+    # Add replay metadata
+    spec.metadata["replay_file"] = str(replay_file)
+    spec.metadata["replay_mode"] = True
+    spec.metadata["replay_speed"] = speed
+    spec.metadata["builder_name"] = builder_name  # Ensure it's in metadata
+    
+    # Extract hub_id from spec (from stream configs)
+    hub_id = None
+    for stream_spec in spec.data_streams:
+        config = stream_spec.config
+        if config.get("hub_id"):
+            hub_id = config["hub_id"]
+            break
+    
+    if not hub_id:
+        # Fallback: use default hub_id from params or metadata
+        hub_id = spec.metadata.get("hub_id", "data_hub")
+    
+    # Create DataHub in replay mode (disable persistence, will load events from file)
+    hub = DataHub(
+        hub_id=hub_id,
+        persistence_file=None,  # Not persisting during replay
+        enable_persistence=False,
+    )
+    
+    # Load events into hub
+    LOGGER.info("Loading events from replay file: %s", replay_file)
+    await hub.start_replay(str(replay_file))
+    
+    # Create a replay-specific context builder that returns our replay hub
+    # We'll temporarily override the context builder in the trial builder registry
+    from agentx.core._registry import get_trial_builder_definition
+    
+    try:
+        builder_def = get_trial_builder_definition(builder_name)
+        original_context_builder = builder_def.context_builder
+        
+        # Create replay context builder
+        def replay_context_builder(spec: TrialSpec) -> dict[str, Any]:
+            """Replay-specific context builder that provides replay hub, no stores."""
+            return {
+                "data_hubs": {hub_id: hub},
+                "stores": {},  # No stores in replay mode
+            }
+        
+        # Temporarily override context builder
+        builder_def.context_builder = replay_context_builder
+        
+        # Launch trial (will use our replay context)
+        LOGGER.info("Launching trial '%s' in replay mode", trial_id)
+        status = await dashboard.launch_trial(spec)
+        
+        # Restore original context builder
+        builder_def.context_builder = original_context_builder
+    except Exception as e:
+        LOGGER.error("Failed to set up replay context: %s", e)
+        raise AgentXCLIError(f"Failed to set up replay: {e}") from e
+    
+    # Start replay with speed control and progress tracking
+    LOGGER.info("Starting replay at %.1fx speed", speed)
+    await _replay_events_with_progress(hub, speed)
+    
+    # Stop trial
+    LOGGER.info("Stopping trial '%s'", trial_id)
+    await dashboard.stop_trial(trial_id)
+    hub.stop_replay()
+    
+    LOGGER.info("Replay complete for trial '%s'", trial_id)
+    return 0
+
+
+
+
+async def _replay_events_with_progress(hub: DataHub, speed: float) -> None:
+    """Replay events with speed control and progress tracking.
+    
+    Args:
+        hub: DataHub instance in replay mode
+        speed: Speed multiplier (1.0 = real-time, 2.0 = 2x speed, etc.)
+    """
+    from datetime import datetime, timezone
+    
+    if not hub._replay_mode or not hub._replay_events:
+        LOGGER.warning("Hub is not in replay mode or has no events")
+        return
+    
+    total_events = len(hub._replay_events)
+    if total_events == 0:
+        LOGGER.info("No events to replay")
+        return
+    
+    start_time = datetime.now(timezone.utc)
+    last_event_time: datetime | None = None
+    
+    LOGGER.info("Replaying %d events at %.1fx speed", total_events, speed)
+    
+    # Use replay_next for consistency
+    event_count = 0
+    while True:
+        event = await hub.replay_next()
+        if event is None:
+            break
+        
+        event_count += 1
+        
+        # Calculate delay based on speed (only if we have a previous event)
+        if last_event_time is not None and speed > 0:
+            # Calculate time difference between events
+            time_diff = (event.timestamp - last_event_time).total_seconds()
+            # Adjust for speed
+            delay = time_diff / speed
+            if delay > 0:
+                await asyncio.sleep(delay)
+        
+        # Progress tracking (every 10% or every 100 events, whichever is more frequent)
+        if event_count % max(1, min(100, total_events // 10)) == 0 or event_count == total_events:
+            percent = 100.0 * event_count / total_events
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+            rate = event_count / elapsed if elapsed > 0 else 0
+            LOGGER.info(
+                "Progress: %d/%d events (%.1f%%) | Rate: %.1f events/sec",
+                event_count,
+                total_events,
+                percent,
+                rate,
+            )
+        
+        last_event_time = event.timestamp
+    
+    elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+    LOGGER.info(
+        "Replay complete: %d events in %.1f seconds (%.1f events/sec)",
+        event_count,
+        elapsed,
+        event_count / elapsed if elapsed > 0 else 0,
+    )
+
+
 def _list_builders_command(args: argparse.Namespace) -> int:
     modules_to_import: list[str] = []
     if not args.no_default_imports:
@@ -552,6 +761,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "run":
             return asyncio.run(_run_command(args))
+        if args.command == "replay":
+            return asyncio.run(_replay_command(args))
         if args.command == "list-builders":
             return _list_builders_command(args)
         if args.command == "get-builder":
