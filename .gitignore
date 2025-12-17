@@ -154,4 +154,5 @@ Thumbs.db
 agentx-store
 
 # Data
-outputs/
+/outputs/
+/data/

@@ -271,17 +271,16 @@ class GameUpdateEvent(DataEvent):
     """Game update event with full scoreboard snapshot.
     
     Contains:
-    - Game status and timing info
     - Team basic info (name, city, tricode, score, wins, losses)
     - Team stats (period scores, timeouts, bonus status)
-    - Game leaders (top scorer, rebounder, assist leader for each team)
+    - All player stats (complete list of players with their statistics)
+    
+    Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay.
     """
     
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     event_id: str = field(default="")
     game_id: str = field(default="")
-    game_status: int = field(default=0)  # 1=Not Started, 2=In Progress, 3=Finished
-    game_status_text: str = field(default="")
     period: int = field(default=0)
     game_clock: str = field(default="")
     game_time_utc: str = field(default="")  # ISO format datetime string
@@ -291,9 +290,9 @@ class GameUpdateEvent(DataEvent):
     away_team: dict[str, Any] = field(
         default_factory=dict
     )  # Team info: teamId, teamName, teamCity, teamTricode, score, wins, losses, seed, timeoutsRemaining, inBonus, periods (quarter scores)
-    game_leaders: dict[str, Any] = field(
+    player_stats: dict[str, Any] = field(
         default_factory=dict
-    )  # Game leaders: home (points, rebounds, assists leaders) and away (points, rebounds, assists leaders) with player names and stats
+    )  # All player stats: {"home": [list of player dicts with statistics], "away": [list of player dicts with statistics]}
     
     @property
     def event_type(self) -> str:

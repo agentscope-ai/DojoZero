@@ -23,40 +23,10 @@ class NBAExternalAPI(ExternalAPI):
         game_id = params.get("game_id", "game_123") if params else "game_123"
         
         if endpoint == "scoreboard":
-            # Query scoreboard using ScoreboardV3
-            game_id_param = params.get("game_id") if params else None
-            game_date = params.get("game_date") if params else None
-            
-            # If game_date not provided, use today
-            if not game_date:
-                game_date = datetime.now().strftime("%Y-%m-%d")
-            
-            try:
-                from nba_api.stats.endpoints import scoreboardv3
-                
-                proxy = get_proxy()
-                if proxy:
-                    board = scoreboardv3.ScoreboardV3(game_date=game_date, proxy=proxy)
-                else:
-                    board = scoreboardv3.ScoreboardV3(game_date=game_date)
-                
-                games_data = board.get_dict()
-                
-                if not games_data or "scoreboard" not in games_data:
-                    return {"scoreboard": []}
-                
-                scoreboard_data = games_data["scoreboard"]
-                games_list = scoreboard_data.get("games", [])
-                
-                # If game_id specified, filter to that game
-                if game_id_param:
-                    games_list = [g for g in games_list if g.get("gameId") == game_id_param]
-                
-                return {"scoreboard": games_list}
-            except ImportError as e:
-                raise RuntimeError(f"nba_api package not available: {e}") from e
-            except Exception as e:
-                raise RuntimeError(f"Error fetching scoreboard data: {e}") from e
+            # DEPRECATED: Use boxscore endpoint instead
+            # This is kept for backward compatibility but will be removed
+            # For new code, use "boxscore" endpoint
+            return {"scoreboard": []}
         elif endpoint == "play_by_play":
             # Fetch play-by-play data from NBA API
             game_id_param = params.get("game_id") if params else game_id
@@ -126,6 +96,41 @@ class NBAExternalAPI(ExternalAPI):
                 logger = logging.getLogger("agentx.data.nba._api")
                 logger.warning(f"Error fetching play-by-play data for game {game_id_param}: {e}")
                 return {"play_by_play": {"gameId": game_id_param, "actions": []}}
+        elif endpoint == "boxscore":
+            # Fetch box score data using BoxScoreTraditionalV3
+            # This replaces ScoreboardV3 and provides complete game data including all leaders
+            game_id_param = params.get("game_id") if params else None
+            
+            if not game_id_param:
+                return {"boxscore": {}}
+            
+            try:
+                from nba_api.stats.endpoints import boxscoretraditionalv3
+                
+                proxy = get_proxy()
+                if proxy:
+                    box_score = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id_param, proxy=proxy)
+                else:
+                    box_score = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id_param)
+                
+                # Get full dict response (not just dataframes)
+                box_score_dict = box_score.get_dict()
+                
+                if not box_score_dict or "boxScoreTraditional" not in box_score_dict:
+                    return {"boxscore": {}}
+                
+                # Return full boxscore data including teams, players, and statistics
+                return {
+                    "boxscore": box_score_dict["boxScoreTraditional"]
+                }
+            except ImportError as e:
+                raise RuntimeError(f"nba_api package not available: {e}") from e
+            except Exception as e:
+                # Log but return empty result to avoid crashing the poll loop
+                import logging
+                logger = logging.getLogger("agentx.data.nba._api")
+                logger.warning(f"Error fetching boxscore data for game {game_id_param}: {e}")
+                return {"boxscore": {}}
         return {}
     
 
