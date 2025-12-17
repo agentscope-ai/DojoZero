@@ -43,6 +43,7 @@ class GameTrialManager:
         check_interval_seconds: float = 60.0,
         data_dir: Path | None = None,
         game_date: str | None = None,
+        log_level: str = "INFO",
     ):
         """Initialize game trial manager.
 
@@ -54,6 +55,7 @@ class GameTrialManager:
             data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
                       If None, use defaults: configs/ and outputs/
             game_date: Date string (YYYY-MM-DD) for date-organized structure
+            log_level: Logging level for subprocess (default: INFO)
         """
         self.game = game
         self.game_id = str(game.get("gameId", ""))
@@ -62,6 +64,7 @@ class GameTrialManager:
         self.check_interval_seconds = check_interval_seconds
         self.data_dir = data_dir
         self.game_date = game_date
+        self.log_level = log_level
 
         # Parse game time
         self.game_time_utc: datetime | None = None
@@ -254,10 +257,13 @@ class GameTrialManager:
             self.generate_config_file()
 
         # Build agentx run command
+        # Note: --log-level is a top-level argument, must come before "run"
         cmd = [
             sys.executable,
             "-m",
             "agentx.cli",
+            "--log-level",
+            self.log_level,
             "run",
             "--params",
             str(self.config_file),
@@ -455,6 +461,7 @@ async def collect_game_for_id(
     pre_start_hours: float = 2.0,
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
+    log_level: str = "INFO",
 ) -> list[GameTrialManager]:
     """Collect data for a specific game by ID.
 
@@ -509,6 +516,7 @@ async def collect_game_for_id(
         check_interval_seconds=check_interval_seconds,
         data_dir=data_dir,
         game_date=game_date_str if data_dir else None,
+        log_level=log_level,
     )
     manager.generate_config_file()
     manager.log_status()
@@ -522,6 +530,7 @@ async def collect_games_for_date(
     pre_start_hours: float = 2.0,
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
+    log_level: str = "INFO",
 ) -> list[GameTrialManager]:
     """Collect data for all games on a given date.
 
@@ -565,6 +574,7 @@ async def collect_games_for_date(
             check_interval_seconds=check_interval_seconds,
             data_dir=data_dir,
             game_date=date_str if data_dir else None,  # Pass date_str when data_dir is set
+            log_level=log_level,
         )
         managers.append(manager)
 
@@ -698,6 +708,7 @@ def main() -> int:
                     pre_start_hours=args.pre_start_hours,
                     check_interval_seconds=args.check_interval,
                     data_dir=args.data_dir,
+                    log_level=args.log_level,
                 )
             )
         else:
@@ -714,6 +725,7 @@ def main() -> int:
                     pre_start_hours=args.pre_start_hours,
                     check_interval_seconds=args.check_interval,
                     data_dir=args.data_dir,
+                    log_level=args.log_level,
                 )
             )
 

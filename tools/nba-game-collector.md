@@ -20,7 +20,12 @@ python tools/nba_game_collector.py --data-dir data/nba-betting --date 2025-12-16
 - `--base-config`: Base config template (default: `configs/nba-pregame-betting.yaml`)
 - `--pre-start-hours`: Hours before game to start trial (default: 2.0)
 - `--check-interval`: Seconds between game status checks (default: 60.0)
-- `--log-level`: Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
+- `--log-level`: Logging level for both collector and trial subprocesses: DEBUG, INFO, WARNING, ERROR (default: INFO)
+
+**Debug logging:**
+```bash
+python tools/nba_game_collector.py --data-dir data/nba-betting --log-level DEBUG
+```
 
 ## File Structure
 

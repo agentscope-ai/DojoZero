@@ -475,11 +475,16 @@ async def _run_trial_and_monitor(
 
 def _configure_logging(level: str) -> None:
     """Configure logging with timestamps and proper formatting."""
+    log_level = getattr(logging, level.upper(), logging.INFO)
     logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.DEBUG),
+        level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    
+    # Suppress noisy third-party library logs
+    # httpx logs all HTTP requests at INFO level, which is too verbose
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 async def _run_command(args: argparse.Namespace) -> int:
