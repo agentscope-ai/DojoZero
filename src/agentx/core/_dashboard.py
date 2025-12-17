@@ -670,6 +670,11 @@ class Dashboard:
                     " does not implement the Operator protocol"
                 )
             operators[runtime.actor_id] = cast(Operator, operator_instance)
+            LOGGER.debug(
+                "Materialized operator '%s' for trial '%s'",
+                runtime.actor_id,
+                spec.trial_id,
+            )
         for actor_spec in spec.agents:
             runtime = await self._materialize_actor(
                 actor_spec,
@@ -1013,7 +1018,19 @@ class Dashboard:
             actor_rt for actor_rt in runtime.actors.values() if actor_rt.role is role
         ]
         if not selected:
+            LOGGER.debug(
+                "No actors with role %s found for trial '%s'",
+                role.value,
+                runtime.spec.trial_id,
+            )
             return
+        LOGGER.debug(
+            "Starting %d actor(s) with role %s for trial '%s': %s",
+            len(selected),
+            role.value,
+            runtime.spec.trial_id,
+            [actor_rt.actor_id for actor_rt in selected],
+        )
         for actor_rt in selected:
             actor_rt.phase = ActorPhase.STARTING
         results = await asyncio.gather(
@@ -1026,8 +1043,22 @@ class Dashboard:
                 actor_rt.phase = ActorPhase.FAILED
                 actor_rt.last_error = result
                 failures.append((actor_rt, result))
+                LOGGER.error(
+                    "Failed to start actor '%s' (role=%s) in trial '%s': %s",
+                    actor_rt.actor_id,
+                    role.value,
+                    runtime.spec.trial_id,
+                    result,
+                    exc_info=result,
+                )
             else:
                 actor_rt.phase = ActorPhase.RUNNING
+                LOGGER.debug(
+                    "Successfully started actor '%s' (role=%s) in trial '%s'",
+                    actor_rt.actor_id,
+                    role.value,
+                    runtime.spec.trial_id,
+                )
         if failures:
             actor_ids = ", ".join(actor.actor_id for actor, _ in failures)
             raise ActorLifecycleError(

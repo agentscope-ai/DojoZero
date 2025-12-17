@@ -27,8 +27,9 @@ from dateutil import parser
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from demos.nba_api_demo import get_games_for_date
+from agentx.data.nba._utils import get_game_info_by_id
 
-LOGGER = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class GameTrialManager:
@@ -70,7 +71,7 @@ class GameTrialManager:
                 if self.game_time_utc.tzinfo is None:
                     self.game_time_utc = self.game_time_utc.replace(tzinfo=timezone.utc)
             except Exception as e:
-                LOGGER.warning("Could not parse game time for %s: %s", self.game_id, e)
+                logger.warning("Could not parse game time for %s: %s", self.game_id, e)
 
         # Trial state
         self.trial_id: str | None = None
@@ -139,7 +140,7 @@ class GameTrialManager:
         # Set up file logger for this game
         self._setup_file_logger()
 
-        LOGGER.info(
+        logger.info(
             "Generated config for game %s: %s (replay: %s, log: %s)",
             self.game_id,
             config_file,
@@ -185,7 +186,7 @@ class GameTrialManager:
             *args: Arguments for message formatting
         """
         # Log to console (via root logger)
-        LOGGER.log(level, message, *args)
+        logger.log(level, message, *args)
 
         # Log to file logger if available
         if self._logger:
@@ -211,14 +212,14 @@ class GameTrialManager:
         """
         start_time = self.calculate_start_time()
         if not start_time:
-            LOGGER.warning("Cannot determine start time for game %s", self.game_id)
+            logger.warning("Cannot determine start time for game %s", self.game_id)
             return False
 
         now = datetime.now(timezone.utc)
 
         # If start time already passed, start immediately
         if start_time <= now:
-            LOGGER.info(
+            logger.info(
                 "Start time already passed for game %s (was %s, now %s)",
                 self.game_id,
                 start_time,
@@ -246,7 +247,7 @@ class GameTrialManager:
             True if started successfully, False otherwise
         """
         if self.started:
-            LOGGER.warning("Trial already started for game %s", self.game_id)
+            logger.warning("Trial already started for game %s", self.game_id)
             return False
 
         if not self.config_file:
@@ -321,7 +322,7 @@ class GameTrialManager:
     async def monitor_trial(self) -> None:
         """Monitor trial process and game status until game concludes."""
         if not self.started or not self.process:
-            LOGGER.warning("Cannot monitor trial for game %s (not started)", self.game_id)
+            logger.warning("Cannot monitor trial for game %s (not started)", self.game_id)
             return
 
         self.log(logging.INFO, "Monitoring trial for game %s until game concludes", self.game_id)
@@ -443,9 +444,76 @@ class GameTrialManager:
             status_parts.append(f"Game time: {self.game_time_utc}")
 
         status_msg = "STATUS: " + " | ".join(status_parts)
-        LOGGER.info(status_msg)
+        logger.info(status_msg)
         if self._logger:
             self._logger.info(status_msg)
+
+
+async def collect_game_for_id(
+    game_id: str,
+    base_config: Path,
+    pre_start_hours: float = 2.0,
+    check_interval_seconds: float = 60.0,
+    data_dir: Path | None = None,
+) -> list[GameTrialManager]:
+    """Collect data for a specific game by ID.
+
+    Searches across recent dates to find the game, then extracts full game data.
+    If the game is not found, returns an empty list.
+
+    Args:
+        game_id: Game ID to collect data for
+        base_config: Path to base config template
+        pre_start_hours: Hours before game to start trial
+        check_interval_seconds: Interval to check game status
+        data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
+                  If None, use defaults: configs/ and outputs/
+
+    Returns:
+        List with single GameTrialManager instance, or empty list if game not found
+    """
+    # First, find which date the game is on
+    logger.info("Searching for game ID: %s", game_id)
+    game_info = get_game_info_by_id(game_id)
+    
+    if not game_info:
+        logger.error("Game ID %s not found in recent dates", game_id)
+        return []
+    
+    # Extract the date from game_info
+    game_date_str = game_info.get('game_date')
+    if not game_date_str:
+        logger.error("Game found but missing date information")
+        return []
+    
+    logger.info("Found game %s on date %s", game_id, game_date_str)
+    
+    # Fetch full game data for that date
+    games = get_games_for_date(game_date_str, print_games=False)
+    
+    if not games:
+        logger.error("No games found for date %s", game_date_str)
+        return []
+    
+    # Extract the specific game
+    game = next((g for g in games if str(g.get("gameId", "")) == game_id), None)
+    if not game:
+        logger.error("Game ID %s not found in games for date %s", game_id, game_date_str)
+        return []
+    
+    # Create manager for this game
+    manager = GameTrialManager(
+        game=game,
+        base_config=base_config,
+        pre_start_hours=pre_start_hours,
+        check_interval_seconds=check_interval_seconds,
+        data_dir=data_dir,
+        game_date=game_date_str if data_dir else None,
+    )
+    manager.generate_config_file()
+    manager.log_status()
+
+    return [manager]
 
 
 async def collect_games_for_date(
@@ -475,19 +543,19 @@ async def collect_games_for_date(
         date_str = game_date
 
     # Get games for date
-    LOGGER.info("Fetching games for date: %s", game_date)
+    logger.info("Fetching games for date: %s", game_date)
     games = get_games_for_date(game_date, print_games=True)
 
     if not games:
-        LOGGER.info("No games found for date %s", game_date)
+        logger.info("No games found for date %s", game_date)
         return []
 
     # Create managers for each game
     managers: list[GameTrialManager] = []
     for game in games:
-        game_id = str(game.get("gameId", ""))
-        if not game_id:
-            LOGGER.warning("Skipping game without gameId: %s", game)
+        game_id_str = str(game.get("gameId", ""))
+        if not game_id_str:
+            logger.warning("Skipping game without gameId: %s", game)
             continue
 
         manager = GameTrialManager(
@@ -524,13 +592,13 @@ async def run_collection(
                 # Wait until start time
                 should_start = await manager.wait_until_start_time()
                 if not should_start:
-                    LOGGER.warning("Skipping start for game %s", manager.game_id)
+                    logger.warning("Skipping start for game %s", manager.game_id)
                     return
 
                 # Start trial
                 started = await manager.start_trial()
                 if not started:
-                    LOGGER.error("Failed to start trial for game %s", manager.game_id)
+                    logger.error("Failed to start trial for game %s", manager.game_id)
                     return
 
                 # Monitor until game concludes
@@ -540,7 +608,7 @@ async def run_collection(
                 manager.log_status()
 
             except Exception as e:
-                LOGGER.error("Error in collection for game %s: %s", manager.game_id, e)
+                logger.error("Error in collection for game %s: %s", manager.game_id, e)
                 manager.log_status()
 
         tasks.append(asyncio.create_task(run_game(manager)))
@@ -549,11 +617,11 @@ async def run_collection(
     await asyncio.gather(*tasks)
 
     # Log final status for all games
-    LOGGER.info("=" * 80)
-    LOGGER.info("FINAL STATUS FOR ALL GAMES:")
+    logger.info("=" * 80)
+    logger.info("FINAL STATUS FOR ALL GAMES:")
     for manager in managers:
         manager.log_status()
-    LOGGER.info("=" * 80)
+    logger.info("=" * 80)
 
 
 def main() -> int:
@@ -566,6 +634,12 @@ def main() -> int:
         type=str,
         default=None,
         help="Date to collect games for (YYYY-MM-DD). Default: today",
+    )
+    parser.add_argument(
+        "--game-id",
+        type=str,
+        default=None,
+        help="Specific game ID to collect data for. If provided, only this game will be processed.",
     )
     parser.add_argument(
         "--base-config",
@@ -608,41 +682,53 @@ def main() -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Determine date
-    if args.date:
-        game_date = args.date
-    else:
-        game_date = datetime.now()
-
     # Validate base config
     if not args.base_config.exists():
-        LOGGER.error("Base config file not found: %s", args.base_config)
+        logger.error("Base config file not found: %s", args.base_config)
         return 1
 
     # Run collection
     try:
-        managers = asyncio.run(
-            collect_games_for_date(
-                game_date=game_date,
-                base_config=args.base_config,
-                pre_start_hours=args.pre_start_hours,
-                check_interval_seconds=args.check_interval,
-                data_dir=args.data_dir,
+        # If game_id is provided, use collect_game_for_id (trumps date logic)
+        if args.game_id:
+            managers = asyncio.run(
+                collect_game_for_id(
+                    game_id=args.game_id,
+                    base_config=args.base_config,
+                    pre_start_hours=args.pre_start_hours,
+                    check_interval_seconds=args.check_interval,
+                    data_dir=args.data_dir,
+                )
             )
-        )
+        else:
+            # Determine date for date-based collection
+            if args.date:
+                game_date = args.date
+            else:
+                game_date = datetime.now()
+
+            managers = asyncio.run(
+                collect_games_for_date(
+                    game_date=game_date,
+                    base_config=args.base_config,
+                    pre_start_hours=args.pre_start_hours,
+                    check_interval_seconds=args.check_interval,
+                    data_dir=args.data_dir,
+                )
+            )
 
         if not managers:
-            LOGGER.info("No games to collect")
+            logger.info("No games to collect")
             return 0
 
         asyncio.run(run_collection(managers))
         return 0
 
     except KeyboardInterrupt:
-        LOGGER.info("Interrupted by user")
+        logger.info("Interrupted by user")
         return 130
     except Exception as e:
-        LOGGER.error("Fatal error: %s", e, exc_info=True)
+        logger.error("Fatal error: %s", e, exc_info=True)
         return 1
 
 
