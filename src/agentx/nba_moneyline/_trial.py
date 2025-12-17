@@ -300,8 +300,8 @@ def _build_trial_spec(
     # Set up polling identifiers for game events
     # NBA store needs game_id to poll game status
     nba_store.set_poll_identifier({"game_id": params.game_id})
-    # Polymarket store needs event_id (using game_id for now)
-    polymarket_store.set_poll_identifier({"event_id": params.game_id})
+    # Polymarket store uses game_id for consistency (all events will use same event_id)
+    polymarket_store.set_poll_identifier({"game_id": params.game_id})
     
     # Start polling on both stores (they will poll automatically)
     # Note: Stores start polling when DataHub connects them via set_event_emitter
@@ -675,7 +675,8 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         market_url: str | None = market_url_raw if isinstance(market_url_raw, str) else None
         
         # Prepare identifier for polling (will be used if market_url/slug not available)
-        identifier: dict[str, Any] = {"event_id": game_id}
+        # Use game_id for consistency (all events will use same event_id)
+        identifier: dict[str, Any] = {"game_id": game_id}
         
         # If market_url not provided, try to construct slug from game info
         if not market_url:
