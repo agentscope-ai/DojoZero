@@ -220,21 +220,21 @@ def _build_trial_spec(
     )
     
     # Setup NBAStore for game status events
-    # Default intervals: scoreboard=5s, play_by_play=2s
+    # Default intervals: boxscore=60s, play_by_play=20s
     nba_api = NBAExternalAPI()
     nba_store = NBAStore(
         store_id="nba_store",
         api=nba_api,
-        # poll_intervals will use defaults: {"scoreboard": 60.0, "play_by_play": 20.0}
+        # poll_intervals will use defaults: {"boxscore": 60.0, "play_by_play": 20.0}
     )
     
     # Setup PolymarketStore for odds updates
-    # Default interval: odds=300s (5 minutes)
+    # Default interval: odds=5s
     polymarket_api = PolymarketAPI()
     polymarket_store = PolymarketStore(
         store_id="polymarket_store",
         api=polymarket_api,
-        # poll_intervals will use defaults: {"odds": 300.0}
+        # poll_intervals will use defaults: {"odds": 5.0}
     )
 
     # Extract event_types from data_streams if provided, otherwise use event_types field
@@ -651,14 +651,14 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
             context["stores"][store_id] = store
     
     # Create NBAStore for game status events
-    # Default intervals: scoreboard=5s, play_by_play=2s
+    # Default intervals: boxscore=60s, play_by_play=20s
     if "nba_store" not in context["stores"]:
         game_id = spec.metadata.get("game_id", "")
         nba_api = NBAExternalAPI()
         nba_store = NBAStore(
             store_id="nba_store",
             api=nba_api,
-            # poll_intervals will use defaults: {"scoreboard": 5.0, "play_by_play": 2.0}
+            # poll_intervals will use defaults: {"boxscore": 60.0, "play_by_play": 20.0}
         )
         nba_store.set_poll_identifier({"game_id": game_id})
         # Connect to hub
@@ -668,7 +668,7 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         context["stores"]["nba_store"] = nba_store
     
     # Create PolymarketStore for odds updates
-    # Default interval: odds=300s (5 minutes)
+    # Default interval: odds=5s
     if "polymarket_store" not in context["stores"]:
         game_id = spec.metadata.get("game_id", "")
         market_url_raw = spec.metadata.get("market_url")
@@ -694,7 +694,7 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         polymarket_store = PolymarketStore(
             store_id="polymarket_store",
             api=polymarket_api,
-            # poll_intervals will use defaults: {"odds": 300.0}
+            # poll_intervals will use defaults: {"odds": 5.0}
             market_url=market_url,
         )
         polymarket_store.set_poll_identifier(identifier)
@@ -768,8 +768,8 @@ register_trial_builder(
                 "event_type": "odds_update",
             },
             {
-                "id": "in_game_critical_stream",
-                "event_type": "in_game_critical",
+                "id": "play_by_play_stream",
+                "event_type": "play_by_play",
             },
         ],
         "operators": [
@@ -799,7 +799,7 @@ register_trial_builder(
                     "game_update_stream",
                     "odds_update_stream",
                     "game_status_change_stream",
-                    "in_game_critical_stream",
+                    "play_by_play_stream",
                 ],
             }
         ],

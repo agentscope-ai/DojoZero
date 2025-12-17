@@ -134,7 +134,7 @@ def main() -> None:
         "--event-types",
         nargs="+",
         default=None,
-        help="Event types to deduplicate (default: all events). Example: --event-types in_game_critical",
+        help="Event types to deduplicate (default: all events). Example: --event-types play_by_play",
     )
     
     args = parser.parse_args()

@@ -37,7 +37,6 @@ class EventTypes(str, Enum):
     GAME_RESULT = "game_result"
     GAME_UPDATE = "game_update"
     PLAY_BY_PLAY = "play_by_play"
-    IN_GAME_CRITICAL = "in_game_critical"
 
     # =========================================================================
     # Web Search

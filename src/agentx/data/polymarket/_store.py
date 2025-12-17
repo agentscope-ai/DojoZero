@@ -11,7 +11,7 @@ from agentx.data.polymarket._events import OddsUpdateEvent
 class PolymarketStore(DataStore):
     """Polymarket data store for polling Polymarket API and emitting events.
     
-    Polls for odds updates every poll_interval_seconds (default 300s = 5 minutes).
+    Polls for odds updates every poll_interval_seconds (default 5s).
     
     Can be initialized with either:
     - market_url: Direct URL to Polymarket market (e.g., "https://polymarket.com/sports/nba/games/week/3/nba-sas-lal-2025-12-10")
@@ -30,13 +30,13 @@ class PolymarketStore(DataStore):
         """Initialize Polymarket store.
         
         Default polling intervals:
-        - odds: 300.0 seconds (5 minutes)
+        - odds: 5.0 seconds
         
         Args:
             store_id: Store identifier
             api: External API instance (defaults to PolymarketAPI)
-            poll_intervals: Per-endpoint polling intervals (e.g., {"odds": 300.0})
-                           Defaults to {"odds": 300.0} if not provided
+            poll_intervals: Per-endpoint polling intervals (e.g., {"odds": 5.0})
+                           Defaults to {"odds": 5.0} if not provided
             event_emitter: Event emitter for publishing events
             market_url: Optional Polymarket market URL (e.g., "https://polymarket.com/sports/nba/games/week/3/nba-sas-lal-2025-12-10")
             slug: Optional market slug (e.g., "nba-sas-lal-2025-12-10"). If market_url is provided, slug is extracted from it.
@@ -44,7 +44,7 @@ class PolymarketStore(DataStore):
         # Set default poll_intervals if not provided
         if poll_intervals is None:
             poll_intervals = {
-                "odds": 300.0,  # 5 minutes
+                "odds": 5.0,  # 5 seconds
             }
         
         super().__init__(

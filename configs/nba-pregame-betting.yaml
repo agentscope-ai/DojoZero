@@ -30,8 +30,8 @@ scenario:
       event_type: game_update
     - id: odds_update_stream
       event_type: odds_update
-    - id: in_game_critical_stream
-      event_type: in_game_critical
+    - id: play_by_play_stream
+      event_type: play_by_play
 
     operators:
     - id: event_counter
@@ -57,4 +57,4 @@ scenario:
       - game_update_stream
       - odds_update_stream
       - game_status_change_stream
-      - in_game_critical_stream
+      - play_by_play_stream
