@@ -474,7 +474,12 @@ async def _run_trial_and_monitor(
 
 
 def _configure_logging(level: str) -> None:
-    logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO))
+    """Configure logging with timestamps and proper formatting."""
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.DEBUG),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
 
 async def _run_command(args: argparse.Namespace) -> int:
