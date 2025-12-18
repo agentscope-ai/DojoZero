@@ -29,7 +29,7 @@ from agentx.nba_moneyline._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
 )
-from agentx.data._streams import DataHubDataStream
+from agentx.data._models import EventTypes
 from agentx.nba_moneyline._operator import (
     EventCounterOperator,
     EventCounterOperatorConfig,
@@ -56,7 +56,7 @@ EVENT_TYPE_PROCESSOR_MAP: dict[str, tuple[type[Any] | None, list[str]]] = {
 # Mapping from synthetic event types to actual event types
 # Used when a stream subscribes to multiple event types
 SYNTHETIC_EVENT_TYPE_MAP: dict[str, list[str]] = {
-    "game_status_change": ["game_start", "game_result"],
+    "game_status_change": [EventTypes.GAME_START.value, EventTypes.GAME_RESULT.value, EventTypes.GAME_INITIALIZE.value],
     # Other event types (game_update, odds_update) are direct mappings
 }
 

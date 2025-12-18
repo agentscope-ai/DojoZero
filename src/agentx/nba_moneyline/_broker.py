@@ -121,9 +121,9 @@ class Event:
     away_team: str
     game_time: datetime
     status: EventStatus
-    home_odds: Decimal
-    away_odds: Decimal
-    last_odds_update: datetime
+    home_odds: Optional[Decimal] = None  # Can be None initially, filled in when odds arrive
+    away_odds: Optional[Decimal] = None  # Can be None initially, filled in when odds arrive
+    last_odds_update: Optional[datetime] = None
     betting_closed_at: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -133,9 +133,11 @@ class Event:
             "away_team": self.away_team,
             "game_time": self.game_time.isoformat(),
             "status": self.status.value,
-            "home_odds": str(self.home_odds),
-            "away_odds": str(self.away_odds),
-            "last_odds_update": self.last_odds_update.isoformat(),
+            "home_odds": str(self.home_odds) if self.home_odds else None,
+            "away_odds": str(self.away_odds) if self.away_odds else None,
+            "last_odds_update": (
+                self.last_odds_update.isoformat() if self.last_odds_update else None
+            ),
             "betting_closed_at": (
                 self.betting_closed_at.isoformat() if self.betting_closed_at else None
             ),
@@ -470,7 +472,55 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     getattr(data_event, "timestamp", None),
                 )
                 
-                if event_type == EventTypes.ODDS_UPDATE.value:
+                if event_type == EventTypes.GAME_INITIALIZE.value:
+
+                    # GameInitializeEvent: Initialize event with team info (no odds yet)
+                    home_team_str = getattr(data_event, "home_team", "")
+                    away_team_str = getattr(data_event, "away_team", "")
+                    game_time_dt = getattr(data_event, "game_time", None)
+                    
+                    if not home_team_str or not away_team_str:
+                        logger.warning(
+                            "GameInitializeEvent missing team info: event_id=%s",
+                            event_id,
+                        )
+                        return
+                    
+                    if not isinstance(game_time_dt, datetime):
+                        game_time_dt = datetime.now()
+                    
+                    if event_id in self._events:
+                        # Event already exists - update team info if needed
+                        broker_event = self._events[event_id]
+                        broker_event.home_team = home_team_str
+                        broker_event.away_team = away_team_str
+                        broker_event.game_time = game_time_dt
+                        logger.info(
+                            "Updated event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s",
+                            event_id,
+                            home_team_str,
+                            away_team_str,
+                            game_time_dt,
+                        )
+                    else:
+                        # Initialize new event without odds (will be filled in when OddsUpdateEvent arrives)
+                        logger.info(
+                            "Initializing event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s (odds pending)",
+                            event_id,
+                            home_team_str,
+                            away_team_str,
+                            game_time_dt,
+                        )
+                        await self.initialize_event(
+                            event_id=event_id,
+                            home_team=home_team_str,
+                            away_team=away_team_str,
+                            game_time=game_time_dt,
+                            initial_home_odds=None,  # Will be updated when OddsUpdateEvent arrives
+                            initial_away_odds=None,  # Will be updated when OddsUpdateEvent arrives
+                        )
+                
+                elif event_type == EventTypes.ODDS_UPDATE.value:
                     # Only process odds if we have team info (either from existing event or pending GameUpdateEvent)
                     if event_id in self._events:
                         # Event exists - update odds
@@ -609,14 +659,27 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         home_team: str,
         away_team: str,
         game_time: datetime,
-        initial_home_odds: Decimal,
-        initial_away_odds: Decimal,
+        initial_home_odds: Optional[Decimal] = None,
+        initial_away_odds: Optional[Decimal] = None,
     ) -> Event:
-        """Initialize a new betting event with starting odds"""
+        """Initialize a new betting event.
+        
+        Args:
+            event_id: Unique event identifier
+            home_team: Home team name
+            away_team: Away team name
+            game_time: Scheduled game time
+            initial_home_odds: Optional initial home odds (can be None if not yet available)
+            initial_away_odds: Optional initial away odds (can be None if not yet available)
+        """
+
         if event_id in self._events:
             raise ValueError(f"Event {event_id} already exists")
 
-        if initial_home_odds <= 1.0 or initial_away_odds <= 1.0:
+        # Validate odds if provided
+        if initial_home_odds is not None and initial_home_odds <= 1.0:
+            raise ValueError("Odds must be greater than 1.0")
+        if initial_away_odds is not None and initial_away_odds <= 1.0:
             raise ValueError("Odds must be greater than 1.0")
 
         now = datetime.now()
@@ -628,24 +691,36 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             status=EventStatus.SCHEDULED,
             home_odds=initial_home_odds,
             away_odds=initial_away_odds,
-            last_odds_update=now,
+            last_odds_update=now if (initial_home_odds and initial_away_odds) else None,
         )
 
         self._events[event_id] = event
-        logger.info(
-            "Created event %s: %s vs %s (Odds: %s/%s)",
-            event_id,
-            home_team,
-            away_team,
-            initial_home_odds,
-            initial_away_odds,
-        )
+        if initial_home_odds and initial_away_odds:
+            logger.info(
+                "Created event %s: %s vs %s (Odds: %s/%s)",
+                event_id,
+                home_team,
+                away_team,
+                initial_home_odds,
+                initial_away_odds,
+            )
+        else:
+            logger.info(
+                "Created event %s: %s vs %s (Odds: pending)",
+                event_id,
+                home_team,
+                away_team,
+            )
         return event
 
     async def update_odds(
         self, event_id: str, home_odds: Decimal, away_odds: Decimal
     ) -> Event:
-        """Update odds for an event and execute matching limit orders"""
+        """Update odds for an event and execute matching limit orders.
+        
+        Can be called to set initial odds (if event was initialized without odds)
+        or to update existing odds.
+        """
         if event_id not in self._events:
             raise ValueError(f"Event {event_id} not found")
 
@@ -987,6 +1062,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     raise ValueError("Event is closed for betting")
                 if event.status == EventStatus.SETTLED:
                     raise ValueError("Event has been settled")
+                
+                # Check odds are available (event must be initialized with odds)
+                if event.home_odds is None or event.away_odds is None:
+                    raise ValueError(
+                        f"Odds not yet available for event {bet_request.event_id}. "
+                        "Please wait for odds to be updated."
+                    )
 
                 # Validate betting phase matches event status
                 if bet_request.betting_phase == BettingPhase.PRE_GAME:
@@ -1017,11 +1099,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 bet_id = str(uuid.uuid4())
 
                 # Determine execution odds for market orders
-                execution_odds = (
-                    event.home_odds
-                    if bet_request.selection == "home"
-                    else event.away_odds
-                )
+                # Odds should already be validated above, but add safety check
+                if bet_request.selection == "home":
+                    execution_odds = event.home_odds
+                else:
+                    execution_odds = event.away_odds
+                
+                if execution_odds is None:
+                    raise ValueError(
+                        f"Odds not available for selection '{bet_request.selection}' "
+                        f"on event {bet_request.event_id}"
+                    )
 
                 # Create bet record
                 bet = Bet(

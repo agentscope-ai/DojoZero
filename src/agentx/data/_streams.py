@@ -104,12 +104,8 @@ class DataHubDataStream(
             self._event_types,
         )
 
-        # Run initializer if provided (e.g., trigger initial searches)
-        if self._initializer and not self._initialized:
-            await self._initializer.initialize(self)
-            self._initialized = True
-
-        # Subscribe to DataHub events using callback mechanism
+        # Subscribe to DataHub events using callback mechanism FIRST
+        # This ensures we're subscribed before any events are emitted
         def event_callback(event: DataEvent) -> None:
             # Check if this event matches our subscription
             should_forward = False
@@ -137,6 +133,28 @@ class DataHubDataStream(
                 event_types=[event_type],
                 callback=event_callback,
             )
+        
+        # Run initializer if provided (e.g., trigger initial searches)
+        # Do this AFTER subscribing so events aren't missed, but run it in background
+        # so it doesn't block pipeline setup
+        if self._initializer and not self._initialized:
+            self._initialized = True
+            # Schedule initializer to run in background - don't await it
+            # This allows pipeline setup to complete while searches happen asynchronously
+            asyncio.create_task(self._run_initializer())
+
+    async def _run_initializer(self) -> None:
+        """Run the initializer in the background without blocking."""
+        if self._initializer:
+            try:
+                await self._initializer.initialize(self)
+            except Exception as e:
+                logger.error(
+                    "Initializer failed for stream '%s': %s",
+                    self.actor_id,
+                    e,
+                    exc_info=True,
+                )
 
     async def _publish_event(self, event: DataEvent) -> None:
         """Publish a DataEvent as a StreamEvent."""

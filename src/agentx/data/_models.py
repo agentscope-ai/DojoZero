@@ -4,7 +4,7 @@ from abc import ABC
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, get_origin, get_args
 
 # Type variable for event classes
 EventT = TypeVar("EventT", bound="DataEvent")
@@ -33,6 +33,7 @@ class EventTypes(str, Enum):
     # =========================================================================
     # NBA Game Lifecycle
     # =========================================================================
+    GAME_INITIALIZE = "game_initialize"  # Game initialization event with team info (no odds)
     GAME_START = "game_start"
     GAME_RESULT = "game_result"
     GAME_UPDATE = "game_update"
@@ -108,6 +109,25 @@ def get_event_class(event_type: str) -> type["DataEvent"] | None:
     return _EVENT_REGISTRY.get(event_type)
 
 
+def convert_datetime_to_iso(obj: Any) -> Any:
+    """Recursively convert datetime objects to ISO format strings.
+    
+    Args:
+        obj: Object that may contain datetime objects
+        
+    Returns:
+        Object with all datetime objects converted to ISO format strings
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: convert_datetime_to_iso(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_datetime_to_iso(item) for item in obj]
+    else:
+        return obj
+
+
 class DataEventFactory:
     """Factory for creating DataEvent instances from dictionaries.
     
@@ -164,10 +184,12 @@ class DataEvent(ABC):
         """Convert event to dictionary for serialization."""
         # Use dataclasses.asdict() to handle slots=True dataclasses
         event_dict = asdict(self)
+        
+        # Convert all datetime fields to ISO format strings
+        converted_dict = convert_datetime_to_iso(event_dict)
         return {
             "event_type": self.event_type,
-            "timestamp": self.timestamp.isoformat(),
-            **{k: v for k, v in event_dict.items() if k != "timestamp"},
+            **converted_dict,
         }
     
     @classmethod
@@ -187,17 +209,29 @@ class DataEvent(ABC):
             Only fields defined on the dataclass are used. Extra fields in the dictionary
             are ignored to support forward compatibility (e.g., events from newer versions).
         """
-        # Get field names defined on this dataclass
-        field_names = {f.name for f in fields(cls)}
+        # Get field names and types defined on this dataclass
+        field_info = {f.name: f.type for f in fields(cls)}
+        field_names = set(field_info.keys())
         
         # Filter data to only include fields defined on the dataclass
         # This prevents TypeError when dictionary contains extra fields
         event_data = {k: v for k, v in data.items() if k in field_names}
         
-        # Parse timestamp if it's a string
-        if "timestamp" in event_data:
-            if isinstance(event_data["timestamp"], str):
-                event_data["timestamp"] = datetime.fromisoformat(event_data["timestamp"])
+        # Parse datetime fields if they are strings
+        for field_name, field_type in field_info.items():
+            if field_name in event_data and isinstance(event_data[field_name], str):
+                # Check if the field type is datetime (handle both datetime and Optional[datetime])
+                origin = get_origin(field_type)
+                args = get_args(field_type) if origin else ()
+                is_datetime_field = (
+                    field_type == datetime or
+                    (origin is not None and datetime in args)
+                )
+                if is_datetime_field:
+                    try:
+                        event_data[field_name] = datetime.fromisoformat(event_data[field_name])
+                    except (ValueError, AttributeError):
+                        pass  # If parsing fails, keep the original value
         
         return cls(**event_data)
 
@@ -221,10 +255,12 @@ class DataFact(ABC):
         """Convert fact to dictionary for serialization."""
         # Use dataclasses.asdict() to handle slots=True dataclasses
         fact_dict = asdict(self)
+        
+        # Convert all datetime fields to ISO format strings
+        converted_dict = convert_datetime_to_iso(fact_dict)
         return {
             "fact_type": self.fact_type,
-            "timestamp": self.timestamp.isoformat(),
-            **{k: v for k, v in fact_dict.items() if k != "timestamp"},
+            **converted_dict,
         }
     
     @classmethod
@@ -243,16 +279,28 @@ class DataFact(ABC):
             Only fields defined on the dataclass are used. Extra fields in the dictionary
             are ignored to support forward compatibility (e.g., facts from newer versions).
         """
-        # Get field names defined on this dataclass
-        field_names = {f.name for f in fields(cls)}
+        # Get field names and types defined on this dataclass
+        field_info = {f.name: f.type for f in fields(cls)}
+        field_names = set(field_info.keys())
         
         # Filter data to only include fields defined on the dataclass
         # This prevents TypeError when dictionary contains extra fields
         fact_data = {k: v for k, v in data.items() if k in field_names}
         
-        # Parse timestamp if it's a string
-        if "timestamp" in fact_data:
-            if isinstance(fact_data["timestamp"], str):
-                fact_data["timestamp"] = datetime.fromisoformat(fact_data["timestamp"])
+        # Parse datetime fields if they are strings
+        for field_name, field_type in field_info.items():
+            if field_name in fact_data and isinstance(fact_data[field_name], str):
+                # Check if the field type is datetime (handle both datetime and Optional[datetime])
+                origin = get_origin(field_type)
+                args = get_args(field_type) if origin else ()
+                is_datetime_field = (
+                    field_type == datetime or
+                    (origin is not None and datetime in args)
+                )
+                if is_datetime_field:
+                    try:
+                        fact_data[field_name] = datetime.fromisoformat(fact_data[field_name])
+                    except (ValueError, AttributeError):
+                        pass  # If parsing fails, keep the original value
         
         return cls(**fact_data)

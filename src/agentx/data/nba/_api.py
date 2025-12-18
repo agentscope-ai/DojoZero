@@ -104,7 +104,7 @@ class NBAExternalAPI(ExternalAPI):
             game_id_param = params.get("game_id") if params else None
             
             if not game_id_param:
-                return {"boxscore": {}}
+                return {"boxscore": {"gameId": ""}}
             
             try:
                 from nba_api.stats.endpoints import boxscoretraditionalv3
@@ -119,14 +119,19 @@ class NBAExternalAPI(ExternalAPI):
                 box_score_dict = box_score.get_dict()
                 
                 if not box_score_dict or "boxScoreTraditional" not in box_score_dict:
-                    return {"boxscore": {}}
+                    # Return gameId even when no data available (for pre-game initialization)
+                    return {"boxscore": {"gameId": game_id_param}}
                 
                 boxscore_data = box_score_dict["boxScoreTraditional"]
                 
                 # Before game starts, boxScoreTraditional may be None or empty
-                # Return empty dict in that case (store will handle gracefully)
+                # Return gameId even when no data available (for pre-game initialization)
                 if not boxscore_data or not isinstance(boxscore_data, dict):
-                    return {"boxscore": {}}
+                    return {"boxscore": {"gameId": game_id_param}}
+                
+                # Ensure gameId is included in the response
+                if "gameId" not in boxscore_data:
+                    boxscore_data["gameId"] = game_id_param
                 
                 # Return full boxscore data including teams, players, and statistics
                 return {
@@ -136,17 +141,17 @@ class NBAExternalAPI(ExternalAPI):
                 raise RuntimeError(f"nba_api package not available: {e}") from e
             except (AttributeError, TypeError) as e:
                 # These errors often occur when boxscore data is None/empty before game starts
-                # This is expected behavior, so we suppress the warning and return empty result
+                # This is expected behavior, so we suppress the warning and return gameId
                 # Only log at debug level to avoid noise in logs
                 logger.debug(
                     "Boxscore data not available for game %s (likely pre-game): %s",
                     game_id_param,
                     e,
                 )
-                return {"boxscore": {}}
+                return {"boxscore": {"gameId": game_id_param}}
             except Exception as e:
                 logger.warning(f"Error fetching boxscore data for game {game_id_param}: {e}")
-                return {"boxscore": {}}
+                return {"boxscore": {"gameId": game_id_param}}
         return {}
     
 

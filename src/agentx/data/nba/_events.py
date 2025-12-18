@@ -43,6 +43,34 @@ class PlayByPlayEvent(DataEvent):
 
 @register_event
 @dataclass(slots=True, frozen=True)
+class GameInitializeEvent(DataEvent):
+    """Game initialization event with team information.
+    
+    This event is emitted when a game is first detected, providing
+    the basic information needed to initialize a betting event.
+    
+    Contains:
+    - Team information (home/away team names, game time)
+    - No odds information (odds will come via OddsUpdateEvent)
+    
+    The broker can initialize the event without odds, then update
+    when OddsUpdateEvent arrives.
+    """
+    
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    event_id: str = field(default="")
+    game_id: str = field(default="")
+    home_team: str = field(default="")  # Full team name (e.g., "New York Knicks")
+    away_team: str = field(default="")  # Full team name (e.g., "San Antonio Spurs")
+    game_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    @property
+    def event_type(self) -> str:
+        return EventTypes.GAME_INITIALIZE.value
+
+
+@register_event
+@dataclass(slots=True, frozen=True)
 class GameStartEvent(DataEvent):
     """Game start event signaling transition from pregame to live."""
     
@@ -51,7 +79,7 @@ class GameStartEvent(DataEvent):
     
     @property
     def event_type(self) -> str:
-        return "game_start"
+        return EventTypes.GAME_START.value
 
 
 @register_event

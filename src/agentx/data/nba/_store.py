@@ -6,6 +6,7 @@ from agentx.data._models import DataEvent
 from agentx.data._stores import DataStore, ExternalAPI
 from agentx.data.nba._api import NBAExternalAPI
 from agentx.data.nba._events import (
+    GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
     GameUpdateEvent,
@@ -50,6 +51,8 @@ class NBAStore(DataStore):
         self._pbp_available: set[str] = set()  # game_id -> True when PBP first becomes available
         # Cache boxscore leaders per game to avoid redundant processing
         self._boxscore_leaders_cache: dict[str, dict[str, Any]] = {}  # game_id -> leaders dict
+        # Track which games have been initialized (to emit GameInitializeEvent only once)
+        self._initialized_games: set[str] = set()  # game_id -> True when GameInitializeEvent has been emitted
     
     def _extract_player_stats_from_boxscore(self, boxscore_data: dict[str, Any]) -> dict[str, Any]:
         """Extract all player stats from BoxScore data.
@@ -99,56 +102,140 @@ class NBAStore(DataStore):
             home_team_data = boxscore_data.get("homeTeam", {})
             away_team_data = boxscore_data.get("awayTeam", {})
             
-            # Get team statistics
-            home_stats = home_team_data.get("statistics", {})
-            away_stats = away_team_data.get("statistics", {})
+            # Check if this is the initial call (no team data available yet - pre-game)
+            has_team_data = bool(home_team_data and away_team_data)
             
-            # Extract scores from statistics
-            home_score = home_stats.get("points", 0) or 0
-            away_score = away_stats.get("points", 0) or 0
+            # Emit GameInitializeEvent on first call when team data is not yet available
+            if game_id not in self._initialized_games and not has_team_data:
+                # Try to get game info from scoreboard API
+                try:
+                    from agentx.data.nba._utils import get_game_info_by_id
+                    game_info = get_game_info_by_id(game_id)
+                    if game_info:
+                        home_team_str = game_info.get("home_team", "")
+                        away_team_str = game_info.get("away_team", "")
+                        game_time_utc_str = game_info.get("game_time_utc", "")
+                        
+                        # Parse game time
+                        game_time_dt = timestamp  # Default to current time
+                        if game_time_utc_str:
+                            try:
+                                game_time_dt = datetime.fromisoformat(
+                                    game_time_utc_str.replace("Z", "+00:00")
+                                )
+                            except (ValueError, AttributeError):
+                                pass
+                        
+                        if home_team_str and away_team_str:
+                            events.append(
+                                GameInitializeEvent(
+                                    timestamp=timestamp,
+                                    event_id=game_id,
+                                    game_id=game_id,
+                                    home_team=home_team_str,
+                                    away_team=away_team_str,
+                                    game_time=game_time_dt,
+                                )
+                            )
+                            self._initialized_games.add(game_id)
+                except Exception as e:
+                    # If we can't get game info, skip GameInitializeEvent
+                    # It will be emitted when boxscore data becomes available
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.debug(
+                        "Could not get game info for GameInitializeEvent: game_id=%s, error=%s",
+                        game_id,
+                        e,
+                    )
             
-            # Extract all player stats from BoxScore (pass through raw data)
-            player_stats = self._extract_player_stats_from_boxscore(boxscore_data)
-            
-            # Emit GameUpdateEvent with complete BoxScore data
-            # Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay
-            events.append(
-                GameUpdateEvent(
-                    timestamp=timestamp,
-                    event_id=game_id,
-                    game_id=game_id,
-                    period=0,  # BoxScore doesn't provide period info
-                    game_clock="",  # BoxScore doesn't provide clock info
-                    game_time_utc="",  # BoxScore doesn't provide game time
-                    home_team={
-                        "teamId": home_team_data.get("teamId", 0),
-                        "teamName": home_team_data.get("teamName", ""),
-                        "teamCity": home_team_data.get("teamCity", ""),
-                        "teamTricode": home_team_data.get("teamTricode", ""),
-                        "score": home_score,
-                        "wins": 0,  # Not available in BoxScore
-                        "losses": 0,  # Not available in BoxScore
-                        "seed": 0,  # Not available in BoxScore
-                        "timeoutsRemaining": 0,  # Not available in BoxScore
-                        "inBonus": None,  # Not available in BoxScore
-                        "periods": [],  # Not available in BoxScore
-                    },
-                    away_team={
-                        "teamId": away_team_data.get("teamId", 0),
-                        "teamName": away_team_data.get("teamName", ""),
-                        "teamCity": away_team_data.get("teamCity", ""),
-                        "teamTricode": away_team_data.get("teamTricode", ""),
-                        "score": away_score,
-                        "wins": 0,  # Not available in BoxScore
-                        "losses": 0,  # Not available in BoxScore
-                        "seed": 0,  # Not available in BoxScore
-                        "timeoutsRemaining": 0,  # Not available in BoxScore
-                        "inBonus": None,  # Not available in BoxScore
-                        "periods": [],  # Not available in BoxScore
-                    },
-                    player_stats=player_stats,
+            # Only emit GameUpdateEvent if we have team data
+            if has_team_data:
+                # Get team statistics
+                home_stats = home_team_data.get("statistics", {})
+                away_stats = away_team_data.get("statistics", {})
+                
+                # Extract scores from statistics
+                home_score = home_stats.get("points", 0) or 0
+                away_score = away_stats.get("points", 0) or 0
+                
+                # Extract all player stats from BoxScore (pass through raw data)
+                player_stats = self._extract_player_stats_from_boxscore(boxscore_data)
+                
+                # Emit GameUpdateEvent with complete BoxScore data
+                # Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay
+                events.append(
+                    GameUpdateEvent(
+                        timestamp=timestamp,
+                        event_id=game_id,
+                        game_id=game_id,
+                        period=0,  # BoxScore doesn't provide period info
+                        game_clock="",  # BoxScore doesn't provide clock info
+                        game_time_utc="",  # BoxScore doesn't provide game time
+                        home_team={
+                            "teamId": home_team_data.get("teamId", 0),
+                            "teamName": home_team_data.get("teamName", ""),
+                            "teamCity": home_team_data.get("teamCity", ""),
+                            "teamTricode": home_team_data.get("teamTricode", ""),
+                            "score": home_score,
+                            "wins": 0,  # Not available in BoxScore
+                            "losses": 0,  # Not available in BoxScore
+                            "seed": 0,  # Not available in BoxScore
+                            "timeoutsRemaining": 0,  # Not available in BoxScore
+                            "inBonus": None,  # Not available in BoxScore
+                            "periods": [],  # Not available in BoxScore
+                        },
+                        away_team={
+                            "teamId": away_team_data.get("teamId", 0),
+                            "teamName": away_team_data.get("teamName", ""),
+                            "teamCity": away_team_data.get("teamCity", ""),
+                            "teamTricode": away_team_data.get("teamTricode", ""),
+                            "score": away_score,
+                            "wins": 0,  # Not available in BoxScore
+                            "losses": 0,  # Not available in BoxScore
+                            "seed": 0,  # Not available in BoxScore
+                            "timeoutsRemaining": 0,  # Not available in BoxScore
+                            "inBonus": None,  # Not available in BoxScore
+                            "periods": [],  # Not available in BoxScore
+                        },
+                        player_stats=player_stats,
+                    )
                 )
-            )
+                
+                # Also emit GameInitializeEvent if not already emitted (when data becomes available)
+                if game_id not in self._initialized_games:
+                    home_city = home_team_data.get("teamCity", "")
+                    home_name = home_team_data.get("teamName", "")
+                    home_team_str = f"{home_city} {home_name}".strip() if (home_city or home_name) else ""
+                    
+                    away_city = away_team_data.get("teamCity", "")
+                    away_name = away_team_data.get("teamName", "")
+                    away_team_str = f"{away_city} {away_name}".strip() if (away_city or away_name) else ""
+                    
+                    if home_team_str and away_team_str:
+                        # Try to get game time from game info
+                        game_time_dt = timestamp  # Default to current time
+                        try:
+                            from agentx.data.nba._utils import get_game_info_by_id
+                            game_info = get_game_info_by_id(game_id)
+                            if game_info and game_info.get("game_time_utc"):
+                                game_time_dt = datetime.fromisoformat(
+                                    game_info["game_time_utc"].replace("Z", "+00:00")
+                                )
+                        except Exception:
+                            pass  # Use timestamp as fallback
+                        
+                        events.append(
+                            GameInitializeEvent(
+                                timestamp=timestamp,
+                                event_id=game_id,
+                                game_id=game_id,
+                                home_team=home_team_str,
+                                away_team=away_team_str,
+                                game_time=game_time_dt,
+                            )
+                        )
+                        self._initialized_games.add(game_id)
         
         # Handle play-by-play events (from NBA API PlayByPlay endpoint)
         # PlayByPlay is used for:
