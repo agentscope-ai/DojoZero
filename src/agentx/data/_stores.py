@@ -188,11 +188,11 @@ class DataStore(ABC):
             self.poll_interval_seconds = 5.0
     
     async def _poll_loop(self) -> None:
-        """Main polling loop that fetches from API and emits events."""
-        # Calculate loop interval: use minimum of all intervals
-        # poll_interval_seconds is already calculated as min(poll_intervals.values()) in __init__
-        loop_interval = self.poll_interval_seconds
+        """Main polling loop that fetches from API and emits events.
         
+        The loop interval is read dynamically on each iteration to support
+        runtime interval updates (e.g., switching from pre-game to in-game polling).
+        """
         while self._running:
             try:
                 # Poll for updates (pass poll identifier)
@@ -223,7 +223,12 @@ class DataStore(ABC):
             except Exception as e:
                 print(f"Error in poll loop for store {self.store_id}: {e}")
             
-            # Wait before next poll (use minimum interval)
+            # Wait before next poll - read interval dynamically to support runtime updates
+            # Recalculate minimum interval on each iteration (in case it was updated)
+            if self.poll_intervals:
+                loop_interval = min(self.poll_intervals.values())
+            else:
+                loop_interval = self.poll_interval_seconds
             await asyncio.sleep(loop_interval)
     
     async def _poll_api(
