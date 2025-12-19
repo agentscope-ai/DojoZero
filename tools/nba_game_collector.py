@@ -12,6 +12,7 @@ Orchestrates data collection for NBA games:
 
 import argparse
 import asyncio
+import hashlib
 import logging
 import os
 import subprocess
@@ -105,7 +106,6 @@ class GameTrialManager:
             # Data dir structure: {data_dir}/{date}/{game_id}.yaml, {game_id}.jsonl, {game_id}.log
             if not self.game_date:
                 # If data_dir is provided but no game_date, use today's date
-                from datetime import datetime
                 self.game_date = datetime.now().strftime("%Y-%m-%d")
             date_dir = self.data_dir / self.game_date
             config_file = date_dir / f"{self.game_id}.yaml"
@@ -138,7 +138,13 @@ class GameTrialManager:
         self.config_file = config_file
         self.replay_file = replay_file
         self.log_file = log_file
-        self.trial_id = f"nba-game-{self.game_id}"
+        
+        # Generate unique trial ID with hash postfix to avoid conflicts
+        # Hash includes game_id, date, and timestamp for uniqueness
+        timestamp = datetime.now(timezone.utc).isoformat()
+        hash_input = f"{self.game_id}-{self.game_date or 'unknown'}-{timestamp}"
+        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+        self.trial_id = f"nba-game-{self.game_id}-{hash_suffix}"
 
         # Set up file logger for this game
         self._setup_file_logger()
