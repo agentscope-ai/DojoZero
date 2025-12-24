@@ -1,6 +1,7 @@
 """Polymarket-specific event types."""
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from agentx.data._models import DataEvent, EventTypes, register_event
 
@@ -14,6 +15,7 @@ class OddsUpdateEvent(DataEvent):
     Raw probabilities are also included for reference.
     """
     
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     event_id: str = field(default="")
     home_odds: float = field(default=1.0)  # Computed: 1 / home_probability
     away_odds: float = field(default=1.0)  # Computed: 1 / away_probability

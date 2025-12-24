@@ -6,7 +6,7 @@ from typing import Any, Mapping, Protocol, Sequence, TypedDict, cast
 from agentx.core import Agent, AgentBase, StreamEvent
 from agentx.data._models import DataEvent
 
-LOGGER = logging.getLogger("agentx.nba_moneyline.agent")
+logger = logging.getLogger(__name__)
 
 
 class _ActorIdConfig(TypedDict):
@@ -59,7 +59,7 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
                             f"operator '{operator.actor_id}' must expose a 'count' coroutine"
                         )
                     self._operator = cast(_EventCounterOperatorLike, operator)
-                    LOGGER.info(
+                    logger.info(
                         "agent '%s' registered operator '%s'",
                         self.actor_id,
                         self._operator_id,
@@ -68,11 +68,11 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
 
     async def start(self) -> None:
         """Protocol hook: dashboard calls this before events are dispatched."""
-        LOGGER.info("agent '%s' starting", self.actor_id)
+        logger.info("agent '%s' starting", self.actor_id)
 
     async def stop(self) -> None:
         """Protocol hook: dashboard calls this when the trial is stopping."""
-        LOGGER.info(
+        logger.info(
             "agent '%s' stopping after %d events",
             self.actor_id,
             self._events_processed,
@@ -89,13 +89,13 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
             try:
                 operator_count = await self._operator.count(event_type=data_event.event_type)
             except Exception as e:
-                LOGGER.warning(
+                logger.warning(
                     "agent '%s' failed to increment counter: %s",
                     self.actor_id,
                     e,
                 )
 
-        LOGGER.info(
+        logger.info(
             "agent '%s' handled event seq=%s type=%s operator_count=%s",
             self.actor_id,
             event.sequence,
@@ -112,7 +112,7 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     async def load_state(self, state: Mapping[str, Any]) -> None:
         """Protocol hook: dashboard restores agent state before resuming."""
         self._events_processed = int(state.get("events_processed", 0))
-        LOGGER.info(
+        logger.info(
             "agent '%s' restored: events=%d",
             self.actor_id,
             self._events_processed,

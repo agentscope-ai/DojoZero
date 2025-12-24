@@ -7,7 +7,7 @@ from agentx.data import DataHub, WebSearchStore
 from agentx.data._streams import DataHubDataStream as BaseDataHubDataStream
 from agentx.nba_moneyline._initializer import NBAStreamInitializer
 
-LOGGER = logging.getLogger("agentx.nba_moneyline.datastream")
+logger = logging.getLogger(__name__)
 
 
 class _ActorIdConfig(TypedDict):

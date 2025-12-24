@@ -121,9 +121,9 @@ class Event:
     away_team: str
     game_time: datetime
     status: EventStatus
-    home_odds: Decimal
-    away_odds: Decimal
-    last_odds_update: datetime
+    home_odds: Optional[Decimal] = None  # Can be None initially, filled in when odds arrive
+    away_odds: Optional[Decimal] = None  # Can be None initially, filled in when odds arrive
+    last_odds_update: Optional[datetime] = None
     betting_closed_at: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -133,9 +133,11 @@ class Event:
             "away_team": self.away_team,
             "game_time": self.game_time.isoformat(),
             "status": self.status.value,
-            "home_odds": str(self.home_odds),
-            "away_odds": str(self.away_odds),
-            "last_odds_update": self.last_odds_update.isoformat(),
+            "home_odds": str(self.home_odds) if self.home_odds else None,
+            "away_odds": str(self.away_odds) if self.away_odds else None,
+            "last_odds_update": (
+                self.last_odds_update.isoformat() if self.last_odds_update else None
+            ),
             "betting_closed_at": (
                 self.betting_closed_at.isoformat() if self.betting_closed_at else None
             ),
@@ -397,14 +399,22 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
     async def start(self) -> None:
         """Protocol hook: called before traffic is routed"""
-        print(f"[BROKER] Operator '{self.actor_id}' starting")
+        logger.info(
+            "Operator '%s' starting (accounts=%d, events=%d, bets=%d)",
+            self.actor_id,
+            len(self._accounts),
+            len(self._events),
+            len(self._bets),
+        )
 
     async def stop(self) -> None:
         """Protocol hook: called during shutdown"""
-        print(
-            f"[BROKER] Operator '{self.actor_id}' stopping - "
-            f"accounts={len(self._accounts)}, events={len(self._events)}, "
-            f"bets={len(self._bets)}"
+        logger.info(
+            "Operator '%s' stopping - accounts=%d, events=%d, bets=%d",
+            self.actor_id,
+            len(self._accounts),
+            len(self._events),
+            len(self._bets),
         )
 
     def register_agents(self, agents: Sequence[Agent]) -> None:
@@ -462,7 +472,55 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     getattr(data_event, "timestamp", None),
                 )
                 
-                if event_type == EventTypes.ODDS_UPDATE.value:
+                if event_type == EventTypes.GAME_INITIALIZE.value:
+
+                    # GameInitializeEvent: Initialize event with team info (no odds yet)
+                    home_team_str = getattr(data_event, "home_team", "")
+                    away_team_str = getattr(data_event, "away_team", "")
+                    game_time_dt = getattr(data_event, "game_time", None)
+                    
+                    if not home_team_str or not away_team_str:
+                        logger.warning(
+                            "GameInitializeEvent missing team info: event_id=%s",
+                            event_id,
+                        )
+                        return
+                    
+                    if not isinstance(game_time_dt, datetime):
+                        game_time_dt = datetime.now()
+                    
+                    if event_id in self._events:
+                        # Event already exists - update team info if needed
+                        broker_event = self._events[event_id]
+                        broker_event.home_team = home_team_str
+                        broker_event.away_team = away_team_str
+                        broker_event.game_time = game_time_dt
+                        logger.info(
+                            "Updated event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s",
+                            event_id,
+                            home_team_str,
+                            away_team_str,
+                            game_time_dt,
+                        )
+                    else:
+                        # Initialize new event without odds (will be filled in when OddsUpdateEvent arrives)
+                        logger.info(
+                            "Initializing event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s (odds pending)",
+                            event_id,
+                            home_team_str,
+                            away_team_str,
+                            game_time_dt,
+                        )
+                        await self.initialize_event(
+                            event_id=event_id,
+                            home_team=home_team_str,
+                            away_team=away_team_str,
+                            game_time=game_time_dt,
+                            initial_home_odds=None,  # Will be updated when OddsUpdateEvent arrives
+                            initial_away_odds=None,  # Will be updated when OddsUpdateEvent arrives
+                        )
+                
+                elif event_type == EventTypes.ODDS_UPDATE.value:
                     # Only process odds if we have team info (either from existing event or pending GameUpdateEvent)
                     if event_id in self._events:
                         # Event exists - update odds
@@ -590,10 +648,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                         final_score=data_event.final_score,
                     )
                 else:
-                    print(f"[WARNING] Unknown event type: {event_type}")
+                    logger.warning("Unknown event type: %s", event_type)
 
         except Exception as e:
-            print(f"[ERROR] Failed to handle stream event: {e}")
+            logger.error("Failed to handle stream event: %s", e, exc_info=True)
 
     async def initialize_event(
         self,
@@ -601,14 +659,27 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         home_team: str,
         away_team: str,
         game_time: datetime,
-        initial_home_odds: Decimal,
-        initial_away_odds: Decimal,
+        initial_home_odds: Optional[Decimal] = None,
+        initial_away_odds: Optional[Decimal] = None,
     ) -> Event:
-        """Initialize a new betting event with starting odds"""
+        """Initialize a new betting event.
+        
+        Args:
+            event_id: Unique event identifier
+            home_team: Home team name
+            away_team: Away team name
+            game_time: Scheduled game time
+            initial_home_odds: Optional initial home odds (can be None if not yet available)
+            initial_away_odds: Optional initial away odds (can be None if not yet available)
+        """
+
         if event_id in self._events:
             raise ValueError(f"Event {event_id} already exists")
 
-        if initial_home_odds <= 1.0 or initial_away_odds <= 1.0:
+        # Validate odds if provided
+        if initial_home_odds is not None and initial_home_odds <= 1.0:
+            raise ValueError("Odds must be greater than 1.0")
+        if initial_away_odds is not None and initial_away_odds <= 1.0:
             raise ValueError("Odds must be greater than 1.0")
 
         now = datetime.now()
@@ -620,20 +691,36 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             status=EventStatus.SCHEDULED,
             home_odds=initial_home_odds,
             away_odds=initial_away_odds,
-            last_odds_update=now,
+            last_odds_update=now if (initial_home_odds and initial_away_odds) else None,
         )
 
         self._events[event_id] = event
-        print(
-            f"[EVENT] Created {event_id}: {home_team} vs {away_team} "
-            f"(Odds: {initial_home_odds}/{initial_away_odds})"
-        )
+        if initial_home_odds and initial_away_odds:
+            logger.info(
+                "Created event %s: %s vs %s (Odds: %s/%s)",
+                event_id,
+                home_team,
+                away_team,
+                initial_home_odds,
+                initial_away_odds,
+            )
+        else:
+            logger.info(
+                "Created event %s: %s vs %s (Odds: pending)",
+                event_id,
+                home_team,
+                away_team,
+            )
         return event
 
     async def update_odds(
         self, event_id: str, home_odds: Decimal, away_odds: Decimal
     ) -> Event:
-        """Update odds for an event and execute matching limit orders"""
+        """Update odds for an event and execute matching limit orders.
+        
+        Can be called to set initial odds (if event was initialized without odds)
+        or to update existing odds.
+        """
         if event_id not in self._events:
             raise ValueError(f"Event {event_id} not found")
 
@@ -650,9 +737,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         event.away_odds = away_odds
         event.last_odds_update = datetime.now()
 
-        print(
-            f"[ODDS] Updated {event_id}: home={home_odds}, away={away_odds} "
-            f"({event.status.value})"
+        logger.info(
+            "Updated odds for event %s: home=%s, away=%s (status=%s)",
+            event_id,
+            home_odds,
+            away_odds,
+            event.status.value,
         )
 
         # Check and execute matching limit orders
@@ -688,7 +778,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         if event.status == EventStatus.SETTLED:
             raise ValueError("Cannot change status of settled event")
 
-        print(f"[EVENT] {event_id} status: {event.status.value} → {status.value}")
+        logger.info(
+            "Event %s status changed: %s → %s",
+            event_id,
+            event.status.value,
+            status.value,
+        )
 
         event.status = status
 
@@ -720,9 +815,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         if winner not in ["home", "away"]:
             raise ValueError(f"Invalid winner: {winner}")
 
-        print(
-            f"[SETTLEMENT] Settling {event_id} - Winner: {winner}, "
-            f"Score: {final_score}"
+        logger.info(
+            "Settling event %s - Winner: %s, Score: %s",
+            event_id,
+            winner,
+            final_score,
         )
 
         # Get all active bets for this event
@@ -739,7 +836,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Update event status
         event.status = EventStatus.SETTLED
 
-        print(f"[SETTLEMENT] Completed {event_id} - Settled {settled_count} bets")
+        logger.info("Completed settlement for event %s - Settled %d bets", event_id, settled_count)
 
     async def _settle_bet(self, bet: Bet, winner: str) -> None:
         """Settle a single bet"""
@@ -769,9 +866,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             self._event_active_bets[bet.event_id].discard(bet.bet_id)
 
             # Log settlement
-            print(
-                f"[SETTLEMENT] Bet {bet.bet_id} - Agent {bet.agent_id}: "
-                f"{outcome}, Payout: {payout}"
+            logger.info(
+                "Bet %s settled - Agent %s: %s, Payout: %s",
+                bet.bet_id,
+                bet.agent_id,
+                outcome,
+                payout,
             )
 
             # Notify agent
@@ -801,7 +901,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 cancelled_count += 1
 
         if cancelled_count > 0:
-            print(f"[EVENT] Cancelled {cancelled_count} pre-game orders for {event_id}")
+            logger.info("Cancelled %d pre-game orders for event %s", cancelled_count, event_id)
 
     async def _cancel_all_pending_orders(self, event_id: str) -> None:
         """Cancel all pending orders for an event"""
@@ -812,9 +912,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             await self._cancel_pending_order(bet)
 
         if pending_bet_ids:
-            print(
-                f"[EVENT] Cancelled {len(pending_bet_ids)} pending orders "
-                f"for {event_id}"
+            logger.info(
+                "Cancelled %d pending orders for event %s",
+                len(pending_bet_ids),
+                event_id,
             )
 
     async def _cancel_pending_order(self, bet: Bet) -> None:
@@ -832,9 +933,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._event_pending_orders[bet.event_id].discard(bet.bet_id)
         self._bet_history[bet.agent_id].append(bet.bet_id)
 
-        print(
-            f"[CANCEL] Bet {bet.bet_id} cancelled - "
-            f"Refunded {bet.amount} to {bet.agent_id}"
+        logger.info(
+            "Bet %s cancelled - Refunded %s to %s",
+            bet.bet_id,
+            bet.amount,
+            bet.agent_id,
         )
 
     # =========================================================================
@@ -858,7 +961,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         )
         self._accounts[agent_id] = account
 
-        print(f"[ACCOUNT] Created for {agent_id} with balance {initial_balance}")
+        logger.info("Created account for %s with balance %s", agent_id, initial_balance)
         return account
 
     async def get_balance(self, agent_id: str) -> Decimal:
@@ -880,7 +983,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             account.balance += amount
             account.last_updated = datetime.now()
 
-            print(f"[DEPOSIT] {agent_id}: +{amount} (balance: {account.balance})")
+            logger.info("Deposit for %s: +%s (balance: %s)", agent_id, amount, account.balance)
             return account.balance
 
     async def withdraw(self, agent_id: str, amount: Decimal) -> Decimal:
@@ -902,7 +1005,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             account.balance -= amount
             account.last_updated = datetime.now()
 
-            print(f"[WITHDRAW] {agent_id}: -{amount} (balance: {account.balance})")
+            logger.info("Withdraw for %s: -%s (balance: %s)", agent_id, amount, account.balance)
             return account.balance
 
     # =========================================================================
@@ -959,6 +1062,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     raise ValueError("Event is closed for betting")
                 if event.status == EventStatus.SETTLED:
                     raise ValueError("Event has been settled")
+                
+                # Check odds are available (event must be initialized with odds)
+                if event.home_odds is None or event.away_odds is None:
+                    raise ValueError(
+                        f"Odds not yet available for event {bet_request.event_id}. "
+                        "Please wait for odds to be updated."
+                    )
 
                 # Validate betting phase matches event status
                 if bet_request.betting_phase == BettingPhase.PRE_GAME:
@@ -989,11 +1099,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 bet_id = str(uuid.uuid4())
 
                 # Determine execution odds for market orders
-                execution_odds = (
-                    event.home_odds
-                    if bet_request.selection == "home"
-                    else event.away_odds
-                )
+                # Odds should already be validated above, but add safety check
+                if bet_request.selection == "home":
+                    execution_odds = event.home_odds
+                else:
+                    execution_odds = event.away_odds
+                
+                if execution_odds is None:
+                    raise ValueError(
+                        f"Odds not available for selection '{bet_request.selection}' "
+                        f"on event {bet_request.event_id}"
+                    )
 
                 # Create bet record
                 bet = Bet(
@@ -1022,16 +1138,19 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     # Add to pending orders (order book)
                     self._pending_orders[agent_id].append(bet_id)
                     self._event_pending_orders[bet_request.event_id].add(bet_id)
-                    print(
-                        f"[BET] Limit order placed - {bet_id}: "
-                        f"{agent_id} ${bet_request.amount} on "
-                        f"{bet_request.selection} @ {bet_request.limit_odds}+"
+                    logger.info(
+                        "Limit order placed - %s: %s $%s on %s @ %s+",
+                        bet_id,
+                        agent_id,
+                        bet_request.amount,
+                        bet_request.selection,
+                        bet_request.limit_odds,
                     )
 
                 return "bet_placed"
 
         except (ValueError, Exception) as e:
-            print(f"[ERROR] Bet rejected for {agent_id}: {e}")
+            logger.error("Bet rejected for %s: %s", agent_id, e, exc_info=True)
             return "bet_invalid"
 
     async def match_bet(self, bet: Bet, execution_odds: Decimal) -> None:
@@ -1050,9 +1169,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._active_bets[bet.agent_id].append(bet.bet_id)
         self._event_active_bets[bet.event_id].add(bet.bet_id)
 
-        print(
-            f"[EXECUTE] Bet {bet.bet_id} executed - "
-            f"{bet.agent_id} ${bet.amount} on {bet.selection} @ {execution_odds}"
+        logger.info(
+            "Bet %s executed - %s $%s on %s @ %s",
+            bet.bet_id,
+            bet.agent_id,
+            bet.amount,
+            bet.selection,
+            execution_odds,
         )
 
         # Send execution notification to agent
@@ -1079,17 +1202,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             "cancel_failed" - Cancellation failed (see logs for reason)
         """
         if bet_id not in self._bets:
-            print(f"[CANCEL_FAILED] Bet {bet_id} not found")
+            logger.warning("Bet %s not found", bet_id)
             return "cancel_failed"
 
         bet = self._bets[bet_id]
 
         if bet.agent_id != agent_id:
-            print(f"[CANCEL_FAILED] Bet {bet_id} does not belong to agent {agent_id}")
+            logger.warning("Bet %s does not belong to agent %s", bet_id, agent_id)
             return "cancel_failed"
 
         if bet.status != BetStatus.PENDING:
-            print(f"[CANCEL_FAILED] Bet {bet_id} is {bet.status.value}, cannot cancel")
+            logger.warning("Bet %s is %s, cannot cancel", bet_id, bet.status.value)
             return "cancel_failed"
 
         async with self._agent_locks[agent_id]:

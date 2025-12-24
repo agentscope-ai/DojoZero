@@ -6,10 +6,10 @@ from agentx.data._models import DataEvent
 from agentx.data._stores import DataStore, ExternalAPI
 from agentx.data.nba._api import NBAExternalAPI
 from agentx.data.nba._events import (
+    GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
     GameUpdateEvent,
-    InGameCriticalEvent,
     PlayByPlayEvent,
 )
 
@@ -27,14 +27,14 @@ class NBAStore(DataStore):
         """Initialize NBA store.
         
         Default polling intervals:
-        - scoreboard: 60.0 seconds (for game updates)
-        - play_by_play: 20.0 seconds (for critical in-game events)
+        - boxscore: 60.0 seconds (for complete game updates with all leaders)
+        - play_by_play: 20.0 seconds (for all play-by-play events and game status)
         """
         # Set default poll_intervals if not provided
         if poll_intervals is None:
             poll_intervals = {
-                "scoreboard": 60.0,
-                "play_by_play": 20.0,
+                "boxscore": 60.0,  # Complete game updates with all leaders
+                "play_by_play": 20.0,  # All play-by-play events and game status detection
             }
         
         super().__init__(
@@ -45,6 +45,39 @@ class NBAStore(DataStore):
         )
         # Track previous game status to detect transitions
         self._previous_game_status: dict[str, int] = {}  # game_id -> gameStatus
+        # Track processed event IDs for deduplication (using event_id instead of actionNumber)
+        self._seen_event_ids: set[str] = set()  # Set of processed event_ids
+        # Track which games have PlayByPlay available (to detect game start)
+        self._pbp_available: set[str] = set()  # game_id -> True when PBP first becomes available
+        # Cache boxscore leaders per game to avoid redundant processing
+        self._boxscore_leaders_cache: dict[str, dict[str, Any]] = {}  # game_id -> leaders dict
+        # Track which games have been initialized (to emit GameInitializeEvent only once)
+        self._initialized_games: set[str] = set()  # game_id -> True when GameInitializeEvent has been emitted
+    
+    def _extract_player_stats_from_boxscore(self, boxscore_data: dict[str, Any]) -> dict[str, Any]:
+        """Extract all player stats from BoxScore data.
+        
+        Args:
+            boxscore_data: Full BoxScoreTraditionalV3 data from API
+            
+        Returns:
+            Dictionary with structure:
+            {
+                "home": [list of player dicts with stats],
+                "away": [list of player dicts with stats]
+            }
+        """
+        home_team_data = boxscore_data.get("homeTeam", {})
+        away_team_data = boxscore_data.get("awayTeam", {})
+        
+        # Get players from each team (already includes statistics nested in each player)
+        home_players = home_team_data.get("players", [])
+        away_players = away_team_data.get("players", [])
+        
+        return {
+            "home": home_players if isinstance(home_players, list) else [],
+            "away": away_players if isinstance(away_players, list) else [],
+        }
     
     def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
         """Parse NBA API response into DataEvents."""
@@ -52,182 +85,221 @@ class NBAStore(DataStore):
         
         events = []
         
-        # Handle scoreboard updates (game_update events)
-        # Note: game_start and game_result events are detected from scoreboard data
-        # by tracking game_status transitions (see lines 80-106 below)
-        if "scoreboard" in data:
-            scoreboard_games = data["scoreboard"]
-            # Ensure scoreboard_games is a list
-            if not isinstance(scoreboard_games, list):
-                scoreboard_games = [scoreboard_games] if scoreboard_games else []
-            for game_data in scoreboard_games:
-                # Ensure game_data is a dict
-                if not isinstance(game_data, dict):
-                    continue
-                timestamp = datetime.now(timezone.utc)
-                game_id = game_data.get("gameId", "")
-                current_status = game_data.get("gameStatus", 0)
-                
-                # Extract home and away team data
-                # Ensure they are dictionaries (API might return integers in some cases)
-                home_team_raw = game_data.get("homeTeam", {})
-                away_team_raw = game_data.get("awayTeam", {})
-                home_team_data = home_team_raw if isinstance(home_team_raw, dict) else {}
-                away_team_data = away_team_raw if isinstance(away_team_raw, dict) else {}
-                
-                # Check for status transitions
-                previous_status = self._previous_game_status.get(game_id)
-                
-                # Handle status transitions and first-time observations
-                if previous_status is None:
-                    # First time seeing this game - handle current state
-                    if current_status == 2:
-                        # Game is already in progress - emit GameStartEvent
-                        # (we missed the actual transition, but game has started)
-                        events.append(
-                            GameStartEvent(
-                                timestamp=timestamp,
-                                event_id=game_id,
-                            )
-                        )
-                    elif current_status == 3:
-                        # Game is already finished - emit GameResultEvent
-                        # (we missed the actual transition, but game has ended)
-                        home_score = home_team_data.get("score", 0) if isinstance(home_team_data, dict) else 0
-                        away_score = away_team_data.get("score", 0) if isinstance(away_team_data, dict) else 0
-                        winner = "home" if home_score > away_score else "away" if away_score > home_score else ""
+        # Handle boxscore data (primary endpoint - replaces ScoreboardV3)
+        # BoxScoreTraditionalV3 provides complete game data including all leaders
+        if "boxscore" in data:
+            boxscore_data = data["boxscore"]
+            if not isinstance(boxscore_data, dict):
+                return events
+            
+            game_id = boxscore_data.get("gameId", "")
+            if not game_id:
+                return events
+            
+            timestamp = datetime.now(timezone.utc)
+            
+            # Extract team data
+            home_team_data = boxscore_data.get("homeTeam", {})
+            away_team_data = boxscore_data.get("awayTeam", {})
+            
+            # Check if this is the initial call (no team data available yet - pre-game)
+            has_team_data = bool(home_team_data and away_team_data)
+            
+            # Emit GameInitializeEvent on first call when team data is not yet available
+            if game_id not in self._initialized_games and not has_team_data:
+                # Try to get game info from scoreboard API
+                try:
+                    from agentx.data.nba._utils import get_game_info_by_id
+                    game_info = get_game_info_by_id(game_id)
+                    if game_info:
+                        home_team_str = game_info.get("home_team", "")
+                        away_team_str = game_info.get("away_team", "")
+                        game_time_utc_str = game_info.get("game_time_utc", "")
                         
-                        events.append(
-                            GameResultEvent(
-                                timestamp=timestamp,
-                                event_id=game_id,
-                                winner=winner,
-                                final_score={"home": home_score, "away": away_score},
-                            )
-                        )
-                    # If current_status == 1 (Not Started) or 0 (invalid), don't emit anything
-                else:
-                    # We have previous status - detect transitions
-                    # Emit GameStartEvent when status transitions from 1 (Not Started) to 2 (In Progress)
-                    if previous_status == 1 and current_status == 2:
-                        events.append(
-                            GameStartEvent(
-                                timestamp=timestamp,
-                                event_id=game_id,
-                            )
-                        )
-                    
-                    # Emit GameResultEvent when status transitions from 2 (In Progress) to 3 (Finished)
-                    if previous_status == 2 and current_status == 3:
-                        # Determine winner from scores
-                        home_score = home_team_data.get("score", 0) if isinstance(home_team_data, dict) else 0
-                        away_score = away_team_data.get("score", 0) if isinstance(away_team_data, dict) else 0
-                        winner = "home" if home_score > away_score else "away" if away_score > home_score else ""
+                        # Parse game time
+                        game_time_dt = timestamp  # Default to current time
+                        if game_time_utc_str:
+                            try:
+                                game_time_dt = datetime.fromisoformat(
+                                    game_time_utc_str.replace("Z", "+00:00")
+                                )
+                            except (ValueError, AttributeError):
+                                pass
                         
-                        events.append(
-                            GameResultEvent(
-                                timestamp=timestamp,
-                                event_id=game_id,
-                                winner=winner,
-                                final_score={"home": home_score, "away": away_score},
+                        if home_team_str and away_team_str:
+                            events.append(
+                                GameInitializeEvent(
+                                    timestamp=timestamp,
+                                    event_id=game_id,
+                                    game_id=game_id,
+                                    home_team=home_team_str,
+                                    away_team=away_team_str,
+                                    game_time=game_time_dt,
+                                )
                             )
-                        )
+                            self._initialized_games.add(game_id)
+                except Exception as e:
+                    # If we can't get game info, skip GameInitializeEvent
+                    # It will be emitted when boxscore data becomes available
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.debug(
+                        "Could not get game info for GameInitializeEvent: game_id=%s, error=%s",
+                        game_id,
+                        e,
+                    )
+            
+            # Only emit GameUpdateEvent if we have team data
+            if has_team_data:
+                # Get team statistics
+                home_stats = home_team_data.get("statistics", {})
+                away_stats = away_team_data.get("statistics", {})
                 
-                # Extract game leaders if available
-                game_leaders_data = game_data.get("gameLeaders", {})
-                game_leaders = {}
-                if game_leaders_data and isinstance(game_leaders_data, dict):
-                    # Extract home and away team leaders
-                    home_leaders_raw = game_leaders_data.get("homeLeaders", {})
-                    away_leaders_raw = game_leaders_data.get("awayLeaders", {})
-                    home_leaders = home_leaders_raw if isinstance(home_leaders_raw, dict) else {}
-                    away_leaders = away_leaders_raw if isinstance(away_leaders_raw, dict) else {}
-                    
-                    # Helper function to safely extract leader data
-                    def extract_leader_data(leaders_dict: dict, stat_type: str) -> dict:
-                        """Safely extract leader data for a specific stat type."""
-                        if not isinstance(leaders_dict, dict):
-                            return {}
-                        stat_data = leaders_dict.get(stat_type, {})
-                        if not isinstance(stat_data, dict):
-                            return {}
-                        return {
-                            "personId": stat_data.get("personId", 0),
-                            "name": stat_data.get("name", ""),
-                            "playerSlug": stat_data.get("playerSlug", ""),
-                            "jerseyNum": stat_data.get("jerseyNum", ""),
-                            "position": stat_data.get("position", ""),
-                            "teamTricode": stat_data.get("teamTricode", ""),
-                            stat_type: stat_data.get("value", 0),
-                        }
-                    
-                    game_leaders = {
-                        "home": {
-                            "points": extract_leader_data(home_leaders, "points"),
-                            "rebounds": extract_leader_data(home_leaders, "rebounds"),
-                            "assists": extract_leader_data(home_leaders, "assists"),
-                        },
-                        "away": {
-                            "points": extract_leader_data(away_leaders, "points"),
-                            "rebounds": extract_leader_data(away_leaders, "rebounds"),
-                            "assists": extract_leader_data(away_leaders, "assists"),
-                        },
-                    }
+                # Extract scores from statistics
+                home_score = home_stats.get("points", 0) or 0
+                away_score = away_stats.get("points", 0) or 0
                 
-                # Always emit GameUpdateEvent with current scoreboard snapshot
+                # Extract all player stats from BoxScore (pass through raw data)
+                player_stats = self._extract_player_stats_from_boxscore(boxscore_data)
+                
+                # Emit GameUpdateEvent with complete BoxScore data
+                # Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay
                 events.append(
                     GameUpdateEvent(
                         timestamp=timestamp,
-                        event_id=game_id,  # Use game_id as event_id
+                        event_id=game_id,
                         game_id=game_id,
-                        game_status=current_status,
-                        game_status_text=game_data.get("gameStatusText", ""),
-                        period=game_data.get("period", 0),
-                        game_clock=game_data.get("gameClock", ""),
-                        game_time_utc=game_data.get("gameTimeUTC", ""),
+                        period=0,  # BoxScore doesn't provide period info
+                        game_clock="",  # BoxScore doesn't provide clock info
+                        game_time_utc="",  # BoxScore doesn't provide game time
                         home_team={
                             "teamId": home_team_data.get("teamId", 0),
                             "teamName": home_team_data.get("teamName", ""),
                             "teamCity": home_team_data.get("teamCity", ""),
                             "teamTricode": home_team_data.get("teamTricode", ""),
-                            "score": home_team_data.get("score", 0),
-                            "wins": home_team_data.get("wins", 0),
-                            "losses": home_team_data.get("losses", 0),
-                            "seed": home_team_data.get("seed", 0),
-                            "timeoutsRemaining": home_team_data.get("timeoutsRemaining", 0),
-                            "inBonus": home_team_data.get("inBonus", False),
-                            "periods": home_team_data.get("periods", []),  # Quarter-by-quarter scores
+                            "score": home_score,
+                            "wins": 0,  # Not available in BoxScore
+                            "losses": 0,  # Not available in BoxScore
+                            "seed": 0,  # Not available in BoxScore
+                            "timeoutsRemaining": 0,  # Not available in BoxScore
+                            "inBonus": None,  # Not available in BoxScore
+                            "periods": [],  # Not available in BoxScore
                         },
                         away_team={
                             "teamId": away_team_data.get("teamId", 0),
                             "teamName": away_team_data.get("teamName", ""),
                             "teamCity": away_team_data.get("teamCity", ""),
                             "teamTricode": away_team_data.get("teamTricode", ""),
-                            "score": away_team_data.get("score", 0),
-                            "wins": away_team_data.get("wins", 0),
-                            "losses": away_team_data.get("losses", 0),
-                            "seed": away_team_data.get("seed", 0),
-                            "timeoutsRemaining": away_team_data.get("timeoutsRemaining", 0),
-                            "inBonus": away_team_data.get("inBonus", False),
-                            "periods": away_team_data.get("periods", []),  # Quarter-by-quarter scores
+                            "score": away_score,
+                            "wins": 0,  # Not available in BoxScore
+                            "losses": 0,  # Not available in BoxScore
+                            "seed": 0,  # Not available in BoxScore
+                            "timeoutsRemaining": 0,  # Not available in BoxScore
+                            "inBonus": None,  # Not available in BoxScore
+                            "periods": [],  # Not available in BoxScore
                         },
-                        game_leaders=game_leaders,
+                        player_stats=player_stats,
                     )
                 )
                 
-                # Update previous status for next poll
-                self._previous_game_status[game_id] = current_status
+                # Also emit GameInitializeEvent if not already emitted (when data becomes available)
+                if game_id not in self._initialized_games:
+                    home_city = home_team_data.get("teamCity", "")
+                    home_name = home_team_data.get("teamName", "")
+                    home_team_str = f"{home_city} {home_name}".strip() if (home_city or home_name) else ""
+                    
+                    away_city = away_team_data.get("teamCity", "")
+                    away_name = away_team_data.get("teamName", "")
+                    away_team_str = f"{away_city} {away_name}".strip() if (away_city or away_name) else ""
+                    
+                    if home_team_str and away_team_str:
+                        # Try to get game time from game info
+                        game_time_dt = timestamp  # Default to current time
+                        try:
+                            from agentx.data.nba._utils import get_game_info_by_id
+                            game_info = get_game_info_by_id(game_id)
+                            if game_info and game_info.get("game_time_utc"):
+                                game_time_dt = datetime.fromisoformat(
+                                    game_info["game_time_utc"].replace("Z", "+00:00")
+                                )
+                        except Exception:
+                            pass  # Use timestamp as fallback
+                        
+                        events.append(
+                            GameInitializeEvent(
+                                timestamp=timestamp,
+                                event_id=game_id,
+                                game_id=game_id,
+                                home_team=home_team_str,
+                                away_team=away_team_str,
+                                game_time=game_time_dt,
+                            )
+                        )
+                        self._initialized_games.add(game_id)
         
         # Handle play-by-play events (from NBA API PlayByPlay endpoint)
+        # PlayByPlay is used for:
+        # 1. Game status detection (start/end)
+        # 2. All play-by-play events (no filtering - agents decide what to use)
         if "play_by_play" in data:
             play_by_play_data = data["play_by_play"]
             game_id = play_by_play_data.get("gameId", "")
             actions = play_by_play_data.get("actions", [])
             
+            # Check if PlayByPlay just became available (game start detection)
+            if game_id and game_id not in self._pbp_available and actions:
+                # First time we see actions for this game - game has started
+                self._pbp_available.add(game_id)
+                previous_status = self._previous_game_status.get(game_id)
+                if previous_status != 2:  # Only emit if not already marked as in progress
+                    events.append(
+                        GameStartEvent(
+                            timestamp=datetime.now(timezone.utc),
+                            event_id=game_id,
+                        )
+                    )
+                    self._previous_game_status[game_id] = 2  # In Progress
+            
+            # Check for game end (last action is "Game End")
+            if actions:
+                last_action = actions[-1]
+                if (
+                    isinstance(last_action, dict)
+                    and last_action.get("actionType") == "game"
+                    and "game end" in last_action.get("description", "").lower()
+                ):
+                    # Game has ended
+                    previous_status = self._previous_game_status.get(game_id)
+                    if previous_status != 3:  # Only emit if not already marked as finished
+                        # Get final scores from last action
+                        home_score = int(last_action.get("scoreHome", 0) or 0)
+                        away_score = int(last_action.get("scoreAway", 0) or 0)
+                        winner = "home" if home_score > away_score else "away" if away_score > home_score else ""
+                        
+                        events.append(
+                            GameResultEvent(
+                                timestamp=datetime.now(timezone.utc),
+                                event_id=game_id,
+                                winner=winner,
+                                final_score={"home": home_score, "away": away_score},
+                            )
+                        )
+                        self._previous_game_status[game_id] = 3  # Finished
+            
+            # Deduplication: filter out actions we've already processed using event_id
+            new_actions = []
             for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                action_number = action.get("actionNumber", 0)
+                pbp_event_id = f"{game_id}_pbp_{action_number}"
+                if pbp_event_id not in self._seen_event_ids:
+                    new_actions.append(action)
+                    self._seen_event_ids.add(pbp_event_id)
+            
+            # Emit ALL play-by-play events (no filtering - let agents decide)
+            for action in new_actions:
                 # Parse timestamp from action
-                # NBA API actions have actionNumber, period, clock, etc.
-                # Try to parse timeActual if available, otherwise use current time
                 timestamp = datetime.now(timezone.utc)
                 time_actual = action.get("timeActual")
                 if time_actual:
@@ -237,55 +309,39 @@ class NBAStore(DataStore):
                         pass  # Use default timestamp
                 
                 # Extract action data
-                action_type = action.get("actionType", "")  # String: "rebound", "shot", "foul", etc.
+                action_type = action.get("actionType", "")
                 action_number = action.get("actionNumber", 0)
                 period = action.get("period", 0)
                 clock = action.get("clock", "")
                 person_id = action.get("personId", 0)
                 player_name = action.get("playerName", "") or action.get("name", "")
                 team_tricode = action.get("teamTricode", "")
-                # Handle scoreHome/scoreAway as strings or ints
                 home_score = int(action.get("scoreHome", 0) or 0)
                 away_score = int(action.get("scoreAway", 0) or 0)
                 description = action.get("description", "")
                 
-                pbp_event = PlayByPlayEvent(
-                    timestamp=timestamp,
-                    game_id=game_id,
-                    action_type=action_type,
-                    action_number=action_number,
-                    period=period,
-                    clock=clock,
-                    person_id=person_id,
-                    player_name=player_name,
-                    team_tricode=team_tricode,
-                    home_score=home_score,
-                    away_score=away_score,
-                    description=description,
+                # Generate unique event_id for deduplication
+                pbp_event_id = f"{game_id}_pbp_{action_number}"
+                
+                # Emit ALL play-by-play events
+                events.append(
+                    PlayByPlayEvent(
+                        timestamp=timestamp,
+                        event_id=pbp_event_id,
+                        game_id=game_id,
+                        action_type=action_type,
+                        action_number=action_number,
+                        period=period,
+                        clock=clock,
+                        person_id=person_id,
+                        player_name=player_name,
+                        team_tricode=team_tricode,
+                        home_score=home_score,
+                        away_score=away_score,
+                        description=description,
+                    )
                 )
                 
-                # Only emit critical events
-                if pbp_event.is_critical():
-                    # Also emit InGameCriticalEvent with the specific critical type
-                    critical_type = pbp_event.get_critical_type()
-                    if critical_type:
-                        critical_event_id = f"{game_id}_critical_{action_number}"
-                        events.append(
-                            InGameCriticalEvent(
-                                timestamp=timestamp,
-                                event_id=critical_event_id,
-                                game_id=game_id,
-                                critical_type=critical_type,
-                                period=period,
-                                clock=clock,
-                                player_id=person_id,
-                                player_name=player_name,
-                                team_tricode=team_tricode,
-                                description=description,
-                                action_type=action_type,
-                                action_number=action_number,
-                            )
-                        )
         
         return events
     
@@ -300,26 +356,21 @@ class NBAStore(DataStore):
         
         events = []
         
-        # Poll scoreboard (for game_update events with full scoreboard snapshot)
+        # Poll boxscore data (for complete game updates with all leaders)
         # Check if enough time has passed since last poll
-        if self._should_poll_endpoint("scoreboard"):
-            scoreboard_params: dict[str, Any] = {}
-            if identifier and "game_id" in identifier:
-                scoreboard_params["game_id"] = identifier["game_id"]
-            if identifier and "game_date" in identifier:
-                scoreboard_params["game_date"] = identifier["game_date"]
-            
-            scoreboard_data = await self._api.fetch("scoreboard", scoreboard_params if scoreboard_params else None)
-            if scoreboard_data:
-                scoreboard_events = self._parse_api_response(scoreboard_data)
-                events.extend(scoreboard_events)
-                self._record_poll_time("scoreboard")
+        if identifier and "game_id" in identifier:
+            if self._should_poll_endpoint("boxscore"):
+                game_id = identifier["game_id"]
+                boxscore_params = {"game_id": game_id}
+                
+                # Fetch boxscore data
+                boxscore_data = await self._api.fetch("boxscore", boxscore_params)
+                if boxscore_data:
+                    boxscore_events = self._parse_api_response(boxscore_data)
+                    events.extend(boxscore_events)
+                    self._record_poll_time("boxscore")
         
-        # Note: game_start and game_result events are detected from scoreboard data
-        # by tracking game_status transitions in _parse_api_response, so we don't need
-        # a separate game_status endpoint call.
-        
-        # Poll play-by-play events (only for live games)
+        # Poll play-by-play events (for all PBP events and game status detection)
         # Check if enough time has passed since last poll
         if identifier and "game_id" in identifier:
             if self._should_poll_endpoint("play_by_play"):

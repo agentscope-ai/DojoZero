@@ -216,6 +216,7 @@ class TrialRuntime:
     phase: TrialPhase = TrialPhase.INITIALIZED
     last_error: Exception | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _context: dict[str, Any] | None = field(default=None, repr=False)  # Runtime context (stores, hubs, etc.)
 
 
 @dataclass(slots=True)
@@ -640,13 +641,9 @@ class Dashboard:
         # Extract from stream configs to recreate hub/store instances
         context = self._build_runtime_context(spec)
         
-        # Call startup function if provided by context builder (e.g., to start DataStore polling)
-        if "_startup" in context and callable(context["_startup"]):
-            startup_fn = context["_startup"]
-            if asyncio.iscoroutinefunction(startup_fn):
-                await startup_fn()
-            else:
-                startup_fn()
+        # Note: _startup is NOT called here - it will be called after all actors
+        # (especially DATA_STREAM actors) are started to ensure streams subscribe
+        # before stores start polling
         
         registry: Dict[str, ActorRuntime[Any]] = {}
         agents: Dict[str, Agent] = {}
@@ -670,6 +667,11 @@ class Dashboard:
                     " does not implement the Operator protocol"
                 )
             operators[runtime.actor_id] = cast(Operator, operator_instance)
+            LOGGER.debug(
+                "Materialized operator '%s' for trial '%s'",
+                runtime.actor_id,
+                spec.trial_id,
+            )
         for actor_spec in spec.agents:
             runtime = await self._materialize_actor(
                 actor_spec,
@@ -709,7 +711,10 @@ class Dashboard:
             operators=operators,
             data_streams=data_streams,
         )
-        return TrialRuntime(spec=spec, actors=registry, record=record)
+        # Store context in runtime so _start_runtime can access _startup function
+        runtime = TrialRuntime(spec=spec, actors=registry, record=record)
+        runtime._context = context
+        return runtime
 
     async def _materialize_actor(
         self,
@@ -983,8 +988,24 @@ class Dashboard:
         runtime.phase = TrialPhase.STARTING
         runtime.last_error = None
         try:
+            # Start actors in order: OPERATOR, AGENT, DATA_STREAM
             for role in self._START_ORDER:
                 await self._start_role(runtime, role)
+            
+            # After all actors (especially DATA_STREAM) are started and subscribed,
+            # call startup function if provided by context builder (e.g., to start DataStore polling)
+            # This ensures streams are subscribed before stores start emitting events
+            context = getattr(runtime, "_context", None)
+            if context and "_startup" in context and callable(context["_startup"]):
+                startup_fn = context["_startup"]
+                LOGGER.debug(
+                    "Calling startup function after all actors started for trial '%s'",
+                    runtime.spec.trial_id,
+                )
+                if asyncio.iscoroutinefunction(startup_fn):
+                    await startup_fn()
+                else:
+                    startup_fn()
         except Exception as exc:  # pragma: no cover - error propagation
             runtime.phase = TrialPhase.FAILED
             runtime.last_error = exc
@@ -1013,7 +1034,19 @@ class Dashboard:
             actor_rt for actor_rt in runtime.actors.values() if actor_rt.role is role
         ]
         if not selected:
+            LOGGER.debug(
+                "No actors with role %s found for trial '%s'",
+                role.value,
+                runtime.spec.trial_id,
+            )
             return
+        LOGGER.debug(
+            "Starting %d actor(s) with role %s for trial '%s': %s",
+            len(selected),
+            role.value,
+            runtime.spec.trial_id,
+            [actor_rt.actor_id for actor_rt in selected],
+        )
         for actor_rt in selected:
             actor_rt.phase = ActorPhase.STARTING
         results = await asyncio.gather(
@@ -1026,8 +1059,22 @@ class Dashboard:
                 actor_rt.phase = ActorPhase.FAILED
                 actor_rt.last_error = result
                 failures.append((actor_rt, result))
+                LOGGER.error(
+                    "Failed to start actor '%s' (role=%s) in trial '%s': %s",
+                    actor_rt.actor_id,
+                    role.value,
+                    runtime.spec.trial_id,
+                    result,
+                    exc_info=result,
+                )
             else:
                 actor_rt.phase = ActorPhase.RUNNING
+                LOGGER.debug(
+                    "Successfully started actor '%s' (role=%s) in trial '%s'",
+                    actor_rt.actor_id,
+                    role.value,
+                    runtime.spec.trial_id,
+                )
         if failures:
             actor_ids = ", ".join(actor.actor_id for actor, _ in failures)
             raise ActorLifecycleError(

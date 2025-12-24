@@ -29,7 +29,7 @@ from agentx.nba_moneyline._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
 )
-from agentx.data._streams import DataHubDataStream
+from agentx.data._models import EventTypes
 from agentx.nba_moneyline._operator import (
     EventCounterOperator,
     EventCounterOperatorConfig,
@@ -39,7 +39,7 @@ from agentx.nba_moneyline._broker import (
     BrokerOperatorConfig,
 )
 
-LOGGER = logging.getLogger("agentx.nba_moneyline.trial")
+logger = logging.getLogger(__name__)
 
 # Mapping from event_type to (processor_class, source_event_types)
 # This defines which processors are needed for each event type and what they depend on.
@@ -56,7 +56,7 @@ EVENT_TYPE_PROCESSOR_MAP: dict[str, tuple[type[Any] | None, list[str]]] = {
 # Mapping from synthetic event types to actual event types
 # Used when a stream subscribes to multiple event types
 SYNTHETIC_EVENT_TYPE_MAP: dict[str, list[str]] = {
-    "game_status_change": ["game_start", "game_result"],
+    "game_status_change": [EventTypes.GAME_START.value, EventTypes.GAME_RESULT.value, EventTypes.GAME_INITIALIZE.value],
     # Other event types (game_update, odds_update) are direct mappings
 }
 
@@ -113,7 +113,7 @@ class NBAPreGameBettingTrialParams(BaseModel):
     # Operators configuration (optional, hierarchical)
     operators: list[OperatorConfig] | None = Field(default=None)
 
-    # Agent configuration (new structure with full agent configs)
+    # Agent configuration
     agents: list[dict[str, Any]] = Field(
         default_factory=lambda: [
             {
@@ -130,12 +130,6 @@ class NBAPreGameBettingTrialParams(BaseModel):
             "  - 'operators': list[str] (optional) - Operator IDs to register\n"
             "  - 'data_streams': list[str] (optional) - DataStream actor IDs to subscribe to"
         ),
-    )
-    
-    # Legacy: agent_ids for backward compatibility (deprecated)
-    agent_ids: list[str] | None = Field(
-        default=None,
-        description="Deprecated: Use 'agents' config instead. If provided, creates simple agents.",
     )
 
     # Polymarket configuration
@@ -189,13 +183,13 @@ def _build_trial_spec(
         home_team_name = game_info.get("home_team")
         away_team_name = game_info.get("away_team")
         game_date = game_info.get("game_date")
-        LOGGER.info(
+        logger.info(
             "Found game info: %s on %s",
             f"{away_team_tricode} @ {home_team_tricode}",
             game_date,
         )
     else:
-        LOGGER.error(
+        logger.error(
             "Could not find game info for game_id=%s. Exiting.",
             params.game_id,
         )
@@ -246,20 +240,20 @@ def _build_trial_spec(
     # Extract event_types from data_streams if provided, otherwise use event_types field
     if params.data_streams:
         event_types_list = [ds.event_type for ds in params.data_streams]
-        LOGGER.info(
+        logger.info(
             "Extracted event types from data_streams config: %s",
             event_types_list,
         )
     elif params.event_types:
         event_types_list = params.event_types
-        LOGGER.info(
+        logger.info(
             "Using event_types from params: %s",
             event_types_list,
         )
     else:
         # Default event types
         event_types_list = ["raw_web_search", "injury_summary", "power_ranking", "expert_prediction"]
-        LOGGER.info(
+        logger.info(
             "Using default event types: %s",
             event_types_list,
         )
@@ -286,14 +280,14 @@ def _build_trial_spec(
                 processor = processor_class() if processor_class else None
                 websearch_store.register_stream(event_type, processor, source_event_types)
                 registered_event_types.add(event_type)
-                LOGGER.debug(
+                logger.debug(
                     "Registered event_type '%s' with processor %s (sources: %s)",
                     event_type,
                     processor_class.__name__ if processor_class else "None",
                     source_event_types,
                 )
         else:
-            LOGGER.warning(
+            logger.warning(
                 "Unknown event_type '%s' not in EVENT_TYPE_PROCESSOR_MAP, skipping processor registration",
                 event_type,
             )
@@ -306,8 +300,8 @@ def _build_trial_spec(
     # Set up polling identifiers for game events
     # NBA store needs game_id to poll game status
     nba_store.set_poll_identifier({"game_id": params.game_id})
-    # Polymarket store needs event_id (using game_id for now)
-    polymarket_store.set_poll_identifier({"event_id": params.game_id})
+    # Polymarket store uses game_id for consistency (all events will use same event_id)
+    polymarket_store.set_poll_identifier({"game_id": params.game_id})
     
     # Start polling on both stores (they will poll automatically)
     # Note: Stores start polling when DataHub connects them via set_event_emitter
@@ -471,7 +465,7 @@ def _build_trial_spec(
                 data_stream_ids=tuple(data_stream_ids),
             )
             operator_specs.append(operator_spec)
-            LOGGER.info(
+            logger.info(
                 "Created operator '%s' of class '%s' with stream subscriptions: %s",
                 op_config.id,
                 op_config.class_name,
@@ -486,14 +480,12 @@ def _build_trial_spec(
             config=default_op_config,
         )
         operator_specs.append(operator_spec)
-        LOGGER.info("Created event counter operator")
+        logger.info("Created event counter operator")
 
-    # Create agent specs from agents config (agent-centric)
+    # Create agent specs from agents config
     agent_specs = []
     
-    # Support both new agents config and legacy agent_ids
     if params.agents:
-        # New structure: agents config with full agent definitions
         for agent_dict in params.agents:
             agent_id = agent_dict.get("id")
             if not agent_id:
@@ -512,7 +504,7 @@ def _build_trial_spec(
                 raise ValueError(f"Unknown agent class: {agent_class_name}")
             
             # Create agent config dict
-            new_agent_config: DummyAgentConfig = {
+            agent_config: DummyAgentConfig = {
                 "actor_id": agent_id,
                 "operator_id": operator_ids[0] if operator_ids else "event_counter",
             }
@@ -520,30 +512,13 @@ def _build_trial_spec(
             agent_spec = AgentSpec[DummyAgentConfig](
                 actor_id=agent_id,
                 actor_cls=agent_cls,
-                config=new_agent_config,
+                config=agent_config,
                 operator_ids=tuple(operator_ids) if operator_ids else ("event_counter",),
                 data_stream_ids=tuple(data_stream_ids),
             )
             agent_specs.append(agent_spec)
-    elif params.agent_ids:
-        # Legacy: simple agent_ids list
-        for agent_id in params.agent_ids:
-            legacy_agent_config: DummyAgentConfig = {
-                "actor_id": agent_id,
-                "operator_id": "event_counter",
-            }
-            # Infer data_stream_ids from all created streams
-            all_stream_ids = [f"{et}_stream" for et in event_types_list]
-            agent_spec = AgentSpec[DummyAgentConfig](
-                actor_id=agent_id,
-                actor_cls=DummyAgent,
-                config=legacy_agent_config,
-                operator_ids=("event_counter",),
-                data_stream_ids=tuple(all_stream_ids),
-            )
-            agent_specs.append(agent_spec)
     else:
-        # Default: create one agent
+        # Default: create one agent if no agents specified
         default_agent_config: DummyAgentConfig = {
             "actor_id": "betting_agent",
             "operator_id": "event_counter",
@@ -700,7 +675,8 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         market_url: str | None = market_url_raw if isinstance(market_url_raw, str) else None
         
         # Prepare identifier for polling (will be used if market_url/slug not available)
-        identifier: dict[str, Any] = {"event_id": game_id}
+        # Use game_id for consistency (all events will use same event_id)
+        identifier: dict[str, Any] = {"game_id": game_id}
         
         # If market_url not provided, try to construct slug from game info
         if not market_url:
@@ -793,8 +769,8 @@ register_trial_builder(
                 "event_type": "odds_update",
             },
             {
-                "id": "in_game_critical_stream",
-                "event_type": "in_game_critical",
+                "id": "play_by_play_stream",
+                "event_type": "play_by_play",
             },
         ],
         "operators": [
@@ -824,7 +800,7 @@ register_trial_builder(
                     "game_update_stream",
                     "odds_update_stream",
                     "game_status_change_stream",
-                    "in_game_critical_stream",
+                    "play_by_play_stream",
                 ],
             }
         ],

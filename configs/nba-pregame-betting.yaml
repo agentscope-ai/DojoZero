@@ -1,7 +1,7 @@
 scenario:
   name: nba-pregame-betting
   config:
-    game_id: '0022501226'
+    game_id: '0022501227'
 
     hub:
       persistence_file: outputs/nba_betting_events.jsonl
@@ -30,8 +30,8 @@ scenario:
       event_type: game_update
     - id: odds_update_stream
       event_type: odds_update
-    - id: in_game_critical_stream
-      event_type: in_game_critical
+    - id: play_by_play_stream
+      event_type: play_by_play
 
     operators:
     - id: event_counter
@@ -42,6 +42,7 @@ scenario:
       data_streams:
       - game_status_change_stream
       - odds_update_stream
+      - game_update_stream
       
     agents:
     - id: betting_agent
@@ -56,4 +57,4 @@ scenario:
       - game_update_stream
       - odds_update_stream
       - game_status_change_stream
-      - in_game_critical_stream
+      - play_by_play_stream

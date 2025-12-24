@@ -1,12 +1,11 @@
 # Query NBA scoreboard using ScoreboardV3 endpoint
 from __future__ import annotations
-
+import asyncio
 from datetime import timezone, datetime, timedelta
 from typing import Any
 from dateutil import parser
 from nba_api.live.nba.endpoints import playbyplay
 from nba_api.stats.static import players
-from nba_api.stats.static import teams
 from nba_api.stats.endpoints import scoreboardv3
 
 # Try to load .env file if python-dotenv is available
@@ -18,14 +17,11 @@ except ImportError:
 
 # Import proxy utilities from agentx
 from agentx.data.nba._utils import with_proxy, get_game_info_by_id
-from agentx.data.nba._events import (
-    GameUpdateEvent,
-)
 from agentx.data.nba._store import NBAStore
 from agentx.data.nba._api import NBAExternalAPI
 
 
-game_id = "0022501226"
+game_id = "0062500001"
 
 def get_current_games():
     """
@@ -51,7 +47,20 @@ def get_current_games():
                 'losses': int
             },
             'awayTeam': {...},
-            'gameLeaders': {...}  # May not be present
+            'gameLeaders': {
+                'homeLeaders': {
+                    'personId': int,
+                    'name': str,
+                    'playerSlug': str,
+                    'jerseyNum': str,
+                    'position': str,
+                    'teamTricode': str,
+                    'points': int,  # Direct numeric value
+                    'rebounds': int,  # Direct numeric value
+                    'assists': int   # Direct numeric value
+                },
+                'awayLeaders': {...}  # Same structure as homeLeaders
+            }  # May not be present (empty when game hasn't started)
         }
     """
     return get_games_for_date(datetime.now(), print_games=False)
@@ -130,7 +139,8 @@ def get_games_for_date(game_date: datetime | str, print_games: bool = False):
                     'score': game_data.get('awayTeam', {}).get('score', 0),
                     'wins': game_data.get('awayTeam', {}).get('wins', 0),
                     'losses': game_data.get('awayTeam', {}).get('losses', 0)
-                }
+                },
+                'gameLeaders': game_data.get('gameLeaders', {})  # Preserve gameLeaders for parsing
             }
             
             # Parse game time
@@ -333,236 +343,46 @@ def get_play_by_play(game_id: str, include_player_names: bool = True):
         return None
 
 
-def create_game_update_event_from_scoreboard(game_data: dict) -> Any:
+async def create_game_update_event_from_boxscore(game_id: str) -> Any:
     """
-    Create a GameUpdateEvent from ScoreboardV3 game data.
+    Create a GameUpdateEvent from BoxScoreTraditionalV3 data.
     
-    This mimics the logic in NBAStore._parse_api_response().
+    Uses NBAStore's parsing logic to ensure consistency.
     
     Args:
-        game_data: Game dictionary from ScoreboardV3 API
+        game_id: NBA game ID
         
     Returns:
-        GameUpdateEvent instance
+        GameUpdateEvent instance (or None if parsing fails)
     """
-    from datetime import datetime, timezone
+    # Use the actual NBAStore to parse the data
+    api = NBAExternalAPI()
+    store = NBAStore(api=api)
     
-    timestamp = datetime.now(timezone.utc)
-    game_id = game_data.get("gameId", "")
-    current_status = game_data.get("gameStatus", 0)
+    # Fetch BoxScore data
+    boxscore_data = await api.fetch("boxscore", {"game_id": game_id})
     
-    # Extract home and away team data
-    home_team_data = game_data.get("homeTeam", {})
-    away_team_data = game_data.get("awayTeam", {})
+    if not boxscore_data or not boxscore_data.get("boxscore"):
+        return None
     
-    # Extract game leaders if available
-    game_leaders_data = game_data.get("gameLeaders", {})
-    game_leaders = {}
-    if game_leaders_data:
-        # Extract home and away team leaders
-        home_leaders = game_leaders_data.get("homeLeaders", {})
-        away_leaders = game_leaders_data.get("awayLeaders", {})
-        game_leaders = {
-            "home": {
-                "points": {
-                    "personId": home_leaders.get("points", {}).get("personId", 0),
-                    "name": home_leaders.get("points", {}).get("name", ""),
-                    "playerSlug": home_leaders.get("points", {}).get("playerSlug", ""),
-                    "jerseyNum": home_leaders.get("points", {}).get("jerseyNum", ""),
-                    "position": home_leaders.get("points", {}).get("position", ""),
-                    "teamTricode": home_leaders.get("points", {}).get("teamTricode", ""),
-                    "points": home_leaders.get("points", {}).get("value", 0),
-                },
-                "rebounds": {
-                    "personId": home_leaders.get("rebounds", {}).get("personId", 0),
-                    "name": home_leaders.get("rebounds", {}).get("name", ""),
-                    "playerSlug": home_leaders.get("rebounds", {}).get("playerSlug", ""),
-                    "jerseyNum": home_leaders.get("rebounds", {}).get("jerseyNum", ""),
-                    "position": home_leaders.get("rebounds", {}).get("position", ""),
-                    "teamTricode": home_leaders.get("rebounds", {}).get("teamTricode", ""),
-                    "rebounds": home_leaders.get("rebounds", {}).get("value", 0),
-                },
-                "assists": {
-                    "personId": home_leaders.get("assists", {}).get("personId", 0),
-                    "name": home_leaders.get("assists", {}).get("name", ""),
-                    "playerSlug": home_leaders.get("assists", {}).get("playerSlug", ""),
-                    "jerseyNum": home_leaders.get("assists", {}).get("jerseyNum", ""),
-                    "position": home_leaders.get("assists", {}).get("position", ""),
-                    "teamTricode": home_leaders.get("assists", {}).get("teamTricode", ""),
-                    "assists": home_leaders.get("assists", {}).get("value", 0),
-                },
-            },
-            "away": {
-                "points": {
-                    "personId": away_leaders.get("points", {}).get("personId", 0),
-                    "name": away_leaders.get("points", {}).get("name", ""),
-                    "playerSlug": away_leaders.get("points", {}).get("playerSlug", ""),
-                    "jerseyNum": away_leaders.get("points", {}).get("jerseyNum", ""),
-                    "position": away_leaders.get("points", {}).get("position", ""),
-                    "teamTricode": away_leaders.get("points", {}).get("teamTricode", ""),
-                    "points": away_leaders.get("points", {}).get("value", 0),
-                },
-                "rebounds": {
-                    "personId": away_leaders.get("rebounds", {}).get("personId", 0),
-                    "name": away_leaders.get("rebounds", {}).get("name", ""),
-                    "playerSlug": away_leaders.get("rebounds", {}).get("playerSlug", ""),
-                    "jerseyNum": away_leaders.get("rebounds", {}).get("jerseyNum", ""),
-                    "position": away_leaders.get("rebounds", {}).get("position", ""),
-                    "teamTricode": away_leaders.get("rebounds", {}).get("teamTricode", ""),
-                    "rebounds": away_leaders.get("rebounds", {}).get("value", 0),
-                },
-                "assists": {
-                    "personId": away_leaders.get("assists", {}).get("personId", 0),
-                    "name": away_leaders.get("assists", {}).get("name", ""),
-                    "playerSlug": away_leaders.get("assists", {}).get("playerSlug", ""),
-                    "jerseyNum": away_leaders.get("assists", {}).get("jerseyNum", ""),
-                    "position": away_leaders.get("assists", {}).get("position", ""),
-                    "teamTricode": away_leaders.get("assists", {}).get("teamTricode", ""),
-                    "assists": away_leaders.get("assists", {}).get("value", 0),
-                },
-            },
-        }
+    # Parse using store's logic
+    events = store._parse_api_response(boxscore_data)
     
-    return GameUpdateEvent(
-        timestamp=timestamp,
-        event_id=game_id,  # Use game_id as event_id
-        game_id=game_id,
-        game_status=current_status,
-        game_status_text=game_data.get("gameStatusText", ""),
-        period=game_data.get("period", 0),
-        game_clock=game_data.get("gameClock", ""),
-        game_time_utc=game_data.get("gameTimeUTC", ""),
-        home_team={
-            "teamId": home_team_data.get("teamId", 0),
-            "teamName": home_team_data.get("teamName", ""),
-            "teamCity": home_team_data.get("teamCity", ""),
-            "teamTricode": home_team_data.get("teamTricode", ""),
-            "score": home_team_data.get("score", 0),
-            "wins": home_team_data.get("wins", 0),
-            "losses": home_team_data.get("losses", 0),
-            "seed": home_team_data.get("seed", 0),
-            "timeoutsRemaining": home_team_data.get("timeoutsRemaining", 0),
-            "inBonus": home_team_data.get("inBonus", False),
-            "periods": home_team_data.get("periods", []),  # Quarter-by-quarter scores
-        },
-        away_team={
-            "teamId": away_team_data.get("teamId", 0),
-            "teamName": away_team_data.get("teamName", ""),
-            "teamCity": away_team_data.get("teamCity", ""),
-            "teamTricode": away_team_data.get("teamTricode", ""),
-            "score": away_team_data.get("score", 0),
-            "wins": away_team_data.get("wins", 0),
-            "losses": away_team_data.get("losses", 0),
-            "seed": away_team_data.get("seed", 0),
-            "timeoutsRemaining": away_team_data.get("timeoutsRemaining", 0),
-            "inBonus": away_team_data.get("inBonus", False),
-            "periods": away_team_data.get("periods", []),  # Quarter-by-quarter scores
-        },
-        game_leaders=game_leaders,
-    )
-
-
-@with_proxy
-def test_game_update_events(game_id: str):
-    """
-    Test creating GameUpdateEvent from ScoreboardV3 data.
+    # Find the GameUpdateEvent
+    for event in events:
+        if event.event_type == "game_update":
+            return event
     
-    Args:
-        game_id: NBA game ID to test
-    """
-    print(f"Fetching ScoreboardV3 data for game_id: {game_id}")
-    
-    # Get games for today (or use game_id to find the specific game)
-    games = get_games_for_date(datetime.now(), print_games=False)
-    
-    # Find the specific game
-    target_game = None
-    for game in games:
-        if game.get('gameId') == game_id:
-            target_game = game
-            break
-    
-    if not target_game:
-        print(f"✗ Game {game_id} not found in today's games")
-        print("  Trying to fetch by date from game info...")
-        game_info = get_game_info_by_id(game_id)
-        if game_info:
-            game_date = game_info.get('game_date')
-            if game_date:
-                games = get_games_for_date(game_date, print_games=False)
-                for game in games:
-                    if game.get('gameId') == game_id:
-                        target_game = game
-                        break
-    
-    if not target_game:
-        print(f"✗ Could not find game {game_id}")
-        return
-    
-    print(f"✓ Found game: {target_game['awayTeam']['teamName']} @ {target_game['homeTeam']['teamName']}")
-    print()
-    
-    # Create GameUpdateEvent
-    print("Creating GameUpdateEvent from scoreboard data...")
-    game_update_event = create_game_update_event_from_scoreboard(target_game)
-    
-    print(f"✓ Created GameUpdateEvent:")
-    print(f"  Event Type: {game_update_event.event_type}")
-    print(f"  Event ID: {game_update_event.event_id}")
-    print(f"  Game ID: {game_update_event.game_id}")
-    print(f"  Game Status: {game_update_event.game_status} ({game_update_event.game_status_text})")
-    print(f"  Period: {game_update_event.period}")
-    print(f"  Game Clock: {game_update_event.game_clock}")
-    print(f"  Game Time UTC: {game_update_event.game_time_utc}")
-    print()
-    print(f"  Away Team: {game_update_event.away_team['teamCity']} {game_update_event.away_team['teamName']} ({game_update_event.away_team['teamTricode']})")
-    print(f"    Score: {game_update_event.away_team['score']}")
-    print(f"    Record: {game_update_event.away_team['wins']}-{game_update_event.away_team['losses']}")
-    print()
-    print(f"  Home Team: {game_update_event.home_team['teamCity']} {game_update_event.home_team['teamName']} ({game_update_event.home_team['teamTricode']})")
-    print(f"    Score: {game_update_event.home_team['score']}")
-    print(f"    Record: {game_update_event.home_team['wins']}-{game_update_event.home_team['losses']}")
-    print()
-    
-    # Check for status transitions
-    status = game_update_event.game_status
-    if status == 2:  # In Progress
-        print("  ⚠ Game is in progress - would emit GameStartEvent if status transitioned from 1→2")
-    elif status == 3:  # Finished
-        home_score = game_update_event.home_team['score']
-        away_score = game_update_event.away_team['score']
-        winner = "home" if home_score > away_score else "away" if away_score > home_score else ""
-        print(f"  ⚠ Game is finished - would emit GameResultEvent:")
-        print(f"    Winner: {winner}")
-        print(f"    Final Score: Home {home_score} - Away {away_score}")
-    
-    # Display game leaders if available
-    if game_update_event.game_leaders:
-        print()
-        print("  Game Leaders:")
-        for team_side in ["home", "away"]:
-            leaders = game_update_event.game_leaders.get(team_side, {})
-            if leaders:
-                print(f"    {team_side.upper()}:")
-                for stat_type in ["points", "rebounds", "assists"]:
-                    stat_data = leaders.get(stat_type, {})
-                    if stat_data and stat_data.get("name"):
-                        value = stat_data.get(stat_type, 0) or stat_data.get("points", 0) or stat_data.get("rebounds", 0) or stat_data.get("assists", 0)
-                        print(f"      {stat_type.capitalize()}: {stat_data['name']} ({value})")
-    
-    # Show event as dict
-    print()
-    print("  Event as dictionary (to_dict()):")
-    event_dict = game_update_event.to_dict()
-    print(event_dict)
+    # If no GameUpdateEvent found, return None
+    return None
 
 
 @with_proxy
 async def test_nba_store_logic(game_id: str):
     """
     Test NBAStore's _parse_api_response logic for all endpoints:
-    - scoreboard (GameUpdateEvent, GameStartEvent, GameResultEvent)
-    - play_by_play (PlayByPlayEvent, InGameCriticalEvent)
+    - boxscore (GameUpdateEvent with complete leaders)
+    - play_by_play (ALL PlayByPlayEvent events + game status detection)
     
     Args:
         game_id: NBA game ID to test
@@ -576,168 +396,170 @@ async def test_nba_store_logic(game_id: str):
     api = NBAExternalAPI()
     store = NBAStore(api=api)
     
-    # Test 1: Scoreboard parsing (GameUpdateEvent)
-    print("TEST 1: Scoreboard Parsing (GameUpdateEvent)")
+    # Test 1: BoxScore parsing (GameUpdateEvent with complete leaders)
+    print("TEST 1: BoxScore Parsing (GameUpdateEvent)")
     print("-" * 80)
-    games = get_games_for_date(datetime.now(), print_games=False)
     
-    # Find the game
-    target_game = None
-    for game in games:
-        if game.get('gameId') == game_id:
-            target_game = game
-            break
+    # Fetch BoxScore data directly
+    boxscore_data = await api.fetch("boxscore", {"game_id": game_id})
     
-    if not target_game:
-        game_info = get_game_info_by_id(game_id)
-        if game_info:
-            game_date = game_info.get('game_date')
-            if game_date:
-                games = get_games_for_date(game_date, print_games=False)
-                for game in games:
-                    if game.get('gameId') == game_id:
-                        target_game = game
-                        break
-    
-    if not target_game:
-        print(f"✗ Game {game_id} not found")
+    if not boxscore_data or not boxscore_data.get("boxscore"):
+        print(f"✗ No boxscore data for game {game_id}")
         return
     
-    # Convert to scoreboard format expected by store
-    scoreboard_data = {
-        "scoreboard": [target_game]
-    }
-    
     # Parse using store
-    events = store._parse_api_response(scoreboard_data)
+    events = list(store._parse_api_response(boxscore_data))
     
-    print(f"✓ Parsed {len(events)} event(s) from scoreboard")
-    for event in events:
-        print(f"  - {event.event_type}: {event.__class__.__name__}")
-        if event.__class__.__name__ == "GameUpdateEvent":
-            game_update = event  # type: ignore[assignment]
-            print(f"    Game ID: {game_update.game_id}")  # type: ignore[attr-defined]
-            print(f"    Status: {game_update.game_status} ({game_update.game_status_text})")  # type: ignore[attr-defined]
-            print(f"    Score: {game_update.away_team.get('teamTricode')} {game_update.away_team.get('score')} - {game_update.home_team.get('score')} {game_update.home_team.get('teamTricode')}")  # type: ignore[attr-defined]
-        elif event.__class__.__name__ == "GameStartEvent":
-            game_start = event  # type: ignore[assignment]
-            print(f"    Event ID: {game_start.event_id}")  # type: ignore[attr-defined]
-        elif event.__class__.__name__ == "GameResultEvent":
-            game_result = event  # type: ignore[assignment]
-            print(f"    Event ID: {game_result.event_id}")  # type: ignore[attr-defined]
-            print(f"    Winner: {game_result.winner}")  # type: ignore[attr-defined]
-            print(f"    Final Score: {game_result.final_score}")  # type: ignore[attr-defined]
+    event_types = [e.event_type for e in events]
+    print(f"✓ Parsed {len(events)} event(s): {', '.join(set(event_types))}")
+    game_updates = [e for e in events if e.event_type == "game_update"]
+    if game_updates:
+        gu = game_updates[0]
+        # Type narrowing: we know it's a GameUpdateEvent based on event_type
+        if hasattr(gu, 'away_team') and hasattr(gu, 'home_team'):
+            away = gu.away_team.get('teamTricode', '')  # type: ignore[attr-defined]
+            away_score = gu.away_team.get('score', 0)  # type: ignore[attr-defined]
+            home_score = gu.home_team.get('score', 0)  # type: ignore[attr-defined]
+            home = gu.home_team.get('teamTricode', '')  # type: ignore[attr-defined]
+            print(f"  Score: {away} {away_score}-{home_score} {home}")
+            
+            # Test player_stats parsing (should have all players with stats)
+            print(f"\n  Player Stats Check:")
+            player_stats = gu.player_stats  # type: ignore[attr-defined]
+            home_players = player_stats.get("home", [])
+            away_players = player_stats.get("away", [])
+            
+            print(f"  Home players: {len(home_players)}")
+            print(f"  Away players: {len(away_players)}")
+            
+            # Find leaders from the full player stats list
+            def find_leader(players: list, stat_key: str) -> dict:
+                if not players:
+                    return {}
+                valid_players = []
+                for p in players:
+                    if isinstance(p, dict):
+                        stats = p.get("statistics", {})
+                        if isinstance(stats, dict):
+                            stat_value = stats.get(stat_key, 0) or 0
+                            if stat_value > 0:
+                                name = p.get("name") or f"{p.get('firstName', '')} {p.get('familyName', '')}".strip()
+                                valid_players.append({"name": name, "value": stat_value, "stat_key": stat_key})
+                if not valid_players:
+                    return {}
+                leader = max(valid_players, key=lambda x: x["value"])
+                return leader
+            
+            print(f"\n  Top Performers:")
+            home_points_leader = find_leader(home_players, "points")
+            home_rebounds_leader = find_leader(home_players, "reboundsTotal")
+            home_assists_leader = find_leader(home_players, "assists")
+            if home_points_leader:
+                print(f"    Home points: {home_points_leader.get('name')} ({home_points_leader.get('value')} pts)")
+            if home_rebounds_leader:
+                print(f"    Home rebounds: {home_rebounds_leader.get('name')} ({home_rebounds_leader.get('value')} reb)")
+            if home_assists_leader:
+                print(f"    Home assists: {home_assists_leader.get('name')} ({home_assists_leader.get('value')} ast)")
+            
+            away_points_leader = find_leader(away_players, "points")
+            away_rebounds_leader = find_leader(away_players, "reboundsTotal")
+            away_assists_leader = find_leader(away_players, "assists")
+            if away_points_leader:
+                print(f"    Away points: {away_points_leader.get('name')} ({away_points_leader.get('value')} pts)")
+            if away_rebounds_leader:
+                print(f"    Away rebounds: {away_rebounds_leader.get('name')} ({away_rebounds_leader.get('value')} reb)")
+            if away_assists_leader:
+                print(f"    Away assists: {away_assists_leader.get('name')} ({away_assists_leader.get('value')} ast)")
+        else:
+            print(f"  ✗ Expected GameUpdateEvent, got {type(gu)}")
     print()
     
-    # Test 2: Play-by-play parsing (PlayByPlayEvent, InGameCriticalEvent)
-    print("TEST 2: Play-by-Play Parsing (Critical Events Only)")
+    # Test 2: Play-by-play parsing (ALL events, no filtering)
+    print("TEST 2: Play-by-Play Parsing (ALL Events)")
     print("-" * 80)
     
     # Get play-by-play data
     pbp_data = get_play_by_play(game_id, include_player_names=True)
     
     if not pbp_data or not pbp_data.get("actions"):
-        print(f"✗ No play-by-play data found for game {game_id}")
-        print("  (This is expected if the game hasn't started or is too old)")
-        return
-    
-    actions = pbp_data["actions"]
-    print(f"✓ Found {len(actions)} play-by-play actions")
-    
-    # Convert to play_by_play format expected by store
-    play_by_play_data = {
-        "play_by_play": {
-            "gameId": game_id,
-            "actions": actions,
-        }
-    }
-    
-    # Parse using store (should only emit critical events)
-    pbp_events = store._parse_api_response(play_by_play_data)
-    
-    print(f"✓ Parsed {len(pbp_events)} critical event(s) from play-by-play")
-    print(f"  (Filtered from {len(actions)} total actions)")
-    print()
-    
-    if pbp_events:
-        print("Critical Events:")
-        for event in pbp_events:
-            if event.__class__.__name__ == "PlayByPlayEvent":
-                pbp = event  # type: ignore[assignment]
-                print(f"  - PlayByPlayEvent:")
-                print(f"    Action Type: {pbp.action_type}")  # type: ignore[attr-defined]
-                print(f"    Period: {pbp.period}, Clock: {pbp.clock}")  # type: ignore[attr-defined]
-                print(f"    Player: {pbp.player_name or 'N/A'} ({pbp.team_tricode})")  # type: ignore[attr-defined]
-                print(f"    Description: {pbp.description}")  # type: ignore[attr-defined]
-                print(f"    Is Critical: {pbp.is_critical()}")  # type: ignore[attr-defined]
-            elif event.__class__.__name__ == "InGameCriticalEvent":
-                critical = event  # type: ignore[assignment]
-                print(f"  - InGameCriticalEvent:")
-                print(f"    Event ID: {critical.event_id}")  # type: ignore[attr-defined]
-                print(f"    Critical Type: {critical.critical_type}")  # type: ignore[attr-defined]
-                print(f"    Player: {critical.player_name or 'N/A'} ({critical.team_tricode})")  # type: ignore[attr-defined]
-                print(f"    Period: {critical.period}, Clock: {critical.clock}")  # type: ignore[attr-defined]
-                print(f"    Description: {critical.description}")  # type: ignore[attr-defined]
-        print(f"  Number of critical events: {len(pbp_events)}")
+        print(f"✗ No play-by-play data (game not started or too old)")
+        print()
     else:
-        print("  No critical events found in this game")
-        print("  (This is normal if there were no injuries, ejections, or critical substitutions)")
+        actions = pbp_data["actions"]
+        play_by_play_data = {"play_by_play": {"gameId": game_id, "actions": actions}}
+        
+        # Clear seen event IDs to test fresh parsing
+        test_event_ids = [f"{game_id}_pbp_{a.get('actionNumber', 0)}" for a in actions[:10]]
+        for eid in test_event_ids:
+            store._seen_event_ids.discard(eid)
+        
+        pbp_events = list(store._parse_api_response(play_by_play_data))
+        
+        # Should emit ALL events (not just critical ones)
+        print(f"✓ Found {len(actions)} actions → {len(pbp_events)} event(s) (ALL events emitted)")
+        if pbp_events:
+            for event in pbp_events[:10]:
+                if event.event_type == "play_by_play" and hasattr(event, 'action_type'):
+                    print(f"  - {event.action_type} ({event.period}Q {event.clock}): {event.description[:60]}")  # type: ignore[attr-defined]
+            if len(pbp_events) > 10:
+                print(f"  ... and {len(pbp_events) - 10} more")
     print()
     
-    # Test 3: Test status transitions (GameStartEvent, GameResultEvent)
-    print("TEST 3: Status Transitions (GameStartEvent, GameResultEvent)")
+    # Test 3: Game status detection (GameStartEvent, GameResultEvent from PlayByPlay)
+    print("TEST 3: Game Status Detection (PlayByPlay)")
     print("-" * 80)
     
-    # Simulate status transitions by manually setting previous status
-    store._previous_game_status = {}
+    # Reset store state
+    store._pbp_available.clear()
+    store._previous_game_status.clear()
     
-    # Test GameStartEvent: transition from 1 (Not Started) to 2 (In Progress)
-    game_data_start = target_game.copy()
-    game_data_start["gameStatus"] = 1  # Not Started
-    scoreboard_data_start = {"scoreboard": [game_data_start]}
-    events_start = store._parse_api_response(scoreboard_data_start)
-    
-    # Now transition to In Progress
-    game_data_live = target_game.copy()
-    game_data_live["gameStatus"] = 2  # In Progress
-    scoreboard_data_live = {"scoreboard": [game_data_live]}
-    events_live = store._parse_api_response(scoreboard_data_live)
-    
-    game_start_events = [e for e in events_live if e.__class__.__name__ == "GameStartEvent"]
-    if game_start_events:
-        print(f"✓ GameStartEvent emitted on status transition 1→2")
-        for event in game_start_events:
-            gs = event  # type: ignore[assignment]
-            print(f"  Event ID: {gs.event_id}")  # type: ignore[attr-defined]
+    # Test GameStartEvent: detected when PlayByPlay first becomes available
+    if pbp_data and pbp_data.get("actions"):
+        actions = pbp_data["actions"]
+        # Simulate first time seeing PBP data
+        test_pbp_data = {"play_by_play": {"gameId": game_id, "actions": actions[:1]}}
+        events_start = list(store._parse_api_response(test_pbp_data))
+        
+        game_start_events = [e for e in events_start if e.event_type == "game_start"]
+        if game_start_events:
+            print(f"✓ GameStartEvent: Detected when PlayByPlay first becomes available")
+        else:
+            print(f"✗ GameStartEvent: Not detected (may already be marked as started)")
+        
+        # Test GameResultEvent: detected from last action "Game End"
+        if actions:
+            last_action = actions[-1]
+            if last_action.get("actionType") == "game" and "end" in last_action.get("description", "").lower():
+                test_pbp_data_end = {"play_by_play": {"gameId": game_id, "actions": [last_action]}}
+                store._previous_game_status[game_id] = 2  # Set as in progress
+                events_end = list(store._parse_api_response(test_pbp_data_end))
+                
+                game_result_events = [e for e in events_end if e.event_type == "game_result"]
+                if game_result_events:
+                    gr = game_result_events[0]
+                    if hasattr(gr, 'winner') and hasattr(gr, 'final_score'):
+                        print(f"✓ GameResultEvent: Detected from 'Game End' action (Winner: {gr.winner}, Score: {gr.final_score})")  # type: ignore[attr-defined]
+                    else:
+                        print(f"✗ GameResultEvent: Missing winner/final_score attributes")
+                else:
+                    print(f"✗ GameResultEvent: Not detected (may already be marked as finished)")
+            else:
+                print(f"✗ GameResultEvent: Last action is not 'Game End' (actionType: {last_action.get('actionType')}, desc: {last_action.get('description', '')[:50]})")
     else:
-        print(f"✗ No GameStartEvent (game status is {target_game.get('gameStatus')}, not transitioning from 1→2)")
+        print(f"✗ Cannot test status detection (no PlayByPlay data)")
     print()
     
-    # Test GameResultEvent: transition from 2 (In Progress) to 3 (Finished)
-    store._previous_game_status = {game_id: 2}  # Set previous status to In Progress
-    
-    game_data_finished = target_game.copy()
-    game_data_finished["gameStatus"] = 3  # Finished
-    scoreboard_data_finished = {"scoreboard": [game_data_finished]}
-    events_finished = store._parse_api_response(scoreboard_data_finished)
-    
-    game_result_events = [e for e in events_finished if e.__class__.__name__ == "GameResultEvent"]
-    if game_result_events:
-        print(f"✓ GameResultEvent emitted on status transition 2→3")
-        for event in game_result_events:
-            gr = event  # type: ignore[assignment]
-            print(f"  Event ID: {gr.event_id}")  # type: ignore[attr-defined]
-            print(f"  Winner: {gr.winner}")  # type: ignore[attr-defined]
-            print(f"  Final Score: {gr.final_score}")  # type: ignore[attr-defined]
-    else:
-        print(f"✗ No GameResultEvent (game status is {target_game.get('gameStatus')}, not transitioning from 2→3)")
-    print()
-    
-    # Test 4: Test critical event detection
-    print("TEST 4: Critical Event Detection")
+    # Test 4: Verify all events are emitted (no filtering)
+    print("TEST 4: All Events Emitted (No Filtering)")
     print("-" * 80)
     
-    # Create test play-by-play events with different types
+    # Reset store state
+    test_game_id = f"{game_id}_test"
+    test_event_ids = [f"{test_game_id}_pbp_{i}" for i in range(1, 10)]
+    for eid in test_event_ids:
+        store._seen_event_ids.discard(eid)
+    
+    # Create test play-by-play events with various types (including non-critical)
     test_actions = [
         {
             "actionNumber": 1,
@@ -791,25 +613,17 @@ async def test_nba_store_logic(game_id: str):
     
     test_pbp_data = {
         "play_by_play": {
-            "gameId": game_id,
+            "gameId": test_game_id,
             "actions": test_actions,
         }
     }
     
-    test_events = store._parse_api_response(test_pbp_data)
-    
-    print(f"✓ Tested with {len(test_actions)} actions")
-    print(f"✓ Emitted {len(test_events)} critical event(s)")
-    print()
-    
+    test_events = list(store._parse_api_response(test_pbp_data))
+    print(f"✓ {len(test_actions)} actions → {len(test_events)} event(s) (ALL emitted, no filtering)")
     for event in test_events:
-        if event.__class__.__name__ == "PlayByPlayEvent":
+        if event.event_type == "play_by_play":
             pbp = event  # type: ignore[assignment]
             print(f"  - {pbp.action_type}: {pbp.description}")  # type: ignore[attr-defined]
-        elif event.__class__.__name__ == "InGameCriticalEvent":
-            critical = event  # type: ignore[assignment]
-            print(f"  - InGameCriticalEvent ({critical.critical_type}): {critical.player_name} - {critical.description}")  # type: ignore[attr-defined]
-    
     print()
     print("="*80)
     print("ALL TESTS COMPLETE")
@@ -820,33 +634,14 @@ async def test_nba_store_logic(game_id: str):
 if __name__ == "__main__":
 
     # Test get_game_info_by_id utility function
-    print("="*80)
-    print("TESTING get_game_info_by_id UTILITY")
-    print("="*80)
-    print(f"Looking up game info for game_id: {game_id}")
     game_info = get_game_info_by_id(game_id)
     if game_info:
-        print(f"✓ Found game info:")
-        print(f"  Game ID: {game_info['game_id']}")
-        print(f"  Matchup: {game_info['away_team']} @ {game_info['home_team']}")
-        print(f"  Date: {game_info['game_date']}")
-        print(f"  Time (UTC): {game_info['game_time_utc']}")
-        print(f"  Away Team Tricode: {game_info['away_team_tricode']}")
-        print(f"  Home Team Tricode: {game_info['home_team_tricode']}")
+        print(f"✓ Game {game_id}: {game_info['away_team']} @ {game_info['home_team']} ({game_info['game_date']})")
     else:
-        print(f"✗ Game not found for game_id: {game_id}")
-        print("  (This is expected if the game is older than 7 days or doesn't exist)")
-    print()
-
-    # Test GameUpdateEvent creation from ScoreboardV3
-    print("="*80)
-    print("TESTING GameUpdateEvent FROM SCOREBOARDV3")
-    print("="*80)
-    test_game_update_events(game_id)
+        print(f"✗ Game {game_id} not found (may be >7 days old)")
     print()
     
     # Test NBA Store logic (all endpoints)
-    import asyncio
     asyncio.run(test_nba_store_logic(game_id))
     print()
     

@@ -8,7 +8,7 @@ from agentx.core import DataStream, DataStreamBase, StreamEvent
 from agentx.data import DataHub
 from agentx.data._models import DataEvent
 
-LOGGER = logging.getLogger("agentx.data.streams")
+logger = logging.getLogger(__name__)
 
 
 class _ActorIdConfig(TypedDict):
@@ -97,19 +97,15 @@ class DataHubDataStream(
         if self._hub is None:
             raise RuntimeError(f"stream '{self.actor_id}' has no DataHub instance")
 
-        LOGGER.info(
+        logger.info(
             "stream '%s' starting: event_type=%s event_types=%s",
             self.actor_id,
             self._event_type,
             self._event_types,
         )
 
-        # Run initializer if provided (e.g., trigger initial searches)
-        if self._initializer and not self._initialized:
-            await self._initializer.initialize(self)
-            self._initialized = True
-
-        # Subscribe to DataHub events using callback mechanism
+        # Subscribe to DataHub events using callback mechanism FIRST
+        # This ensures we're subscribed before any events are emitted
         def event_callback(event: DataEvent) -> None:
             # Check if this event matches our subscription
             should_forward = False
@@ -137,6 +133,28 @@ class DataHubDataStream(
                 event_types=[event_type],
                 callback=event_callback,
             )
+        
+        # Run initializer if provided (e.g., trigger initial searches)
+        # Do this AFTER subscribing so events aren't missed, but run it in background
+        # so it doesn't block pipeline setup
+        if self._initializer and not self._initialized:
+            self._initialized = True
+            # Schedule initializer to run in background - don't await it
+            # This allows pipeline setup to complete while searches happen asynchronously
+            asyncio.create_task(self._run_initializer())
+
+    async def _run_initializer(self) -> None:
+        """Run the initializer in the background without blocking."""
+        if self._initializer:
+            try:
+                await self._initializer.initialize(self)
+            except Exception as e:
+                logger.error(
+                    "Initializer failed for stream '%s': %s",
+                    self.actor_id,
+                    e,
+                    exc_info=True,
+                )
 
     async def _publish_event(self, event: DataEvent) -> None:
         """Publish a DataEvent as a StreamEvent."""
@@ -151,7 +169,7 @@ class DataHubDataStream(
 
     async def stop(self) -> None:
         """Protocol hook: unsubscribe from DataHub."""
-        LOGGER.info(
+        logger.info(
             "stream '%s' stopping after %d events",
             self.actor_id,
             len(self._received_events),
@@ -172,7 +190,7 @@ class DataHubDataStream(
         """Protocol hook: dashboard restores a checkpoint before resuming."""
         self._sequence = int(state.get("sequence", 0))
         self._initialized = bool(state.get("initialized", False))
-        LOGGER.info(
+        logger.info(
             "stream '%s' restored: sequence=%d initialized=%s",
             self.actor_id,
             self._sequence,

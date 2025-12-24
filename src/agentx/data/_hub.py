@@ -155,6 +155,10 @@ class DataHub:
         
         store.set_event_emitter(emit_wrapper)
         
+        # Store DataHub reference in store so it can subscribe to events if needed
+        if hasattr(store, "_data_hub"):
+            store._data_hub = self
+        
         # Track connected store for lifecycle management
         if store not in self._connected_stores:
             self._connected_stores.append(store)

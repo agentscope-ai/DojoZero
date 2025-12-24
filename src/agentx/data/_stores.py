@@ -3,10 +3,13 @@
 import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from agentx.data._models import DataEvent
 from agentx.data._processors import DataProcessor
+
+if TYPE_CHECKING:
+    from agentx.data._hub import DataHub
 
 
 class ExternalAPI(ABC):
@@ -58,6 +61,8 @@ class DataStore(ABC):
         # Calculate base interval from poll_intervals (minimum value, or 5.0 if empty)
         self.poll_interval_seconds = min(self.poll_intervals.values()) if self.poll_intervals else 5.0
         self._event_emitter = event_emitter
+        # Track DataHub reference for event subscriptions (set by connect_store)
+        self._data_hub: "DataHub | None" = None
         
         # Stream registry: stream_id -> (processor, source_event_types)
         # Maps raw event types to processors that create cooked event streams
@@ -165,12 +170,29 @@ class DataStore(ABC):
         """
         self._last_poll_times[endpoint] = datetime.now(timezone.utc)
     
-    async def _poll_loop(self) -> None:
-        """Main polling loop that fetches from API and emits events."""
-        # Calculate loop interval: use minimum of all intervals
-        # poll_interval_seconds is already calculated as min(poll_intervals.values()) in __init__
-        loop_interval = self.poll_interval_seconds
+    def update_poll_interval(self, endpoint: str, interval: float) -> None:
+        """Update polling interval for a specific endpoint dynamically.
         
+        This allows stores to adjust polling frequency based on game status
+        or other conditions (e.g., pre-game vs in-game).
+        
+        Args:
+            endpoint: Endpoint name (e.g., "odds", "boxscore")
+            interval: New polling interval in seconds
+        """
+        self.poll_intervals[endpoint] = interval
+        # Recalculate base interval (minimum of all intervals)
+        if self.poll_intervals:
+            self.poll_interval_seconds = min(self.poll_intervals.values())
+        else:
+            self.poll_interval_seconds = 5.0
+    
+    async def _poll_loop(self) -> None:
+        """Main polling loop that fetches from API and emits events.
+        
+        The loop interval is read dynamically on each iteration to support
+        runtime interval updates (e.g., switching from pre-game to in-game polling).
+        """
         while self._running:
             try:
                 # Poll for updates (pass poll identifier)
@@ -201,7 +223,12 @@ class DataStore(ABC):
             except Exception as e:
                 print(f"Error in poll loop for store {self.store_id}: {e}")
             
-            # Wait before next poll (use minimum interval)
+            # Wait before next poll - read interval dynamically to support runtime updates
+            # Recalculate minimum interval on each iteration (in case it was updated)
+            if self.poll_intervals:
+                loop_interval = min(self.poll_intervals.values())
+            else:
+                loop_interval = self.poll_interval_seconds
             await asyncio.sleep(loop_interval)
     
     async def _poll_api(

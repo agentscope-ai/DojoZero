@@ -6,7 +6,7 @@ from typing import Any, Mapping, TypedDict
 
 from agentx.core import Operator, OperatorBase, StreamEvent
 
-LOGGER = logging.getLogger("agentx.nba_moneyline.operator")
+logger = logging.getLogger(__name__)
 
 
 class _ActorIdConfig(TypedDict):
@@ -41,11 +41,11 @@ class EventCounterOperator(OperatorBase, Operator[EventCounterOperatorConfig]):
 
     async def start(self) -> None:
         """Protocol hook: dashboard calls this before traffic is routed."""
-        LOGGER.info("operator '%s' starting", self.actor_id)
+        logger.info("operator '%s' starting", self.actor_id)
 
     async def stop(self) -> None:
         """Protocol hook: dashboard calls this during shutdown."""
-        LOGGER.info(
+        logger.info(
             "operator '%s' stopping at count=%d (typed_counts=%s)",
             self.actor_id,
             self._count,
@@ -76,7 +76,7 @@ class EventCounterOperator(OperatorBase, Operator[EventCounterOperatorConfig]):
                 if isinstance(typed_counts, dict)
                 else {}
             )
-            LOGGER.info(
+            logger.info(
                 "operator '%s' restored to count=%d (typed_counts=%s)",
                 self.actor_id,
                 self._count,
@@ -99,7 +99,7 @@ class EventCounterOperator(OperatorBase, Operator[EventCounterOperatorConfig]):
             self._count += 1
             if event_type:
                 self._typed_counts[event_type] = self._typed_counts.get(event_type, 0) + 1
-            LOGGER.info(
+            logger.info(
                 "operator '%s' incremented count to %d (event_type=%s, typed_counts=%s)",
                 self.actor_id,
                 self._count,
