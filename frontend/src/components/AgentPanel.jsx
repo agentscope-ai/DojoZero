@@ -397,7 +397,7 @@ const styles = {
     overflow: "hidden",
     marginTop: "8px",
     gap: "12px",
-    backgroundImage: `url(/assets/background/agentboard.jpg)`,
+    backgroundImage: `url(/assets/nba/background/agentboard.jpg)`,
     backgroundSize: "cover",
     backgroundPosition: "center",
     backgroundRepeat: "no-repeat",

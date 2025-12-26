@@ -274,7 +274,7 @@ const styles = {
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundImage: `url(/assets/background/scoreboard.jpg)`,
+    backgroundImage: `url(/assets/nba/background/scoreboard.jpg)`,
     backgroundSize: "cover",
     backgroundPosition: "center",
     zIndex: 0,

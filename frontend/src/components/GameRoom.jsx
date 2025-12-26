@@ -576,7 +576,7 @@ const styles = {
     flex: 1,
     display: "flex",
     flexDirection: "column",
-    background: `url(/assets/background/room_background.png) center center / cover no-repeat`,
+    background: `url(/assets/nba/background/room_background.png) center center / cover no-repeat`,
     borderRadius: "16px",
     border: "1px solid var(--glass-border)",
     overflow: "hidden",
