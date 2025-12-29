@@ -22,8 +22,6 @@ from agentx.data.websearch._processors import (
     PowerRankingProcessor,
 )
 from agentx.nba_moneyline._agent import (
-    DummyAgent,
-    DummyAgentConfig,
     NBABettingAgent,
     NBABettingAgentConfig,
 )
@@ -117,20 +115,14 @@ class NBAPreGameBettingTrialParams(BaseModel):
 
     # Agent configuration
     agents: list[dict[str, Any]] = Field(
-        default_factory=lambda: [
-            {
-                "id": "betting_agent",
-                "class": "DummyAgent",
-                "operators": ["event_counter"],
-                "data_streams": [],
-            }
-        ],
+        default_factory=list,
         description=(
             "List of agent configurations. Each agent dict should have:\n"
             "  - 'id': str (required) - Agent identifier\n"
-            "  - 'class': str (required) - Agent class name (e.g., 'DummyAgent')\n"
+            "  - 'class': str (required) - Must be 'NBABettingAgent'\n"
             "  - 'operators': list[str] (optional) - Operator IDs to register\n"
-            "  - 'data_streams': list[str] (optional) - DataStream actor IDs to subscribe to"
+            "  - 'data_streams': list[str] (optional) - DataStream actor IDs to subscribe to\n"
+            "  - 'agent_config_path': str (optional) - Path to agent YAML config file"
         ),
     )
 
@@ -432,6 +424,19 @@ def _build_trial_spec(
             f"Please add them to the 'data_streams' section in your configuration."
         )
 
+    # Build operator_id -> agent_ids mapping from agent configs
+    operator_to_agents: dict[str, list[str]] = {}
+    if params.agents:
+        for agent_dict in params.agents:
+            agent_id = agent_dict.get("id")
+            if not agent_id:
+                continue
+            operator_ids = agent_dict.get("operators", [])
+            for op_id in operator_ids:
+                if op_id not in operator_to_agents:
+                    operator_to_agents[op_id] = []
+                operator_to_agents[op_id].append(str(agent_id))
+
     # Create operators - use hierarchical config if provided, otherwise create default
     operator_specs = []
     if params.operators:
@@ -465,13 +470,15 @@ def _build_trial_spec(
                 actor_cls=op_cls,
                 config=operator_config,
                 data_stream_ids=tuple(data_stream_ids),
+                agent_ids=tuple(operator_to_agents.get(op_config.id, [])),
             )
             operator_specs.append(operator_spec)
             logger.info(
-                "Created operator '%s' of class '%s' with stream subscriptions: %s",
+                "Created operator '%s' of class '%s' with stream subscriptions: %s, agent_ids: %s",
                 op_config.id,
                 op_config.class_name,
                 data_stream_ids,
+                operator_spec.agent_ids,
             )
     else:
         # Default: create event_counter operator
@@ -480,93 +487,54 @@ def _build_trial_spec(
             actor_id="event_counter",
             actor_cls=EventCounterOperator,
             config=default_op_config,
+            agent_ids=tuple(operator_to_agents.get("event_counter", [])),
         )
         operator_specs.append(operator_spec)
         logger.info("Created event counter operator")
 
     # Create agent specs from agents config
     agent_specs = []
-
-    if params.agents:
-        for agent_dict in params.agents:
-            agent_id = agent_dict.get("id")
-            if not agent_id:
-                raise ValueError("Agent config missing required 'id' field")
-            
-            agent_class_name = agent_dict.get("class", "DummyAgent")
-            operator_ids = agent_dict.get("operators", [])
-            data_stream_ids = agent_dict.get("data_streams", [])
-            
-            # Map class name to class
-            agent_class_map: dict[str, type] = {
-                "DummyAgent": DummyAgent,
-                "NBABettingAgent": NBABettingAgent,
-            }
-            agent_cls = agent_class_map.get(agent_class_name)
-            if agent_cls is None:
-                raise ValueError(f"Unknown agent class: {agent_class_name}")
-            
-            # Create agent config dict based on agent class
-            if agent_class_name == "NBABettingAgent":
-                agent_config_path = agent_dict.get("agent_config_path")
-                if not agent_config_path:
-                    raise ValueError(
-                        f"agent_config_path is required for NBABettingAgent '{agent_id}'"
-                    )
-                nba_agent_config: NBABettingAgentConfig = {
-                    "actor_id": agent_id,
-                    "agent_config_path": agent_config_path,
-                }
-                agent_spec = AgentSpec[NBABettingAgentConfig](
-                    actor_id=agent_id,
-                    actor_cls=agent_cls,
-                    config=nba_agent_config,
-                    operator_ids=tuple(operator_ids) if operator_ids else ("event_counter",),
-                    data_stream_ids=tuple(data_stream_ids),
-                )
-            else:
-                agent_config: DummyAgentConfig = {
-                    "actor_id": agent_id,
-                    "operator_id": operator_ids[0] if operator_ids else "event_counter",
-                }
-                agent_spec = AgentSpec[DummyAgentConfig](
-                    actor_id=agent_id,
-                    actor_cls=agent_cls,
-                    config=agent_config,
-                    operator_ids=tuple(operator_ids) if operator_ids else ("event_counter",),
-                    data_stream_ids=tuple(data_stream_ids),
-                )
-            agent_specs.append(agent_spec)
-    elif params.agent_ids:
-        # Legacy: simple agent_ids list
-        for agent_id in params.agent_ids:
-            legacy_agent_config: DummyAgentConfig = {
-                "actor_id": agent_id,
-                "operator_id": "event_counter",
-            }
-            # Infer data_stream_ids from all created streams
-            all_stream_ids = [f"{et}_stream" for et in event_types_list]
-            agent_spec = AgentSpec[DummyAgentConfig](
-                actor_id=agent_id,
-                actor_cls=DummyAgent,
-                config=legacy_agent_config,
-                operator_ids=("event_counter",),
-                data_stream_ids=tuple(all_stream_ids),
+    
+    if not params.agents:
+        raise ValueError(
+            "No agents specified. At least one agent with class 'NBABettingAgent' is required."
+        )
+    
+    for agent_dict in params.agents:
+        agent_id = agent_dict.get("id")
+        if not agent_id:
+            raise ValueError("Agent config missing required 'id' field")
+        
+        agent_class_name = agent_dict.get("class")
+        if agent_class_name != "NBABettingAgent":
+            raise ValueError(
+                f"Invalid agent class '{agent_class_name}' for agent '{agent_id}'. "
+                "Only 'NBABettingAgent' is supported."
             )
-            agent_specs.append(agent_spec)
-    else:
-        # Default: create one agent if no agents specified
-        default_agent_config: DummyAgentConfig = {
-            "actor_id": "betting_agent",
-            "operator_id": "event_counter",
+        
+        operator_ids = agent_dict.get("operators", [])
+        data_stream_ids = agent_dict.get("data_streams", [])
+        
+        # Create agent config - pass through config fields from agent_dict
+        agent_config: NBABettingAgentConfig = {
+            "actor_id": agent_id,
         }
-        all_stream_ids = [f"{et}_stream" for et in event_types_list]
-        agent_spec = AgentSpec[DummyAgentConfig](
-            actor_id="betting_agent",
-            actor_cls=DummyAgent,
-            config=default_agent_config,
-            operator_ids=("event_counter",),
-            data_stream_ids=tuple(all_stream_ids),
+        # Copy optional config fields
+        if agent_dict.get("name"):
+            agent_config["name"] = agent_dict["name"]
+        if agent_dict.get("agent_config_path"):
+            agent_config["agent_config_path"] = agent_dict["agent_config_path"]
+        if agent_dict.get("model_type"):
+            agent_config["model_type"] = agent_dict["model_type"]
+        if agent_dict.get("model_name"):
+            agent_config["model_name"] = agent_dict["model_name"]
+        
+        agent_spec = AgentSpec[NBABettingAgentConfig](
+            actor_id=agent_id,
+            actor_cls=NBABettingAgent,
+            config=agent_config,
+            operator_ids=tuple(operator_ids) if operator_ids else (),
+            data_stream_ids=tuple(data_stream_ids),
         )
         agent_specs.append(agent_spec)
 
@@ -828,7 +796,7 @@ register_trial_builder(
         "agents": [
             {
                 "id": "betting_agent",
-                "class": "DummyAgent",
+                "class": "NBABettingAgent",
                 "operators": ["event_counter", "betting_broker"],
                 "data_streams": [
                     "injury_summary_stream",

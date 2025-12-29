@@ -887,7 +887,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 ),
                 emitted_at=datetime.now(),
             )
-            await self._notify_agent(bet.agent_id, notification)
+            asyncio.create_task(self._notify_agent(bet.agent_id, notification))
 
     async def _cancel_pregame_orders(self, event_id: str) -> None:
         """Cancel all unfilled pre-game orders for an event"""
@@ -1192,7 +1192,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             ),
             emitted_at=datetime.now(),
         )
-        await self._notify_agent(bet.agent_id, notification)
+        asyncio.create_task(self._notify_agent(bet.agent_id, notification))
 
     async def cancel_bet(self, agent_id: str, bet_id: str) -> str:
         """Cancel a pending limit order and refund locked funds.

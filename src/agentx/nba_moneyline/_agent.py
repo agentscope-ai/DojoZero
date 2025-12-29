@@ -142,4 +142,12 @@ class NBABettingAgent(BettingAgent):
     
     Inherits from BettingAgent. Uses agent_config_path to load config from YAML.
     """
-    pass
+
+    @classmethod
+    def from_dict(cls, config: NBABettingAgentConfig) -> "NBABettingAgent":
+        """Create NBABettingAgent from config dict."""
+        # Call parent's from_dict and cast the result
+        # BettingAgent.from_dict creates an instance that is compatible
+        agent = BettingAgent.from_dict(config)
+        agent.__class__ = cls
+        return agent
