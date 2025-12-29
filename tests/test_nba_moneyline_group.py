@@ -1,8 +1,5 @@
 """
 Integration test: BettingAgentGroup with multiple agents communicating via MsgHub
-
-Run with: python -m pytest tests/test_group.py -v -s
-Requires OPENAI_API_KEY and OPENAI_BASE_URL in .env
 """
 
 import os
@@ -13,7 +10,10 @@ from dotenv import load_dotenv
 
 from agentx.agents.group import BettingAgentGroup
 from agentx.core import StreamEvent
-from agentx.samples.nba_moneyline._broker import BrokerOperator
+from agentx.nba_moneyline._broker import BrokerOperator
+from agentx.data.nba._events import GameInitializeEvent, GameResultEvent
+from agentx.data.polymarket._events import OddsUpdateEvent
+from datetime import datetime
 
 load_dotenv()
 
@@ -53,12 +53,34 @@ async def test_group_receives_event_and_discusses(broker, agent_group):
 
     # TBD: broker.register_agents(group.agents)
     await agent_group.register_operators([broker])
+    broker.register_agents(agent_group.agents)
 
     await agent_group.start()
 
     # Check agents are initialized
     assert len(agent_group.agents) == 3
     assert set(agent_group.agent_ids) == {"whale", "sheep", "shark"}
+
+    # Initialize event in broker first
+    game_init_event = GameInitializeEvent(
+        event_id="lakers_vs_warriors_2024",
+        game_id="lakers_vs_warriors_2024",
+        home_team="Lakers",
+        away_team="Warriors",
+        game_time=datetime.now(),
+    )
+    await broker.handle_stream_event(
+        StreamEvent(stream_id="nba-stream", payload=game_init_event, sequence=-2)
+    )
+
+    odds_update_event = OddsUpdateEvent(
+        event_id="lakers_vs_warriors_2024",
+        home_odds=1.85,
+        away_odds=2.10,
+    )
+    await broker.handle_stream_event(
+        StreamEvent(stream_id="nba-stream", payload=odds_update_event, sequence=-1)
+    )
 
     # Simulate DataStream sending match data
     event = StreamEvent(
@@ -76,19 +98,24 @@ async def test_group_receives_event_and_discusses(broker, agent_group):
     print(f"\nSending event to group: {event.payload}")
 
     # Group handles event - agents discuss via MsgHub
-    messages = await agent_group.handle_stream_event(event, max_rounds=1)
+    messages = await agent_group.handle_stream_event(event, max_rounds=10)
 
     print(f"\nGroup discussion produced {len(messages)} messages")
     for msg in messages:
         content = msg.content[0]["text"]
         print(f"  [{msg.name}]: {content}...")
 
+    game_result_event = GameResultEvent(
+        event_id="lakers_vs_warriors_2024",
+        winner="home",
+        final_score={"home": 110, "away": 105},
+    )
     final_event = StreamEvent(
         stream_id="nba-stream",
-        payload={"event_id": "lakers_vs_warriors_2024", "winner": "home"},
+        payload=game_result_event,
         sequence=2,
     )
-    await broker.settle_event(final_event)
+    await broker.handle_stream_event(final_event)
 
     # Each agent should have processed the event
     for agent in agent_group.agents:
@@ -124,9 +151,7 @@ if __name__ == "__main__":
         broker = BrokerOperator.from_dict(
             {
                 "actor_id": "nba-broker",
-                "initial_balances": {
-                    AGENT_ID: "1000.00" for AGENT_ID in ["whale", "sheep", "shark"]
-                },
+                "initial_balance": "1000.00",
             }
         )
 

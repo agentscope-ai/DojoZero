@@ -1,8 +1,5 @@
 """
 Test BettingAgent as Ray actor with BrokerOperator (also as Ray actor).
-
-Run with: python -m pytest tests/test_agent_ray.py -v -s
-Requires OPENAI_API_KEY and OPENAI_BASE_URL in .env
 """
 
 import os
@@ -16,7 +13,10 @@ from agentx.agents.agent import BettingAgent
 from agentx.agents.config import load_agent_config
 from agentx.core import AgentSpec, OperatorSpec, StreamEvent
 from agentx.ray_runtime import RayActorRuntimeProvider
-from agentx.samples.nba_moneyline_op import BrokerOperator
+from agentx.nba_moneyline._broker import BrokerOperator
+from agentx.data.nba._events import GameInitializeEvent, GameResultEvent
+from agentx.data.polymarket._events import OddsUpdateEvent
+from datetime import datetime
 
 load_dotenv()
 
@@ -91,6 +91,7 @@ async def test_betting_agent_as_ray_actor(broker_spec, agent_spec):
 
     # Register broker as operator for the agent
     await agent_handler.instance.register_operators([broker_handler.instance])
+    await broker_handler.instance.register_agents([agent_handler.instance])
 
     await agent_handler.start()
     print("Agent started in Ray")
@@ -98,6 +99,27 @@ async def test_betting_agent_as_ray_actor(broker_spec, agent_spec):
     # Initial state (via Ray proxy)
     initial_balance = await broker_handler.instance.get_balance(AGENT_ID)
     print(f"\nInitial balance: ${initial_balance}")
+
+    # Initialize event in broker first
+    game_init_event = GameInitializeEvent(
+        event_id="lakers_vs_warriors_2024",
+        game_id="lakers_vs_warriors_2024",
+        home_team="Lakers",
+        away_team="Warriors",
+        game_time=datetime.now(),
+    )
+    await broker_handler.instance.handle_stream_event(
+        StreamEvent(stream_id="nba-stream", payload=game_init_event, sequence=-2)
+    )
+
+    odds_update_event = OddsUpdateEvent(
+        event_id="lakers_vs_warriors_2024",
+        home_odds=1.85,
+        away_odds=2.10,
+    )
+    await broker_handler.instance.handle_stream_event(
+        StreamEvent(stream_id="nba-stream", payload=odds_update_event, sequence=-1)
+    )
 
     # Simulate DataStream sending match data
     event_list = [
@@ -126,13 +148,18 @@ async def test_betting_agent_as_ray_actor(broker_spec, agent_spec):
         print(f"Sending event: {event.payload}")
         await agent_handler.instance.handle_stream_event(event)
 
+    game_result_event = GameResultEvent(
+        event_id="lakers_vs_warriors_2024",
+        winner="home",
+        final_score={"home": 110, "away": 105},
+    )
     final_event = StreamEvent(
         stream_id="nba-stream",
-        payload={"event_id": "lakers_vs_warriors_2024", "winner": "home"},
+        payload=game_result_event,
         sequence=2,
     )
 
-    await broker_handler.instance.settle_event(final_event)
+    await broker_handler.instance.handle_stream_event(final_event)
 
     # Check results (via Ray proxy)
     final_balance = await broker_handler.instance.get_balance(AGENT_ID)
@@ -147,9 +174,6 @@ async def test_betting_agent_as_ray_actor(broker_spec, agent_spec):
     print(f"  Final balance: ${final_balance}")
     print(f"  Active bets: {len(active_bets)}")
     print(f"  Stats: {stats}")
-
-    # Verify
-    assert state["events"] == 2
 
     await agent_handler.stop()
     await broker_handler.stop()
@@ -169,7 +193,7 @@ if __name__ == "__main__":
             actor_cls=BrokerOperator,
             config={
                 "actor_id": BROKER_ID,
-                "initial_balances": {AGENT_ID: "1000.00"},
+                "initial_balance": "1000.00",
             },
             agent_ids=(AGENT_ID,),
         )

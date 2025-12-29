@@ -1,8 +1,5 @@
 """
 Integration test: DataStream -> Agent (LLM) -> place_bet -> BrokerOperator
-
-Run with: python -m pytest tests/test_agent.py -v -s
-Requires OPENAI_API_KEY and OPENAI_BASE_URL in .env
 """
 
 import os
@@ -13,7 +10,10 @@ from dotenv import load_dotenv
 
 from agentx.agents.agent import BettingAgent
 from agentx.core import StreamEvent
-from agentx.samples.nba_moneyline._broker import BrokerOperator
+from agentx.nba_moneyline._broker import BrokerOperator
+from agentx.data.nba._events import GameInitializeEvent, GameResultEvent
+from agentx.data.polymarket._events import OddsUpdateEvent
+from datetime import datetime
 
 load_dotenv()
 AGENT_ID = "basic"
@@ -45,6 +45,7 @@ async def test_agent_receives_event_and_places_bet(broker, agent):
     """Test full flow: DataStream -> Agent -> place_bet -> Operator."""
     # await broker.register_agents([agent])
     await agent.register_operators([broker])
+    broker.register_agents([agent])
     await broker.start()
     await agent.start()
 
@@ -53,6 +54,27 @@ async def test_agent_receives_event_and_places_bet(broker, agent):
     # Initial state
     initial_balance = await broker.get_balance(AGENT_ID)
     print(f"\nInitial balance: ${initial_balance}")
+
+    # Initialize event in broker first
+    game_init_event = GameInitializeEvent(
+        event_id="lakers_vs_warriors_2024",
+        game_id="lakers_vs_warriors_2024",
+        home_team="Lakers",
+        away_team="Warriors",
+        game_time=datetime.now(),
+    )
+    await broker.handle_stream_event(
+        StreamEvent(stream_id="nba-stream", payload=game_init_event, sequence=-2)
+    )
+
+    odds_update_event = OddsUpdateEvent(
+        event_id="lakers_vs_warriors_2024",
+        home_odds=1.85,
+        away_odds=2.10,
+    )
+    await broker.handle_stream_event(
+        StreamEvent(stream_id="nba-stream", payload=odds_update_event, sequence=-1)
+    )
 
     # Simulate DataStream sending match data
     event_list = [
@@ -80,13 +102,18 @@ async def test_agent_receives_event_and_places_bet(broker, agent):
     for event in event_list:
         await agent.handle_stream_event(event)
 
+    game_result_event = GameResultEvent(
+        event_id="lakers_vs_warriors_2024",
+        winner="home",
+        final_score={"home": 110, "away": 105},
+    )
     final_event = StreamEvent(
         stream_id="nba-stream",
-        payload={"event_id": "lakers_vs_warriors_2024", "winner": "home"},
+        payload=game_result_event,
         sequence=2,
     )
 
-    await broker.settle_event(event=final_event)
+    await broker.handle_stream_event(final_event)
 
     # Check results
     final_balance = await broker.get_balance(AGENT_ID)
@@ -110,7 +137,7 @@ if __name__ == "__main__":
         broker = BrokerOperator.from_dict(
             {
                 "actor_id": "nba-broker",
-                "initial_balances": {AGENT_ID: "1000.00"},
+                "initial_balance": "1000.00",
             }
         )
         agent = BettingAgent.from_yaml(CONFIG_PATH)
