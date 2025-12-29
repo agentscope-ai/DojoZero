@@ -182,7 +182,7 @@ class BettingAgent(ReActAgent):
         self._state.append({event.stream_id: memory})
 
         LOGGER.info(
-            "agent '%s' processed event seq=%s, response length=%d",
+            "agent '%s' processed event seq=%s",
             self.actor_id,
             event.sequence,
         )
