@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
+from agentx.agents.agent import BettingAgent
+from agentx.agents.config import load_agent_config
 from agentx.agents.group import BettingAgentGroup
+from agentx.agents.model import _create_model_from_llm_config, _create_formatter
 from agentx.core import StreamEvent
 from agentx.nba_moneyline._broker import BrokerOperator
 from agentx.data.nba._events import GameInitializeEvent, GameResultEvent
@@ -17,10 +20,39 @@ from datetime import datetime
 
 load_dotenv()
 
+# Test-specific environment variable names to avoid conflicts with other apps
+TEST_API_KEY_ENV = "AGENTX_TEST_OPENAI_API_KEY"
+TEST_BASE_URL_ENV = "AGENTX_TEST_OPENAI_BASE_URL"
+
 CONFIG_DIR = Path(__file__).parent.parent / "configs" / "agents"
 WHALE_CONFIG = CONFIG_DIR / "whale.yaml"
 SHEEP_CONFIG = CONFIG_DIR / "sheep.yaml"
 SHARK_CONFIG = CONFIG_DIR / "shark.yaml"
+
+
+def create_test_agent(config_path: Path) -> BettingAgent:
+    """Create agent with test-specific env vars, overriding YAML config."""
+    config = load_agent_config(config_path)
+    llm_config = config["llm"].copy()
+    llm_config["api_key_env"] = TEST_API_KEY_ENV
+    llm_config["base_url_env"] = TEST_BASE_URL_ENV
+    model_type = llm_config.get("model_type", "openai")
+    return BettingAgent(
+        actor_id=config["agent_id"],
+        name=config["name"],
+        sys_prompt=config["sys_prompt"],
+        model=_create_model_from_llm_config(llm_config),
+        formatter=_create_formatter(model_type),
+    )
+
+
+class TestBettingAgentGroup(BettingAgentGroup):
+    """Test-specific group that creates agents with test env vars."""
+
+    def __init__(self, config_paths: list[Path]) -> None:
+        # Skip parent __init__, create agents with test env vars directly
+        self._agents = [create_test_agent(path) for path in config_paths]
+        self._agent_colors: dict[str, str] = {}
 
 
 @pytest.fixture
@@ -29,24 +61,20 @@ def broker():
     return BrokerOperator.from_dict(
         {
             "actor_id": "nba-broker",
-            "initial_balances": {
-                "whale": "10000.00",
-                "sheep": "1000.00",
-                "shark": "5000.00",
-            },
+            "initial_balance": "1000.00",
         }
     )
 
 
 @pytest.fixture
 def agent_group():
-    """Create BettingAgentGroup with whale, sheep, shark agents."""
-    return BettingAgentGroup(config_paths=[WHALE_CONFIG, SHEEP_CONFIG, SHARK_CONFIG])
+    """Create BettingAgentGroup with whale, sheep, shark agents using test env vars."""
+    return TestBettingAgentGroup(config_paths=[WHALE_CONFIG, SHEEP_CONFIG, SHARK_CONFIG])
 
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set"
+    not os.environ.get(TEST_API_KEY_ENV), reason=f"{TEST_API_KEY_ENV} not set"
 )
 async def test_group_receives_event_and_discusses(broker, agent_group):
     """Test group communication: all agents discuss a market event."""
@@ -98,7 +126,7 @@ async def test_group_receives_event_and_discusses(broker, agent_group):
     print(f"\nSending event to group: {event.payload}")
 
     # Group handles event - agents discuss via MsgHub
-    messages = await agent_group.handle_stream_event(event, max_rounds=10)
+    messages = await agent_group.handle_stream_event(event, max_rounds=2)
 
     print(f"\nGroup discussion produced {len(messages)} messages")
     for msg in messages:
@@ -155,7 +183,7 @@ if __name__ == "__main__":
             }
         )
 
-        group = BettingAgentGroup(
+        group = TestBettingAgentGroup(
             config_paths=[WHALE_CONFIG, SHEEP_CONFIG, SHARK_CONFIG],
         )
 

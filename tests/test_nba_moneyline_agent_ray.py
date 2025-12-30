@@ -20,6 +20,10 @@ from datetime import datetime
 
 load_dotenv()
 
+# Test-specific environment variable names to avoid conflicts with other apps
+TEST_API_KEY_ENV = "AGENTX_TEST_OPENAI_API_KEY"
+TEST_BASE_URL_ENV = "AGENTX_TEST_OPENAI_BASE_URL"
+
 AGENT_ID = "basic"
 BROKER_ID = "nba-broker"
 CONFIG_PATH = Path(__file__).parent.parent / "configs" / "agents" / "basic.yaml"
@@ -30,7 +34,12 @@ def ray_env():
     """Initialize Ray for the test module."""
     if ray.is_initialized():
         ray.shutdown()
-    ray.init(include_dashboard=False)
+    # Exclude pyproject.toml/uv.lock to prevent Ray workers from creating
+    # a new venv with wrong Python version when packaging local modules
+    ray.init(
+        include_dashboard=False,
+        runtime_env={"excludes": ["pyproject.toml", "uv.lock"]},
+    )
     yield
     ray.shutdown()
 
@@ -43,26 +52,31 @@ def broker_spec() -> OperatorSpec:
         actor_cls=BrokerOperator,
         config={
             "actor_id": BROKER_ID,
-            "initial_balances": {AGENT_ID: "1000.00"},
+            "initial_balance": "1000.00",
         },
         agent_ids=(AGENT_ID,),
     )
 
 
-@pytest.fixture
-def agent_spec() -> AgentSpec:
-    """Create AgentSpec for Ray runtime."""
+def _create_agent_config() -> dict:
+    """Create agent config with test-specific env vars."""
     config = load_agent_config(CONFIG_PATH)
     llm_config = config.get("llm", {})
-    agent_config = {
+    return {
         "actor_id": config["agent_id"],
         "name": config.get("name", config["agent_id"]),
         "sys_prompt": config.get("sys_prompt", ""),
         "model_type": llm_config.get("model_type", "openai"),
         "model_name": llm_config.get("model_name", "qwen3-max"),
-        "api_key_env": llm_config.get("api_key_env", "OPENAI_API_KEY"),
-        "base_url_env": llm_config.get("base_url_env", "OPENAI_BASE_URL"),
+        "api_key_env": TEST_API_KEY_ENV,
+        "base_url_env": TEST_BASE_URL_ENV,
     }
+
+
+@pytest.fixture
+def agent_spec() -> AgentSpec:
+    """Create AgentSpec for Ray runtime with test-specific env vars."""
+    agent_config = _create_agent_config()
     return AgentSpec(
         actor_id=agent_config["actor_id"],
         actor_cls=BettingAgent,
@@ -73,9 +87,9 @@ def agent_spec() -> AgentSpec:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set"
+    not os.environ.get(TEST_API_KEY_ENV), reason=f"{TEST_API_KEY_ENV} not set"
 )
-async def test_betting_agent_as_ray_actor(broker_spec, agent_spec):
+async def test_betting_agent_as_ray_actor(ray_env, broker_spec, agent_spec):
     """Test full flow: DataStream -> Ray Agent -> place_bet -> Ray Operator."""
     provider = RayActorRuntimeProvider(auto_init=False)
 
@@ -198,18 +212,7 @@ if __name__ == "__main__":
             agent_ids=(AGENT_ID,),
         )
 
-        config = load_agent_config(CONFIG_PATH)
-        llm_config = config.get("llm", {})
-        agent_config = {
-            "actor_id": config["agent_id"],
-            "name": config.get("name", config["agent_id"]),
-            "sys_prompt": config.get("sys_prompt", ""),
-            "model_type": llm_config.get("model_type", "openai"),
-            "model_name": llm_config.get("model_name", "qwen3-max"),
-            "api_key_env": llm_config.get("api_key_env", "OPENAI_API_KEY"),
-            "base_url_env": llm_config.get("base_url_env", "OPENAI_BASE_URL"),
-        }
-
+        agent_config = _create_agent_config()
         agent_spec = AgentSpec(
             actor_id=agent_config["actor_id"],
             actor_cls=BettingAgent,
@@ -217,7 +220,7 @@ if __name__ == "__main__":
             operator_ids=(BROKER_ID,),
         )
 
-        await test_betting_agent_as_ray_actor(broker_spec, agent_spec)
+        await test_betting_agent_as_ray_actor(None, broker_spec, agent_spec)
         ray.shutdown()
 
     asyncio.run(main())

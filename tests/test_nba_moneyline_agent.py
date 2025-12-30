@@ -9,6 +9,8 @@ import pytest
 from dotenv import load_dotenv
 
 from agentx.agents.agent import BettingAgent
+from agentx.agents.config import load_agent_config
+from agentx.agents.model import _create_model_from_llm_config, _create_formatter
 from agentx.core import StreamEvent
 from agentx.nba_moneyline._broker import BrokerOperator
 from agentx.data.nba._events import GameInitializeEvent, GameResultEvent
@@ -16,8 +18,29 @@ from agentx.data.polymarket._events import OddsUpdateEvent
 from datetime import datetime
 
 load_dotenv()
+
+# Test-specific environment variable names to avoid conflicts with other apps
+TEST_API_KEY_ENV = "AGENTX_TEST_OPENAI_API_KEY"
+TEST_BASE_URL_ENV = "AGENTX_TEST_OPENAI_BASE_URL"
+
 AGENT_ID = "basic"
 CONFIG_PATH = Path(__file__).parent.parent / "configs" / "agents" / "basic.yaml"
+
+
+def create_test_agent(config_path: Path) -> BettingAgent:
+    """Create agent with test-specific env vars, overriding YAML config."""
+    config = load_agent_config(config_path)
+    llm_config = config["llm"].copy()
+    llm_config["api_key_env"] = TEST_API_KEY_ENV
+    llm_config["base_url_env"] = TEST_BASE_URL_ENV
+    model_type = llm_config.get("model_type", "openai")
+    return BettingAgent(
+        actor_id=config["agent_id"],
+        name=config["name"],
+        sys_prompt=config["sys_prompt"],
+        model=_create_model_from_llm_config(llm_config),
+        formatter=_create_formatter(model_type),
+    )
 
 
 @pytest.fixture
@@ -26,20 +49,20 @@ def broker():
     return BrokerOperator.from_dict(
         {
             "actor_id": "nba-broker",
-            "initial_balances": {AGENT_ID: "1000.00"},
+            "initial_balance": "1000.00",
         }
     )
 
 
 @pytest.fixture
 def agent():
-    """Create BettingAgent from YAML config."""
-    return BettingAgent.from_yaml(CONFIG_PATH)
+    """Create BettingAgent with test-specific env vars."""
+    return create_test_agent(CONFIG_PATH)
 
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set"
+    not os.environ.get(TEST_API_KEY_ENV), reason=f"{TEST_API_KEY_ENV} not set"
 )
 async def test_agent_receives_event_and_places_bet(broker, agent):
     """Test full flow: DataStream -> Agent -> place_bet -> Operator."""
@@ -140,7 +163,7 @@ if __name__ == "__main__":
                 "initial_balance": "1000.00",
             }
         )
-        agent = BettingAgent.from_yaml(CONFIG_PATH)
+        agent = create_test_agent(CONFIG_PATH)
 
         await test_agent_receives_event_and_places_bet(broker, agent)
 
