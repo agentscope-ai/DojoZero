@@ -1,0 +1,292 @@
+"""Buffered variant of the bounded random reference scenario.
+
+This module reuses the bounded random stream and operator actors but swaps in a
+buffered agent that batches incoming events. The buffer drains on a fixed
+interval so the operator's counter increments in bursts rather than per-event.
+"""
+
+import asyncio
+import logging
+from typing import Any, Mapping, Protocol, Sequence, cast
+
+from pydantic import Field
+
+from dojozero.core import (
+    Agent,
+    AgentBase,
+    AgentSpec,
+    DataStreamSpec,
+    Operator,
+    OperatorSpec,
+    register_trial_builder,
+    StreamEvent,
+    TrialSpec,
+)
+
+from .bounded_random import (
+    BoundedRandomStringDataStream,
+    BoundedRandomStringDataStreamConfig,
+    BoundedRandomTrialParams,
+    CounterAgentConfig,
+    CounterOperator,
+    CounterOperatorConfig,
+)
+
+LOGGER = logging.getLogger("dojozero.samples.bounded_random_buffered")
+
+
+def _preview_payload(value: Any, *, limit: int = 32) -> str:
+    text = value if isinstance(value, str) else repr(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+class CounterAgentBufferedConfig(CounterAgentConfig, total=False):
+    flush_interval_seconds: float
+
+
+class BoundedRandomBufferedTrialParams(BoundedRandomTrialParams):
+    buffer_flush_seconds: float = Field(default=5.0, gt=0.0)
+    agent_id: str = "counter-agent-buffered"
+
+
+class _CounterOperatorLike(Operator[CounterOperatorConfig], Protocol):
+    async def count(self) -> int: ...
+
+
+class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
+    """Agent that buffers events and processes them on a timed cadence."""
+
+    def __init__(
+        self,
+        actor_id: str,
+        operator_id: str,
+        flush_interval_seconds: float,
+    ) -> None:
+        super().__init__(actor_id)
+        self._operator_id = operator_id
+        self._operator: _CounterOperatorLike | None = None
+        self._flush_interval = max(float(flush_interval_seconds), 0.001)
+        self._events = 0
+        self._observed_counts: list[int] = []
+        self._buffer: list[dict[str, Any]] = []
+        self._buffer_lock = asyncio.Lock()
+        self._flush_task: asyncio.Task[None] | None = None
+
+    @classmethod
+    def from_dict(
+        cls,
+        spec: CounterAgentBufferedConfig,
+    ) -> "CounterAgentBuffered":
+        interval = float(spec.get("flush_interval_seconds", 5.0))
+        return cls(
+            actor_id=str(spec["actor_id"]),
+            operator_id=str(spec["operator_id"]),
+            flush_interval_seconds=interval,
+        )
+
+    def register_operators(self, operators: Sequence[Operator]) -> None:
+        super().register_operators(operators)
+        if not operators:
+            raise RuntimeError("CounterAgentBuffered requires at least one operator")
+        operator = operators[0]
+        if operator.actor_id != self._operator_id:
+            raise RuntimeError(
+                f"CounterAgentBuffered expected operator '{self._operator_id}'"
+                f" but received '{operator.actor_id}'"
+            )
+        if not hasattr(operator, "count"):
+            raise TypeError(
+                f"operator '{operator.actor_id}' must expose a 'count' coroutine"
+            )
+        self._operator = cast(_CounterOperatorLike, operator)
+
+    async def start(self) -> None:
+        LOGGER.info(
+            "buffered agent '%s' starting with flush_interval=%ss",
+            self.actor_id,
+            self._flush_interval,
+        )
+        if self._flush_task is None:
+            self._flush_task = asyncio.create_task(self._flush_loop())
+
+    async def stop(self) -> None:
+        LOGGER.info(
+            "buffered agent '%s' stopping after %d processed events",
+            self.actor_id,
+            self._events,
+        )
+        if self._flush_task is not None:
+            self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._flush_task = None
+        async with self._buffer_lock:
+            pending = len(self._buffer)
+        if pending:
+            LOGGER.info(
+                "buffered agent '%s' leaving %d events buffered for persistence",
+                self.actor_id,
+                pending,
+            )
+
+    async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
+        preview = _preview_payload(event.payload)
+        async with self._buffer_lock:
+            self._buffer.append({"sequence": event.sequence, "payload": event.payload})
+            pending = len(self._buffer)
+        LOGGER.info(
+            "buffered agent '%s' queued event seq=%s buffer_size=%d payload=%s",
+            self.actor_id,
+            event.sequence,
+            pending,
+            preview,
+        )
+
+    async def save_state(self) -> Mapping[str, Any]:
+        async with self._buffer_lock:
+            snapshot = [dict(item) for item in self._buffer]
+        return {
+            "events": self._events,
+            "observed_counts": list(self._observed_counts),
+            "buffer": snapshot,
+        }
+
+    async def load_state(self, state: Mapping[str, Any]) -> None:
+        self._events = int(state.get("events", 0))
+        self._observed_counts = [
+            int(value) for value in state.get("observed_counts", [])
+        ]
+        buffer_items = [
+            {
+                "sequence": item.get("sequence"),
+                "payload": item.get("payload"),
+            }
+            for item in state.get("buffer", [])
+        ]
+        async with self._buffer_lock:
+            self._buffer = buffer_items
+        LOGGER.info(
+            "buffered agent '%s' restored: events=%d buffered=%d observed_counts=%d",
+            self.actor_id,
+            self._events,
+            len(buffer_items),
+            len(self._observed_counts),
+        )
+
+    async def _flush_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._flush_interval)
+                await self._flush_buffer(reason="interval")
+        except asyncio.CancelledError:
+            raise
+
+    async def _flush_buffer(self, *, reason: str) -> None:
+        async with self._buffer_lock:
+            if not self._buffer or reason == "shutdown":
+                return
+            batch = tuple(self._buffer)
+            self._buffer.clear()
+        LOGGER.info(
+            "buffered agent '%s' flushing %d buffered events due to %s",
+            self.actor_id,
+            len(batch),
+            reason,
+        )
+        for record in batch:
+            preview = _preview_payload(record.get("payload"))
+            self._events += 1
+            operator = self._require_operator()
+            new_value = await operator.count()
+            self._observed_counts.append(new_value)
+            LOGGER.info(
+                "buffered agent '%s' processed buffered seq=%s operator_count=%d reason=%s payload=%s",
+                self.actor_id,
+                record.get("sequence"),
+                new_value,
+                reason,
+                preview,
+            )
+
+    def _require_operator(self) -> _CounterOperatorLike:
+        if self._operator is None:
+            raise RuntimeError(f"agent '{self.actor_id}' has no registered operator")
+        return self._operator
+
+
+def _build_buffered_trial_spec(
+    trial_id: str,
+    params: BoundedRandomBufferedTrialParams,
+) -> TrialSpec:
+    operator_config: CounterOperatorConfig = {"actor_id": params.operator_id}
+    operator_spec = OperatorSpec(
+        actor_id=params.operator_id,
+        actor_cls=CounterOperator,
+        config=operator_config,
+        agent_ids=(params.agent_id,),
+    )
+    agent_config: CounterAgentBufferedConfig = {
+        "actor_id": params.agent_id,
+        "operator_id": params.operator_id,
+        "flush_interval_seconds": params.buffer_flush_seconds,
+    }
+    agent_spec = AgentSpec(
+        actor_id=params.agent_id,
+        actor_cls=CounterAgentBuffered,
+        config=agent_config,
+        operator_ids=(params.operator_id,),
+    )
+    stream_config: BoundedRandomStringDataStreamConfig = {
+        "actor_id": params.stream_id,
+        "total_events": params.total_events,
+        "payload_length": params.payload_length,
+        "interval_seconds": params.interval_seconds,
+    }
+    if params.seed is not None:
+        stream_config["seed"] = params.seed
+    stream_spec = DataStreamSpec[BoundedRandomStringDataStreamConfig](
+        actor_id=params.stream_id,
+        actor_cls=BoundedRandomStringDataStream,
+        config=stream_config,
+        consumer_ids=(params.operator_id, params.agent_id),
+    )
+    return TrialSpec(
+        trial_id=trial_id,
+        data_streams=(stream_spec,),
+        operators=(operator_spec,),
+        agents=(agent_spec,),
+        metadata={
+            "sample": "bounded-random-buffered",
+            "total_events": params.total_events,
+            "buffer_flush_seconds": params.buffer_flush_seconds,
+        },
+    )
+
+
+register_trial_builder(
+    "samples.bounded-random-buffered",
+    BoundedRandomBufferedTrialParams,
+    _build_buffered_trial_spec,
+    description=(
+        "Bounded random stream with buffered agent that flushes every few seconds"
+    ),
+    example_params=BoundedRandomBufferedTrialParams(
+        total_events=5,
+        payload_length=6,
+        interval_seconds=0.0,
+        seed=1234,
+        buffer_flush_seconds=5.0,
+    ),
+)
+
+
+__all__ = [
+    "BoundedRandomBufferedTrialParams",
+    "CounterAgentBuffered",
+    "CounterAgentBufferedConfig",
+]
