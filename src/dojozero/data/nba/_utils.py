@@ -1,7 +1,7 @@
 """NBA-specific utility functions."""
 
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import wraps
 from typing import Any, Callable, TypeVar, cast
 
@@ -177,13 +177,95 @@ def normalize_team_name(team_name: str) -> str | None:
 
 
 @with_proxy
+def get_games_by_date_range(
+    start_date: date,
+    end_date: date,
+    proxy: str | None = None,
+) -> list[dict[str, Any]]:
+    """Get all games within a date range.
+
+    Args:
+        start_date: Start date (inclusive)
+        end_date: End date (inclusive)
+        proxy: Optional proxy URL (automatically set from PROXY_URL env var if not provided)
+
+    Returns:
+        List of game dictionaries with structure:
+        {
+            'game_id': str,
+            'home_team': str,
+            'away_team': str,
+            'home_team_tricode': str,
+            'away_team_tricode': str,
+            'game_date': str,
+            'game_time_utc': str,
+            'game_status': int,  # 1=scheduled, 2=in-progress, 3=completed
+        }
+    """
+    import logging
+
+    from nba_api.stats.endpoints import scoreboardv3
+
+    logger = logging.getLogger(__name__)
+
+    games = []
+    current_date = start_date
+
+    while current_date <= end_date:
+        date_str = current_date.strftime("%Y-%m-%d")
+        logger.debug(f"Fetching games for date={date_str}")
+
+        try:
+            if proxy:
+                board = scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy)
+            else:
+                board = scoreboardv3.ScoreboardV3(game_date=date_str)
+
+            games_data = board.get_dict()
+
+            if games_data and "scoreboard" in games_data:
+                scoreboard_data = games_data["scoreboard"]
+                games_list = scoreboard_data.get("games", [])
+
+                for game_data in games_list:
+                    home_team = game_data.get("homeTeam", {})
+                    away_team = game_data.get("awayTeam", {})
+
+                    home_team_name = f"{home_team.get('teamCity', '')} {home_team.get('teamName', '')}".strip()
+                    away_team_name = f"{away_team.get('teamCity', '')} {away_team.get('teamName', '')}".strip()
+
+                    games.append(
+                        {
+                            "game_id": str(game_data.get("gameId", "")),
+                            "home_team": home_team_name,
+                            "away_team": away_team_name,
+                            "home_team_tricode": home_team.get("teamTricode", ""),
+                            "away_team_tricode": away_team.get("teamTricode", ""),
+                            "game_date": date_str,
+                            "game_time_utc": game_data.get("gameTimeUTC", ""),
+                            "game_status": game_data.get("gameStatus", 0),
+                        }
+                    )
+
+                logger.debug(f"Found {len(games_list)} games on {date_str}")
+        except Exception as e:
+            logger.debug(f"Error fetching games for date={date_str}: {e}")
+
+        current_date += timedelta(days=1)
+
+    logger.debug(f"Found {len(games)} total games between {start_date} and {end_date}")
+    return games
+
+
+@with_proxy
 def get_game_info_by_id(
     game_id: str, proxy: str | None = None
 ) -> dict[str, Any] | None:
     """Get team names and game date for a given NBA game ID.
 
-    This function searches for the game across recent dates (today and past 7 days)
-    to find the game information.
+    This function uses a hybrid approach:
+    1. First tries BoxScoreTraditionalV3 (fast, works for past/completed games)
+    2. If that fails, searches upcoming games in ScoreboardV3 (for future games)
 
     Args:
         game_id: NBA.com game ID (e.g., '0022500290')
@@ -200,20 +282,79 @@ def get_game_info_by_id(
             'game_date': str,  # Date in YYYY-MM-DD format
             'game_time_utc': str,  # Game time in UTC (ISO format)
         }
-        Returns None if game not found
+        Returns None if game not found or is invalid
     """
-    from nba_api.stats.endpoints import scoreboardv3
+    import logging
 
-    # Search across recent dates (today and past 30 days)
-    search_dates = []
+    from nba_api.stats.endpoints import boxscoretraditionalv3, scoreboardv3
+
+    logger = logging.getLogger(__name__)
+
+    logger.debug(f"Looking up game_id={game_id}")
+
+    # Strategy 1: Try BoxScore endpoint (works for completed/in-progress games)
+    logger.debug(f"Attempting BoxScore lookup for game_id={game_id}")
+    try:
+        if proxy:
+            box_score = boxscoretraditionalv3.BoxScoreTraditionalV3(
+                game_id=game_id, proxy=proxy
+            )
+        else:
+            box_score = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id)
+
+        box_score_dict = box_score.get_dict()
+
+        if box_score_dict and "boxScoreTraditional" in box_score_dict:
+            boxscore_data = box_score_dict["boxScoreTraditional"]
+
+            if boxscore_data and isinstance(boxscore_data, dict):
+                # Extract team information from boxscore
+                home_team = boxscore_data.get("homeTeam", {})
+                away_team = boxscore_data.get("awayTeam", {})
+
+                # Build full team name
+                home_team_name = f"{home_team.get('teamCity', '')} {home_team.get('teamName', '')}".strip()
+                away_team_name = f"{away_team.get('teamCity', '')} {away_team.get('teamName', '')}".strip()
+
+                # If team names are available, we found the game
+                if home_team_name and away_team_name:
+                    logger.debug(
+                        f"Found game via BoxScore: {away_team.get('teamTricode')} @ {home_team.get('teamTricode')}"
+                    )
+                    return {
+                        "game_id": game_id,
+                        "home_team": home_team_name,
+                        "away_team": away_team_name,
+                        "home_team_tricode": home_team.get("teamTricode", ""),
+                        "away_team_tricode": away_team.get("teamTricode", ""),
+                        "game_date": "",  # BoxScore doesn't always include date
+                        "game_time_utc": "",
+                    }
+                else:
+                    logger.debug(
+                        f"BoxScore returned data but team names are empty for game_id={game_id}"
+                    )
+        else:
+            logger.debug(
+                f"BoxScore returned no data or missing 'boxScoreTraditional' for game_id={game_id}"
+            )
+    except Exception as e:
+        # BoxScore failed, will try Scoreboard fallback
+        logger.debug(f"BoxScore lookup failed for game_id={game_id}: {e}")
+
+    # Strategy 2: Fallback to Scoreboard search for future/upcoming games
+    # Search next 14 days for scheduled games
+    logger.debug(
+        f"BoxScore lookup unsuccessful, searching Scoreboard for next 14 days for game_id={game_id}"
+    )
     today = datetime.now().date()
-    for i in range(30):  # Today + 30 days back
-        search_dates.append(today - timedelta(days=i))
-
-    for date in search_dates:
+    for i in range(14):
+        date = today + timedelta(days=i)
         date_str = date.strftime("%Y-%m-%d")
+
+        logger.debug(f"Searching scoreboard for date={date_str}")
+
         try:
-            # Fetch scoreboard for this date
             if proxy:
                 board = scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy)
             else:
@@ -221,10 +362,13 @@ def get_game_info_by_id(
 
             games_data = board.get_dict()
             if not games_data or "scoreboard" not in games_data:
+                logger.debug(f"No scoreboard data for date={date_str}")
                 continue
 
             scoreboard_data = games_data["scoreboard"]
             games_list = scoreboard_data.get("games", [])
+
+            logger.debug(f"Found {len(games_list)} games on {date_str}")
 
             # Search for the game_id
             for game_data in games_list:
@@ -239,6 +383,10 @@ def get_game_info_by_id(
 
                     game_time_utc = game_data.get("gameTimeUTC", "")
 
+                    logger.debug(
+                        f"Found game via Scoreboard on {date_str}: {away_team.get('teamTricode')} @ {home_team.get('teamTricode')}"
+                    )
+
                     return {
                         "game_id": game_id,
                         "home_team": home_team_name,
@@ -248,9 +396,13 @@ def get_game_info_by_id(
                         "game_date": date_str,
                         "game_time_utc": game_time_utc,
                     }
-        except Exception:
+        except Exception as e:
             # Continue to next date if this one fails
+            logger.debug(f"Error searching scoreboard for date={date_str}: {e}")
             continue
 
-    # Game not found in recent dates
+    # Game not found in both BoxScore and upcoming Scoreboards
+    logger.debug(
+        f"Game not found in both BoxScore and Scoreboard (searched 14 days) for game_id={game_id}"
+    )
     return None
