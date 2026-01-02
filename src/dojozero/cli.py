@@ -476,13 +476,28 @@ async def _run_trial_and_monitor(
 
 
 def _configure_logging(level: str) -> None:
-    """Configure logging with timestamps and proper formatting."""
-    log_level = getattr(logging, level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    """Configure logging with timestamps while scoping the CLI log level."""
+    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    formatter = logging.Formatter(
+        fmt=fmt,
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    # Keep the root logger quiet (WARNING+) so third-party modules are unaffected.
+    logging.basicConfig(
+        level=logging.WARNING,
+        format=fmt,
+        datefmt=formatter.datefmt,
+    )
+
+    dojo_logger = logging.getLogger("dojozero")
+    dojo_logger.handlers.clear()
+    dojo_logger.propagate = False
+    dojo_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    dojo_logger.addHandler(handler)
 
     # Suppress noisy third-party library logs
     # httpx logs all HTTP requests at INFO level, which is too verbose
