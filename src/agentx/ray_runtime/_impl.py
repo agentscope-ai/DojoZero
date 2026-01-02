@@ -214,6 +214,7 @@ class RayActorRuntimeProvider(ActorRuntimeProvider):
     async def create_handler(
         self,
         spec: "ActorSpec[Any]",
+        context: dict[str, Any] | None = None,
     ) -> RayActorHandler:
         self._ensure_ray()
         handle = cast(ActorHandle, _RayActorHost.remote())
