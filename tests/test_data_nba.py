@@ -21,23 +21,9 @@ from dojozero.data.nba._utils import get_game_info_by_id, get_games_by_date_rang
 pytestmark = pytest.mark.integration
 
 
-def pytest_configure(config):
-    """Register custom markers."""
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests (skipped by default)"
-    )
-
-
 # =============================================================================
 # Fixtures and Helper Functions
 # =============================================================================
-
-
-@pytest.fixture
-def skip_if_no_integration_flag(request):
-    """Skip test unless --run-integration flag is passed."""
-    if not request.config.getoption("--run-integration", default=False):
-        pytest.skip("Integration tests skipped (use --run-integration to enable)")
 
 
 @pytest.fixture(scope="module")
@@ -83,7 +69,7 @@ def test_game_ids() -> dict[str, str]:
 class TestGetGamesByDateRangeIntegration:
     """Integration tests for get_games_by_date_range function."""
 
-    def test_single_day_range(self, skip_if_no_integration_flag):
+    def test_single_day_range(self):
         """Test fetching games for a single day."""
         yesterday = (datetime.now() - timedelta(days=1)).date()
         games = get_games_by_date_range(yesterday, yesterday)
@@ -99,7 +85,7 @@ class TestGetGamesByDateRangeIntegration:
             assert "away_team" in game
             assert "game_status" in game
 
-    def test_multi_day_range(self, skip_if_no_integration_flag):
+    def test_multi_day_range(self):
         """Test fetching games across multiple days."""
         end_date = (datetime.now() - timedelta(days=1)).date()
         start_date = end_date - timedelta(days=3)
@@ -110,7 +96,7 @@ class TestGetGamesByDateRangeIntegration:
         # Should have multiple games across 4 days
         assert len(games) > 0
 
-    def test_future_date_range(self, skip_if_no_integration_flag):
+    def test_future_date_range(self):
         """Test fetching scheduled future games."""
         start_date = (datetime.now() + timedelta(days=1)).date()
         end_date = start_date + timedelta(days=2)
@@ -125,7 +111,7 @@ class TestGetGamesByDateRangeIntegration:
             for game in games:
                 assert game["game_status"] in [1, 2, 3]
 
-    def test_empty_date_range(self, skip_if_no_integration_flag):
+    def test_empty_date_range(self):
         """Test date range with likely no games (offseason)."""
         # Use a date far in the future that's unlikely to have games scheduled
         start_date = (datetime.now() + timedelta(days=180)).date()
