@@ -43,7 +43,7 @@ def get_orderbook_data(client: ClobClient, token_id: str) -> dict:
 
 def find_active_tokens(client: ClobClient, tokens: list) -> list[tuple[str, dict]]:
     """Find all tokens with active orderbooks.
-    
+
     Returns:
         List of (token_id, orderbook_data) tuples for all active tokens
     """
@@ -61,24 +61,24 @@ def find_active_tokens(client: ClobClient, tokens: list) -> list[tuple[str, dict
             else:
                 print(f"  Error for token {token}: {e}")
                 raise
-    
+
     return active_tokens
 
 
 def main():
     # Configuration
     slug = market_url.split("/")[-1]
-    
+
     # Get market data from Gamma API
     print(f"Fetching market data for slug: {slug}")
     market = get_market_by_slug(slug)
-    
+
     market_id = market.get("id")
     tokens = parse_tokens(market.get("clobTokenIds"))
-    
+
     print(f"Market ID: {market_id}")
     print(f"Tokens: {tokens}")
-    
+
     # Inspect market metadata for outcome information
     print(f"\nMarket metadata keys: {list(market.keys())}")
     if "outcomes" in market:
@@ -88,27 +88,29 @@ def main():
     if "description" in market:
         print(f"Description: {market.get('description', 'N/A')[:200]}...")
     print()
-    
+
     # Initialize CLOB client
     client = ClobClient("https://clob.polymarket.com")
-    
+
     # Check API status
     ok = client.get_ok()
     server_time = client.get_server_time()
     print(f"API Status: {ok}, Server Time: {server_time}\n")
-    
+
     # Find all active tokens and get orderbook data
     active_tokens = find_active_tokens(client, tokens)
-    
+
     if not active_tokens:
-        print("⚠ Warning: No orderbook found for any token. The market may not have active trading yet.")
+        print(
+            "⚠ Warning: No orderbook found for any token. The market may not have active trading yet."
+        )
         return
-    
+
     # Display results for all active tokens
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Found {len(active_tokens)} active token(s)")
-    print(f"{'='*60}\n")
-    
+    print(f"{'=' * 60}\n")
+
     for i, (token_id, orderbook_data) in enumerate(active_tokens, 1):
         print(f"Token {i}: {token_id}")
         print(f"  Midpoint: {orderbook_data['midpoint']}")
@@ -122,55 +124,59 @@ def main():
 async def test_polymarket_store_logic(market_url: str):
     """
     Test PolymarketStore's _parse_api_response and _poll_api logic.
-    
+
     Args:
         market_url: Polymarket market URL
     """
-    print("="*80)
+    print("=" * 80)
     print("TESTING POLYMARKET STORE LOGIC")
-    print("="*80)
+    print("=" * 80)
     print()
-    
+
     # Create store instance
     api = PolymarketAPI()
     store = PolymarketStore(api=api, market_url=market_url)
-    
+
     # Test 1: Fetch odds and create OddsUpdateEvent
     print("TEST 1: Fetch Odds and Create OddsUpdateEvent")
     print("-" * 80)
-    
+
     try:
         # Poll API for odds
         events = await store._poll_api()
-        
+
         print(f"✓ Fetched {len(events)} event(s) from Polymarket API")
         print()
-        
+
         for event in events:
-            if event.__class__.__name__ == "OddsUpdateEvent":
-                odds_event = event  # type: ignore[assignment]
-                print(f"  - OddsUpdateEvent:")
-                print(f"    Event ID: {odds_event.event_id}")  # type: ignore[attr-defined]
-                print(f"    Home Odds: {odds_event.home_odds:.4f} (from prob: {odds_event.home_probability:.4f})")  # type: ignore[attr-defined]
-                print(f"    Away Odds: {odds_event.away_odds:.4f} (from prob: {odds_event.away_probability:.4f})")  # type: ignore[attr-defined]
-                print(f"    Event Type: {odds_event.event_type}")  # type: ignore[attr-defined]
+            if isinstance(event, OddsUpdateEvent):
+                print("  - OddsUpdateEvent:")
+                print(f"    Event ID: {event.event_id}")
+                print(
+                    f"    Home Odds: {event.home_odds:.4f} (from prob: {event.home_probability:.4f})"
+                )
+                print(
+                    f"    Away Odds: {event.away_odds:.4f} (from prob: {event.away_probability:.4f})"
+                )
+                print(f"    Event Type: {event.event_type}")
                 print()
-                
+
                 # Show event as dict
-                event_dict = odds_event.to_dict()
-                print(f"  Event as dictionary:")
+                event_dict = event.to_dict()
+                print("  Event as dictionary:")
                 print(f"    {json.dumps(event_dict, indent=4, default=str)}")
                 print()
     except Exception as e:
         print(f"✗ Error fetching odds: {e}")
         import traceback
+
         traceback.print_exc()
         print()
-    
+
     # Test 2: Parse API response directly
     print("TEST 2: Parse API Response Directly")
     print("-" * 80)
-    
+
     # Simulate API response format
     test_odds_data = {
         "odds_update": {
@@ -182,33 +188,36 @@ async def test_polymarket_store_logic(market_url: str):
             "away_probability": 0.5128,  # Raw probability (1 / 1.95)
         }
     }
-    
+
     parsed_events = store._parse_api_response(test_odds_data)
-    
+
     print(f"✓ Parsed {len(parsed_events)} event(s) from test data")
     for event in parsed_events:
-        if event.__class__.__name__ == "OddsUpdateEvent":
-            odds_event = event  # type: ignore[assignment]
-            print(f"  - OddsUpdateEvent:")
-            print(f"    Event ID: {odds_event.event_id}")  # type: ignore[attr-defined]
-            print(f"    Home Odds: {odds_event.home_odds:.4f} (from prob: {odds_event.home_probability:.4f})")  # type: ignore[attr-defined]
-            print(f"    Away Odds: {odds_event.away_odds:.4f} (from prob: {odds_event.away_probability:.4f})")  # type: ignore[attr-defined]
-            print(f"    Event Type: {odds_event.event_type}")  # type: ignore[attr-defined]
+        if isinstance(event, OddsUpdateEvent):
+            print("  - OddsUpdateEvent:")
+            print(f"    Event ID: {event.event_id}")
+            print(
+                f"    Home Odds: {event.home_odds:.4f} (from prob: {event.home_probability:.4f})"
+            )
+            print(
+                f"    Away Odds: {event.away_odds:.4f} (from prob: {event.away_probability:.4f})"
+            )
+            print(f"    Event Type: {event.event_type}")
     print()
-    
+
     # Test 3: Test broker integration (if broker is available)
     print("TEST 3: Broker Integration Test")
     print("-" * 80)
-    
+
     try:
         from agentx.nba_moneyline._broker import BrokerOperator
         from agentx.core import StreamEvent
         from decimal import Decimal
-        
+
         # Create a test broker
         broker = BrokerOperator({"actor_id": "test_broker", "initial_balance": "1000"})
         await broker.start()
-        
+
         # Get odds from store
         events = await store._poll_api()
         if events:
@@ -217,7 +226,7 @@ async def test_polymarket_store_logic(market_url: str):
                 if event.__class__.__name__ == "OddsUpdateEvent":
                     odds_event = event
                     break
-            
+
             if odds_event:
                 # Initialize event in broker first
                 test_event_id = odds_event.event_id or "test_event"  # type: ignore[attr-defined]
@@ -233,50 +242,53 @@ async def test_polymarket_store_logic(market_url: str):
                     print(f"✓ Initialized event {test_event_id} in broker")
                 except ValueError as e:
                     if "already exists" in str(e):
-                        print(f"  Event {test_event_id} already exists, updating odds instead")
+                        print(
+                            f"  Event {test_event_id} already exists, updating odds instead"
+                        )
                     else:
                         raise
-                
+
                 # Create StreamEvent and test broker handling
                 stream_event = StreamEvent(
                     stream_id=f"odds_update_{test_event_id}",
                     payload=odds_event,
                     emitted_at=datetime.now(),
                 )
-                
+
                 # Handle the event in broker
                 await broker.handle_stream_event(stream_event)
-                print(f"✓ Broker handled OddsUpdateEvent successfully")
-                
+                print("✓ Broker handled OddsUpdateEvent successfully")
+
                 # Verify odds were updated
                 quote = await broker.get_quote(test_event_id)
-                print(f"  Current odds in broker:")
+                print("  Current odds in broker:")
                 print(f"    Home: {quote['home_odds']}")
                 print(f"    Away: {quote['away_odds']}")
             else:
                 print("  No OddsUpdateEvent found to test broker integration")
         else:
             print("  No events found to test broker integration")
-        
+
         await broker.stop()
     except ImportError:
         print("  Broker not available (skipping broker integration test)")
     except Exception as e:
         print(f"  Error testing broker integration: {e}")
         import traceback
+
         traceback.print_exc()
     print()
-    
-    print("="*80)
+
+    print("=" * 80)
     print("ALL TESTS COMPLETE")
-    print("="*80)
+    print("=" * 80)
 
 
 if __name__ == "__main__":
     # Run the original demo
     main()
     print()
-    
+
     # Run async tests
     print()
     asyncio.run(test_polymarket_store_logic(market_url))

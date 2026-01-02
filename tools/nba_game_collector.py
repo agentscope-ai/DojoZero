@@ -138,7 +138,7 @@ class GameTrialManager:
         self.config_file = config_file
         self.replay_file = replay_file
         self.log_file = log_file
-        
+
         # Generate unique trial ID with hash postfix to avoid conflicts
         # Hash includes game_id, date, and timestamp for uniqueness
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -277,7 +277,9 @@ class GameTrialManager:
             self.trial_id,
         ]
 
-        self.log(logging.INFO, "Starting trial for game %s: %s", self.game_id, " ".join(cmd))
+        self.log(
+            logging.INFO, "Starting trial for game %s: %s", self.game_id, " ".join(cmd)
+        )
 
         try:
             # Start process (non-blocking)
@@ -291,11 +293,11 @@ class GameTrialManager:
                     encoding="utf-8",
                     buffering=1,  # Line buffered for immediate writes
                 )
-                
+
                 # Set environment variable for subprocess (future enhancement)
                 env = os.environ.copy()
                 env["AGENTX_LOG_FILE"] = str(self.log_file)
-                
+
                 self.process = subprocess.Popen(
                     cmd,
                     stdout=self._log_file_handle,
@@ -328,16 +330,24 @@ class GameTrialManager:
 
             return True
         except Exception as e:
-            self.log(logging.ERROR, "Failed to start trial for game %s: %s", self.game_id, e)
+            self.log(
+                logging.ERROR, "Failed to start trial for game %s: %s", self.game_id, e
+            )
             return False
 
     async def monitor_trial(self) -> None:
         """Monitor trial process and game status until game concludes."""
         if not self.started or not self.process:
-            logger.warning("Cannot monitor trial for game %s (not started)", self.game_id)
+            logger.warning(
+                "Cannot monitor trial for game %s (not started)", self.game_id
+            )
             return
 
-        self.log(logging.INFO, "Monitoring trial for game %s until game concludes", self.game_id)
+        self.log(
+            logging.INFO,
+            "Monitoring trial for game %s until game concludes",
+            self.game_id,
+        )
 
         while True:
             # Check if process is still running
@@ -362,7 +372,9 @@ class GameTrialManager:
                         return_code,
                     )
                     if stderr:
-                        self.log(logging.ERROR, "Stderr: %s", stderr[:500])  # First 500 chars
+                        self.log(
+                            logging.ERROR, "Stderr: %s", stderr[:500]
+                        )  # First 500 chars
 
                 break
 
@@ -388,7 +400,12 @@ class GameTrialManager:
                         self.completed = True
                         break
             except Exception as e:
-                self.log(logging.WARNING, "Error checking game status for %s: %s", self.game_id, e)
+                self.log(
+                    logging.WARNING,
+                    "Error checking game status for %s: %s",
+                    self.game_id,
+                    e,
+                )
 
             # Wait before next check
             await asyncio.sleep(self.check_interval_seconds)
@@ -398,7 +415,12 @@ class GameTrialManager:
         if not self.process:
             return
 
-        self.log(logging.INFO, "Stopping trial for game %s (PID: %d)", self.game_id, self.process.pid)
+        self.log(
+            logging.INFO,
+            "Stopping trial for game %s (PID: %d)",
+            self.game_id,
+            self.process.pid,
+        )
 
         try:
             # Send SIGTERM
@@ -409,7 +431,9 @@ class GameTrialManager:
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 # Force kill if not responding
-                self.log(logging.WARNING, "Trial process did not terminate, forcing kill")
+                self.log(
+                    logging.WARNING, "Trial process did not terminate, forcing kill"
+                )
                 self.process.kill()
                 self.process.wait()
 
@@ -419,13 +443,20 @@ class GameTrialManager:
                     self._log_file_handle.flush()  # Ensure all data is written
                     self._log_file_handle.close()
                 except Exception as e:
-                    self.log(logging.WARNING, "Error closing log file for game %s: %s", self.game_id, e)
+                    self.log(
+                        logging.WARNING,
+                        "Error closing log file for game %s: %s",
+                        self.game_id,
+                        e,
+                    )
                 finally:
                     self._log_file_handle = None
 
             self.log(logging.INFO, "✓ Trial stopped for game %s", self.game_id)
         except Exception as e:
-            self.log(logging.ERROR, "Error stopping trial for game %s: %s", self.game_id, e)
+            self.log(
+                logging.ERROR, "Error stopping trial for game %s: %s", self.game_id, e
+            )
 
     def log_status(self) -> None:
         """Log crucial status information."""
@@ -488,32 +519,34 @@ async def collect_game_for_id(
     # First, find which date the game is on
     logger.info("Searching for game ID: %s", game_id)
     game_info = get_game_info_by_id(game_id)
-    
+
     if not game_info:
         logger.error("Game ID %s not found in recent dates", game_id)
         return []
-    
+
     # Extract the date from game_info
-    game_date_str = game_info.get('game_date')
+    game_date_str = game_info.get("game_date")
     if not game_date_str:
         logger.error("Game found but missing date information")
         return []
-    
+
     logger.info("Found game %s on date %s", game_id, game_date_str)
-    
+
     # Fetch full game data for that date
     games = get_games_for_date(game_date_str, print_games=False)
-    
+
     if not games:
         logger.error("No games found for date %s", game_date_str)
         return []
-    
+
     # Extract the specific game
     game = next((g for g in games if str(g.get("gameId", "")) == game_id), None)
     if not game:
-        logger.error("Game ID %s not found in games for date %s", game_id, game_date_str)
+        logger.error(
+            "Game ID %s not found in games for date %s", game_id, game_date_str
+        )
         return []
-    
+
     # Create manager for this game
     manager = GameTrialManager(
         game=game,
@@ -579,7 +612,9 @@ async def collect_games_for_date(
             pre_start_hours=pre_start_hours,
             check_interval_seconds=check_interval_seconds,
             data_dir=data_dir,
-            game_date=date_str if data_dir else None,  # Pass date_str when data_dir is set
+            game_date=(
+                date_str if data_dir else None
+            ),  # Pass date_str when data_dir is set
             log_level=log_level,
         )
         managers.append(manager)
@@ -752,4 +787,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

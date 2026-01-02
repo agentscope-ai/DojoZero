@@ -121,8 +121,12 @@ class Event:
     away_team: str
     game_time: datetime
     status: EventStatus
-    home_odds: Optional[Decimal] = None  # Can be None initially, filled in when odds arrive
-    away_odds: Optional[Decimal] = None  # Can be None initially, filled in when odds arrive
+    home_odds: Optional[Decimal] = (
+        None  # Can be None initially, filled in when odds arrive
+    )
+    away_odds: Optional[Decimal] = (
+        None  # Can be None initially, filled in when odds arrive
+    )
     last_odds_update: Optional[datetime] = None
     betting_closed_at: Optional[datetime] = None
 
@@ -368,7 +372,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Event management
         self._events: Dict[str, Event] = {}
         self._event_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        
+
         # Pending team info from GameUpdateEvent (waiting for OddsUpdateEvent)
         # Maps event_id -> {"home_team": str, "away_team": str, "game_time": datetime}
         self._pending_team_info: Dict[str, Dict[str, Any]] = {}
@@ -430,12 +434,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
     async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
         """Process incoming stream events and delegate to appropriate handlers.
-        
+
         Expects StreamEvent.payload to be a DataEvent (OddsUpdateEvent, GameStartEvent, GameResultEvent, etc.)
         """
         try:
             data_event = event.payload
-            
+
             # Type check - ensure it's one of our game events
             if not hasattr(data_event, "event_id"):
                 logger.warning(
@@ -444,7 +448,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     data_event,
                 )
                 return
-            
+
             event_id = data_event.event_id
             if not event_id:
                 logger.error("Event missing event_id: %s", data_event)
@@ -462,7 +466,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                         event_id,
                     )
                     return
-                
+
                 # Log every incoming event
                 logger.info(
                     "Received event: type=%s, event_id=%s, stream_id=%s, timestamp=%s",
@@ -471,24 +475,23 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     event.stream_id,
                     getattr(data_event, "timestamp", None),
                 )
-                
-                if event_type == EventTypes.GAME_INITIALIZE.value:
 
+                if event_type == EventTypes.GAME_INITIALIZE.value:
                     # GameInitializeEvent: Initialize event with team info (no odds yet)
                     home_team_str = getattr(data_event, "home_team", "")
                     away_team_str = getattr(data_event, "away_team", "")
                     game_time_dt = getattr(data_event, "game_time", None)
-                    
+
                     if not home_team_str or not away_team_str:
                         logger.warning(
                             "GameInitializeEvent missing team info: event_id=%s",
                             event_id,
                         )
                         return
-                    
+
                     if not isinstance(game_time_dt, datetime):
                         game_time_dt = datetime.now()
-                    
+
                     if event_id in self._events:
                         # Event already exists - update team info if needed
                         broker_event = self._events[event_id]
@@ -519,7 +522,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                             initial_home_odds=None,  # Will be updated when OddsUpdateEvent arrives
                             initial_away_odds=None,  # Will be updated when OddsUpdateEvent arrives
                         )
-                
+
                 elif event_type == EventTypes.ODDS_UPDATE.value:
                     # Only process odds if we have team info (either from existing event or pending GameUpdateEvent)
                     if event_id in self._events:
@@ -570,27 +573,35 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     home_team_str = None
                     away_team_str = None
                     game_time_dt = None
-                    
-                    if hasattr(data_event, "home_team") and isinstance(data_event.home_team, dict):
+
+                    if hasattr(data_event, "home_team") and isinstance(
+                        data_event.home_team, dict
+                    ):
                         home_city = data_event.home_team.get("teamCity", "")
                         home_name = data_event.home_team.get("teamName", "")
                         if home_city or home_name:
                             home_team_str = f"{home_city} {home_name}".strip()
-                    
-                    if hasattr(data_event, "away_team") and isinstance(data_event.away_team, dict):
+
+                    if hasattr(data_event, "away_team") and isinstance(
+                        data_event.away_team, dict
+                    ):
                         away_city = data_event.away_team.get("teamCity", "")
                         away_name = data_event.away_team.get("teamName", "")
                         if away_city or away_name:
                             away_team_str = f"{away_city} {away_name}".strip()
-                    
+
                     # Extract game_time_utc if available
-                    if hasattr(data_event, "game_time_utc") and data_event.game_time_utc:
+                    if (
+                        hasattr(data_event, "game_time_utc")
+                        and data_event.game_time_utc
+                    ):
                         try:
-                            from datetime import timezone
-                            game_time_dt = datetime.fromisoformat(data_event.game_time_utc.replace("Z", "+00:00"))
+                            game_time_dt = datetime.fromisoformat(
+                                data_event.game_time_utc.replace("Z", "+00:00")
+                            )
                         except (ValueError, AttributeError):
                             pass
-                    
+
                     # Only process if we have both team names
                     if not home_team_str or not away_team_str:
                         logger.debug(
@@ -600,11 +611,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                             away_team_str,
                         )
                         return
-                    
+
                     # Use current time as fallback if game_time_utc not available
                     if not game_time_dt:
                         game_time_dt = datetime.now()
-                    
+
                     if event_id in self._events:
                         # Event exists - update team names and game_time
                         broker_event = self._events[event_id]
@@ -663,7 +674,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         initial_away_odds: Optional[Decimal] = None,
     ) -> Event:
         """Initialize a new betting event.
-        
+
         Args:
             event_id: Unique event identifier
             home_team: Home team name
@@ -717,7 +728,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self, event_id: str, home_odds: Decimal, away_odds: Decimal
     ) -> Event:
         """Update odds for an event and execute matching limit orders.
-        
+
         Can be called to set initial odds (if event was initialized without odds)
         or to update existing odds.
         """
@@ -808,8 +819,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         if event.status != EventStatus.CLOSED:
             raise ValueError(
-                f"Cannot settle event with status {event.status.value}, "
-                f"must be CLOSED"
+                f"Cannot settle event with status {event.status.value}, must be CLOSED"
             )
 
         if winner not in ["home", "away"]:
@@ -836,7 +846,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Update event status
         event.status = EventStatus.SETTLED
 
-        logger.info("Completed settlement for event %s - Settled %d bets", event_id, settled_count)
+        logger.info(
+            "Completed settlement for event %s - Settled %d bets",
+            event_id,
+            settled_count,
+        )
 
     async def _settle_bet(self, bet: Bet, winner: str) -> None:
         """Settle a single bet"""
@@ -901,7 +915,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 cancelled_count += 1
 
         if cancelled_count > 0:
-            logger.info("Cancelled %d pre-game orders for event %s", cancelled_count, event_id)
+            logger.info(
+                "Cancelled %d pre-game orders for event %s", cancelled_count, event_id
+            )
 
     async def _cancel_all_pending_orders(self, event_id: str) -> None:
         """Cancel all pending orders for an event"""
@@ -983,7 +999,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             account.balance += amount
             account.last_updated = datetime.now()
 
-            logger.info("Deposit for %s: +%s (balance: %s)", agent_id, amount, account.balance)
+            logger.info(
+                "Deposit for %s: +%s (balance: %s)", agent_id, amount, account.balance
+            )
             return account.balance
 
     async def withdraw(self, agent_id: str, amount: Decimal) -> Decimal:
@@ -1005,7 +1023,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             account.balance -= amount
             account.last_updated = datetime.now()
 
-            logger.info("Withdraw for %s: -%s (balance: %s)", agent_id, amount, account.balance)
+            logger.info(
+                "Withdraw for %s: -%s (balance: %s)", agent_id, amount, account.balance
+            )
             return account.balance
 
     # =========================================================================
@@ -1062,7 +1082,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     raise ValueError("Event is closed for betting")
                 if event.status == EventStatus.SETTLED:
                     raise ValueError("Event has been settled")
-                
+
                 # Check odds are available (event must be initialized with odds)
                 if event.home_odds is None or event.away_odds is None:
                     raise ValueError(
@@ -1104,7 +1124,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     execution_odds = event.home_odds
                 else:
                     execution_odds = event.away_odds
-                
+
                 if execution_odds is None:
                     raise ValueError(
                         f"Odds not available for selection '{bet_request.selection}' "

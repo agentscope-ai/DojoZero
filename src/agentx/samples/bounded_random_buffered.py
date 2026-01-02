@@ -5,7 +5,6 @@ buffered agent that batches incoming events. The buffer drains on a fixed
 interval so the operator's counter increments in bursts rather than per-event.
 """
 
-from agentx.samples.bounded_random import BoundedRandomStringDataStreamConfig
 import asyncio
 import logging
 from typing import Any, Mapping, Protocol, Sequence, cast

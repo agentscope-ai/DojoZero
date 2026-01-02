@@ -56,19 +56,25 @@ EVENT_TYPE_PROCESSOR_MAP: dict[str, tuple[type[Any] | None, list[str]]] = {
 # Mapping from synthetic event types to actual event types
 # Used when a stream subscribes to multiple event types
 SYNTHETIC_EVENT_TYPE_MAP: dict[str, list[str]] = {
-    "game_status_change": [EventTypes.GAME_START.value, EventTypes.GAME_RESULT.value, EventTypes.GAME_INITIALIZE.value],
+    "game_status_change": [
+        EventTypes.GAME_START.value,
+        EventTypes.GAME_RESULT.value,
+        EventTypes.GAME_INITIALIZE.value,
+    ],
     # Other event types (game_update, odds_update) are direct mappings
 }
 
 
 class HubConfig(BaseModel):
     """Hub configuration."""
+
     persistence_file: str = Field(default="outputs/nba_pregame_events.jsonl")
     enable_persistence: bool = Field(default=True)
 
 
 class DataStreamConfig(BaseModel):
     """Data stream configuration."""
+
     id: str
     event_type: str
     initializer: dict[str, Any] | None = Field(default=None)
@@ -76,11 +82,16 @@ class DataStreamConfig(BaseModel):
 
 class OperatorConfig(BaseModel):
     """Operator configuration."""
+
     id: str
     class_name: str = Field(alias="class", description="Operator class name")
-    data_streams: list[str] = Field(default_factory=list, description="DataStream actor IDs to subscribe to")
-    initial_balance: str | None = Field(default=None, description="Initial balance for broker (if applicable)")
-    
+    data_streams: list[str] = Field(
+        default_factory=list, description="DataStream actor IDs to subscribe to"
+    )
+    initial_balance: str | None = Field(
+        default=None, description="Initial balance for broker (if applicable)"
+    )
+
     class Config:
         populate_by_name = True
 
@@ -103,13 +114,13 @@ class NBAPreGameBettingTrialParams(BaseModel):
 
     # Data streams configuration (optional, hierarchical)
     data_streams: list[DataStreamConfig] | None = Field(default=None)
-    
+
     # Event type configuration (which event types to create streams for) - used if data_streams not provided
     event_types: list[str] | None = Field(
         default=None,
-        description="List of event types to create streams for (used if data_streams not provided)"
+        description="List of event types to create streams for (used if data_streams not provided)",
     )
-    
+
     # Operators configuration (optional, hierarchical)
     operators: list[OperatorConfig] | None = Field(default=None)
 
@@ -134,7 +145,7 @@ class NBAPreGameBettingTrialParams(BaseModel):
             "If not provided, will auto-construct slug from game info (away_tricode, home_tricode, game_date)."
         ),
     )
-    
+
     # Search queries (optional, for triggering searches)
     # If not provided, will be auto-generated based on game_id
     # Supports query templates with placeholders: {teams}, {home_team}, {away_team}, {date}, {home_tricode}, {away_tricode}
@@ -197,8 +208,10 @@ def _build_trial_spec(
     else:
         hub_id = params.hub_id
         persistence_file = params.persistence_file or "outputs/nba_pregame_events.jsonl"
-        enable_persistence = params.enable_persistence if params.enable_persistence is not None else True
-    
+        enable_persistence = (
+            params.enable_persistence if params.enable_persistence is not None else True
+        )
+
     # Create DataHub instance
     hub = DataHub(
         hub_id=hub_id,
@@ -209,10 +222,9 @@ def _build_trial_spec(
     # Setup WebSearchStore
     websearch_api = WebSearchAPI()
     websearch_store = WebSearchStore(
-        store_id=params.websearch_store_id,
-        api=websearch_api
+        store_id=params.websearch_store_id, api=websearch_api
     )
-    
+
     # Setup NBAStore for game status events
     # Default intervals: scoreboard=5s, play_by_play=2s
     nba_api = NBAExternalAPI()
@@ -221,7 +233,7 @@ def _build_trial_spec(
         api=nba_api,
         # poll_intervals will use defaults: {"scoreboard": 60.0, "play_by_play": 20.0}
     )
-    
+
     # Setup PolymarketStore for odds updates
     # Default interval: odds=300s (5 minutes)
     polymarket_api = PolymarketAPI()
@@ -246,16 +258,21 @@ def _build_trial_spec(
         )
     else:
         # Default event types
-        event_types_list = ["raw_web_search", "injury_summary", "power_ranking", "expert_prediction"]
+        event_types_list = [
+            "raw_web_search",
+            "injury_summary",
+            "power_ranking",
+            "expert_prediction",
+        ]
         logger.info(
             "Using default event types: %s",
             event_types_list,
         )
-    
+
     # Collect all event types including game events
     # Game events come from NBAStore and PolymarketStore
     all_event_types = set(event_types_list)
-    
+
     # Expand synthetic event types to actual event types
     expanded_event_types = set()
     for event_type in all_event_types:
@@ -263,7 +280,7 @@ def _build_trial_spec(
             expanded_event_types.update(SYNTHETIC_EVENT_TYPE_MAP[event_type])
         else:
             expanded_event_types.add(event_type)
-    
+
     # Auto-register processors based on requested event_types
     # Use EVENT_TYPE_PROCESSOR_MAP to determine which processors are needed
     registered_event_types = set()
@@ -272,7 +289,9 @@ def _build_trial_spec(
             processor_class, source_event_types = EVENT_TYPE_PROCESSOR_MAP[event_type]
             if event_type not in registered_event_types:
                 processor = processor_class() if processor_class else None
-                websearch_store.register_stream(event_type, processor, source_event_types)
+                websearch_store.register_stream(
+                    event_type, processor, source_event_types
+                )
                 registered_event_types.add(event_type)
                 logger.debug(
                     "Registered event_type '%s' with processor %s (sources: %s)",
@@ -290,13 +309,13 @@ def _build_trial_spec(
     hub.connect_store(websearch_store)
     hub.connect_store(nba_store)
     hub.connect_store(polymarket_store)
-    
+
     # Set up polling identifiers for game events
     # NBA store needs game_id to poll game status
     nba_store.set_poll_identifier({"game_id": params.game_id})
     # Polymarket store uses game_id for consistency (all events will use same event_id)
     polymarket_store.set_poll_identifier({"game_id": params.game_id})
-    
+
     # Start polling on both stores (they will poll automatically)
     # Note: Stores start polling when DataHub connects them via set_event_emitter
     # The dashboard will call start_polling() during trial startup
@@ -304,7 +323,7 @@ def _build_trial_spec(
     # Create stream specs - multiple streams, one per event type (or group)
     # All streams subscribe to the same DataHub
     stream_specs = []
-    
+
     # Create streams for web search event types
     if params.data_streams:
         # Use hierarchical data_streams config
@@ -315,7 +334,7 @@ def _build_trial_spec(
                 actual_event_types = SYNTHETIC_EVENT_TYPE_MAP[ds_config.event_type]
             else:
                 actual_event_types = [ds_config.event_type]
-            
+
             ds_stream_config: NBAPreGameBettingDataHubDataStreamConfig = {
                 "actor_id": ds_config.id,
                 "hub_id": hub_id,
@@ -323,13 +342,13 @@ def _build_trial_spec(
                 "event_type": ds_config.event_type,
                 "event_types": actual_event_types,
             }
-            
+
             # Add optional fields
             if home_team_tricode:
                 ds_stream_config["home_team_tricode"] = home_team_tricode
             if away_team_tricode:
                 ds_stream_config["away_team_tricode"] = away_team_tricode
-            
+
             # Handle initializer config for raw_web_search stream
             if ds_config.event_type == "raw_web_search":
                 ds_stream_config["websearch_store_id"] = params.websearch_store_id
@@ -345,8 +364,10 @@ def _build_trial_spec(
                     ds_stream_config["game_date"] = game_date
                 # Get search_queries from initializer if provided
                 if ds_config.initializer and "search_queries" in ds_config.initializer:
-                    ds_stream_config["search_queries"] = ds_config.initializer["search_queries"]
-            
+                    ds_stream_config["search_queries"] = ds_config.initializer[
+                        "search_queries"
+                    ]
+
             stream_spec = DataStreamSpec(
                 actor_id=ds_config.id,
                 actor_cls=NBAPreGameBettingDataHubDataStream,
@@ -363,13 +384,13 @@ def _build_trial_spec(
                 "event_type": event_type,
                 "event_types": [event_type],
             }
-            
+
             # Add optional fields
             if home_team_tricode:
                 flat_stream_config["home_team_tricode"] = home_team_tricode
             if away_team_tricode:
                 flat_stream_config["away_team_tricode"] = away_team_tricode
-            
+
             # Handle initializer config for raw_web_search stream
             if event_type == "raw_web_search":
                 flat_stream_config["websearch_store_id"] = params.websearch_store_id
@@ -386,36 +407,36 @@ def _build_trial_spec(
                 # Pass search_queries if provided
                 if params.search_queries:
                     flat_stream_config["search_queries"] = params.search_queries
-            
+
             stream_spec = DataStreamSpec(
                 actor_id=f"{event_type}_stream",
                 actor_cls=NBAPreGameBettingDataHubDataStream,
                 config=flat_stream_config,
             )
             stream_specs.append(stream_spec)
-    
+
     # Validate that all referenced streams exist
     # Collect all stream IDs that are defined in YAML
     defined_stream_ids = set()
     if params.data_streams:
         defined_stream_ids = {ds.id for ds in params.data_streams}
-    
+
     # Collect all stream IDs referenced by operators and agents
     referenced_stream_ids = set()
-    
+
     # Check operators
     if params.operators:
         for op_config in params.operators:
             if op_config.data_streams:
                 referenced_stream_ids.update(op_config.data_streams)
-    
+
     # Check agents
     if params.agents:
         for agent_dict in params.agents:
             agent_streams = agent_dict.get("data_streams", [])
             if agent_streams:
                 referenced_stream_ids.update(agent_streams)
-    
+
     # Validate all referenced streams exist
     missing_streams = referenced_stream_ids - defined_stream_ids
     if missing_streams:
@@ -449,7 +470,7 @@ def _build_trial_spec(
             op_cls = operator_class_map.get(op_config.class_name)
             if op_cls is None:
                 raise ValueError(f"Unknown operator class: {op_config.class_name}")
-            
+
             # Create operator config based on class
             if op_config.class_name == "BrokerOperator":
                 broker_config: BrokerOperatorConfig = {
@@ -457,14 +478,16 @@ def _build_trial_spec(
                 }
                 if op_config.initial_balance:
                     broker_config["initial_balance"] = op_config.initial_balance
-                operator_config: BrokerOperatorConfig | EventCounterOperatorConfig = broker_config
+                operator_config: BrokerOperatorConfig | EventCounterOperatorConfig = (
+                    broker_config
+                )
             else:
                 counter_config: EventCounterOperatorConfig = {"actor_id": op_config.id}
                 operator_config = counter_config
-            
+
             # Use operator's specified data_streams, or default to empty
             data_stream_ids = op_config.data_streams if op_config.data_streams else []
-            
+
             operator_spec = OperatorSpec(
                 actor_id=op_config.id,
                 actor_cls=op_cls,
@@ -494,27 +517,27 @@ def _build_trial_spec(
 
     # Create agent specs from agents config
     agent_specs = []
-    
+
     if not params.agents:
         raise ValueError(
             "No agents specified. At least one agent with class 'NBABettingAgent' is required."
         )
-    
+
     for agent_dict in params.agents:
         agent_id = agent_dict.get("id")
         if not agent_id:
             raise ValueError("Agent config missing required 'id' field")
-        
+
         agent_class_name = agent_dict.get("class")
         if agent_class_name != "NBABettingAgent":
             raise ValueError(
                 f"Invalid agent class '{agent_class_name}' for agent '{agent_id}'. "
                 "Only 'NBABettingAgent' is supported."
             )
-        
+
         operator_ids = agent_dict.get("operators", [])
         data_stream_ids = agent_dict.get("data_streams", [])
-        
+
         # Create agent config - pass through config fields from agent_dict
         agent_config: NBABettingAgentConfig = {
             "actor_id": agent_id,
@@ -528,7 +551,7 @@ def _build_trial_spec(
             agent_config["model_type"] = agent_dict["model_type"]
         if agent_dict.get("model_name"):
             agent_config["model_name"] = agent_dict["model_name"]
-        
+
         agent_spec = AgentSpec[NBABettingAgentConfig](
             actor_id=agent_id,
             actor_cls=NBABettingAgent,
@@ -545,11 +568,11 @@ def _build_trial_spec(
         "hub_id": params.hub_id,
         "event_types": params.event_types,
     }
-    
+
     # Add market_url if provided
     if params.market_url:
         metadata["market_url"] = params.market_url
-    
+
     # Add team information if available
     if home_team_tricode and away_team_tricode:
         metadata["home_team_tricode"] = home_team_tricode
@@ -568,13 +591,13 @@ def _build_trial_spec(
 
 def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
     """Build runtime context for NBA pre-game betting trial.
-    
+
     Creates DataHub and WebSearchStore instances from stream configs.
     This allows from_dict() methods to access these dependencies via context.
-    
+
     Args:
         spec: Trial specification
-        
+
     Returns:
         Context dictionary with 'data_hubs' and 'stores' keys
     """
@@ -582,17 +605,17 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         "data_hubs": {},
         "stores": {},
     }
-    
+
     # Extract hub/store info from stream configs
     hub_configs: dict[str, dict[str, Any]] = {}
     store_configs: dict[str, dict[str, Any]] = {}
-    
+
     for stream_spec in spec.data_streams:
         config = stream_spec.config
         hub_id = config.get("hub_id")
         persistence_file = config.get("persistence_file")
         websearch_store_id = config.get("websearch_store_id")
-        
+
         if hub_id and persistence_file:
             if hub_id not in hub_configs:
                 hub_configs[hub_id] = {
@@ -600,13 +623,13 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
                     "persistence_file": persistence_file,
                     "enable_persistence": config.get("enable_persistence", True),
                 }
-        
+
         if websearch_store_id:
             if websearch_store_id not in store_configs:
                 store_configs[websearch_store_id] = {
                     "store_id": websearch_store_id,
                 }
-    
+
     # Create DataHub instances
     for hub_id, hub_config in hub_configs.items():
         if hub_id not in context["data_hubs"]:
@@ -616,7 +639,7 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
                 enable_persistence=hub_config.get("enable_persistence", True),
             )
             context["data_hubs"][hub_id] = hub
-    
+
     # Create Store instances
     # WebSearchStore
     for store_id, store_config in store_configs.items():
@@ -637,13 +660,17 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
                     event_types_to_check.append(config.get("event_type"))
                 if config.get("event_types"):
                     event_types_to_check.extend(config.get("event_types", []))
-                
+
                 for event_type in event_types_to_check:
                     if event_type and event_type in EVENT_TYPE_PROCESSOR_MAP:
-                        processor_class, source_event_types = EVENT_TYPE_PROCESSOR_MAP[event_type]
+                        processor_class, source_event_types = EVENT_TYPE_PROCESSOR_MAP[
+                            event_type
+                        ]
                         if event_type not in registered_event_types:
                             processor = processor_class() if processor_class else None
-                            store.register_stream(event_type, processor, source_event_types)
+                            store.register_stream(
+                                event_type, processor, source_event_types
+                            )
                             registered_event_types.add(event_type)
             # Connect store to hub
             hub_id = None
@@ -654,7 +681,7 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
             if hub_id and hub_id in context["data_hubs"]:
                 context["data_hubs"][hub_id].connect_store(store)
             context["stores"][store_id] = store
-    
+
     # Create NBAStore for game status events
     # Default intervals: scoreboard=5s, play_by_play=2s
     if "nba_store" not in context["stores"]:
@@ -671,31 +698,37 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         if hub_id:
             context["data_hubs"][hub_id].connect_store(nba_store)
         context["stores"]["nba_store"] = nba_store
-    
+
     # Create PolymarketStore for odds updates
     # Default interval: odds=300s (5 minutes)
     if "polymarket_store" not in context["stores"]:
         game_id = spec.metadata.get("game_id", "")
         market_url_raw = spec.metadata.get("market_url")
-        market_url: str | None = market_url_raw if isinstance(market_url_raw, str) else None
-        
+        market_url: str | None = (
+            market_url_raw if isinstance(market_url_raw, str) else None
+        )
+
         # Prepare identifier for polling (will be used if market_url/slug not available)
         # Use game_id for consistency (all events will use same event_id)
         identifier: dict[str, Any] = {"game_id": game_id}
-        
+
         # If market_url not provided, try to construct slug from game info
         if not market_url:
             away_tricode_raw = spec.metadata.get("away_team_tricode")
             home_tricode_raw = spec.metadata.get("home_team_tricode")
             game_date_raw = spec.metadata.get("game_date")
-            away_tricode = away_tricode_raw if isinstance(away_tricode_raw, str) else None
-            home_tricode = home_tricode_raw if isinstance(home_tricode_raw, str) else None
+            away_tricode = (
+                away_tricode_raw if isinstance(away_tricode_raw, str) else None
+            )
+            home_tricode = (
+                home_tricode_raw if isinstance(home_tricode_raw, str) else None
+            )
             game_date = game_date_raw if isinstance(game_date_raw, str) else None
             if away_tricode and home_tricode and game_date:
                 identifier["away_tricode"] = away_tricode
                 identifier["home_tricode"] = home_tricode
                 identifier["game_date"] = game_date
-        
+
         polymarket_api = PolymarketAPI()
         polymarket_store = PolymarketStore(
             store_id="polymarket_store",
@@ -709,7 +742,7 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         if hub_id:
             context["data_hubs"][hub_id].connect_store(polymarket_store)
         context["stores"]["polymarket_store"] = polymarket_store
-    
+
     # Start all stores after they're all connected and configured
     # Add startup function to context that dashboard can call
     async def start_data_stores() -> None:
@@ -718,9 +751,9 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         if hub_id:
             hub = context["data_hubs"][hub_id]
             await hub.start()
-    
+
     context["_startup"] = start_data_stores
-    
+
     return context
 
 
@@ -743,9 +776,15 @@ register_trial_builder(
                 "event_type": "raw_web_search",
                 "initializer": {
                     "search_queries": [
-                        {"template": "NBA injury updates for {teams} on {date}", "intent": "injury_summary"},
+                        {
+                            "template": "NBA injury updates for {teams} on {date}",
+                            "intent": "injury_summary",
+                        },
                         {"template": "NBA power rankings", "intent": "power_ranking"},
-                        {"template": "NBA expert predictions for {teams}", "intent": "expert_prediction"},
+                        {
+                            "template": "NBA expert predictions for {teams}",
+                            "intent": "expert_prediction",
+                        },
                     ]
                 },
             },

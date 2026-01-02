@@ -41,14 +41,7 @@ def load_agent_config(config_path: str | Path) -> AgentConfig:
     with path.open("r", encoding="utf-8") as f:
         data: dict[str, Any] = yaml.safe_load(f)
 
-    config: AgentConfig = {
-        "agent_id": data["agent_id"],
-        "name": data.get("name", data["agent_id"]),
-        "sys_prompt": data.get("sys_prompt", ""),
-        "tools": data.get("tools", []),
-    }
-
-    # Parse LLM config
+    # Parse LLM config first
     llm_data = data.get("llm", {})
     llm_config: LLMConfig = {
         "model_type": llm_data.get("model_type", "openai"),
@@ -59,9 +52,14 @@ def load_agent_config(config_path: str | Path) -> AgentConfig:
     if "base_url_env" in llm_data:
         llm_config["base_url_env"] = llm_data["base_url_env"]
 
-    config["llm"] = llm_config
-
-    return config
+    # Build AgentConfig with all required fields
+    return AgentConfig(
+        agent_id=data["agent_id"],
+        name=data.get("name", data["agent_id"]),
+        sys_prompt=data.get("sys_prompt", ""),
+        tools=data.get("tools", []),
+        llm=llm_config,
+    )
 
 
 def get_api_key(llm_config: LLMConfig) -> str:
@@ -84,4 +82,6 @@ class BettingAgentConfig(TypedDict, total=False):
     model_name: str
     api_key_env: str  # Environment variable name for API key
     base_url_env: str  # Environment variable name for base URL (optional)
-    agent_config_path: str  # Path to agent YAML config file (alternative to inline config)
+    agent_config_path: (
+        str  # Path to agent YAML config file (alternative to inline config)
+    )

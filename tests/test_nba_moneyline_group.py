@@ -69,7 +69,9 @@ def broker():
 @pytest.fixture
 def agent_group():
     """Create BettingAgentGroup with whale, sheep, shark agents using test env vars."""
-    return TestBettingAgentGroup(config_paths=[WHALE_CONFIG, SHEEP_CONFIG, SHARK_CONFIG])
+    return TestBettingAgentGroup(
+        config_paths=[WHALE_CONFIG, SHEEP_CONFIG, SHARK_CONFIG]
+    )
 
 
 @pytest.mark.asyncio

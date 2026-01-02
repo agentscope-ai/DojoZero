@@ -159,7 +159,10 @@ class FileSystemDashboardStore(DashboardStore):
         if not self._index_file.exists():
             return []
         payload = self._read_json(self._index_file)
-        return list(payload.get("trials", []))  # type: ignore[arg-type]
+        assert isinstance(payload, dict), "Trial index file must contain a dict"
+        trials = payload.get("trials", [])
+        assert isinstance(trials, list), "Trials must be a list"
+        return trials
 
     def _trial_dir(self, trial_id: str) -> Path:
         safe_name = quote(trial_id, safe="")
@@ -239,14 +242,22 @@ class FileSystemDashboardStore(DashboardStore):
     ) -> OperatorSpec[Any]:
         base_kwargs = self._deserialize_actor_spec_common(payload)
         agent_ids = tuple(str(value) for value in payload.get("agent_ids", ()))
-        data_stream_ids = tuple(str(value) for value in payload.get("data_stream_ids", ()))
-        return OperatorSpec(agent_ids=agent_ids, data_stream_ids=data_stream_ids, **base_kwargs)
+        data_stream_ids = tuple(
+            str(value) for value in payload.get("data_stream_ids", ())
+        )
+        return OperatorSpec(
+            agent_ids=agent_ids, data_stream_ids=data_stream_ids, **base_kwargs
+        )
 
     def _deserialize_agent_spec(self, payload: Mapping[str, Any]) -> AgentSpec[Any]:
         base_kwargs = self._deserialize_actor_spec_common(payload)
         operator_ids = tuple(str(value) for value in payload.get("operator_ids", ()))
-        data_stream_ids = tuple(str(value) for value in payload.get("data_stream_ids", ()))
-        return AgentSpec(operator_ids=operator_ids, data_stream_ids=data_stream_ids, **base_kwargs)
+        data_stream_ids = tuple(
+            str(value) for value in payload.get("data_stream_ids", ())
+        )
+        return AgentSpec(
+            operator_ids=operator_ids, data_stream_ids=data_stream_ids, **base_kwargs
+        )
 
     def _deserialize_data_stream_spec(
         self, payload: Mapping[str, Any]

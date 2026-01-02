@@ -35,7 +35,6 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "ruff>=0.1.0",
     "pyright>=1.1.0",
-    "black>=23.0.0",
     "pre-commit>=3.0.0",
     "ray>=2.51.1",
     "nba_api>=1.11.3",
@@ -51,11 +50,6 @@ target-version = "py310"
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
-
-[tool.black]
-line-length = 88
-target-version = ["py310"]
-include = '\.pyi?$'
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

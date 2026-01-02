@@ -34,10 +34,10 @@ ResultT = TypeVar("ResultT")
 @dataclass(slots=True)
 class QueryResult(Generic[ResultT]):
     """Envelope for data returned from a query/on-demand request.
-    
+
     Similar to StreamEvent but for pull-based queries rather than push-based streams.
     Provides metadata about the query (source, timing, etc.) along with the result.
-    
+
     Example:
         # Query returns QueryResult[DataFact]
         result = await store.query_fact("game_score", game_id="game_123")
@@ -49,6 +49,12 @@ class QueryResult(Generic[ResultT]):
     query_id: str  # Unique identifier for this query (can be generated or provided)
     result: ResultT | None  # The query result (None if not found or error)
     queried_at: datetime = field(default_factory=_utcnow)  # When query was executed
-    source_id: str | None = None  # Actor ID of the source (store/operator) that executed query
-    query_params: JSONDict = field(default_factory=dict)  # Parameters used for the query
-    metadata: JSONDict = field(default_factory=dict)  # Additional metadata (errors, warnings, etc.)
+    source_id: str | None = (
+        None  # Actor ID of the source (store/operator) that executed query
+    )
+    query_params: JSONDict = field(
+        default_factory=dict
+    )  # Parameters used for the query
+    metadata: JSONDict = field(
+        default_factory=dict
+    )  # Additional metadata (errors, warnings, etc.)

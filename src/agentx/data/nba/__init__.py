@@ -20,4 +20,3 @@ __all__ = [
     "extract_team_names_from_query",
     "normalize_team_name",
 ]
-

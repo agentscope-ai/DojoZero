@@ -74,6 +74,7 @@ class LocalActorRuntimeProvider(ActorRuntimeProvider):
         if hasattr(spec.actor_cls, "from_dict"):
             from_dict_method = getattr(spec.actor_cls, "from_dict")
             import inspect
+
             sig = inspect.signature(from_dict_method)
             if "context" in sig.parameters:
                 actor = from_dict_method(spec.config, context=context)
@@ -81,7 +82,7 @@ class LocalActorRuntimeProvider(ActorRuntimeProvider):
                 actor = from_dict_method(spec.config)
         else:
             raise TypeError(f"actor class {spec.actor_cls} has no from_dict method")
-        
+
         if actor.actor_id != spec.actor_id:
             raise ValueError(
                 f"actor id mismatch: spec '{spec.actor_id}' != instance '{actor.actor_id}'"

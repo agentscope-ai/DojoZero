@@ -77,7 +77,7 @@ def register_trial_builder(
     overwrite: bool = False,
 ) -> None:
     """Register *builder* under *name* for CLI discovery.
-    
+
     Args:
         name: Builder identifier
         param_model: Pydantic model for trial parameters

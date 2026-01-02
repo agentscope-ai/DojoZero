@@ -16,7 +16,7 @@ from agentx.data.nba._events import (
 
 class NBAStore(DataStore):
     """NBA data store for polling NBA API and emitting events."""
-    
+
     def __init__(
         self,
         store_id: str = "nba_store",
@@ -25,7 +25,7 @@ class NBAStore(DataStore):
         event_emitter=None,
     ):
         """Initialize NBA store.
-        
+
         Default polling intervals:
         - boxscore: 60.0 seconds (for complete game updates with all leaders)
         - play_by_play: 20.0 seconds (for all play-by-play events and game status)
@@ -36,7 +36,7 @@ class NBAStore(DataStore):
                 "boxscore": 60.0,  # Complete game updates with all leaders
                 "play_by_play": 20.0,  # All play-by-play events and game status detection
             }
-        
+
         super().__init__(
             store_id,
             api or NBAExternalAPI(),
@@ -48,18 +48,26 @@ class NBAStore(DataStore):
         # Track processed event IDs for deduplication (using event_id instead of actionNumber)
         self._seen_event_ids: set[str] = set()  # Set of processed event_ids
         # Track which games have PlayByPlay available (to detect game start)
-        self._pbp_available: set[str] = set()  # game_id -> True when PBP first becomes available
+        self._pbp_available: set[str] = (
+            set()
+        )  # game_id -> True when PBP first becomes available
         # Cache boxscore leaders per game to avoid redundant processing
-        self._boxscore_leaders_cache: dict[str, dict[str, Any]] = {}  # game_id -> leaders dict
+        self._boxscore_leaders_cache: dict[
+            str, dict[str, Any]
+        ] = {}  # game_id -> leaders dict
         # Track which games have been initialized (to emit GameInitializeEvent only once)
-        self._initialized_games: set[str] = set()  # game_id -> True when GameInitializeEvent has been emitted
-    
-    def _extract_player_stats_from_boxscore(self, boxscore_data: dict[str, Any]) -> dict[str, Any]:
+        self._initialized_games: set[str] = (
+            set()
+        )  # game_id -> True when GameInitializeEvent has been emitted
+
+    def _extract_player_stats_from_boxscore(
+        self, boxscore_data: dict[str, Any]
+    ) -> dict[str, Any]:
         """Extract all player stats from BoxScore data.
-        
+
         Args:
             boxscore_data: Full BoxScoreTraditionalV3 data from API
-            
+
         Returns:
             Dictionary with structure:
             {
@@ -69,53 +77,54 @@ class NBAStore(DataStore):
         """
         home_team_data = boxscore_data.get("homeTeam", {})
         away_team_data = boxscore_data.get("awayTeam", {})
-        
+
         # Get players from each team (already includes statistics nested in each player)
         home_players = home_team_data.get("players", [])
         away_players = away_team_data.get("players", [])
-        
+
         return {
             "home": home_players if isinstance(home_players, list) else [],
             "away": away_players if isinstance(away_players, list) else [],
         }
-    
+
     def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
         """Parse NBA API response into DataEvents."""
         from datetime import datetime, timezone
-        
+
         events = []
-        
+
         # Handle boxscore data (primary endpoint - replaces ScoreboardV3)
         # BoxScoreTraditionalV3 provides complete game data including all leaders
         if "boxscore" in data:
             boxscore_data = data["boxscore"]
             if not isinstance(boxscore_data, dict):
                 return events
-            
+
             game_id = boxscore_data.get("gameId", "")
             if not game_id:
                 return events
-            
+
             timestamp = datetime.now(timezone.utc)
-            
+
             # Extract team data
             home_team_data = boxscore_data.get("homeTeam", {})
             away_team_data = boxscore_data.get("awayTeam", {})
-            
+
             # Check if this is the initial call (no team data available yet - pre-game)
             has_team_data = bool(home_team_data and away_team_data)
-            
+
             # Emit GameInitializeEvent on first call when team data is not yet available
             if game_id not in self._initialized_games and not has_team_data:
                 # Try to get game info from scoreboard API
                 try:
                     from agentx.data.nba._utils import get_game_info_by_id
+
                     game_info = get_game_info_by_id(game_id)
                     if game_info:
                         home_team_str = game_info.get("home_team", "")
                         away_team_str = game_info.get("away_team", "")
                         game_time_utc_str = game_info.get("game_time_utc", "")
-                        
+
                         # Parse game time
                         game_time_dt = timestamp  # Default to current time
                         if game_time_utc_str:
@@ -125,7 +134,7 @@ class NBAStore(DataStore):
                                 )
                             except (ValueError, AttributeError):
                                 pass
-                        
+
                         if home_team_str and away_team_str:
                             events.append(
                                 GameInitializeEvent(
@@ -142,26 +151,27 @@ class NBAStore(DataStore):
                     # If we can't get game info, skip GameInitializeEvent
                     # It will be emitted when boxscore data becomes available
                     import logging
+
                     logger = logging.getLogger(__name__)
                     logger.debug(
                         "Could not get game info for GameInitializeEvent: game_id=%s, error=%s",
                         game_id,
                         e,
                     )
-            
+
             # Only emit GameUpdateEvent if we have team data
             if has_team_data:
                 # Get team statistics
                 home_stats = home_team_data.get("statistics", {})
                 away_stats = away_team_data.get("statistics", {})
-                
+
                 # Extract scores from statistics
                 home_score = home_stats.get("points", 0) or 0
                 away_score = away_stats.get("points", 0) or 0
-                
+
                 # Extract all player stats from BoxScore (pass through raw data)
                 player_stats = self._extract_player_stats_from_boxscore(boxscore_data)
-                
+
                 # Emit GameUpdateEvent with complete BoxScore data
                 # Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay
                 events.append(
@@ -201,22 +211,31 @@ class NBAStore(DataStore):
                         player_stats=player_stats,
                     )
                 )
-                
+
                 # Also emit GameInitializeEvent if not already emitted (when data becomes available)
                 if game_id not in self._initialized_games:
                     home_city = home_team_data.get("teamCity", "")
                     home_name = home_team_data.get("teamName", "")
-                    home_team_str = f"{home_city} {home_name}".strip() if (home_city or home_name) else ""
-                    
+                    home_team_str = (
+                        f"{home_city} {home_name}".strip()
+                        if (home_city or home_name)
+                        else ""
+                    )
+
                     away_city = away_team_data.get("teamCity", "")
                     away_name = away_team_data.get("teamName", "")
-                    away_team_str = f"{away_city} {away_name}".strip() if (away_city or away_name) else ""
-                    
+                    away_team_str = (
+                        f"{away_city} {away_name}".strip()
+                        if (away_city or away_name)
+                        else ""
+                    )
+
                     if home_team_str and away_team_str:
                         # Try to get game time from game info
                         game_time_dt = timestamp  # Default to current time
                         try:
                             from agentx.data.nba._utils import get_game_info_by_id
+
                             game_info = get_game_info_by_id(game_id)
                             if game_info and game_info.get("game_time_utc"):
                                 game_time_dt = datetime.fromisoformat(
@@ -224,7 +243,7 @@ class NBAStore(DataStore):
                                 )
                         except Exception:
                             pass  # Use timestamp as fallback
-                        
+
                         events.append(
                             GameInitializeEvent(
                                 timestamp=timestamp,
@@ -236,7 +255,7 @@ class NBAStore(DataStore):
                             )
                         )
                         self._initialized_games.add(game_id)
-        
+
         # Handle play-by-play events (from NBA API PlayByPlay endpoint)
         # PlayByPlay is used for:
         # 1. Game status detection (start/end)
@@ -245,13 +264,15 @@ class NBAStore(DataStore):
             play_by_play_data = data["play_by_play"]
             game_id = play_by_play_data.get("gameId", "")
             actions = play_by_play_data.get("actions", [])
-            
+
             # Check if PlayByPlay just became available (game start detection)
             if game_id and game_id not in self._pbp_available and actions:
                 # First time we see actions for this game - game has started
                 self._pbp_available.add(game_id)
                 previous_status = self._previous_game_status.get(game_id)
-                if previous_status != 2:  # Only emit if not already marked as in progress
+                if (
+                    previous_status != 2
+                ):  # Only emit if not already marked as in progress
                     events.append(
                         GameStartEvent(
                             timestamp=datetime.now(timezone.utc),
@@ -259,7 +280,7 @@ class NBAStore(DataStore):
                         )
                     )
                     self._previous_game_status[game_id] = 2  # In Progress
-            
+
             # Check for game end (last action is "Game End")
             if actions:
                 last_action = actions[-1]
@@ -270,12 +291,20 @@ class NBAStore(DataStore):
                 ):
                     # Game has ended
                     previous_status = self._previous_game_status.get(game_id)
-                    if previous_status != 3:  # Only emit if not already marked as finished
+                    if (
+                        previous_status != 3
+                    ):  # Only emit if not already marked as finished
                         # Get final scores from last action
                         home_score = int(last_action.get("scoreHome", 0) or 0)
                         away_score = int(last_action.get("scoreAway", 0) or 0)
-                        winner = "home" if home_score > away_score else "away" if away_score > home_score else ""
-                        
+                        winner = (
+                            "home"
+                            if home_score > away_score
+                            else "away"
+                            if away_score > home_score
+                            else ""
+                        )
+
                         events.append(
                             GameResultEvent(
                                 timestamp=datetime.now(timezone.utc),
@@ -285,7 +314,7 @@ class NBAStore(DataStore):
                             )
                         )
                         self._previous_game_status[game_id] = 3  # Finished
-            
+
             # Deduplication: filter out actions we've already processed using event_id
             new_actions = []
             for action in actions:
@@ -296,7 +325,7 @@ class NBAStore(DataStore):
                 if pbp_event_id not in self._seen_event_ids:
                     new_actions.append(action)
                     self._seen_event_ids.add(pbp_event_id)
-            
+
             # Emit ALL play-by-play events (no filtering - let agents decide)
             for action in new_actions:
                 # Parse timestamp from action
@@ -304,10 +333,12 @@ class NBAStore(DataStore):
                 time_actual = action.get("timeActual")
                 if time_actual:
                     try:
-                        timestamp = datetime.fromisoformat(time_actual.replace("Z", "+00:00"))
+                        timestamp = datetime.fromisoformat(
+                            time_actual.replace("Z", "+00:00")
+                        )
                     except (ValueError, AttributeError):
                         pass  # Use default timestamp
-                
+
                 # Extract action data
                 action_type = action.get("actionType", "")
                 action_number = action.get("actionNumber", 0)
@@ -319,10 +350,10 @@ class NBAStore(DataStore):
                 home_score = int(action.get("scoreHome", 0) or 0)
                 away_score = int(action.get("scoreAway", 0) or 0)
                 description = action.get("description", "")
-                
+
                 # Generate unique event_id for deduplication
                 pbp_event_id = f"{game_id}_pbp_{action_number}"
-                
+
                 # Emit ALL play-by-play events
                 events.append(
                     PlayByPlayEvent(
@@ -341,10 +372,9 @@ class NBAStore(DataStore):
                         description=description,
                     )
                 )
-                
-        
+
         return events
-    
+
     async def _poll_api(
         self,
         event_type: str | None = None,
@@ -353,36 +383,35 @@ class NBAStore(DataStore):
         """Poll the API for game status, scoreboard updates, and play-by-play events."""
         if not self._api:
             return []
-        
+
         events = []
-        
+
         # Poll boxscore data (for complete game updates with all leaders)
         # Check if enough time has passed since last poll
         if identifier and "game_id" in identifier:
             if self._should_poll_endpoint("boxscore"):
                 game_id = identifier["game_id"]
                 boxscore_params = {"game_id": game_id}
-                
+
                 # Fetch boxscore data
                 boxscore_data = await self._api.fetch("boxscore", boxscore_params)
                 if boxscore_data:
                     boxscore_events = self._parse_api_response(boxscore_data)
                     events.extend(boxscore_events)
                     self._record_poll_time("boxscore")
-        
+
         # Poll play-by-play events (for all PBP events and game status detection)
         # Check if enough time has passed since last poll
         if identifier and "game_id" in identifier:
             if self._should_poll_endpoint("play_by_play"):
                 game_id = identifier["game_id"]
                 pbp_params = {"game_id": game_id}
-                
+
                 # Fetch play-by-play data
                 pbp_data = await self._api.fetch("play_by_play", pbp_params)
                 if pbp_data:
                     pbp_events = self._parse_api_response(pbp_data)
                     events.extend(pbp_events)
                     self._record_poll_time("play_by_play")
-        
-        return events
 
+        return events

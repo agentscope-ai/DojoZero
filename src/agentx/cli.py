@@ -481,7 +481,7 @@ def _configure_logging(level: str) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    
+
     # Suppress noisy third-party library logs
     # httpx logs all HTTP requests at INFO level, which is too verbose
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -547,12 +547,11 @@ async def _run_command(args: argparse.Namespace) -> int:
 
 async def _replay_command(args: argparse.Namespace) -> int:
     """Handle replay command."""
-    from datetime import datetime, timezone
     from uuid import uuid4
-    
+
     config_payload = _load_cli_config(args.setting)
     params_payload = _load_yaml_mapping(args.params, label="params")
-    
+
     config_imports = _gather_imports(config_payload)
     params_imports = _gather_imports(params_payload)
     requested_imports = list(args.import_modules or [])
@@ -563,41 +562,41 @@ async def _replay_command(args: argparse.Namespace) -> int:
     modules_to_import.extend(params_imports)
     modules_to_import.extend(requested_imports)
     _import_modules(modules_to_import)
-    
+
     store = _create_store(config_payload)
     runtime_provider = _create_runtime_provider(config_payload)
     dashboard = Dashboard(store=store, runtime_provider=runtime_provider)
-    
+
     trial_id = args.trial_id or uuid4().hex
     replay_file = args.replay_file
     speed_up = args.replay_speed_up
     max_sleep = args.replay_max_sleep
-    
+
     if not replay_file.exists():
         raise AgentXCLIError(f"Replay file not found: {replay_file}")
-    
+
     if speed_up <= 0:
         raise AgentXCLIError(f"Replay speed-up must be positive, got: {speed_up}")
-    
+
     if max_sleep <= 0:
         raise AgentXCLIError(f"Replay max-sleep must be positive, got: {max_sleep}")
-    
+
     # Prepare trial spec from params
     spec = _prepare_trial_spec(trial_id, params_payload)
-    
+
     # Extract builder_name from scenario (it's not in metadata by default)
     scenario = params_payload.get("scenario", {})
     builder_name = scenario.get("name") if isinstance(scenario, dict) else None
     if not builder_name:
         raise AgentXCLIError("Could not determine builder name from params")
-    
+
     # Add replay metadata
     spec.metadata["replay_file"] = str(replay_file)
     spec.metadata["replay_mode"] = True
     spec.metadata["replay_speed_up"] = speed_up
     spec.metadata["replay_max_sleep"] = max_sleep
     spec.metadata["builder_name"] = builder_name  # Ensure it's in metadata
-    
+
     # Extract hub_id from spec (from stream configs)
     hub_id = None
     for stream_spec in spec.data_streams:
@@ -605,48 +604,50 @@ async def _replay_command(args: argparse.Namespace) -> int:
         if config.get("hub_id"):
             hub_id = config["hub_id"]
             break
-    
+
     if not hub_id:
         # Fallback: use default hub_id from params or metadata
         hub_id_raw = spec.metadata.get("hub_id", "data_hub")
         hub_id = str(hub_id_raw) if hub_id_raw else "data_hub"
-    
+
     # Ensure hub_id is a string
     hub_id = str(hub_id)
-    
+
     # Create DataHub in replay mode (disable persistence, will load events from file)
     hub = DataHub(
         hub_id=hub_id,
         persistence_file=None,  # Not persisting during replay
         enable_persistence=False,
     )
-    
+
     # Create ReplayCoordinator with speed control
     from agentx.data import ReplayCoordinator
-    
+
     coordinator = ReplayCoordinator(data_hub=hub, replay_file=replay_file)
     coordinator.set_speed(speed_up=speed_up, max_sleep=max_sleep)
-    
+
     # Set up progress callback
     def progress_callback(current: int, total: int) -> None:
         if current % max(1, min(100, total // 10)) == 0:
             progress_pct = (current / total) * 100
-            LOGGER.info("Replay progress: %d/%d events (%.1f%%)", current, total, progress_pct)
-    
+            LOGGER.info(
+                "Replay progress: %d/%d events (%.1f%%)", current, total, progress_pct
+            )
+
     coordinator.set_progress_callback(progress_callback)
-    
+
     # Load events into hub
     LOGGER.info("Loading events from replay file: %s", replay_file)
     await coordinator.start_replay()
-    
+
     # Create a replay-specific context builder that returns our replay hub
     # We'll temporarily override the context builder in the trial builder registry
     from agentx.core._registry import get_trial_builder_definition
-    
+
     try:
         builder_def = get_trial_builder_definition(builder_name)
         original_context_builder = builder_def.context_builder
-        
+
         # Create replay context builder
         def replay_context_builder(spec: TrialSpec) -> dict[str, Any]:
             """Replay-specific context builder that provides replay hub, no stores."""
@@ -654,29 +655,31 @@ async def _replay_command(args: argparse.Namespace) -> int:
                 "data_hubs": {hub_id: hub},
                 "stores": {},  # No stores in replay mode
             }
-        
+
         # Temporarily override context builder
         builder_def.context_builder = replay_context_builder
-        
+
         # Launch trial (will use our replay context)
         LOGGER.info("Launching trial '%s' in replay mode", trial_id)
-        status = await dashboard.launch_trial(spec)
-        
+        await dashboard.launch_trial(spec)
+
         # Restore original context builder
         builder_def.context_builder = original_context_builder
     except Exception as e:
         LOGGER.error("Failed to set up replay context: %s", e)
         raise AgentXCLIError(f"Failed to set up replay: {e}") from e
-    
+
     # Start replay with speed control and progress tracking
-    LOGGER.info("Starting replay at %.1fx speed (max sleep: %.1fs)", speed_up, max_sleep)
+    LOGGER.info(
+        "Starting replay at %.1fx speed (max sleep: %.1fs)", speed_up, max_sleep
+    )
     await coordinator.replay_all()
-    
+
     # Stop trial
     LOGGER.info("Stopping trial '%s'", trial_id)
     await dashboard.stop_trial(trial_id)
     coordinator.stop_replay()
-    
+
     LOGGER.info("Replay complete for trial '%s'", trial_id)
     return 0
 

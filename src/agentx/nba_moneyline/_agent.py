@@ -1,9 +1,10 @@
 """Agent implementations for NBA moneyline betting."""
 
 import logging
-from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, TypedDict, cast
 
+from agentx.agents import BettingAgent
+from agentx.agents.config import BettingAgentConfig
 from agentx.core import Agent, AgentBase, StreamEvent
 from agentx.data._models import DataEvent
 
@@ -20,12 +21,13 @@ class DummyAgentConfig(_ActorIdConfig, total=False):
 
 class _EventCounterOperatorLike(Protocol):
     """Protocol for event counter operator - only the RPC surface is required."""
+
     async def count(self, event_type: str | None = None) -> int: ...
 
 
 class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     """Dummy agent that just counts events.
-    
+
     This agent receives events from DataHub streams and uses a counter operator
     to track the total number of events processed. It does minimal processing,
     primarily just counting events.
@@ -50,7 +52,7 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     def register_operators(self, operators: Sequence[Any]) -> None:
         """Register operators that the agent can reach."""
         super().register_operators(operators)
-        
+
         # Find and register the counter operator if available
         if self._operator_id and operators:
             for operator in operators:
@@ -88,7 +90,9 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
         operator_count = None
         if self._operator:
             try:
-                operator_count = await self._operator.count(event_type=data_event.event_type)
+                operator_count = await self._operator.count(
+                    event_type=data_event.event_type
+                )
             except Exception as e:
                 logger.warning(
                     "agent '%s' failed to increment counter: %s",
@@ -129,17 +133,13 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
 # ============================================================================
 
 
-from agentx.agents import BettingAgent
-from agentx.agents.config import BettingAgentConfig
-
-
 # Config type alias for clarity
 NBABettingAgentConfig = BettingAgentConfig
 
 
 class NBABettingAgent(BettingAgent):
     """LLM-based betting agent for NBA moneyline betting.
-    
+
     Inherits from BettingAgent. Uses agent_config_path to load config from YAML.
     """
 
@@ -149,5 +149,7 @@ class NBABettingAgent(BettingAgent):
         # Call parent's from_dict and cast the result
         # BettingAgent.from_dict creates an instance that is compatible
         agent = BettingAgent.from_dict(config)
+        # Change the class at runtime to NBABettingAgent
         agent.__class__ = cls
-        return agent
+        # Cast for type checker
+        return cast("NBABettingAgent", agent)

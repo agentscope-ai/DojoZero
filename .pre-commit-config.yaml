@@ -6,12 +6,6 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
-  - repo: https://github.com/psf/black
-    rev: 24.1.1
-    hooks:
-      - id: black
-        language_version: python3.12
-
   - repo: https://github.com/RobertCraigie/pyright-python
     rev: v1.1.386
     hooks:
@@ -20,7 +14,15 @@ repos:
           - pydantic
           - pyyaml
           - pytest
+          - pytest-asyncio
           - ray
+          - nba_api
+          - aiohttp
+          - agentscope
+          - python-dotenv
+          - tavily-python
+          - python-dateutil
+          - py-clob-client
 
   - repo: local
     hooks:

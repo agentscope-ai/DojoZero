@@ -3,10 +3,9 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import cast
 
 from agentx.data._models import DataEventFactory
-from agentx.data.websearch._events import RawWebSearchEvent
+from agentx.data.websearch._events import RawWebSearchEvent, PowerRankingEvent
 from agentx.data.websearch._processors import PowerRankingProcessor
 
 
@@ -16,32 +15,30 @@ async def demo_power_ranking_extraction():
     json_file = Path("demos/data/power_ranking_search_event.json")
     with open(json_file, "r") as f:
         raw_event_data = json.load(f)
-    
+
     event = DataEventFactory.from_dict(raw_event_data)
-    if event is None:
-        print("Error: Failed to deserialize event")
+    if not isinstance(event, RawWebSearchEvent):
+        print("Error: Failed to deserialize event or wrong event type")
         return
-    
-    raw_event = cast("RawWebSearchEvent", event)  # type: ignore[arg-type]
-    print(f"Query: {raw_event.query}")  # type: ignore[attr-defined]
-    print(f"Results: {len(raw_event.results)}")  # type: ignore[attr-defined]
+
+    print(f"Query: {event.query}")
+    print(f"Results: {len(event.results)}")
     print()
-    
+
     # Process event
     processor = PowerRankingProcessor()
-    if not processor.should_process(raw_event):
+    if not processor.should_process(event):
         print("Processor skipped this event")
         return
-    
-    result = await processor.process([raw_event])
-    if result is None or not hasattr(result, "rankings"):
+
+    result = await processor.process(event)
+    if not isinstance(result, PowerRankingEvent):
         print("No rankings extracted")
         return
-    
-    rankings = result.rankings  # type: ignore[attr-defined]
-    print(f"Extracted Rankings ({len(rankings)} sources):\n")
-    
-    for source, teams in rankings.items():
+
+    print(f"Extracted Rankings ({len(result.rankings)} sources):\n")
+
+    for source, teams in result.rankings.items():
         print(f"{source}: {len(teams)} teams")
         for team_data in teams[:3]:
             rank = team_data.get("rank", "?")

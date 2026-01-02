@@ -54,20 +54,19 @@ class BettingAgent(ReActAgent):
     @classmethod
     def from_dict(cls, config: BettingAgentConfig) -> "BettingAgent":
         """Create agent from config dict.
-        
+
         Supports two modes:
         1. agent_config_path: Load config from YAML file
         2. Inline config: Use config dict directly
         """
         actor_id = config.get("actor_id", "")
         agent_config_path = config.get("agent_config_path")
-        
+
         if agent_config_path:
             # Load from YAML file
             yaml_config = load_agent_config(agent_config_path)
             llm_config = yaml_config["llm"]
             model_type = llm_config.get("model_type", "openai")
-            model_name = llm_config.get("model_name")
             return cls(
                 actor_id=actor_id or yaml_config["agent_id"],
                 name=yaml_config.get("name", actor_id),
@@ -76,7 +75,7 @@ class BettingAgent(ReActAgent):
                 formatter=_create_formatter(model_type),
                 # model_name=model_name,
             )
-        
+
         # Inline config mode
         model_type = config.get("model_type", "openai")
         return cls(
@@ -124,16 +123,18 @@ class BettingAgent(ReActAgent):
             )
             agent_tools = getattr(op, "agent_tools", None)
             if callable(agent_tools):
-                tools = agent_tools(self.actor_id, operator=op)
-                if inspect.iscoroutine(tools):
-                    tools = await tools
-                all_tools.extend(tools)
-                LOGGER.info(
-                    "agent '%s' registered %d tools from '%s'",
-                    self.actor_id,
-                    len(tools),
-                    op.actor_id,
-                )
+                tools_result = agent_tools(self.actor_id, operator=op)
+                if inspect.iscoroutine(tools_result):
+                    tools_result = await tools_result
+                # After awaiting, tools_result should be a list
+                if isinstance(tools_result, list):
+                    all_tools.extend(tools_result)
+                    LOGGER.info(
+                        "agent '%s' registered %d tools from '%s'",
+                        self.actor_id,
+                        len(tools_result),
+                        op.actor_id,
+                    )
 
         if all_tools:
             self.toolkit = create_toolkit(all_tools)

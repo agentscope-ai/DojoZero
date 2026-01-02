@@ -216,7 +216,9 @@ class TrialRuntime:
     phase: TrialPhase = TrialPhase.INITIALIZED
     last_error: Exception | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
-    _context: dict[str, Any] | None = field(default=None, repr=False)  # Runtime context (stores, hubs, etc.)
+    _context: dict[str, Any] | None = field(
+        default=None, repr=False
+    )  # Runtime context (stores, hubs, etc.)
 
 
 @dataclass(slots=True)
@@ -640,11 +642,11 @@ class Dashboard:
         # Build runtime context with DataHub and Store instances
         # Extract from stream configs to recreate hub/store instances
         context = self._build_runtime_context(spec)
-        
+
         # Note: _startup is NOT called here - it will be called after all actors
         # (especially DATA_STREAM actors) are started to ensure streams subscribe
         # before stores start polling
-        
+
         registry: Dict[str, ActorRuntime[Any]] = {}
         agents: Dict[str, Agent] = {}
         operators: Dict[str, Operator] = {}
@@ -727,33 +729,34 @@ class Dashboard:
         except Exception as exc:  # pragma: no cover - defensive translation
             raise DashboardError(str(exc)) from exc
         return ActorRuntime(spec=spec, handler=handler, role=role)
-    
+
     def _build_runtime_context(self, spec: TrialSpec) -> dict[str, Any]:
         """Build runtime context using context builder from trial builder registry.
-        
+
         If the trial builder provides a context_builder, use it. Otherwise,
         return empty context for trials without data infrastructure.
-        
+
         Args:
             spec: Trial specification
-            
+
         Returns:
             Context dictionary (typically with 'data_hubs' and 'stores' keys)
         """
         # Try to get context builder from trial builder registry
         # Extract builder name from spec metadata
         builder_name = spec.metadata.get("builder_name")
-        
+
         if builder_name and isinstance(builder_name, str):
             try:
                 from ._registry import get_trial_builder_definition
+
                 builder_def = get_trial_builder_definition(builder_name)
                 if builder_def.context_builder:
                     return builder_def.context_builder(spec)
             except Exception:
                 # Builder not found or no context builder - fall through to default
                 pass
-        
+
         # Default: empty context for trials without data infrastructure
         return {}
 
@@ -851,7 +854,7 @@ class Dashboard:
         data_streams: Mapping[str, DataStream[Any]],
     ) -> None:
         """Wire agents to data streams (agent-centric approach).
-        
+
         Agents declare which streams they subscribe to via data_stream_ids.
         """
         for agent_spec in agent_specs:
@@ -886,7 +889,7 @@ class Dashboard:
         data_streams: Mapping[str, DataStream[Any]],
     ) -> None:
         """Wire operators to data streams (operator-centric approach).
-        
+
         Operators declare which streams they subscribe to via data_stream_ids.
         """
         for operator_spec in operator_specs:
@@ -922,7 +925,7 @@ class Dashboard:
         operators: Mapping[str, Operator[Any]],
     ) -> None:
         """Wire streams to consumers (stream-centric approach, legacy).
-        
+
         Only used if consumer_ids are explicitly set on streams.
         Agent-centric wiring (via agent.data_stream_ids) takes precedence.
         """
@@ -991,7 +994,7 @@ class Dashboard:
             # Start actors in order: OPERATOR, AGENT, DATA_STREAM
             for role in self._START_ORDER:
                 await self._start_role(runtime, role)
-            
+
             # After all actors (especially DATA_STREAM) are started and subscribed,
             # call startup function if provided by context builder (e.g., to start DataStore polling)
             # This ensures streams are subscribed before stores start emitting events

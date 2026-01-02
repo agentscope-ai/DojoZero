@@ -15,12 +15,13 @@ class _ActorIdConfig(TypedDict):
 
 class EventCounterOperatorConfig(_ActorIdConfig):
     """Configuration for event counter operator."""
+
     pass
 
 
 class EventCounterOperator(OperatorBase, Operator[EventCounterOperatorConfig]):
     """Operator that counts events processed by agents.
-    
+
     Similar to CounterOperator in bounded_random, this operator maintains
     a shared count of events that agents can increment. Also tracks counts
     per event type for detailed statistics.
@@ -85,20 +86,22 @@ class EventCounterOperator(OperatorBase, Operator[EventCounterOperatorConfig]):
 
     async def count(self, event_type: str | None = None) -> int:
         """RPC method: increment and return the event count.
-        
+
         Called by agents for each event they process.
-        
+
         Args:
             event_type: Optional event type to track separately. If provided,
                 increments both the total count and the typed count for this event type.
-        
+
         Returns:
             The new total count after incrementing
         """
         async with self._lock:
             self._count += 1
             if event_type:
-                self._typed_counts[event_type] = self._typed_counts.get(event_type, 0) + 1
+                self._typed_counts[event_type] = (
+                    self._typed_counts.get(event_type, 0) + 1
+                )
             logger.info(
                 "operator '%s' incremented count to %d (event_type=%s, typed_counts=%s)",
                 self.actor_id,

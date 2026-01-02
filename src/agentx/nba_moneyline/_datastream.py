@@ -1,7 +1,7 @@
 """NBA pre-game betting DataStream with search initialization."""
 
 import logging
-from typing import Any, Mapping, TypedDict
+from typing import Any, TypedDict
 
 from agentx.data import DataHub, WebSearchStore
 from agentx.data._streams import DataHubDataStream as BaseDataHubDataStream
@@ -16,24 +16,29 @@ class _ActorIdConfig(TypedDict):
 
 class NBAPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
     """Configuration for NBA pre-game betting DataHubDataStream."""
+
     hub_id: str
     persistence_file: str
     event_type: str  # Which event_type to subscribe to in DataHub
-    event_types: list[str]  # Which event_types to subscribe to (alternative to event_type)
-    websearch_store_id: str  # Store ID for triggering searches (only for raw_web_search stream)
+    event_types: list[
+        str
+    ]  # Which event_types to subscribe to (alternative to event_type)
+    websearch_store_id: (
+        str  # Store ID for triggering searches (only for raw_web_search stream)
+    )
     home_team_tricode: str  # Team metadata for generating queries
     away_team_tricode: str
     home_team_name: str  # Full team name for search queries
     away_team_name: str
     game_date: str
-    search_queries: list[dict[str, Any]]  # Custom search queries (only for raw_web_search stream)
+    search_queries: list[
+        dict[str, Any]
+    ]  # Custom search queries (only for raw_web_search stream)
 
 
-class NBAPreGameBettingDataHubDataStream(
-    BaseDataHubDataStream
-):
+class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
     """NBA pre-game betting DataStream that extends generic DataHubDataStream.
-    
+
     Adds NBA-specific initialization logic (triggering web searches) via
     NBAStreamInitializer.
     """
@@ -65,7 +70,7 @@ class NBAPreGameBettingDataHubDataStream(
                 away_team_tricode=away_team_tricode,
                 search_queries=search_queries,
             )
-        
+
         super().__init__(
             actor_id=actor_id,
             hub=hub,
@@ -83,11 +88,11 @@ class NBAPreGameBettingDataHubDataStream(
         # Get hub and store from context (provided by dashboard during materialization)
         hub: DataHub | None = None
         store: WebSearchStore | None = None
-        
+
         if context and "data_hubs" in context:
             hub_id = config.get("hub_id", "default_hub")
             hub = context["data_hubs"].get(hub_id)
-        
+
         if context and "stores" in context:
             store_id = config.get("websearch_store_id")
             if store_id:

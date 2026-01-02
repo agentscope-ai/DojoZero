@@ -16,7 +16,7 @@ from agentx.nba_moneyline._operator import (
 )
 from agentx.nba_moneyline._trial import (
     NBAPreGameBettingTrialParams,
-    register_trial_builder
+    register_trial_builder,
 )
 
 __all__ = [
@@ -29,5 +29,5 @@ __all__ = [
     "EventCounterOperator",
     "EventCounterOperatorConfig",
     "NBAPreGameBettingTrialParams",
-    "register_trial_builder"
+    "register_trial_builder",
 ]

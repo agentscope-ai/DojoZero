@@ -9,8 +9,9 @@ import pytest
 from dotenv import load_dotenv
 import ray
 
+
 from agentx.agents.agent import BettingAgent
-from agentx.agents.config import load_agent_config
+from agentx.agents.config import load_agent_config, BettingAgentConfig
 from agentx.core import AgentSpec, OperatorSpec, StreamEvent
 from agentx.ray_runtime import RayActorRuntimeProvider
 from agentx.nba_moneyline._broker import BrokerOperator
@@ -58,19 +59,19 @@ def broker_spec() -> OperatorSpec:
     )
 
 
-def _create_agent_config() -> dict:
+def _create_agent_config() -> BettingAgentConfig:
     """Create agent config with test-specific env vars."""
     config = load_agent_config(CONFIG_PATH)
     llm_config = config.get("llm", {})
-    return {
-        "actor_id": config["agent_id"],
-        "name": config.get("name", config["agent_id"]),
-        "sys_prompt": config.get("sys_prompt", ""),
-        "model_type": llm_config.get("model_type", "openai"),
-        "model_name": llm_config.get("model_name", "qwen3-max"),
-        "api_key_env": TEST_API_KEY_ENV,
-        "base_url_env": TEST_BASE_URL_ENV,
-    }
+    return BettingAgentConfig(
+        actor_id=config["agent_id"],
+        name=config.get("name", config["agent_id"]),
+        sys_prompt=config.get("sys_prompt", ""),
+        model_type=llm_config.get("model_type", "openai"),  # type: ignore[typeddict-item]
+        model_name=llm_config.get("model_name", "qwen3-max"),
+        api_key_env=TEST_API_KEY_ENV,
+        base_url_env=TEST_BASE_URL_ENV,
+    )
 
 
 @pytest.fixture
@@ -78,7 +79,7 @@ def agent_spec() -> AgentSpec:
     """Create AgentSpec for Ray runtime with test-specific env vars."""
     agent_config = _create_agent_config()
     return AgentSpec(
-        actor_id=agent_config["actor_id"],
+        actor_id=agent_config.get("actor_id", AGENT_ID),
         actor_cls=BettingAgent,
         config=agent_config,
         operator_ids=(BROKER_ID,),
@@ -104,14 +105,14 @@ async def test_betting_agent_as_ray_actor(ray_env, broker_spec, agent_spec):
     print(f"Created Ray agent: {agent_handler.actor_id}")
 
     # Register broker as operator for the agent
-    await agent_handler.instance.register_operators([broker_handler.instance])
-    await broker_handler.instance.register_agents([agent_handler.instance])
+    await agent_handler.instance.register_operators([broker_handler.instance])  # type: ignore[attr-defined]
+    await broker_handler.instance.register_agents([agent_handler.instance])  # type: ignore[attr-defined]
 
     await agent_handler.start()
     print("Agent started in Ray")
 
     # Initial state (via Ray proxy)
-    initial_balance = await broker_handler.instance.get_balance(AGENT_ID)
+    initial_balance = await broker_handler.instance.get_balance(AGENT_ID)  # type: ignore[attr-defined]
     print(f"\nInitial balance: ${initial_balance}")
 
     # Initialize event in broker first
@@ -122,7 +123,7 @@ async def test_betting_agent_as_ray_actor(ray_env, broker_spec, agent_spec):
         away_team="Warriors",
         game_time=datetime.now(),
     )
-    await broker_handler.instance.handle_stream_event(
+    await broker_handler.instance.handle_stream_event(  # type: ignore[attr-defined]
         StreamEvent(stream_id="nba-stream", payload=game_init_event, sequence=-2)
     )
 
@@ -131,7 +132,7 @@ async def test_betting_agent_as_ray_actor(ray_env, broker_spec, agent_spec):
         home_odds=1.85,
         away_odds=2.10,
     )
-    await broker_handler.instance.handle_stream_event(
+    await broker_handler.instance.handle_stream_event(  # type: ignore[attr-defined]
         StreamEvent(stream_id="nba-stream", payload=odds_update_event, sequence=-1)
     )
 
@@ -160,7 +161,7 @@ async def test_betting_agent_as_ray_actor(ray_env, broker_spec, agent_spec):
 
     for event in event_list:
         print(f"Sending event: {event.payload}")
-        await agent_handler.instance.handle_stream_event(event)
+        await agent_handler.instance.handle_stream_event(event)  # type: ignore[attr-defined]
 
     game_result_event = GameResultEvent(
         event_id="lakers_vs_warriors_2024",
@@ -173,12 +174,12 @@ async def test_betting_agent_as_ray_actor(ray_env, broker_spec, agent_spec):
         sequence=2,
     )
 
-    await broker_handler.instance.handle_stream_event(final_event)
+    await broker_handler.instance.handle_stream_event(final_event)  # type: ignore[attr-defined]
 
     # Check results (via Ray proxy)
-    final_balance = await broker_handler.instance.get_balance(AGENT_ID)
-    active_bets = await broker_handler.instance.get_active_bets(AGENT_ID)
-    stats = await broker_handler.instance.get_statistics(AGENT_ID)
+    final_balance = await broker_handler.instance.get_balance(AGENT_ID)  # type: ignore[attr-defined]
+    active_bets = await broker_handler.instance.get_active_bets(AGENT_ID)  # type: ignore[attr-defined]
+    stats = await broker_handler.instance.get_statistics(AGENT_ID)  # type: ignore[attr-defined]
 
     # Get events_processed from Ray agent
     state = await agent_handler.save_state()
@@ -214,7 +215,7 @@ if __name__ == "__main__":
 
         agent_config = _create_agent_config()
         agent_spec = AgentSpec(
-            actor_id=agent_config["actor_id"],
+            actor_id=agent_config.get("actor_id", AGENT_ID),
             actor_cls=BettingAgent,
             config=agent_config,
             operator_ids=(BROKER_ID,),

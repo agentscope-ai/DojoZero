@@ -17,30 +17,31 @@ class _ActorIdConfig(TypedDict):
 
 class DataHubDataStreamConfig(_ActorIdConfig, total=False):
     """Configuration for DataHubDataStream."""
+
     hub_id: str
     persistence_file: str
     event_type: str  # Which event_type to subscribe to in DataHub
-    event_types: list[str]  # Which event_types to subscribe to (alternative to event_type)
+    event_types: list[
+        str
+    ]  # Which event_types to subscribe to (alternative to event_type)
 
 
 class StreamInitializer(Protocol):
     """Protocol for stream initialization logic.
-    
+
     Implementations can trigger initial events, set up subscriptions, etc.
     """
-    
+
     async def initialize(self, stream: "DataHubDataStream") -> None:
         """Initialize the stream (e.g., trigger initial events).
-        
+
         Args:
             stream: The DataHubDataStream instance to initialize
         """
         ...
 
 
-class DataHubDataStream(
-    DataStreamBase, DataStream[DataHubDataStreamConfig]
-):
+class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
     """Generic DataStream that bridges DataHub events to StreamEvent system.
 
     Subscribes to DataHub events and converts them to StreamEvent[DataEvent]
@@ -74,7 +75,7 @@ class DataHubDataStream(
     ) -> "DataHubDataStream":
         # Get hub from context (provided by dashboard during materialization)
         hub: DataHub | None = None
-        
+
         if context and "data_hubs" in context:
             hub_id = config.get("hub_id", "default_hub")
             hub = context["data_hubs"].get(hub_id)
@@ -133,7 +134,7 @@ class DataHubDataStream(
                 event_types=[event_type],
                 callback=event_callback,
             )
-        
+
         # Run initializer if provided (e.g., trigger initial searches)
         # Do this AFTER subscribing so events aren't missed, but run it in background
         # so it doesn't block pipeline setup
