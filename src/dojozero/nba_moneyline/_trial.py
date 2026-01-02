@@ -211,37 +211,6 @@ def _build_trial_spec(
             params.enable_persistence if params.enable_persistence is not None else True
         )
 
-    # Create DataHub instance
-    hub = DataHub(
-        hub_id=hub_id,
-        persistence_file=persistence_file,
-        enable_persistence=enable_persistence,
-    )
-
-    # Setup WebSearchStore
-    websearch_api = WebSearchAPI()
-    websearch_store = WebSearchStore(
-        store_id=params.websearch_store_id, api=websearch_api
-    )
-
-    # Setup NBAStore for game status events
-    # Default intervals: scoreboard=5s, play_by_play=2s
-    nba_api = NBAExternalAPI()
-    nba_store = NBAStore(
-        store_id="nba_store",
-        api=nba_api,
-        # poll_intervals will use defaults: {"scoreboard": 60.0, "play_by_play": 20.0}
-    )
-
-    # Setup PolymarketStore for odds updates
-    # Default interval: odds=300s (5 minutes)
-    polymarket_api = PolymarketAPI()
-    polymarket_store = PolymarketStore(
-        store_id="polymarket_store",
-        api=polymarket_api,
-        # poll_intervals will use defaults: {"odds": 300.0}
-    )
-
     # Extract event_types from data_streams if provided, otherwise use event_types field
     if params.data_streams:
         event_types_list = [ds.event_type for ds in params.data_streams]
@@ -268,57 +237,6 @@ def _build_trial_spec(
             event_types_list,
         )
 
-    # Collect all event types including game events
-    # Game events come from NBAStore and PolymarketStore
-    all_event_types = set(event_types_list)
-
-    # Expand synthetic event types to actual event types
-    expanded_event_types = set()
-    for event_type in all_event_types:
-        if event_type in SYNTHETIC_EVENT_TYPE_MAP:
-            expanded_event_types.update(SYNTHETIC_EVENT_TYPE_MAP[event_type])
-        else:
-            expanded_event_types.add(event_type)
-
-    # Auto-register processors based on requested event_types
-    # Use EVENT_TYPE_PROCESSOR_MAP to determine which processors are needed
-    registered_event_types = set()
-    for event_type in event_types_list:
-        if event_type in EVENT_TYPE_PROCESSOR_MAP:
-            processor_class, source_event_types = EVENT_TYPE_PROCESSOR_MAP[event_type]
-            if event_type not in registered_event_types:
-                processor = processor_class() if processor_class else None
-                websearch_store.register_stream(
-                    event_type, processor, source_event_types
-                )
-                registered_event_types.add(event_type)
-                logger.debug(
-                    "Registered event_type '%s' with processor %s (sources: %s)",
-                    event_type,
-                    processor_class.__name__ if processor_class else "None",
-                    source_event_types,
-                )
-        else:
-            logger.warning(
-                "Unknown event_type '%s' not in EVENT_TYPE_PROCESSOR_MAP, skipping processor registration",
-                event_type,
-            )
-
-    # Connect stores to DataHub
-    hub.connect_store(websearch_store)
-    hub.connect_store(nba_store)
-    hub.connect_store(polymarket_store)
-
-    # Set up polling identifiers for game events
-    # NBA store needs game_id to poll game status
-    nba_store.set_poll_identifier({"game_id": params.game_id})
-    # Polymarket store uses game_id for consistency (all events will use same event_id)
-    polymarket_store.set_poll_identifier({"game_id": params.game_id})
-
-    # Start polling on both stores (they will poll automatically)
-    # Note: Stores start polling when DataHub connects them via set_event_emitter
-    # The dashboard will call start_polling() during trial startup
-
     # Create stream specs - multiple streams, one per event type (or group)
     # All streams subscribe to the same DataHub
     stream_specs = []
@@ -338,6 +256,7 @@ def _build_trial_spec(
                 "actor_id": ds_config.id,
                 "hub_id": hub_id,
                 "persistence_file": persistence_file,
+                "enable_persistence": enable_persistence,
                 "event_type": ds_config.event_type,
                 "event_types": actual_event_types,
             }
@@ -380,6 +299,7 @@ def _build_trial_spec(
                 "actor_id": f"{event_type}_stream",
                 "hub_id": hub_id,
                 "persistence_file": persistence_file,
+                "enable_persistence": enable_persistence,
                 "event_type": event_type,
                 "event_types": [event_type],
             }
