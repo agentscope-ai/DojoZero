@@ -21,7 +21,7 @@ except ImportError:
     print("Tavily SDK not installed. Install with: pip install tavily-python")
     exit(1)
 
-from agentx.data.websearch import WebSearchAPI
+from dojozero.data.websearch import WebSearchAPI
 
 
 def demo_tavily_api():

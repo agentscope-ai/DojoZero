@@ -2,7 +2,7 @@ from typing import Any, Mapping, TypedDict
 
 import pytest
 
-from agentx.core import (
+from dojozero.core import (
     Agent,
     AgentBase,
     AgentSpec,

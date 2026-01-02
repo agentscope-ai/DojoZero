@@ -4,9 +4,9 @@ import asyncio
 import json
 from pathlib import Path
 
-from agentx.data._models import DataEventFactory
-from agentx.data.websearch._events import RawWebSearchEvent, PowerRankingEvent
-from agentx.data.websearch._processors import PowerRankingProcessor
+from dojozero.data._models import DataEventFactory
+from dojozero.data.websearch._events import RawWebSearchEvent, PowerRankingEvent
+from dojozero.data.websearch._processors import PowerRankingProcessor
 
 
 async def demo_power_ranking_extraction():

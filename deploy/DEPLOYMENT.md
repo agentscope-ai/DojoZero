@@ -2,8 +2,8 @@
 
 ## Setup
 
-1. Transfer project: `scp -r /path/to/AgentX user@host:/path/` or `git clone`
-2. Run setup: `cd AgentX && chmod +x deploy/setup.sh && ./deploy/setup.sh` (creates `.env.template` if missing)
+1. Transfer project: `scp -r /path/to/DojoZero user@host:/path/` or `git clone`
+2. Run setup: `cd DojoZero && chmod +x deploy/setup.sh && ./deploy/setup.sh` (creates `.env.template` if missing)
 3. Configure: `cp .env.template .env && nano .env` (add `TAVILY_API_KEY`, `DASHSCOPE_API_KEY`, `PROXY_URL`, `POLY_PRIVATE_KEY`)
 4. Test: `./deploy/run_daily.sh` or `./deploy/run_daily.sh 2025-12-20`
 
@@ -12,7 +12,7 @@
 **Cron (recommended):**
 ```bash
 crontab -e
-# Add: 0 6 * * * /path/to/AgentX/deploy/run_daily.sh >> /path/to/AgentX/cron.log 2>&1
+# Add: 0 6 * * * /path/to/DojoZero/deploy/run_daily.sh >> /path/to/DojoZero/cron.log 2>&1
 ```
 
 **Systemd (Linux):**
@@ -24,10 +24,10 @@ After=network.target
 [Service]
 Type=oneshot
 User=your-username
-WorkingDirectory=/path/to/AgentX
-ExecStart=/bin/bash /path/to/AgentX/deploy/run_daily.sh
-StandardOutput=append:/path/to/AgentX/systemd.log
-StandardError=append:/path/to/AgentX/systemd_error.log
+WorkingDirectory=/path/to/DojoZero
+ExecStart=/bin/bash /path/to/DojoZero/deploy/run_daily.sh
+StandardOutput=append:/path/to/DojoZero/systemd.log
+StandardError=append:/path/to/DojoZero/systemd_error.log
 
 # /etc/systemd/system/nba-collector.timer
 [Unit]

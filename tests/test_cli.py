@@ -3,10 +3,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-import agentx.samples  # noqa: F401 - import triggers builder registration
+import dojozero.samples  # noqa: F401 - import triggers builder registration
 
-from agentx import cli as agentx_cli
-from agentx.core import (
+from dojozero import cli as agentx_cli
+from dojozero.core import (
     InMemoryDashboardStore,
     LocalActorRuntimeProvider,
     TrialSpec,
@@ -67,7 +67,7 @@ def test_prepare_trial_spec_requires_scenario_mapping() -> None:
     payload = {
         "metadata": {"foo": "bar"},
     }
-    with pytest.raises(agentx_cli.AgentXCLIError):
+    with pytest.raises(agentx_cli.DojoZeroCLIError):
         agentx_cli._prepare_trial_spec("missing-env", payload)
 
 
@@ -78,7 +78,7 @@ def test_prepare_trial_spec_surfaces_validation_errors() -> None:
             "config": {"total_events": -1},
         },
     }
-    with pytest.raises(agentx_cli.AgentXCLIError):
+    with pytest.raises(agentx_cli.DojoZeroCLIError):
         agentx_cli._prepare_trial_spec("bad-config", payload)
 
 

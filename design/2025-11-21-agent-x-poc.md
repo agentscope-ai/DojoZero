@@ -1,9 +1,9 @@
-# AgentX (Proof-of-Concept)
+# DojoZero (Proof-of-Concept)
 
-AgentX is a system for hosting AI agents that run continously on realtime data
+DojoZero is a system for hosting AI agents that run continously on realtime data
 to reason about future outcomes and act on them, such as trading and placing bets.
 
-*"AgentX" is a code name for this project, and the public name will be decided in the future.*
+*"DojoZero" is a code name for this project, and the public name will be decided in the future.*
 
 ## Design Goal
 
@@ -44,7 +44,7 @@ exposes a REST API for Dashboard and Frontend.
 
 ```mermaid
 flowchart TB
-    subgraph Runtime["AgentX Runtime<br/>(Single Python Service + Ray)"]
+    subgraph Runtime["DojoZero Runtime<br/>(Single Python Service + Ray)"]
         direction TB
         API["Runtime API<br/>(FastAPI Control)"]
         DS["Data Streams<br/>(Ray Actors)"]

@@ -9,16 +9,16 @@ This demo shows the complete flow:
 
 import asyncio
 
-from agentx.core import AgentBase
-from agentx.data import DataHub, WebSearchAPI, WebSearchStore
-from agentx.data.websearch._events import (
+from dojozero.core import AgentBase
+from dojozero.data import DataHub, WebSearchAPI, WebSearchStore
+from dojozero.data.websearch._events import (
     WebSearchIntent,
     RawWebSearchEvent,
     InjurySummaryEvent,
     PowerRankingEvent,
     ExpertPredictionEvent,
 )
-from agentx.data.websearch._processors import (
+from dojozero.data.websearch._processors import (
     ExpertPredictionProcessor,
     InjurySummaryProcessor,
     PowerRankingProcessor,

@@ -10,20 +10,20 @@ from dotenv import load_dotenv
 import ray
 
 
-from agentx.agents.agent import BettingAgent
-from agentx.agents.config import load_agent_config, BettingAgentConfig
-from agentx.core import AgentSpec, OperatorSpec, StreamEvent
-from agentx.ray_runtime import RayActorRuntimeProvider
-from agentx.nba_moneyline._broker import BrokerOperator
-from agentx.data.nba._events import GameInitializeEvent, GameResultEvent
-from agentx.data.polymarket._events import OddsUpdateEvent
+from dojozero.agents.agent import BettingAgent
+from dojozero.agents.config import load_agent_config, BettingAgentConfig
+from dojozero.core import AgentSpec, OperatorSpec, StreamEvent
+from dojozero.ray_runtime import RayActorRuntimeProvider
+from dojozero.nba_moneyline._broker import BrokerOperator
+from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
+from dojozero.data.polymarket._events import OddsUpdateEvent
 from datetime import datetime
 
 load_dotenv()
 
 # Test-specific environment variable names to avoid conflicts with other apps
-TEST_API_KEY_ENV = "AGENTX_TEST_OPENAI_API_KEY"
-TEST_BASE_URL_ENV = "AGENTX_TEST_OPENAI_BASE_URL"
+TEST_API_KEY_ENV = "DOJOZERO_TEST_OPENAI_API_KEY"
+TEST_BASE_URL_ENV = "DOJOZERO_TEST_OPENAI_BASE_URL"
 
 AGENT_ID = "basic"
 BROKER_ID = "nba-broker"

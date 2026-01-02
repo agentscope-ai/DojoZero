@@ -1,5 +1,5 @@
 #!/bin/bash
-# Setup script for deploying AgentX NBA Game Collector to a Unix machine
+# Setup script for deploying DojoZero NBA Game Collector to a Unix machine
 # This script sets up the Python environment, installs dependencies, and prepares the system
 
 set -e  # Exit on error
@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "=========================================="
-echo "AgentX NBA Game Collector - Setup"
+echo "DojoZero NBA Game Collector - Setup"
 echo "=========================================="
 echo ""
 
@@ -51,7 +51,7 @@ echo "Setting up Python environment..."
 cd "$PROJECT_ROOT"
 
 # Install the package and dependencies
-echo "Installing AgentX package and dependencies..."
+echo "Installing DojoZero package and dependencies..."
 uv pip install .
 
 # Install dev dependencies (includes nba_api, tavily-python, etc.)
@@ -72,7 +72,7 @@ echo ""
 if [ ! -f "$PROJECT_ROOT/.env" ]; then
     echo "WARNING: .env file not found. Creating template..."
     cat > "$PROJECT_ROOT/.env.template" << 'EOF'
-# AgentX Environment Variables
+# DojoZero Environment Variables
 # Copy this file to .env and fill in your API keys
 
 # Tavily API key for web search

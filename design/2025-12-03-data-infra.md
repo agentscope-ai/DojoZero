@@ -133,7 +133,7 @@ class DataEvent:
 Event classes are registered using the `@register_event` decorator to enable automatic deserialization during replay:
 
 ```python
-from agentx.data._models import DataEvent, register_event
+from dojozero.data._models import DataEvent, register_event
 
 @register_event
 @dataclass(slots=True, frozen=True)
