@@ -3,8 +3,6 @@
 DojoZero is a system for hosting AI agents that run continously on realtime data
 to reason about future outcomes and act on them, such as trading and placing bets.
 
-*"DojoZero" is a code name for this project, and the public name will be decided in the future.*
-
 ## Design Goal
 
 Show a proof-of-concept of a system capable of hosting multiple agents and producing realtime
