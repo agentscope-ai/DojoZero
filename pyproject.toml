@@ -17,7 +17,8 @@ dependencies = [
     "pydantic>=2.12.4",
     "aiohttp>=3.9.0",
     "agentscope>=1.0.8",
-    "nba_api>=1.11.3"
+    "nba_api>=1.11.3",
+    "py-clob-client>=0.1.0"
 ]
 
 [project.scripts]
@@ -41,6 +42,7 @@ dev = [
     "python-dotenv>=1.2.1",
     "tavily-python>=0.7.12",
     "agentscope>=1.0.8",
+    "python-dateutil>=2.8.0",
 ]
 
 [tool.ruff]
