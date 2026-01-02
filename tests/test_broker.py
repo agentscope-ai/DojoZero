@@ -8,7 +8,7 @@ from decimal import Decimal
 from datetime import datetime
 from typing import Any
 
-from agentx.nba_moneyline._broker import (
+from dojozero.nba_moneyline._broker import (
     BrokerOperator,
     BrokerOperatorConfig,
     BetRequest,
@@ -21,9 +21,13 @@ from agentx.nba_moneyline._broker import (
     BetSettledPayload,
 )
 
-from agentx.core import StreamEvent
-from agentx.data.nba._events import GameInitializeEvent, GameStartEvent, GameResultEvent
-from agentx.data.polymarket._events import OddsUpdateEvent
+from dojozero.core import StreamEvent
+from dojozero.data.nba._events import (
+    GameInitializeEvent,
+    GameStartEvent,
+    GameResultEvent,
+)
+from dojozero.data.polymarket._events import OddsUpdateEvent
 
 
 # =============================================================================

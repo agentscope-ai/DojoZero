@@ -44,7 +44,7 @@ data/nba-betting/2025-12-16/
 1. Fetches games from NBA API for the specified date
 2. Generates per-game config files in `{data-dir}/{date}/{game_id}.yaml`
 3. Schedules trials to start 2 hours before each game
-4. Launches `agentx run` process for each game (isolated subprocess)
+4. Launches `dojo0 run` process for each game (isolated subprocess)
 5. Monitors game status every 60 seconds
 6. Stops trial when game status = 3 (Finished)
 7. Logs all events to `{data-dir}/{date}/{game_id}.log`
@@ -53,7 +53,7 @@ data/nba-betting/2025-12-16/
 
 After collection, replay a game:
 ```bash
-agentx replay \
+dojo0 replay \
   --replay-file data/nba-betting/2025-12-16/0062500001.jsonl \
   --params data/nba-betting/2025-12-16/0062500001.yaml \
   --replay-speed-up 2.0

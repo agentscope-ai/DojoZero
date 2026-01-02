@@ -4,14 +4,14 @@ import pytest
 
 from pydantic import BaseModel
 
-from agentx.core import (
+from dojozero.core import (
     TrialSpec,
     get_trial_builder_definition,
     list_trial_builders,
     register_trial_builder,
     unregister_trial_builder,
 )
-from agentx.samples.bounded_random import BoundedRandomTrialParams
+from dojozero.samples.bounded_random import BoundedRandomTrialParams
 
 
 def _bounded_random_spec(trial_id: str, total_events: int) -> TrialSpec:

@@ -8,20 +8,20 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
-from agentx.agents.agent import BettingAgent
-from agentx.agents.config import load_agent_config
-from agentx.agents.model import _create_model_from_llm_config, _create_formatter
-from agentx.core import StreamEvent
-from agentx.nba_moneyline._broker import BrokerOperator
-from agentx.data.nba._events import GameInitializeEvent, GameResultEvent
-from agentx.data.polymarket._events import OddsUpdateEvent
+from dojozero.agents.agent import BettingAgent
+from dojozero.agents.config import load_agent_config
+from dojozero.agents.model import _create_model_from_llm_config, _create_formatter
+from dojozero.core import StreamEvent
+from dojozero.nba_moneyline._broker import BrokerOperator
+from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
+from dojozero.data.polymarket._events import OddsUpdateEvent
 from datetime import datetime
 
 load_dotenv()
 
 # Test-specific environment variable names to avoid conflicts with other apps
-TEST_API_KEY_ENV = "AGENTX_TEST_OPENAI_API_KEY"
-TEST_BASE_URL_ENV = "AGENTX_TEST_OPENAI_BASE_URL"
+TEST_API_KEY_ENV = "DOJOZERO_TEST_OPENAI_API_KEY"
+TEST_BASE_URL_ENV = "DOJOZERO_TEST_OPENAI_BASE_URL"
 
 AGENT_ID = "basic"
 CONFIG_PATH = Path(__file__).parent.parent / "configs" / "agents" / "basic.yaml"

@@ -16,11 +16,11 @@ try:
 except ImportError:
     pass  # python-dotenv not installed, skip .env loading
 
-# Import proxy utilities from agentx
-from agentx.data.nba._utils import with_proxy, get_game_info_by_id
-from agentx.data.nba._store import NBAStore
-from agentx.data.nba._api import NBAExternalAPI
-from agentx.data.nba._events import PlayByPlayEvent, GameResultEvent
+# Import proxy utilities from dojozero
+from dojozero.data.nba._utils import with_proxy, get_game_info_by_id
+from dojozero.data.nba._store import NBAStore
+from dojozero.data.nba._api import NBAExternalAPI
+from dojozero.data.nba._events import PlayByPlayEvent, GameResultEvent
 
 
 game_id = "0062500001"
@@ -105,7 +105,7 @@ def get_games_for_date(game_date: datetime | str, print_games: bool = False):
 
         # Use ScoreboardV3 for all dates
         # Proxy is handled by @with_proxy decorator
-        from agentx.data.nba._utils import get_proxy
+        from dojozero.data.nba._utils import get_proxy
 
         proxy = get_proxy()
         board = (
@@ -337,7 +337,7 @@ def get_play_by_play(game_id: str, include_player_names: bool = True):
 
     try:
         # Proxy is handled by @with_proxy decorator
-        from agentx.data.nba._utils import get_proxy
+        from dojozero.data.nba._utils import get_proxy
 
         proxy = get_proxy()
         pbp = (

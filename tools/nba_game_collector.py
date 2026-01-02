@@ -24,11 +24,11 @@ from typing import Any
 import yaml
 from dateutil import parser
 
-# Add parent directory to path to import agentx modules
+# Add parent directory to path to import dojozero modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from demos.nba_api_demo import get_games_for_date
-from agentx.data.nba._utils import get_game_info_by_id
+from dojozero.data.nba._utils import get_game_info_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -262,12 +262,12 @@ class GameTrialManager:
         if not self.config_file:
             self.generate_config_file()
 
-        # Build agentx run command
+        # Build dojo0 run command
         # Note: --log-level is a top-level argument, must come before "run"
         cmd = [
             sys.executable,
             "-m",
-            "agentx.cli",
+            "dojo0.cli",
             "--log-level",
             self.log_level,
             "run",
@@ -296,7 +296,7 @@ class GameTrialManager:
 
                 # Set environment variable for subprocess (future enhancement)
                 env = os.environ.copy()
-                env["AGENTX_LOG_FILE"] = str(self.log_file)
+                env["DOJOZERO_LOG_FILE"] = str(self.log_file)
 
                 self.process = subprocess.Popen(
                     cmd,

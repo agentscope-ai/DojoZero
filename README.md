@@ -1,9 +1,7 @@
-# AgentX
+# DojoZero
 
-AgentX is a system for hosting AI agents that run continously on realtime data
+DojoZero is a system for hosting AI agents that run continously on realtime data
 to reason about future outcomes and act on them, such as trading and placing bets.
-
-*"AgentX" is a code name for this project, and the public name will be decided in the future.*
 
 > 🚧 This project is in early development. Architecture design and core features are currently being implemented.
 > See [Design](./design/) for decision records on design.
@@ -17,16 +15,16 @@ to reason about future outcomes and act on them, such as trading and placing bet
 uv pip install . 
 ```
 
-This installs AgentX for running trials only. For development workflows (tests,
+This installs DojoZero for running trials only. For development workflows (tests,
 lint, editable installs), see the [Development Setup](#development-setup)
 section below.
 
 ## Standalone Usage
 
-AgentX trials start from a params file that names the trial builder and its
+DojoZero trials start from a params file that names the trial builder and its
 inputs. Each builder defines the scenario—the combination of data streams,
-operators, and agents that act together during the trial. Use `agentx
-list-builders` to see registered scenarios, then run `agentx get-builder
+operators, and agents that act together during the trial. Use `dojo0
+list-builders` to see registered scenarios, then run `dojo0 get-builder
 <name> --create-example-params` (or author the params file directly):
 
 ```yaml
@@ -38,14 +36,14 @@ scenario:
 		interval_seconds: 0.0
 ```
 
-Launch the trial by pointing `agentx run` at the params file (add `--trial-id`
+Launch the trial by pointing `dojo0 run` at the params file (add `--trial-id`
 to set a friendly identifier, otherwise a UUID is generated):
 
 ```bash
-agentx run --params sample_trial.yaml --trial-id sample-trial
+dojo0 run --params sample_trial.yaml --trial-id sample-trial
 ```
 
-Use `agentx list-builders` to discover registered scenarios (their
+Use `dojo0 list-builders` to discover registered scenarios (their
 data streams, operators, and agents), and add imports with repeated `--import-module`
 flags whenever your builder lives outside the defaults.
 
@@ -56,10 +54,10 @@ checkpoint id or the `--resume-latest` flag:
 
 ```bash
 # Resume from a known checkpoint
-agentx run --trial-id sample-trial --checkpoint-id 3f2c6a9e
+dojo0 run --trial-id sample-trial --checkpoint-id 3f2c6a9e
 
 # Resume from the latest checkpoint stored for the trial
-agentx run --trial-id sample-trial --resume-latest
+dojo0 run --trial-id sample-trial --resume-latest
 ```
 
 You can still start a new trial from a checkpoint by supplying both `--params`
@@ -70,7 +68,7 @@ and `--checkpoint-id`; the CLI applies the checkpoint before launching.
 Replay historical events from a JSONL file for backtesting:
 
 ```bash
-agentx replay \
+dojo0 replay \
   --replay-file outputs/nba_betting_events.jsonl \
   --params configs/nba-pregame-betting.yaml \
   --replay-speed-up 2.0 \
@@ -79,32 +77,32 @@ agentx replay \
 
 ## Server Usage (Coming Soon)
 
-The `agentx serve` command is reserved for a FastAPI dashboard server that will
+The `dojo0 serve` command is reserved for a FastAPI dashboard server that will
 reuse the existing `Dashboard` runtime. Use the top-level `--setting` flag here
 too so the server process can share the same dashboard settings (store/runtime
-and import wiring) as `agentx run`. The CLI already exposes placeholder flags (`--host`, `--port`) so
+and import wiring) as `dojo0 run`. The CLI already exposes placeholder flags (`--host`, `--port`) so
 future releases can add the server without breaking backward compatibility.
 
 ## Runtime & Store Configuration
 
 When you need persistent dashboard storage, non-default imports, or an
 alternative runtime provider, declare those dashboard settings once in
-`agentx.yaml` (or any filename you pass to the top-level `--setting` flag).
+`dojozero.yaml` (or any filename you pass to the top-level `--setting` flag).
 The settings file captures everything the dashboard runtime needs: store,
 runtime provider, and module imports.
 
 ```yaml
-# agentx.yaml
+# dojozero.yaml
 store:
 	kind: filesystem
-	root: ./agentx-store
+	root: ./dojozero-store
 runtime:
 	kind: local
 imports:
-	- agentx.samples
+	- dojozero.samples
 ```
 
-Launch with `agentx --setting agentx.yaml run --params sample_trial.yaml` (or the
+Launch with `dojo0 --setting dojozero.yaml run --params sample_trial.yaml` (or the
 serve command once available) to reuse the configuration across invocations.
 
 ### Using the Ray runtime
@@ -122,7 +120,7 @@ runtime:
 		num_cpus: 8
 ```
 
-Then run `agentx --setting ray.yaml run --params sample_trial.yaml` to launch the
+Then run `dojo0 --setting ray.yaml run --params sample_trial.yaml` to launch the
 trial with Ray actors.
 
 ## Development Setup
@@ -143,14 +141,17 @@ pre-commit install
 ## Package Layout
 
 ```
-agentx/
+dojozero/
 ├─ README.md                Project overview (this file)
 ├─ design/                  Architecture notes and decision records
 ├─ tools/                   Utility scripts (data collection, deduplication, etc.)
-├─ src/agentx/              Runtime, core abstractions, and CLI entry points
+├─ src/dojozero/            Runtime, core abstractions, and CLI entry points
+│  ├─ agents/               Agent implementations
 │  ├─ core/                 Dashboard, registry, actor bases, and stores
-│  ├─ samples/              Reference trial builders (bounded-random, etc.)
-│  └─ ray_runtime/          Optional Ray runtime provider
+│  ├─ data/                 Data stream implementations
+│  ├─ nba_moneyline/        NBA moneyline betting scenario
+│  ├─ ray_runtime/          Optional Ray runtime provider
+│  └─ samples/              Reference trial builders (bounded-random, etc.)
 └─ tests/                   Pytest suites covering CLI, registry, samples
 ```
 
@@ -160,13 +161,13 @@ Every scenario (a specific wiring of data streams, operators, and agents)
 exposes a *trial builder* that turns serialized configs into a `TrialSpec`.
 Builders are registered with a Pydantic `BaseModel` schema so the CLI can
 validate inputs, render JSON Schema, and generate ready-to-edit YAML templates
-automatically. New built-in scenarios that ship with AgentX should live inside
-the `agentx` package (for example, `agentx.samples`).
+automatically. New built-in scenarios that ship with DojoZero should live inside
+the `dojozero` package (for example, `dojozero.samples`).
 
 ```python
 from pydantic import BaseModel, Field
 
-from agentx.core import TrialSpec, register_trial_builder
+from dojozero.core import TrialSpec, register_trial_builder
 
 
 class MyScenarioConfig(BaseModel):
@@ -188,7 +189,7 @@ register_trial_builder(
 )
 ```
 
-Once imported, `agentx get-builder myenv.prices` will show the schema and can
+Once imported, `dojo0 get-builder myenv.prices` will show the schema and can
 emit a ready-made YAML spec for local experimentation.
 
 ## Tools

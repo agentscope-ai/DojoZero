@@ -1,1 +1,1 @@
-"""Tests for AgentX package."""
+"""Tests for DojoZero package."""

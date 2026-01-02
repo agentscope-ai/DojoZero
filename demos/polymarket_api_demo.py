@@ -8,9 +8,9 @@ from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import BookParams
 from py_clob_client.exceptions import PolyApiException
 
-from agentx.data.polymarket._store import PolymarketStore
-from agentx.data.polymarket._api import PolymarketAPI
-from agentx.data.polymarket._events import OddsUpdateEvent
+from dojozero.data.polymarket._store import PolymarketStore
+from dojozero.data.polymarket._api import PolymarketAPI
+from dojozero.data.polymarket._events import OddsUpdateEvent
 
 
 market_url = "https://polymarket.com/event/nba-lac-okc-2025-12-17"
@@ -210,8 +210,8 @@ async def test_polymarket_store_logic(market_url: str):
     print("-" * 80)
 
     try:
-        from agentx.nba_moneyline._broker import BrokerOperator
-        from agentx.core import StreamEvent
+        from dojozero.nba_moneyline._broker import BrokerOperator
+        from dojozero.core import StreamEvent
         from decimal import Decimal
 
         # Create a test broker

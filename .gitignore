@@ -151,7 +151,7 @@ uv.lock
 Thumbs.db
 
 # Sample scenario artifacts
-agentx-store
+dojozero-store
 
 # Data
 /outputs/

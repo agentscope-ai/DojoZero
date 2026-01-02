@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 import ray
 
-from agentx.core import (
+from dojozero.core import (
     Dashboard,
     DashboardStore,
     FileSystemDashboardStore,
@@ -14,15 +14,15 @@ from agentx.core import (
     TrialPhase,
     get_trial_builder_definition,
 )
-from agentx.samples.bounded_random import (
+from dojozero.samples.bounded_random import (
     BoundedRandomStringDataStream,
     CounterOperator,
 )
-from agentx.samples.bounded_random_buffered import (
+from dojozero.samples.bounded_random_buffered import (
     BoundedRandomBufferedTrialParams,
     CounterAgentBuffered,
 )
-from agentx.ray_runtime import RayActorRuntimeProvider
+from dojozero.ray_runtime import RayActorRuntimeProvider
 
 StoreBuilder = Callable[[Path], DashboardStore]
 
@@ -153,7 +153,7 @@ async def test_bounded_random_buffered_checkpoint_resume(
 async def test_bounded_random_buffered_runs_with_ray_runtime(tmp_path: Path) -> None:
     if ray.is_initialized():
         ray.shutdown()
-    namespace = f"agentx-buffered-test-{uuid4().hex}"
+    namespace = f"dojozero-buffered-test-{uuid4().hex}"
     provider = RayActorRuntimeProvider(
         init_kwargs={"namespace": namespace, "ignore_reinit_error": True}
     )
