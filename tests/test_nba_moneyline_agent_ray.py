@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 import ray
 
 
-from dojozero.agents.agent import BettingAgent
-from dojozero.agents.config import load_agent_config, BettingAgentConfig
+from dojozero.nba_moneyline import BettingAgent, BettingAgentConfig
+from dojozero.agents import load_agent_config
 from dojozero.core import AgentSpec, OperatorSpec, StreamEvent
 from dojozero.ray_runtime import RayActorRuntimeProvider
 from dojozero.nba_moneyline._broker import BrokerOperator
@@ -22,8 +22,8 @@ from datetime import datetime
 load_dotenv()
 
 # Test-specific environment variable names to avoid conflicts with other apps
-TEST_API_KEY_ENV = "DOJOZERO_TEST_OPENAI_API_KEY"
-TEST_BASE_URL_ENV = "DOJOZERO_TEST_OPENAI_BASE_URL"
+TEST_API_KEY_ENV = "DOJOZERO_OPENAI_API_KEY"
+TEST_BASE_URL_ENV = "DOJOZERO_OPENAI_BASE_URL"
 
 AGENT_ID = "basic"
 BROKER_ID = "nba-broker"
@@ -64,8 +64,8 @@ def _create_agent_config() -> BettingAgentConfig:
     config = load_agent_config(CONFIG_PATH)
     llm_config = config.get("llm", {})
     return BettingAgentConfig(
-        actor_id=config["agent_id"],
-        name=config.get("name", config["agent_id"]),
+        actor_id=config["name"],
+        name=config.get("name", ""),
         sys_prompt=config.get("sys_prompt", ""),
         model_type=llm_config.get("model_type", "openai"),  # type: ignore[typeddict-item]
         model_name=llm_config.get("model_name", "qwen3-max"),

@@ -9,9 +9,9 @@ from agentscope.pipeline import MsgHub
 
 from dojozero.core import Operator, StreamEvent
 
-from .agent import BettingAgent
+from ._agent import BettingAgent
 
-LOGGER = logging.getLogger("dojozero.agents.group")
+LOGGER = logging.getLogger(__name__)
 
 
 class BettingAgentGroup:
@@ -34,7 +34,9 @@ class BettingAgentGroup:
         self._agent_colors: dict[str, str] = {}
 
         for i, path in enumerate(config_paths):
-            agent = BettingAgent.from_yaml(path)
+            # Use config file stem as actor_id (e.g., "basic" from "basic.yaml")
+            actor_id = Path(path).stem
+            agent = BettingAgent.from_yaml(path, actor_id=actor_id)
             self._agents.append(agent)
             LOGGER.info(
                 "[%s] added to group",

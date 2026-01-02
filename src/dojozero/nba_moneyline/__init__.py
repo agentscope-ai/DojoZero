@@ -1,11 +1,12 @@
 """NBA moneyline betting module with DataHub integration."""
 
 from dojozero.nba_moneyline._agent import (
+    BettingAgent,
+    BettingAgentConfig,
     DummyAgent,
     DummyAgentConfig,
-    NBABettingAgent,
-    NBABettingAgentConfig,
 )
+from dojozero.nba_moneyline._group import BettingAgentGroup
 from dojozero.nba_moneyline._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
@@ -20,12 +21,13 @@ from dojozero.nba_moneyline._trial import (
 )
 
 __all__ = [
+    "BettingAgent",
+    "BettingAgentConfig",
+    "BettingAgentGroup",
     "NBAPreGameBettingDataHubDataStream",
     "NBAPreGameBettingDataHubDataStreamConfig",
     "DummyAgent",
     "DummyAgentConfig",
-    "NBABettingAgent",
-    "NBABettingAgentConfig",
     "EventCounterOperator",
     "EventCounterOperatorConfig",
     "NBAPreGameBettingTrialParams",

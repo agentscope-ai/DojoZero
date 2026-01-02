@@ -1423,7 +1423,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         Returns:
             List of tool functions for agent to use
         """
-        from dojozero.agents.toolkit import tool  # type: ignore[import-untyped]
+        from dojozero.agents._toolkit import tool  # type: ignore[import-untyped]
 
         target = operator if operator is not None else self
 

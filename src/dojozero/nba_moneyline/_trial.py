@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from dojozero.core import (
     AgentSpec,
@@ -22,8 +22,8 @@ from dojozero.data.websearch._processors import (
     PowerRankingProcessor,
 )
 from dojozero.nba_moneyline._agent import (
-    NBABettingAgent,
-    NBABettingAgentConfig,
+    BettingAgent,
+    BettingAgentConfig,
 )
 from dojozero.nba_moneyline._datastream import (
     NBAPreGameBettingDataHubDataStream,
@@ -83,6 +83,8 @@ class DataStreamConfig(BaseModel):
 class OperatorConfig(BaseModel):
     """Operator configuration."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
     class_name: str = Field(alias="class", description="Operator class name")
     data_streams: list[str] = Field(
@@ -91,9 +93,6 @@ class OperatorConfig(BaseModel):
     initial_balance: str | None = Field(
         default=None, description="Initial balance for broker (if applicable)"
     )
-
-    class Config:
-        populate_by_name = True
 
 
 class NBAPreGameBettingTrialParams(BaseModel):
@@ -130,7 +129,7 @@ class NBAPreGameBettingTrialParams(BaseModel):
         description=(
             "List of agent configurations. Each agent dict should have:\n"
             "  - 'id': str (required) - Agent identifier\n"
-            "  - 'class': str (required) - Must be 'NBABettingAgent'\n"
+            "  - 'class': str (required) - Must be 'BettingAgent'\n"
             "  - 'operators': list[str] (optional) - Operator IDs to register\n"
             "  - 'data_streams': list[str] (optional) - DataStream actor IDs to subscribe to\n"
             "  - 'agent_config_path': str (optional) - Path to agent YAML config file"
@@ -520,7 +519,7 @@ def _build_trial_spec(
 
     if not params.agents:
         raise ValueError(
-            "No agents specified. At least one agent with class 'NBABettingAgent' is required."
+            "No agents specified. At least one agent with class 'BettingAgent' is required."
         )
 
     for agent_dict in params.agents:
@@ -529,17 +528,17 @@ def _build_trial_spec(
             raise ValueError("Agent config missing required 'id' field")
 
         agent_class_name = agent_dict.get("class")
-        if agent_class_name != "NBABettingAgent":
+        if agent_class_name != "BettingAgent":
             raise ValueError(
                 f"Invalid agent class '{agent_class_name}' for agent '{agent_id}'. "
-                "Only 'NBABettingAgent' is supported."
+                "Only 'BettingAgent' is supported."
             )
 
         operator_ids = agent_dict.get("operators", [])
         data_stream_ids = agent_dict.get("data_streams", [])
 
         # Create agent config - pass through config fields from agent_dict
-        agent_config: NBABettingAgentConfig = {
+        agent_config: BettingAgentConfig = {
             "actor_id": agent_id,
         }
         # Copy optional config fields
@@ -547,14 +546,21 @@ def _build_trial_spec(
             agent_config["name"] = agent_dict["name"]
         if agent_dict.get("agent_config_path"):
             agent_config["agent_config_path"] = agent_dict["agent_config_path"]
-        if agent_dict.get("model_type"):
-            agent_config["model_type"] = agent_dict["model_type"]
-        if agent_dict.get("model_name"):
-            agent_config["model_name"] = agent_dict["model_name"]
 
-        agent_spec = AgentSpec[NBABettingAgentConfig](
+        # Build LLM config if model_type or model_name are specified
+        if agent_dict.get("model_type") or agent_dict.get("model_name"):
+            from dojozero.agents._config import LLMConfig
+
+            llm_config: LLMConfig = {}
+            if agent_dict.get("model_type"):
+                llm_config["model_type"] = agent_dict["model_type"]
+            if agent_dict.get("model_name"):
+                llm_config["model_name"] = agent_dict["model_name"]
+            agent_config["llm"] = llm_config
+
+        agent_spec = AgentSpec[BettingAgentConfig](
             actor_id=agent_id,
-            actor_cls=NBABettingAgent,
+            actor_cls=BettingAgent,
             config=agent_config,
             operator_ids=tuple(operator_ids) if operator_ids else (),
             data_stream_ids=tuple(data_stream_ids),
@@ -835,7 +841,7 @@ register_trial_builder(
         "agents": [
             {
                 "id": "betting_agent",
-                "class": "NBABettingAgent",
+                "class": "BettingAgent",
                 "operators": ["event_counter", "betting_broker"],
                 "data_streams": [
                     "injury_summary_stream",
