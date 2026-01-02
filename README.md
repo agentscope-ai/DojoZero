@@ -146,9 +146,12 @@ dojozero/
 ├─ design/                  Architecture notes and decision records
 ├─ tools/                   Utility scripts (data collection, deduplication, etc.)
 ├─ src/dojozero/            Runtime, core abstractions, and CLI entry points
+│  ├─ agents/               Agent implementations
 │  ├─ core/                 Dashboard, registry, actor bases, and stores
-│  ├─ samples/              Reference trial builders (bounded-random, etc.)
-│  └─ ray_runtime/          Optional Ray runtime provider
+│  ├─ data/                 Data stream implementations
+│  ├─ nba_moneyline/        NBA moneyline betting scenario
+│  ├─ ray_runtime/          Optional Ray runtime provider
+│  └─ samples/              Reference trial builders (bounded-random, etc.)
 └─ tests/                   Pytest suites covering CLI, registry, samples
 ```
 
