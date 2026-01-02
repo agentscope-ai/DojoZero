@@ -3,6 +3,8 @@
 from agentx.nba_moneyline._agent import (
     DummyAgent,
     DummyAgentConfig,
+    NBABettingAgent,
+    NBABettingAgentConfig,
 )
 from agentx.nba_moneyline._datastream import (
     NBAPreGameBettingDataHubDataStream,
@@ -22,6 +24,8 @@ __all__ = [
     "NBAPreGameBettingDataHubDataStreamConfig",
     "DummyAgent",
     "DummyAgentConfig",
+    "NBABettingAgent",
+    "NBABettingAgentConfig",
     "EventCounterOperator",
     "EventCounterOperatorConfig",
     "NBAPreGameBettingTrialParams",

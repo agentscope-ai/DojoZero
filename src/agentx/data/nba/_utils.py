@@ -167,10 +167,10 @@ def get_game_info_by_id(game_id: str, proxy: str | None = None) -> dict[str, Any
     from nba_api.stats.endpoints import scoreboardv3
     from dateutil import parser
     
-    # Search across recent dates (today and past 7 days)
+    # Search across recent dates (today and past 30 days)
     search_dates = []
     today = datetime.now().date()
-    for i in range(8):  # Today + 7 days back
+    for i in range(30):  # Today + 30 days back
         search_dates.append(today - timedelta(days=i))
     
     for date in search_dates:

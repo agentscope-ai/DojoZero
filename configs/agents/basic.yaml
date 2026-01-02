@@ -1,0 +1,12 @@
+agent_id: "basic"
+name: "Basic"
+sys_prompt: |
+  You are a sports betting agent. When you receive match data:
+  1. Check your balance first
+  2. Analyze the odds and decide whether to bet
+  3. Report your decision and reasoning
+llm:
+  model_type: openai
+  model_name: qwen3-max
+  api_key_env: OPENAI_API_KEY
+  base_url_env: OPENAI_BASE_URL
