@@ -55,7 +55,7 @@ ls -lh data/nba-betting/2025-12-17/
 
 ## Troubleshooting
 
-- `python3 not found` → Install Python 3.10+, check PATH
+- `python3 not found` → Install Python 3.11+, check PATH
 - `TAVILY_API_KEY not set` or missing keys → Verify `.env` exists with all required keys (`chmod 600 .env`)
 - `No games found` → Normal if no games scheduled
 - `Collection timed out` → Increase timeout in `run_daily.sh`

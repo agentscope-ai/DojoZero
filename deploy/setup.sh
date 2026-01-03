@@ -15,7 +15,7 @@ echo ""
 # Check Python version
 echo "Checking Python version..."
 if ! command -v python3 &> /dev/null; then
-    echo "ERROR: python3 is not installed. Please install Python 3.10 or higher."
+    echo "ERROR: python3 is not installed. Please install Python 3.11 or higher."
     exit 1
 fi
 
@@ -23,8 +23,8 @@ PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_inf
 PYTHON_MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
 PYTHON_MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
 
-if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 10 ]); then
-    echo "ERROR: Python 3.10+ is required. Found: $PYTHON_VERSION"
+if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 11 ]); then
+    echo "ERROR: Python 3.11+ is required. Found: $PYTHON_VERSION"
     exit 1
 fi
 

@@ -7,7 +7,7 @@ name = "dojozero"
 version = "0.0.0"
 description = "DojoZero is a system for hosting AI agents that run continously on realtime data to reason about future outcomes and act on them, such as trading and placing bets."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "DojoZero Team"}
@@ -47,10 +47,10 @@ dev = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py311"
 
 [tool.pyright]
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 typeCheckingMode = "basic"
 
 [tool.pytest.ini_options]
