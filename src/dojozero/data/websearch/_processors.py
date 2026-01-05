@@ -40,7 +40,7 @@ class InjurySummaryProcessor(DataProcessor):
         """Initialize injury summary processor.
 
         Args:
-            api_key: Dashscope API key (defaults to AGENT_DASHSCOPE_API_KEY env var)
+            api_key: Dashscope API key (defaults to DOJOZERO_DASHSCOPE_API_KEY env var)
             model: Dashscope model to use for summarization
         """
         # Initialize Dashscope (will raise if not available or key missing)
@@ -233,7 +233,7 @@ class PowerRankingProcessor(DataProcessor):
         """Initialize power ranking processor.
 
         Args:
-            api_key: Dashscope API key (defaults to AGENT_DASHSCOPE_API_KEY env var)
+            api_key: Dashscope API key (defaults to DOJOZERO_DASHSCOPE_API_KEY env var)
             model: Dashscope model to use for extraction
         """
         # Initialize Dashscope (will raise if not available or key missing)
@@ -405,7 +405,7 @@ class ExpertPredictionProcessor(DataProcessor):
         """Initialize expert prediction processor.
 
         Args:
-            api_key: Dashscope API key (defaults to AGENT_DASHSCOPE_API_KEY env var)
+            api_key: Dashscope API key (defaults to DOJOZERO_DASHSCOPE_API_KEY env var)
             model: Dashscope model to use for extraction (default: "qwen-turbo")
         """
         # Initialize Dashscope (will raise if not available or key missing)

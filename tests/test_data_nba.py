@@ -241,10 +241,10 @@ class TestGetGameInfoByIdIntegration:
             ), f"Invalid/malformed game ID '{game_id}' should return None"
 
     def test_proxy_support(self, test_game_ids):
-        """Test that proxy parameter works (if PROXY_URL env var is set)."""
-        proxy = os.getenv("PROXY_URL")
+        """Test that proxy parameter works (if DOJOZERO_PROXY_URL env var is set)."""
+        proxy = os.getenv("DOJOZERO_PROXY_URL")
         if not proxy:
-            pytest.skip("PROXY_URL environment variable not set")
+            pytest.skip("DOJOZERO_PROXY_URL environment variable not set")
 
         if "recent" not in test_game_ids:
             pytest.skip("No recent game ID available for proxy test")
