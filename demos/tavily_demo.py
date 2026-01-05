@@ -32,9 +32,9 @@ def demo_tavily_api():
     print()
 
     # Get API key from environment
-    api_key = os.getenv("TAVILY_API_KEY")
+    api_key = os.getenv("DOJOZERO_TAVILY_API_KEY")
     if not api_key:
-        print("Error: TAVILY_API_KEY not found in environment variables.")
+        print("Error: DOJOZERO_TAVILY_API_KEY not found in environment variables.")
         print("Please set it in your .env file or export it.")
         return
 

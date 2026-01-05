@@ -36,7 +36,7 @@ def initialize_dashscope(api_key: str | None = None) -> str:
     """Initialize Dashscope SDK with API key.
 
     Args:
-        api_key: Dashscope API key (defaults to DASHSCOPE_API_KEY env var)
+        api_key: Dashscope API key (defaults to DOJOZERO_DASHSCOPE_API_KEY env var)
 
     Returns:
         The API key that was used
@@ -50,10 +50,10 @@ def initialize_dashscope(api_key: str | None = None) -> str:
             "Dashscope SDK not installed. Install with: pip install dashscope"
         )
 
-    resolved_api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
+    resolved_api_key = api_key or os.getenv("DOJOZERO_DASHSCOPE_API_KEY")
     if not resolved_api_key:
         raise ValueError(
-            "DASHSCOPE_API_KEY not provided and not found in environment variables. "
+            "DOJOZERO_DASHSCOPE_API_KEY not provided and not found in environment variables. "
             "Please set it in .env file or pass as parameter."
         )
 

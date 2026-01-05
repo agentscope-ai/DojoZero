@@ -14,14 +14,14 @@ def get_proxy() -> str | None:
     Returns:
         Proxy URL string, or None if not configured
     """
-    return os.getenv("PROXY_URL")
+    return os.getenv("DOJOZERO_PROXY_URL")
 
 
 def with_proxy(func: F) -> F:
-    """Decorator to ensure PROXY_URL is set up for NBA API calls.
+    """Decorator to ensure DOJOZERO_PROXY_URL is set up for NBA API calls.
 
     This decorator:
-    1. Checks if PROXY_URL is available
+    1. Checks if DOJOZERO_PROXY_URL is available
     2. Passes proxy parameter to functions that accept it (checks function signature)
     3. Handles ImportError if nba_api is not available
 
@@ -187,7 +187,7 @@ def get_games_by_date_range(
     Args:
         start_date: Start date (inclusive)
         end_date: End date (inclusive)
-        proxy: Optional proxy URL (automatically set from PROXY_URL env var if not provided)
+        proxy: Optional proxy URL (automatically set from DOJOZERO_PROXY_URL env var if not provided)
 
     Returns:
         List of game dictionaries with structure:
@@ -269,7 +269,7 @@ def get_game_info_by_id(
 
     Args:
         game_id: NBA.com game ID (e.g., '0022500290')
-        proxy: Optional proxy URL (automatically set from PROXY_URL env var if not provided)
+        proxy: Optional proxy URL (automatically set from DOJOZERO_PROXY_URL env var if not provided)
 
     Returns:
         Dictionary with game information:

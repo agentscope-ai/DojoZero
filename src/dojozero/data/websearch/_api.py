@@ -30,17 +30,17 @@ class TavilySearchAdapter:
         """Initialize Tavily search adapter.
 
         Args:
-            api_key: Tavily API key (defaults to TAVILY_API_KEY env var)
+            api_key: Tavily API key (defaults to DOJOZERO_TAVILY_API_KEY env var)
         """
         if not TAVILY_AVAILABLE:
             raise ImportError(
                 "Tavily SDK not installed. Install with: pip install tavily-python"
             )
 
-        self.api_key = api_key or os.getenv("TAVILY_API_KEY")
+        self.api_key = api_key or os.getenv("DOJOZERO_TAVILY_API_KEY")
         if not self.api_key:
             raise ValueError(
-                "TAVILY_API_KEY not provided and not found in environment variables. "
+                "DOJOZERO_TAVILY_API_KEY not provided and not found in environment variables. "
                 "Please set it in .env file or pass as parameter."
             )
 
@@ -125,7 +125,7 @@ class WebSearchAPI(ExternalAPI):
         """Initialize Web Search API.
 
         Args:
-            api_key: Tavily API key (defaults to TAVILY_API_KEY env var)
+            api_key: Tavily API key (defaults to DOJOZERO_TAVILY_API_KEY env var)
             use_tavily: Whether to use Tavily SDK (default: True)
             custom_search_fn: Custom search function (optional, for testing/mocking)
         """
@@ -230,7 +230,7 @@ class WebSearchAPI(ExternalAPI):
             raise ValueError(
                 "Tavily SDK not available. "
                 "Please install with: pip install tavily-python "
-                "and set TAVILY_API_KEY in your .env file."
+                "and set DOJOZERO_TAVILY_API_KEY in your .env file."
             )
         else:
             raise NotImplementedError(

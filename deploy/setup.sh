@@ -76,13 +76,13 @@ if [ ! -f "$PROJECT_ROOT/.env" ]; then
 # Copy this file to .env and fill in your API keys
 
 # Tavily API key for web search
-TAVILY_API_KEY=your_tavily_api_key_here
+DOJOZERO_TAVILY_API_KEY=your_tavily_api_key_here
 
 # Dashscope API key for LLM calls
-DASHSCOPE_API_KEY=your_dashscope_api_key_here
+DOJOZERO_DASHSCOPE_API_KEY=your_dashscope_api_key_here
 
 # Proxy URL for NBA API requests
-PROXY_URL=http://proxy.example.com:8080
+DOJOZERO_PROXY_URL=http://proxy.example.com:8080
 
 # Polymarket private key for CLOB authentication
 POLY_PRIVATE_KEY=0x...

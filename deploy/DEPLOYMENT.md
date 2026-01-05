@@ -4,7 +4,7 @@
 
 1. Transfer project: `scp -r /path/to/DojoZero user@host:/path/` or `git clone`
 2. Run setup: `cd DojoZero && chmod +x deploy/setup.sh && ./deploy/setup.sh` (creates `.env.template` if missing)
-3. Configure: `cp .env.template .env && nano .env` (add `TAVILY_API_KEY`, `DASHSCOPE_API_KEY`, `PROXY_URL`, `POLY_PRIVATE_KEY`)
+3. Configure: `cp .env.template .env && nano .env` (add `DOJOZERO_TAVILY_API_KEY`, `DOJOZERO_DASHSCOPE_API_KEY`, `DOJOZERO_PROXY_URL`, `DOJOZERO_POLY_PRIVATE_KEY`)
 4. Test: `./deploy/run_daily.sh` or `./deploy/run_daily.sh 2025-12-20`
 
 ## Automation
@@ -56,7 +56,7 @@ ls -lh data/nba-betting/2025-12-17/
 ## Troubleshooting
 
 - `python3 not found` → Install Python 3.11+, check PATH
-- `TAVILY_API_KEY not set` or missing keys → Verify `.env` exists with all required keys (`chmod 600 .env`)
+- `DOJOZERO_TAVILY_API_KEY not set` or missing keys → Verify `.env` exists with all required keys (`chmod 600 .env`)
 - `No games found` → Normal if no games scheduled
 - `Collection timed out` → Increase timeout in `run_daily.sh`
 - Cron not running → Check `crontab -l`, service status, logs
