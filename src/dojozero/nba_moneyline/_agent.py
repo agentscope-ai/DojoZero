@@ -1,11 +1,25 @@
 """Agent implementations for NBA moneyline betting."""
 
+import inspect
 import logging
+from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, TypedDict, cast
 
-from dojozero.agents import BettingAgent
-from dojozero.agents.config import BettingAgentConfig
-from dojozero.core import Agent, AgentBase, StreamEvent
+from agentscope.agent import ReActAgent
+from agentscope.formatter import FormatterBase
+from agentscope.memory import InMemoryMemory
+from agentscope.message import Msg
+from agentscope.model import ChatModelBase
+from agentscope.tool import Toolkit
+
+from dojozero.agents import (
+    load_agent_config,
+    LLMConfig,
+    create_model,
+    create_formatter,
+    create_toolkit,
+)
+from dojozero.core import Agent, AgentBase, Operator, StreamEvent
 from dojozero.data._models import DataEvent
 
 logger = logging.getLogger(__name__)
@@ -15,8 +29,224 @@ class _ActorIdConfig(TypedDict):
     actor_id: str
 
 
+class BettingAgentConfig(_ActorIdConfig, total=False):
+    """Betting agent configuration.
+
+    Supports two modes:
+    1. agent_config_path: Load config from YAML file
+    2. Inline config: Use llm field with LLMConfig
+    """
+
+    name: str
+    sys_prompt: str
+    tools: list[str]  # List of tool names to enable
+    llm: LLMConfig  # LLM configuration
+    agent_config_path: (
+        str  # Path to agent YAML config file (alternative to inline config)
+    )
+
+
 class DummyAgentConfig(_ActorIdConfig, total=False):
     operator_id: str  # ID of the event counter operator to use
+
+
+class BettingAgent(ReActAgent):
+    """ReActAgent extended with DojoZero stream event handling.
+
+    Inherits from agentscope's ReActAgent and adds:
+    - actor_id for DojoZero identification
+    - Operator registration
+    - StreamEvent handling
+    - State persistence for checkpointing
+    """
+
+    def __init__(
+        self,
+        actor_id: str,
+        name: str,
+        sys_prompt: str,
+        model: ChatModelBase,
+        formatter: FormatterBase,
+        toolkit: Toolkit | None = None,
+    ) -> None:
+        super().__init__(
+            name=name,
+            sys_prompt=sys_prompt,
+            model=model,
+            formatter=formatter,
+            toolkit=toolkit or Toolkit(),
+            memory=InMemoryMemory(),
+        )
+        self._actor_id = actor_id
+        self._operator_registry: dict[str, Operator] = {}
+        self._event_count = 0
+        self._state: list[dict] = []
+
+    @classmethod
+    def from_dict(cls, config: BettingAgentConfig) -> "BettingAgent":
+        """Create agent from config dict.
+
+        Supports two modes:
+        1. agent_config_path: Load config from YAML file
+        2. Inline config: Use config dict directly
+        """
+        actor_id = config["actor_id"]
+        agent_config_path = config.get("agent_config_path")
+
+        if agent_config_path:
+            # Load from YAML file
+            yaml_config = load_agent_config(agent_config_path)
+            llm_config = yaml_config["llm"]
+            model_type = llm_config.get("model_type", "openai")
+            return cls(
+                actor_id=actor_id,
+                name=yaml_config.get("name", actor_id),
+                sys_prompt=yaml_config.get("sys_prompt", ""),
+                model=create_model(llm_config),
+                formatter=create_formatter(model_type),
+            )
+
+        # Inline config mode
+        llm_config = config.get("llm", {})
+        model_type = llm_config.get("model_type", "openai")
+        return cls(
+            actor_id=actor_id,
+            name=config.get("name", actor_id),
+            sys_prompt=config.get("sys_prompt", ""),
+            model=create_model(llm_config),
+            formatter=create_formatter(model_type),
+        )
+
+    @classmethod
+    def from_yaml(
+        cls,
+        config_path: str | Path,
+        actor_id: str,
+        toolkit: Toolkit | None = None,
+    ) -> "BettingAgent":
+        """Create agent from YAML config file.
+
+        Args:
+            config_path: Path to YAML config file
+            actor_id: The actor ID for this agent
+            toolkit: Optional toolkit to use
+        """
+        config = load_agent_config(config_path)
+        llm_config = config["llm"]
+        model_type = llm_config.get("model_type", "openai")
+
+        return cls(
+            actor_id=actor_id,
+            name=config["name"],
+            sys_prompt=config["sys_prompt"],
+            model=create_model(llm_config),
+            formatter=create_formatter(model_type),
+            toolkit=toolkit or Toolkit(),
+        )
+
+    @property
+    def actor_id(self) -> str:
+        return self._actor_id
+
+    async def register_operators(self, operators: Sequence[Operator]) -> None:
+        """Register operators and auto-register broker tools if available."""
+        all_tools = []
+        for op in operators:
+            self._operator_registry[op.actor_id] = op
+            logger.info(
+                "agent '%s' registered operator '%s'", self.actor_id, op.actor_id
+            )
+            agent_tools = getattr(op, "agent_tools", None)
+            if callable(agent_tools):
+                tools_result = agent_tools(self.actor_id, operator=op)
+                if inspect.iscoroutine(tools_result):
+                    tools_result = await tools_result
+                # After awaiting, tools_result should be a list
+                if isinstance(tools_result, list):
+                    all_tools.extend(tools_result)
+                    logger.info(
+                        "agent '%s' registered %d tools from '%s'",
+                        self.actor_id,
+                        len(tools_result),
+                        op.actor_id,
+                    )
+
+        if all_tools:
+            self.toolkit = create_toolkit(all_tools)
+
+    @property
+    def operators(self) -> tuple[str, ...]:
+        return tuple(self._operator_registry.keys())
+
+    def get_operator(self, operator_id: str) -> Operator:
+        """Get a registered operator by ID."""
+        return self._operator_registry[operator_id]
+
+    async def start(self) -> None:
+        """Start the agent."""
+        logger.info("agent '%s' starting", self.actor_id)
+
+    async def stop(self) -> None:
+        """Stop the agent."""
+        logger.info(
+            "agent '%s' stopping after %d events", self.actor_id, self._event_count
+        )
+
+    async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
+        """Process incoming stream event with the ReActAgent.
+
+        All LLM interactions and agent behaviors are automatically traced by AgentScope's
+        native tracing system. No manual recording is needed - traces are captured via
+        @trace_llm and @trace_reply decorators in the base classes.
+        """
+        self._event_count += 1
+        logger.info(
+            "agent '%s' received event seq=%s from stream '%s'",
+            self.actor_id,
+            event.sequence,
+            event.stream_id,
+        )
+
+        input_content = f"New data: {event.payload}"
+        msg = Msg(name="event_push", content=input_content, role="user")
+
+        # Call agent - all interactions are automatically traced by AgentScope
+        await self(msg)
+
+        memory = await self.memory.get_memory()
+        memory = [msg.to_dict() for msg in memory]
+        self._state.append({event.stream_id: memory})
+
+        logger.info(
+            "agent '%s' processed event seq=%s",
+            self.actor_id,
+            event.sequence,
+        )
+
+    async def save_state(self) -> Mapping[str, Any]:
+        """Return serializable state for checkpointing."""
+        return {"events": self._event_count, "state": self._state}
+
+    async def load_state(self, state: Mapping[str, Any]) -> None:
+        """Restore state from checkpoint.
+
+        Note: LLM interactions are retrieved from AgentScope's trace store, not from state.
+        """
+        self._event_count = int(state.get("events", 0))
+        self._state = state.get("state", [])
+        logger.info(
+            "agent '%s' restored: events_processed=%d",
+            self.actor_id,
+            self._event_count,
+        )
+
+    @property
+    def event_count(self) -> int:
+        return self._event_count
+
+    def register_toolkit(self, toolkit: Toolkit) -> None:
+        """Register toolkit for Ray actor compatibility."""
+        self.toolkit = toolkit
 
 
 class _EventCounterOperatorLike(Protocol):
@@ -126,30 +356,3 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     @property
     def events_processed(self) -> int:
         return self._events_processed
-
-
-# ============================================================================
-# NBABettingAgent - LLM-based agent that inherits from BettingAgent
-# ============================================================================
-
-
-# Config type alias for clarity
-NBABettingAgentConfig = BettingAgentConfig
-
-
-class NBABettingAgent(BettingAgent):
-    """LLM-based betting agent for NBA moneyline betting.
-
-    Inherits from BettingAgent. Uses agent_config_path to load config from YAML.
-    """
-
-    @classmethod
-    def from_dict(cls, config: NBABettingAgentConfig) -> "NBABettingAgent":
-        """Create NBABettingAgent from config dict."""
-        # Call parent's from_dict and cast the result
-        # BettingAgent.from_dict creates an instance that is compatible
-        agent = BettingAgent.from_dict(config)
-        # Change the class at runtime to NBABettingAgent
-        agent.__class__ = cls
-        # Cast for type checker
-        return cast("NBABettingAgent", agent)

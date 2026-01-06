@@ -19,6 +19,7 @@ class NBAPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
 
     hub_id: str
     persistence_file: str
+    enable_persistence: bool
     event_type: str  # Which event_type to subscribe to in DataHub
     event_types: list[
         str

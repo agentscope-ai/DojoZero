@@ -8,9 +8,8 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
-from dojozero.agents.agent import BettingAgent
-from dojozero.agents.config import load_agent_config
-from dojozero.agents.model import _create_model_from_llm_config, _create_formatter
+from dojozero.nba_moneyline import BettingAgent
+from dojozero.agents import load_agent_config, create_model, create_formatter
 from dojozero.core import StreamEvent
 from dojozero.nba_moneyline._broker import BrokerOperator
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
@@ -20,8 +19,8 @@ from datetime import datetime
 load_dotenv()
 
 # Test-specific environment variable names to avoid conflicts with other apps
-TEST_API_KEY_ENV = "DOJOZERO_TEST_OPENAI_API_KEY"
-TEST_BASE_URL_ENV = "DOJOZERO_TEST_OPENAI_BASE_URL"
+TEST_API_KEY_ENV = "DOJOZERO_OPENAI_API_KEY"
+TEST_BASE_URL_ENV = "DOJOZERO_OPENAI_BASE_URL"
 
 AGENT_ID = "basic"
 CONFIG_PATH = Path(__file__).parent.parent / "configs" / "agents" / "basic.yaml"
@@ -35,11 +34,11 @@ def create_test_agent(config_path: Path) -> BettingAgent:
     llm_config["base_url_env"] = TEST_BASE_URL_ENV
     model_type = llm_config.get("model_type", "openai")
     return BettingAgent(
-        actor_id=config["agent_id"],
+        actor_id=config["name"],
         name=config["name"],
         sys_prompt=config["sys_prompt"],
-        model=_create_model_from_llm_config(llm_config),
-        formatter=_create_formatter(model_type),
+        model=create_model(llm_config),
+        formatter=create_formatter(model_type),
     )
 
 
