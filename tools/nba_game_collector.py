@@ -267,7 +267,7 @@ class GameTrialManager:
         cmd = [
             sys.executable,
             "-m",
-            "dojo0.cli",
+            "dojozero.cli",
             "--log-level",
             self.log_level,
             "run",
