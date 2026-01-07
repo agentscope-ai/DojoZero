@@ -178,22 +178,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum sleep time in seconds between events (caps long delays). Default: 20.0 seconds",
     )
 
-    # Placeholder parser for the upcoming FastAPI server command.
+    # FastAPI server command
     serve_parser = subparsers.add_parser(
         "serve",
-        help="Start the dashboard FastAPI server (coming soon)",
-        description="Reserved for the upcoming FastAPI dashboard server command.",
+        help="Start the dashboard FastAPI server with WebSocket streaming",
+        description="Launch the FastAPI dashboard server for real-time trial monitoring.",
     )
     serve_parser.add_argument(
         "--host",
         default="127.0.0.1",
-        help="Reserved host option for the future serve command.",
+        help="Host address to bind to (default: 127.0.0.1).",
     )
     serve_parser.add_argument(
         "--port",
         type=int,
         default=8000,
-        help="Reserved port option for the future serve command.",
+        help="Port to listen on (default: 8000).",
     )
     return parser
 
@@ -747,6 +747,36 @@ def _get_builder_command(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _serve_command(args: argparse.Namespace) -> int:
+    """Handle serve command - start FastAPI server with WebSocket streaming."""
+    from dojozero.core import run_server
+
+    config_payload = _load_cli_config(args.setting)
+
+    config_imports = _gather_imports(config_payload)
+    requested_imports = list(args.import_modules or [])
+    modules_to_import: list[str] = []
+    if not args.no_default_imports:
+        modules_to_import.extend(DEFAULT_IMPORTS)
+    modules_to_import.extend(config_imports)
+    modules_to_import.extend(requested_imports)
+    _import_modules(modules_to_import)
+
+    store = _create_store(config_payload)
+    runtime_provider = _create_runtime_provider(config_payload)
+    dashboard = Dashboard(store=store, runtime_provider=runtime_provider)
+
+    host = args.host
+    port = args.port
+
+    LOGGER.info("Starting DojoZero server at http://%s:%d", host, port)
+    LOGGER.info("REST API: http://%s:%d/api/trials", host, port)
+    LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
+
+    await run_server(dashboard=dashboard, host=host, port=port)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -762,9 +792,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "get-builder":
             return _get_builder_command(args)
         if args.command == "serve":
-            raise DojoZeroCLIError(
-                "'serve' is reserved for the upcoming FastAPI dashboard and is not implemented yet"
-            )
+            return asyncio.run(_serve_command(args))
         raise DojoZeroCLIError(f"unknown command '{args.command}'")
     except DojoZeroCLIError as exc:
         LOGGER.error(str(exc))

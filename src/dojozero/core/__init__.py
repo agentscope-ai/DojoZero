@@ -50,6 +50,14 @@ from ._registry import (
     register_trial_builder,
     unregister_trial_builder,
 )
+from ._server import (
+    EventBroadcaster,
+    ServerState,
+    WSMessageType,
+    create_app,
+    create_event_hook,
+    run_server,
+)
 from ._types import JSONDict, JSONPrimitive, JSONValue, QueryResult, StreamEvent
 
 __all__ = [
@@ -75,6 +83,7 @@ __all__ = [
     "DataStream",
     "DataStreamBase",
     "DataStreamSpec",
+    "EventBroadcaster",
     "FileSystemDashboardStore",
     "InMemoryDashboardStore",
     "JSONDict",
@@ -86,6 +95,9 @@ __all__ = [
     "OperatorBase",
     "OperatorSpec",
     "ParamModelT",
+    "QueryResult",
+    "ServerState",
+    "StreamEvent",
     "TrialBuilderFn",
     "TrialBuilderDefinition",
     "TrialBuilderNotFoundError",
@@ -97,10 +109,12 @@ __all__ = [
     "TrialPhase",
     "TrialSpec",
     "TrialStatus",
+    "WSMessageType",
+    "create_app",
+    "create_event_hook",
     "get_trial_builder_definition",
     "list_trial_builders",
     "register_trial_builder",
-    "StreamEvent",
-    "QueryResult",
+    "run_server",
     "unregister_trial_builder",
 ]
