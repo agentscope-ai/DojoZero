@@ -80,8 +80,12 @@ class NBAExternalAPI(ExternalAPI):
                             player = players.find_player_by_id(person_id)
                             if player is not None:
                                 action["playerName"] = player["full_name"]
-                        except Exception:
-                            pass  # Player not found, skip
+                        except (KeyError, TypeError) as e:
+                            logger.debug(
+                                "Could not find player name for ID %s: %s",
+                                person_id,
+                                e,
+                            )
 
                 return {
                     "play_by_play": {

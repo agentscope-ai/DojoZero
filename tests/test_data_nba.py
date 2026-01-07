@@ -236,9 +236,9 @@ class TestGetGameInfoByIdIntegration:
 
         for game_id in invalid_ids:
             result = get_game_info_by_id(game_id)
-            assert (
-                result is None
-            ), f"Invalid/malformed game ID '{game_id}' should return None"
+            assert result is None, (
+                f"Invalid/malformed game ID '{game_id}' should return None"
+            )
 
     def test_proxy_support(self, test_game_ids):
         """Test that proxy parameter works (if DOJOZERO_PROXY_URL env var is set)."""

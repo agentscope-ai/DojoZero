@@ -118,7 +118,8 @@ class PolymarketAPI(ExternalAPI):
                 data = self.get_orderbook_data(token)
                 if data is not None:
                     return token, data
-            except Exception:
+            except Exception as e:
+                logger.debug("Token %s has no active orderbook: %s", token, e)
                 continue  # Try next token
         return None, None
 
@@ -139,7 +140,8 @@ class PolymarketAPI(ExternalAPI):
                 data = self.get_orderbook_data(token)
                 if data is not None:
                     active_tokens.append((token, data))
-            except Exception:
+            except Exception as e:
+                logger.debug("Token %s has no active orderbook: %s", token, e)
                 continue  # Try next token
         return active_tokens
 
@@ -167,8 +169,13 @@ class PolymarketAPI(ExternalAPI):
         # Get market data from Gamma API
         try:
             market = await self.get_market_by_slug(slug)
-        except Exception:
-            logger.error(f"Failed to fetch market data for slug: {slug}")
+        except aiohttp.ClientError as e:
+            logger.error("Failed to fetch market data for slug %s: %s", slug, e)
+            return None
+        except Exception as e:
+            logger.error(
+                "Unexpected error fetching market data for slug %s: %s", slug, e
+            )
             return None
 
         market_id = market.get("id")

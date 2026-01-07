@@ -9,6 +9,7 @@ from dojozero.data.websearch._events import (
     WebSearchIntent,
 )
 from dojozero.data.websearch._processors import (
+    BaseDashscopeProcessor,
     ExpertPredictionProcessor,
     InjurySummaryProcessor,
     PowerRankingProcessor,
@@ -23,6 +24,7 @@ __all__ = [
     "PowerRankingEvent",
     "ExpertPredictionEvent",
     "WebSearchIntent",
+    "BaseDashscopeProcessor",
     "InjurySummaryProcessor",
     "PowerRankingProcessor",
     "ExpertPredictionProcessor",

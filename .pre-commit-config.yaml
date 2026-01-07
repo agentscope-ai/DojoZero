@@ -1,28 +1,22 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+  - repo: local
     hooks:
       - id: ruff
-        args: ["--fix"]
+        name: ruff lint
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
       - id: ruff-format
-
-  - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.386
-    hooks:
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
       - id: pyright
-        additional_dependencies:
-          - pydantic
-          - pyyaml
-          - pytest
-          - pytest-asyncio
-          - ray
-          - nba_api
-          - aiohttp
-          - agentscope
-          - python-dotenv
-          - tavily-python
-          - python-dateutil
-          - py-clob-client
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
 
   - repo: local
     hooks:
@@ -37,8 +31,8 @@ repos:
     # uv version.
     rev: 0.9.21
     hooks:
-      # Update the uv lockfile
+      # Check uv lockfile is up to date
       - id: uv-lock
-        name: Update uv lockfile
+        name: Check uv lockfile
         files: pyproject.toml
-        args: [--project, python]
+        args: [--check]

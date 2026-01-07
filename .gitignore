@@ -156,3 +156,6 @@ dojozero-store
 # Data
 /outputs/
 /data/
+
+# Claude configs 
+/.claude/

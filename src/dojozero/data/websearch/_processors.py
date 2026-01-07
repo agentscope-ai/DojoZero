@@ -23,25 +23,45 @@ from dojozero.data.websearch._events import (
 
 logger = logging.getLogger(__name__)
 
+# Pre-compiled regex patterns for response parsing (performance optimization)
+_SUMMARY_PATTERN = re.compile(
+    r"SUMMARY:\s*(.*?)(?=STRUCTURED_DATA:|$)", re.DOTALL | re.IGNORECASE
+)
+_STRUCTURED_DATA_HEADER_PATTERN = re.compile(r"STRUCTURED_DATA:", re.IGNORECASE)
+_STRUCTURED_DATA_JSON_PATTERN = re.compile(
+    r"STRUCTURED_DATA:\s*(\{.*\})", re.DOTALL | re.IGNORECASE
+)
 
-class InjurySummaryProcessor(DataProcessor):
-    """Processor that uses Dashscope to summarize injury information from web search results.
 
-    This processor extracts and summarizes injury information from raw web search results.
+class BaseDashscopeProcessor(DataProcessor):
+    """Base processor for Dashscope-powered web search processors.
+
+    Provides common functionality for processors that use Dashscope LLM
+    to process web search results:
+    - Dashscope initialization (api_key, model)
+    - Intent-based should_process() with keyword fallback
+    - Safe Dashscope API calling with error handling
+
+    Subclasses should:
+    - Set `intended_intent` class attribute (optional)
+    - Set `fallback_keywords` class attribute (for non-intent routing)
+    - Implement `process()` method with specific processing logic
     """
 
-    intended_intent = WebSearchIntent.INJURY_SUMMARY  # Intent this processor handles
+    # Subclasses should override these class attributes
+    intended_intent: WebSearchIntent | None = None
+    fallback_keywords: list[str] = []
 
     def __init__(
         self,
         api_key: str | None = None,
         model: str = "qwen-turbo",
     ):
-        """Initialize injury summary processor.
+        """Initialize Dashscope processor.
 
         Args:
             api_key: Dashscope API key (defaults to DOJOZERO_DASHSCOPE_API_KEY env var)
-            model: Dashscope model to use for summarization
+            model: Dashscope model to use (default: "qwen-turbo")
         """
         # Initialize Dashscope (will raise if not available or key missing)
         self.api_key = initialize_dashscope(api_key)
@@ -50,31 +70,85 @@ class InjurySummaryProcessor(DataProcessor):
     def should_process(self, event: DataEvent) -> bool:
         """Check if this processor should handle the event.
 
-        Only processes raw web search events with injury-related queries.
-        If event has intent, uses intent-based routing (via base class); otherwise uses keyword matching.
+        Uses a two-stage approach:
+        1. Intent-based routing (if event has intent attribute)
+        2. Keyword-based routing (fallback for backward compatibility)
 
         Args:
             event: Event to check
 
         Returns:
-            True if event is injury-related raw web search, False otherwise
+            True if processor should handle this event, False otherwise
         """
         # Only process raw web search events
         if event.event_type != EventTypes.RAW_WEB_SEARCH.value:
             return False
 
-        # Use base class intent checking first
+        # Stage 1: Intent-based routing (preferred)
         event_intent = getattr(event, "intent", None)
         if event_intent is not None:
+            # Use base class intent checking (compares event intent with self.intended_intent)
             return super().should_process(event)
 
-        # Fallback to keyword-based filtering when no intent
+        # Stage 2: Keyword-based routing (fallback)
         query = getattr(event, "query", "")
         if not query:
             return False
 
         query_lower = query.lower()
-        return "injury" in query_lower or "injured" in query_lower
+        return any(kw in query_lower for kw in self.fallback_keywords)
+
+    async def _call_dashscope_safe(
+        self,
+        prompt: str,
+    ) -> dict[str, Any]:
+        """Call Dashscope API with unified error handling.
+
+        Args:
+            prompt: Prompt to send to Dashscope
+
+        Returns:
+            Dashscope response dict with status_code and output/message
+        """
+        try:
+            response = await call_dashscope_model(
+                prompt=prompt,
+                model=self.model,
+            )
+            return response
+        except Exception as e:
+            logger.error(
+                "Dashscope call failed in %s: %s",
+                self.__class__.__name__,
+                e,
+                exc_info=True,
+            )
+            return {"status_code": 500, "message": str(e)}
+
+    async def process(self, event: DataEvent) -> DataEvent | None:
+        """Process event and return result.
+
+        Subclasses must implement this method.
+
+        Args:
+            event: Event to process
+
+        Returns:
+            Processed event or None
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement process() method"
+        )
+
+
+class InjurySummaryProcessor(BaseDashscopeProcessor):
+    """Processor that uses Dashscope to summarize injury information from web search results.
+
+    This processor extracts and summarizes injury information from raw web search results.
+    """
+
+    intended_intent = WebSearchIntent.INJURY_SUMMARY  # Intent this processor handles
+    fallback_keywords = ["injury", "injured"]  # Keywords for non-intent routing
 
     async def process(self, event: DataEvent) -> DataEvent | None:
         """Process raw web search event and generate injury summary.
@@ -86,7 +160,10 @@ class InjurySummaryProcessor(DataProcessor):
             Injury summary event or None
         """
         # should_process() already ensures this is a raw_web_search event
-        assert isinstance(event, RawWebSearchEvent), "Event must be RawWebSearchEvent"
+        if not isinstance(event, RawWebSearchEvent):
+            raise TypeError(
+                f"Event must be RawWebSearchEvent, got {type(event).__name__}"
+            )
 
         # Extract text from search results
         result_texts = []
@@ -124,88 +201,66 @@ STRUCTURED_DATA:
 If a team or player name is not clearly mentioned, use empty lists or omit the team.
 Only include players who are confirmed to be injured/out."""
 
-        # Call Dashscope API
-        try:
-            logger.debug(
-                "Processing injury summary: query=%s, results_count=%d",
-                event.query,
-                len(result_texts),
-            )
-            response = await call_dashscope_model(
-                prompt=prompt,
-                model=self.model,
-            )
+        # Call Dashscope API with safe error handling
+        logger.debug(
+            "Processing injury summary: query=%s, results_count=%d",
+            event.query,
+            len(result_texts),
+        )
+        response = await self._call_dashscope_safe(prompt)
 
-            # Extract summary and structured data from response
-            summary = ""
-            injured_players: dict[str, list[str]] = {}
+        # Extract summary and structured data from response
+        summary = ""
+        injured_players: dict[str, list[str]] = {}
 
-            if response.get("status_code") == 200:
-                full_text = response.get("output", {}).get("text", "").strip()
-                if not full_text:
-                    # Fallback: try alternative response structure
-                    full_text = str(response.get("output", "")).strip()
+        if response.get("status_code") == 200:
+            full_text = response.get("output", {}).get("text", "").strip()
+            if not full_text:
+                # Fallback: try alternative response structure
+                full_text = str(response.get("output", "")).strip()
 
-                # Parse the response: extract SUMMARY and STRUCTURED_DATA sections
-                summary_match = re.search(
-                    r"SUMMARY:\s*(.*?)(?=STRUCTURED_DATA:|$)",
-                    full_text,
-                    re.DOTALL | re.IGNORECASE,
-                )
-                if summary_match:
-                    summary = summary_match.group(1).strip()
-                else:
-                    # Fallback: use everything before STRUCTURED_DATA as summary
-                    structured_match = re.search(
-                        r"STRUCTURED_DATA:", full_text, re.IGNORECASE
-                    )
-                    if structured_match:
-                        summary = full_text[: structured_match.start()].strip()
-                    else:
-                        summary = full_text
-
-                # Extract structured JSON data using utility function
-                # First extract the STRUCTURED_DATA section, then use utility to parse
-                structured_match = re.search(
-                    r"STRUCTURED_DATA:\s*(\{.*\})", full_text, re.DOTALL | re.IGNORECASE
-                )
-                if structured_match:
-                    json_str = structured_match.group(1).strip()
-                    # Create a mock response structure for the utility function
-                    mock_response = {"status_code": 200, "output": {"text": json_str}}
-                    extracted = extract_json_from_dashscope_response(
-                        mock_response, expected_type=dict
-                    )
-                    if extracted and isinstance(extracted, dict):
-                        # Ensure all values are lists
-                        injured_players = {
-                            k: (
-                                v
-                                if isinstance(v, list)
-                                else [v]
-                                if isinstance(v, str)
-                                else []
-                            )
-                            for k, v in extracted.items()
-                        }
+            # Parse the response: extract SUMMARY and STRUCTURED_DATA sections
+            summary_match = _SUMMARY_PATTERN.search(full_text)
+            if summary_match:
+                summary = summary_match.group(1).strip()
             else:
-                error_msg = response.get("message", "Unknown error")
-                logger.warning(
-                    "Dashscope API returned non-200 status for injury summary: status=%d, message=%s",
-                    response.get("status_code", 0),
-                    error_msg,
-                )
-                summary = f"Error generating summary: {error_msg}"
+                # Fallback: use everything before STRUCTURED_DATA as summary
+                structured_match = _STRUCTURED_DATA_HEADER_PATTERN.search(full_text)
+                if structured_match:
+                    summary = full_text[: structured_match.start()].strip()
+                else:
+                    summary = full_text
 
-        except Exception as e:
-            logger.error(
-                "Error processing injury summary: query=%s, error=%s",
-                event.query,
-                e,
-                exc_info=True,
+            # Extract structured JSON data using utility function
+            # First extract the STRUCTURED_DATA section, then use utility to parse
+            structured_match = _STRUCTURED_DATA_JSON_PATTERN.search(full_text)
+            if structured_match:
+                json_str = structured_match.group(1).strip()
+                # Create a mock response structure for the utility function
+                mock_response = {"status_code": 200, "output": {"text": json_str}}
+                extracted = extract_json_from_dashscope_response(
+                    mock_response, expected_type=dict
+                )
+                if extracted and isinstance(extracted, dict):
+                    # Ensure all values are lists
+                    injured_players = {
+                        k: (
+                            v
+                            if isinstance(v, list)
+                            else [v]
+                            if isinstance(v, str)
+                            else []
+                        )
+                        for k, v in extracted.items()
+                    }
+        else:
+            error_msg = response.get("message", "Unknown error")
+            logger.warning(
+                "Dashscope API returned non-200 status for injury summary: status=%d, message=%s",
+                response.get("status_code", 0),
+                error_msg,
             )
-            summary = f"Error calling Dashscope API: {str(e)}"
-            injured_players = {}
+            summary = f"Error generating summary: {error_msg}"
 
         # Create injury summary event
         return InjurySummaryEvent(
@@ -216,7 +271,7 @@ Only include players who are confirmed to be injured/out."""
         )
 
 
-class PowerRankingProcessor(DataProcessor):
+class PowerRankingProcessor(BaseDashscopeProcessor):
     """Processor that extracts power rankings from web search results.
 
     Extracts structured power rankings from NBA.com, ESPN, and other sources.
@@ -224,50 +279,10 @@ class PowerRankingProcessor(DataProcessor):
     """
 
     intended_intent = WebSearchIntent.POWER_RANKING  # Intent this processor handles
-
-    def __init__(
-        self,
-        api_key: str | None = None,
-        model: str = "qwen-turbo",
-    ):
-        """Initialize power ranking processor.
-
-        Args:
-            api_key: Dashscope API key (defaults to DOJOZERO_DASHSCOPE_API_KEY env var)
-            model: Dashscope model to use for extraction
-        """
-        # Initialize Dashscope (will raise if not available or key missing)
-        self.api_key = initialize_dashscope(api_key)
-        self.model = model
-
-    def should_process(self, event: DataEvent) -> bool:
-        """Check if this processor should handle the event.
-
-        Only processes raw web search events with power ranking-related queries.
-        If event has intent, uses intent-based routing (via base class); otherwise uses keyword matching.
-
-        Args:
-            event: Event to check
-
-        Returns:
-            True if event is power ranking-related raw web search, False otherwise
-        """
-        # Only process raw web search events
-        if event.event_type != EventTypes.RAW_WEB_SEARCH.value:
-            return False
-
-        # Use base class intent checking first
-        event_intent = getattr(event, "intent", None)
-        if event_intent is not None:
-            return super().should_process(event)
-
-        # Fallback to keyword-based filtering when no intent
-        query = getattr(event, "query", "")
-        if not query:
-            return False
-
-        query_lower = query.lower()
-        return "power ranking" in query_lower or "power rankings" in query_lower
+    fallback_keywords = [
+        "power ranking",
+        "power rankings",
+    ]  # Keywords for non-intent routing
 
     async def process(self, event: DataEvent) -> DataEvent | None:
         """Process raw web search event and extract power rankings.
@@ -279,7 +294,10 @@ class PowerRankingProcessor(DataProcessor):
             Power ranking event or None
         """
         # should_process() already ensures this is a raw_web_search event
-        assert isinstance(event, RawWebSearchEvent), "Event must be RawWebSearchEvent"
+        if not isinstance(event, RawWebSearchEvent):
+            raise TypeError(
+                f"Event must be RawWebSearchEvent, got {type(event).__name__}"
+            )
 
         # Extract text from search results
         result_texts = []
@@ -317,69 +335,55 @@ Rules:
 - Use URL domain as key (e.g., "nba.com")
 - Skip sources without clear rankings"""
 
-        # Call Dashscope API
-        try:
-            logger.debug(
-                "Processing power rankings: query=%s, results_count=%d",
+        # Call Dashscope API with safe error handling
+        logger.debug(
+            "Processing power rankings: query=%s, results_count=%d",
+            event.query,
+            len(result_texts),
+        )
+        response = await self._call_dashscope_safe(prompt)
+
+        # Extract rankings from response using utility function
+        extracted = extract_json_from_dashscope_response(response, expected_type=dict)
+
+        if not extracted:
+            logger.warning(
+                "Failed to extract power rankings from response: query=%s, status=%d",
                 event.query,
-                len(result_texts),
-            )
-            response = await call_dashscope_model(
-                prompt=prompt,
-                model=self.model,
+                response.get("status_code", 0),
             )
 
-            # Extract rankings from response using utility function
-            extracted = extract_json_from_dashscope_response(
-                response, expected_type=dict
-            )
+        rankings: dict[str, list[dict[str, Any]]] = {}
+        if extracted and isinstance(extracted, dict):
+            # Clean and validate rankings: remove duplicates, ensure proper format
+            cleaned_rankings: dict[str, list[dict[str, Any]]] = {}
+            for source, teams in extracted.items():
+                if not isinstance(teams, list):
+                    continue
 
-            if not extracted:
-                logger.warning(
-                    "Failed to extract power rankings from response: query=%s, status=%d",
-                    event.query,
-                    response.get("status_code", 0),
-                )
-
-            rankings: dict[str, list[dict[str, Any]]] = {}
-            if extracted and isinstance(extracted, dict):
-                # Clean and validate rankings: remove duplicates, ensure proper format
-                cleaned_rankings: dict[str, list[dict[str, Any]]] = {}
-                for source, teams in extracted.items():
-                    if not isinstance(teams, list):
+                # Filter out invalid entries and remove duplicates
+                seen_teams: set[str] = set()
+                valid_teams = []
+                for team_data in teams:
+                    if not isinstance(team_data, dict):
                         continue
 
-                    # Filter out invalid entries and remove duplicates
-                    seen_teams: set[str] = set()
-                    valid_teams = []
-                    for team_data in teams:
-                        if not isinstance(team_data, dict):
-                            continue
+                    team_name = team_data.get("team", "").strip()
+                    if not team_name:
+                        continue
 
-                        team_name = team_data.get("team", "").strip()
-                        if not team_name:
-                            continue
+                    # Skip if we've seen this team already (duplicate)
+                    if team_name.lower() in seen_teams:
+                        continue
 
-                        # Skip if we've seen this team already (duplicate)
-                        if team_name.lower() in seen_teams:
-                            continue
+                    seen_teams.add(team_name.lower())
+                    valid_teams.append(team_data)
 
-                        seen_teams.add(team_name.lower())
-                        valid_teams.append(team_data)
+                # Only include if we have at least 1 team (relaxed threshold)
+                if len(valid_teams) >= 1:
+                    cleaned_rankings[source] = valid_teams
 
-                    # Only include if we have at least 1 team (relaxed threshold)
-                    if len(valid_teams) >= 1:
-                        cleaned_rankings[source] = valid_teams
-
-                rankings = cleaned_rankings
-
-        except Exception as e:
-            logger.warning(
-                "Error extracting power rankings from Dashscope response: %s",
-                e,
-                exc_info=True,
-            )
-            rankings = {}
+            rankings = cleaned_rankings
 
         # Create power ranking event
         return PowerRankingEvent(
@@ -389,71 +393,27 @@ Rules:
         )
 
 
-class ExpertPredictionProcessor(DataProcessor):
+class ExpertPredictionProcessor(BaseDashscopeProcessor):
     """Processor that extracts expert predictions from web search results.
 
     Extracts expert predictions and analysis from NBA.com, ESPN, and other credible sources.
     """
 
     intended_intent = WebSearchIntent.EXPERT_PREDICTION  # Intent this processor handles
-
-    def __init__(
-        self,
-        api_key: str | None = None,
-        model: str = "qwen-turbo",
-    ):
-        """Initialize expert prediction processor.
-
-        Args:
-            api_key: Dashscope API key (defaults to DOJOZERO_DASHSCOPE_API_KEY env var)
-            model: Dashscope model to use for extraction (default: "qwen-turbo")
-        """
-        # Initialize Dashscope (will raise if not available or key missing)
-        self.api_key = initialize_dashscope(api_key)
-        self.model = model
-
-    def should_process(self, event: DataEvent) -> bool:
-        """Check if this processor should handle the event.
-
-        Only processes raw web search events with prediction/expert-related queries.
-        If event has intent, uses intent-based routing (via base class); otherwise uses keyword matching.
-
-        Args:
-            event: Event to check
-
-        Returns:
-            True if event is prediction-related raw web search, False otherwise
-        """
-        # Only process raw web search events
-        if event.event_type != EventTypes.RAW_WEB_SEARCH.value:
-            return False
-
-        # Use base class intent checking first
-        event_intent = getattr(event, "intent", None)
-        if event_intent is not None:
-            return super().should_process(event)
-
-        # Fallback to keyword-based filtering when no intent
-        query = getattr(event, "query", "")
-        if not query:
-            return False
-
-        query_lower = query.lower()
-        prediction_keywords = [
-            "expert predictions",
-            "expert prediction",
-            "expert pick",
-            "expert picks",
-            "prediction",
-            "predictions",
-            "expert",
-            "pick",
-            "picks",
-            "forecast",
-            "analysis",
-            "preview",
-        ]
-        return any(keyword in query_lower for keyword in prediction_keywords)
+    fallback_keywords = [
+        "expert predictions",
+        "expert prediction",
+        "expert pick",
+        "expert picks",
+        "prediction",
+        "predictions",
+        "expert",
+        "pick",
+        "picks",
+        "forecast",
+        "analysis",
+        "preview",
+    ]  # Keywords for non-intent routing
 
     async def process(self, event: DataEvent) -> DataEvent | None:
         """Process raw web search event and extract expert predictions.
@@ -465,7 +425,10 @@ class ExpertPredictionProcessor(DataProcessor):
             Expert prediction event or None
         """
         # should_process() already ensures this is a raw_web_search event
-        assert isinstance(event, RawWebSearchEvent), "Event must be RawWebSearchEvent"
+        if not isinstance(event, RawWebSearchEvent):
+            raise TypeError(
+                f"Event must be RawWebSearchEvent, got {type(event).__name__}"
+            )
 
         # Extract text from search results
         result_texts = []
@@ -513,39 +476,28 @@ Please extract expert predictions from each source (NBA.com, ESPN, etc.) and pro
 Extract predictions from all credible sources mentioned. If expert name is not mentioned, use "Anonymous" or omit the field.
 Focus on game predictions, matchup analysis, and expert picks."""
 
-        # Call Dashscope API
-        try:
-            logger.debug(
-                "Processing expert predictions: query=%s, results_count=%d",
-                event.query,
-                len(result_texts),
-            )
-            response = await call_dashscope_model(prompt=prompt, model=self.model)
+        # Call Dashscope API with safe error handling
+        logger.debug(
+            "Processing expert predictions: query=%s, results_count=%d",
+            event.query,
+            len(result_texts),
+        )
+        response = await self._call_dashscope_safe(prompt)
 
-            # Extract predictions from response using utility function
-            extracted = extract_json_from_dashscope_response(
-                response, expected_type=list
-            )
+        # Extract predictions from response using utility function
+        extracted = extract_json_from_dashscope_response(response, expected_type=list)
 
-            if not extracted:
-                logger.warning(
-                    "Failed to extract expert predictions from response: query=%s, status=%d",
-                    event.query,
-                    response.get("status_code", 0),
-                )
-
-            predictions: list[dict[str, Any]] = []
-            if extracted and isinstance(extracted, list):
-                # Ensure all items are dicts
-                predictions = [p if isinstance(p, dict) else {} for p in extracted]
-
-        except Exception as e:
+        if not extracted:
             logger.warning(
-                "Error extracting expert predictions from Dashscope response: %s",
-                e,
-                exc_info=True,
+                "Failed to extract expert predictions from response: query=%s, status=%d",
+                event.query,
+                response.get("status_code", 0),
             )
-            predictions = []
+
+        predictions: list[dict[str, Any]] = []
+        if extracted and isinstance(extracted, list):
+            # Ensure all items are dicts
+            predictions = [p if isinstance(p, dict) else {} for p in extracted]
 
         # Create expert prediction event
         return ExpertPredictionEvent(
