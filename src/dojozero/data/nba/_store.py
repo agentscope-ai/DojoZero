@@ -12,6 +12,7 @@ from dojozero.data.nba._events import (
     GameUpdateEvent,
     PlayByPlayEvent,
 )
+from dojozero.data.nba._state_tracker import GameStateTracker
 
 
 class NBAStore(DataStore):
@@ -43,22 +44,8 @@ class NBAStore(DataStore):
             poll_intervals,
             event_emitter,
         )
-        # Track previous game status to detect transitions
-        self._previous_game_status: dict[str, int] = {}  # game_id -> gameStatus
-        # Track processed event IDs for deduplication (using event_id instead of actionNumber)
-        self._seen_event_ids: set[str] = set()  # Set of processed event_ids
-        # Track which games have PlayByPlay available (to detect game start)
-        self._pbp_available: set[str] = (
-            set()
-        )  # game_id -> True when PBP first becomes available
-        # Cache boxscore leaders per game to avoid redundant processing
-        self._boxscore_leaders_cache: dict[
-            str, dict[str, Any]
-        ] = {}  # game_id -> leaders dict
-        # Track which games have been initialized (to emit GameInitializeEvent only once)
-        self._initialized_games: set[str] = (
-            set()
-        )  # game_id -> True when GameInitializeEvent has been emitted
+        # Game state tracker manages all state variables in one place
+        self._state = GameStateTracker()
 
     def _extract_player_stats_from_boxscore(
         self, boxscore_data: dict[str, Any]
@@ -114,7 +101,7 @@ class NBAStore(DataStore):
             has_team_data = bool(home_team_data and away_team_data)
 
             # Emit GameInitializeEvent on first call when team data is not yet available
-            if game_id not in self._initialized_games and not has_team_data:
+            if not self._state.is_game_initialized(game_id) and not has_team_data:
                 # Try to get game info from scoreboard API
                 try:
                     from dojozero.data.nba._utils import get_game_info_by_id
@@ -146,7 +133,7 @@ class NBAStore(DataStore):
                                     game_time=game_time_dt,
                                 )
                             )
-                            self._initialized_games.add(game_id)
+                            self._state.mark_game_initialized(game_id)
                 except Exception as e:
                     # If we can't get game info, skip GameInitializeEvent
                     # It will be emitted when boxscore data becomes available
@@ -213,7 +200,7 @@ class NBAStore(DataStore):
                 )
 
                 # Also emit GameInitializeEvent if not already emitted (when data becomes available)
-                if game_id not in self._initialized_games:
+                if not self._state.is_game_initialized(game_id):
                     home_city = home_team_data.get("teamCity", "")
                     home_name = home_team_data.get("teamName", "")
                     home_team_str = (
@@ -254,7 +241,7 @@ class NBAStore(DataStore):
                                 game_time=game_time_dt,
                             )
                         )
-                        self._initialized_games.add(game_id)
+                        self._state.mark_game_initialized(game_id)
 
         # Handle play-by-play events (from NBA API PlayByPlay endpoint)
         # PlayByPlay is used for:
@@ -266,10 +253,10 @@ class NBAStore(DataStore):
             actions = play_by_play_data.get("actions", [])
 
             # Check if PlayByPlay just became available (game start detection)
-            if game_id and game_id not in self._pbp_available and actions:
+            if game_id and not self._state.is_pbp_available(game_id) and actions:
                 # First time we see actions for this game - game has started
-                self._pbp_available.add(game_id)
-                previous_status = self._previous_game_status.get(game_id)
+                self._state.mark_pbp_available(game_id)
+                previous_status = self._state.get_previous_status(game_id)
                 if (
                     previous_status != 2
                 ):  # Only emit if not already marked as in progress
@@ -279,7 +266,7 @@ class NBAStore(DataStore):
                             event_id=game_id,
                         )
                     )
-                    self._previous_game_status[game_id] = 2  # In Progress
+                    self._state.set_previous_status(game_id, 2)  # In Progress
 
             # Check for game end (last action is "Game End")
             if actions:
@@ -290,7 +277,7 @@ class NBAStore(DataStore):
                     and "game end" in last_action.get("description", "").lower()
                 ):
                     # Game has ended
-                    previous_status = self._previous_game_status.get(game_id)
+                    previous_status = self._state.get_previous_status(game_id)
                     if (
                         previous_status != 3
                     ):  # Only emit if not already marked as finished
@@ -313,18 +300,10 @@ class NBAStore(DataStore):
                                 final_score={"home": home_score, "away": away_score},
                             )
                         )
-                        self._previous_game_status[game_id] = 3  # Finished
+                        self._state.set_previous_status(game_id, 3)  # Finished
 
             # Deduplication: filter out actions we've already processed using event_id
-            new_actions = []
-            for action in actions:
-                if not isinstance(action, dict):
-                    continue
-                action_number = action.get("actionNumber", 0)
-                pbp_event_id = f"{game_id}_pbp_{action_number}"
-                if pbp_event_id not in self._seen_event_ids:
-                    new_actions.append(action)
-                    self._seen_event_ids.add(pbp_event_id)
+            new_actions = self._state.filter_new_actions(game_id, actions)
 
             # Emit ALL play-by-play events (no filtering - let agents decide)
             for action in new_actions:

@@ -1,6 +1,7 @@
 """Web Search-specific data infrastructure components."""
 
 from dojozero.data.websearch._api import TavilySearchAdapter, WebSearchAPI
+from dojozero.data.websearch._base_processor import BaseDashscopeProcessor
 from dojozero.data.websearch._events import (
     ExpertPredictionEvent,
     InjurySummaryEvent,
@@ -23,6 +24,7 @@ __all__ = [
     "PowerRankingEvent",
     "ExpertPredictionEvent",
     "WebSearchIntent",
+    "BaseDashscopeProcessor",
     "InjurySummaryProcessor",
     "PowerRankingProcessor",
     "ExpertPredictionProcessor",

@@ -96,6 +96,151 @@ class GameResultEvent(DataEvent):
         return "game_result"
 
 
+@dataclass(slots=True, frozen=True)
+class TeamStats:
+    """Type-safe team statistics and metadata within a game.
+
+    Provides structured access to team information instead of raw dict.
+    Supports conversion to/from camelCase API format for backward compatibility.
+    """
+
+    team_id: int = field(default=0)
+    team_name: str = field(default="")
+    team_city: str = field(default="")
+    team_tricode: str = field(default="")
+    score: int = field(default=0)
+    wins: int = field(default=0)
+    losses: int = field(default=0)
+    seed: int = field(default=0)
+    timeouts_remaining: int = field(default=0)
+    in_bonus: bool | None = field(default=None)
+    periods: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # Quarter-by-quarter scores
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TeamStats":
+        """Create TeamStats from API dict (handles camelCase keys).
+
+        Args:
+            data: Team data dict from NBA API
+
+        Returns:
+            TeamStats instance
+        """
+        return cls(
+            team_id=data.get("teamId", 0),
+            team_name=data.get("teamName", ""),
+            team_city=data.get("teamCity", ""),
+            team_tricode=data.get("teamTricode", ""),
+            score=data.get("score", 0),
+            wins=data.get("wins", 0),
+            losses=data.get("losses", 0),
+            seed=data.get("seed", 0),
+            timeouts_remaining=data.get("timeoutsRemaining", 0),
+            in_bonus=data.get("inBonus"),
+            periods=data.get("periods", []),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict (maintains original camelCase keys for API compatibility).
+
+        Returns:
+            Dict with camelCase keys matching NBA API format
+        """
+        return {
+            "teamId": self.team_id,
+            "teamName": self.team_name,
+            "teamCity": self.team_city,
+            "teamTricode": self.team_tricode,
+            "score": self.score,
+            "wins": self.wins,
+            "losses": self.losses,
+            "seed": self.seed,
+            "timeoutsRemaining": self.timeouts_remaining,
+            "inBonus": self.in_bonus,
+            "periods": self.periods,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class PlayerStats:
+    """Type-safe player statistics within a game.
+
+    Lightweight wrapper for player stats dict.
+    Can be expanded with specific fields as needed.
+    """
+
+    player_id: int = field(default=0)
+    name: str = field(default="")
+    statistics: dict[str, Any] = field(default_factory=dict)  # Full stats dict
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PlayerStats":
+        """Create PlayerStats from API dict.
+
+        Args:
+            data: Player data dict from NBA API
+
+        Returns:
+            PlayerStats instance
+        """
+        return cls(
+            player_id=data.get("personId", 0),
+            name=data.get("name", ""),
+            statistics=data.get("statistics", {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict (API format).
+
+        Returns:
+            Dict matching NBA API format
+        """
+        return {
+            "personId": self.player_id,
+            "name": self.name,
+            "statistics": self.statistics,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class GamePlayerStats:
+    """Container for home and away player stats.
+
+    Organizes player statistics by team (home/away).
+    """
+
+    home: list[PlayerStats] = field(default_factory=list)
+    away: list[PlayerStats] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GamePlayerStats":
+        """Create GamePlayerStats from API dict.
+
+        Args:
+            data: Player stats dict with home/away lists
+
+        Returns:
+            GamePlayerStats instance
+        """
+        return cls(
+            home=[PlayerStats.from_dict(p) for p in data.get("home", [])],
+            away=[PlayerStats.from_dict(p) for p in data.get("away", [])],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict (API format).
+
+        Returns:
+            Dict with home/away player lists
+        """
+        return {
+            "home": [p.to_dict() for p in self.home],
+            "away": [p.to_dict() for p in self.away],
+        }
+
+
 @register_event
 @dataclass(slots=True, frozen=True)
 class GameUpdateEvent(DataEvent):
@@ -123,6 +268,33 @@ class GameUpdateEvent(DataEvent):
     player_stats: dict[str, Any] = field(
         default_factory=dict
     )  # All player stats: {"home": [list of player dicts with statistics], "away": [list of player dicts with statistics]}
+
+    @property
+    def home_team_stats(self) -> TeamStats:
+        """Type-safe access to home team stats.
+
+        Returns:
+            TeamStats instance with structured team data
+        """
+        return TeamStats.from_dict(self.home_team)
+
+    @property
+    def away_team_stats(self) -> TeamStats:
+        """Type-safe access to away team stats.
+
+        Returns:
+            TeamStats instance with structured team data
+        """
+        return TeamStats.from_dict(self.away_team)
+
+    @property
+    def game_player_stats(self) -> GamePlayerStats:
+        """Type-safe access to player stats.
+
+        Returns:
+            GamePlayerStats instance with home/away player lists
+        """
+        return GamePlayerStats.from_dict(self.player_stats)
 
     @property
     def event_type(self) -> str:
