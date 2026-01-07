@@ -1,4 +1,4 @@
-name: "Basic"
+name: "basic"
 sys_prompt: |
   You are a sports betting agent. When you receive match data:
   1. Check your balance first
