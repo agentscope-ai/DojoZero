@@ -75,13 +75,55 @@ dojo0 replay \
   --replay-max-sleep 20.0
 ```
 
-## Server Usage (Coming Soon)
+## Server Usage
 
-The `dojo0 serve` command is reserved for a FastAPI dashboard server that will
-reuse the existing `Dashboard` runtime. Use the top-level `--setting` flag here
-too so the server process can share the same dashboard settings (store/runtime
-and import wiring) as `dojo0 run`. The CLI already exposes placeholder flags (`--host`, `--port`) so
-future releases can add the server without breaking backward compatibility.
+The `dojo0 serve` command starts a FastAPI dashboard server that provides REST
+APIs for managing trials and streaming real-time events to the frontend:
+
+```bash
+# Start the backend server
+dojo0 serve --host 0.0.0.0 --port 8000
+```
+
+You can use the top-level `--setting` flag to share dashboard settings
+(store/runtime and import wiring) with the server process, just like with `dojo0 run`:
+
+```bash
+dojo0 --setting dojozero.yaml serve --host 0.0.0.0 --port 8000
+```
+
+### Available API Endpoints
+
+- `GET /trials` - List all trials
+- `GET /trials/{trial_id}` - Get trial details
+- `GET /trials/{trial_id}/stream` - Server-Sent Events stream for real-time updates
+
+## Frontend Setup & Usage
+
+The frontend provides a real-time dashboard for visualizing trial progress and
+agent interactions. It's built with React and Vite.
+
+### Setup
+
+Install frontend dependencies (first time only):
+
+```bash
+cd frontend
+npm install
+```
+
+### Development
+
+Start the frontend development server:
+
+```bash
+cd frontend
+npm run dev
+```
+
+The frontend will be available at `http://localhost:5173` by default. Make sure
+the backend server is running at `http://localhost:8000` for the frontend to
+connect and receive real-time updates.
 
 ## Runtime & Store Configuration
 
