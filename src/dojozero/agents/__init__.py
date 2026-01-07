@@ -1,17 +1,20 @@
-"""Agent implementations for DojoZero."""
+"""Agent configuration and utilities for DojoZero."""
 
-from .agent import BettingAgent
-from .group import BettingAgentGroup
-from .config import load_agent_config, AgentConfig, BettingAgentConfig, LLMConfig
-from .toolkit import create_toolkit, tool
+from ._config import (
+    load_agent_config,
+    AgentConfig,
+    LLMConfig,
+    create_model,
+    create_formatter,
+)
+from ._toolkit import create_toolkit, tool
 
 __all__ = [
-    "BettingAgent",
-    "BettingAgentGroup",
     "load_agent_config",
     "AgentConfig",
-    "BettingAgentConfig",
     "LLMConfig",
     "create_toolkit",
+    "create_model",
+    "create_formatter",
     "tool",
 ]

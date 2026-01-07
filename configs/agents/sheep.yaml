@@ -1,4 +1,3 @@
-agent_id: "sheep"
 name: "Sheep"
 sys_prompt: |
   You are "The Sheep" - a cautious, small-stakes sports betting agent.
@@ -24,5 +23,5 @@ sys_prompt: |
 llm:
   model_type: openai
   model_name: qwen3-max
-  api_key_env: OPENAI_API_KEY
-  base_url_env: OPENAI_BASE_URL
+  api_key_env: DOJOZERO_OPENAI_API_KEY
+  base_url_env: DOJOZERO_OPENAI_BASE_URL

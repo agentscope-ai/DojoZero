@@ -1,7 +1,7 @@
 scenario:
   name: nba-pregame-betting
   config:
-    game_id: '0022501227'
+    game_id: '0022500477'
 
     hub:
       persistence_file: outputs/nba_betting_events.jsonl
@@ -46,7 +46,7 @@ scenario:
       
     agents:
     - id: betting_agent
-      class: NBABettingAgent
+      class: BettingAgent
       agent_config_path: configs/agents/basic.yaml
       operators:
       - event_counter
