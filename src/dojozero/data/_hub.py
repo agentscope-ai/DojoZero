@@ -120,8 +120,14 @@ class DataHub:
             event: Event to persist
         """
         event_dict = event.to_dict()
+        line = json.dumps(event_dict) + "\n"
+        # Use thread pool to avoid blocking the event loop
+        await asyncio.to_thread(self._write_to_file, line)
+
+    def _write_to_file(self, line: str) -> None:
+        """Write a line to the persistence file (sync, runs in thread pool)."""
         with open(self.persistence_file, "a") as f:
-            f.write(json.dumps(event_dict) + "\n")
+            f.write(line)
 
     async def _dispatch_event(self, event: DataEvent) -> None:
         """Dispatch event to subscribed agents.
@@ -156,7 +162,8 @@ class DataHub:
         # Set the store's event emitter to this hub's receive_event
         # Note: event_emitter is sync callback, but we schedule async work
         def emit_wrapper(event: DataEvent) -> None:
-            asyncio.create_task(self.receive_event(event))
+            task = asyncio.create_task(self.receive_event(event))
+            task.add_done_callback(self._handle_task_exception)
 
         store.set_event_emitter(emit_wrapper)
 
@@ -167,6 +174,22 @@ class DataHub:
         # Track connected store for lifecycle management
         if store not in self._connected_stores:
             self._connected_stores.append(store)
+
+    def _handle_task_exception(self, task: asyncio.Task[None]) -> None:
+        """Handle exceptions from background tasks.
+
+        Args:
+            task: Completed task to check for exceptions
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Background task failed in DataHub: %s",
+                exc,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
 
     async def start_replay(self, replay_file: Path | str) -> None:
         """Start replay mode from a file.
