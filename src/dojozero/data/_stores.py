@@ -1,12 +1,16 @@
 """DataStore: Manages external APIs, polling, and event emission."""
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from dojozero.data._models import DataEvent
 from dojozero.data._processors import DataProcessor
+
+logger = logging.getLogger(__name__)
+
 
 if TYPE_CHECKING:
     from dojozero.data._hub import DataHub
@@ -230,7 +234,7 @@ class DataStore(ABC):
                     self._last_poll_time = max(e.timestamp for e in raw_events)
 
             except Exception as e:
-                print(f"Error in poll loop for store {self.store_id}: {e}")
+                logger.error("Error in poll loop for store %s: %s", self.store_id, e)
 
             # Wait before next poll - read interval dynamically to support runtime updates
             # Recalculate minimum interval on each iteration (in case it was updated)

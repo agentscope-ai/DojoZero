@@ -8,6 +8,25 @@ from typing import Any, Callable, TypeVar, cast
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+def parse_iso_datetime(time_str: str) -> datetime:
+    """Parse ISO format datetime string, handling 'Z' suffix.
+
+    NBA API returns timestamps with 'Z' suffix (e.g., '2025-01-07T02:00:00Z')
+    which Python's fromisoformat() doesn't handle directly until Python 3.11.
+
+    Args:
+        time_str: ISO format datetime string (e.g., '2025-01-07T02:00:00Z')
+
+    Returns:
+        datetime object with UTC timezone
+
+    Examples:
+        >>> parse_iso_datetime('2025-01-07T02:00:00Z')
+        datetime(2025, 1, 7, 2, 0, 0, tzinfo=timezone.utc)
+    """
+    return datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+
+
 def get_proxy() -> str | None:
     """Get proxy configuration from environment variables.
 

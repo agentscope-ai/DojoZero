@@ -2,11 +2,14 @@
 
 import asyncio
 import json
+import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from dojozero.data._models import DataEvent
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from dojozero.data._stores import DataStore
@@ -134,7 +137,7 @@ class DataHub:
                 try:
                     handler(event)
                 except Exception as e:
-                    print(f"Error in event handler for {event_type}: {e}")
+                    logger.error("Error in event handler for %s: %s", event_type, e)
 
         # Dispatch to agents subscribed to this event type
         for agent_id, subscriptions in self._agent_subscriptions.items():
@@ -211,7 +214,7 @@ class DataHub:
 
             return DataEventFactory.from_dict(event_dict)
         except Exception as e:
-            print(f"Error reconstructing event: {e}")
+            logger.warning("Error reconstructing event: %s", e)
             return None
 
     async def replay_next(self) -> DataEvent | None:

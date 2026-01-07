@@ -548,7 +548,7 @@ async def test_nba_store_logic(game_id: str):
             f"{game_id}_pbp_{a.get('actionNumber', 0)}" for a in actions[:10]
         ]
         for eid in test_event_ids:
-            store._seen_event_ids.discard(eid)
+            store._state._seen_event_ids.discard(eid)
 
         pbp_events = list(store._parse_api_response(play_by_play_data))
 
@@ -571,8 +571,8 @@ async def test_nba_store_logic(game_id: str):
     print("-" * 80)
 
     # Reset store state
-    store._pbp_available.clear()
-    store._previous_game_status.clear()
+    store._state._pbp_available.clear()
+    store._state._previous_game_status.clear()
 
     # Test GameStartEvent: detected when PlayByPlay first becomes available
     if pbp_data and pbp_data.get("actions"):
@@ -597,7 +597,7 @@ async def test_nba_store_logic(game_id: str):
                 test_pbp_data_end = {
                     "play_by_play": {"gameId": game_id, "actions": [last_action]}
                 }
-                store._previous_game_status[game_id] = 2  # Set as in progress
+                store._state._previous_game_status[game_id] = 2  # Set as in progress
                 events_end = list(store._parse_api_response(test_pbp_data_end))
 
                 game_result_events = [
@@ -633,7 +633,7 @@ async def test_nba_store_logic(game_id: str):
     test_game_id = f"{game_id}_test"
     test_event_ids = [f"{test_game_id}_pbp_{i}" for i in range(1, 10)]
     for eid in test_event_ids:
-        store._seen_event_ids.discard(eid)
+        store._state._seen_event_ids.discard(eid)
 
     # Create test play-by-play events with various types (including non-critical)
     test_actions = [

@@ -7,9 +7,7 @@ import re
 from typing import Any
 
 from dojozero.data._models import DataEvent
-from dojozero.data._utils import (
-    extract_json_from_dashscope_response,
-)
+from dojozero.data._utils import extract_json_from_dashscope_response
 from dojozero.data.websearch._base_processor import BaseDashscopeProcessor
 from dojozero.data.websearch._events import (
     ExpertPredictionEvent,
@@ -20,6 +18,15 @@ from dojozero.data.websearch._events import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Pre-compiled regex patterns for response parsing (performance optimization)
+_SUMMARY_PATTERN = re.compile(
+    r"SUMMARY:\s*(.*?)(?=STRUCTURED_DATA:|$)", re.DOTALL | re.IGNORECASE
+)
+_STRUCTURED_DATA_HEADER_PATTERN = re.compile(r"STRUCTURED_DATA:", re.IGNORECASE)
+_STRUCTURED_DATA_JSON_PATTERN = re.compile(
+    r"STRUCTURED_DATA:\s*(\{.*\})", re.DOTALL | re.IGNORECASE
+)
 
 
 class InjurySummaryProcessor(BaseDashscopeProcessor):
@@ -41,7 +48,10 @@ class InjurySummaryProcessor(BaseDashscopeProcessor):
             Injury summary event or None
         """
         # should_process() already ensures this is a raw_web_search event
-        assert isinstance(event, RawWebSearchEvent), "Event must be RawWebSearchEvent"
+        if not isinstance(event, RawWebSearchEvent):
+            raise TypeError(
+                f"Event must be RawWebSearchEvent, got {type(event).__name__}"
+            )
 
         # Extract text from search results
         result_texts = []
@@ -98,18 +108,12 @@ Only include players who are confirmed to be injured/out."""
                 full_text = str(response.get("output", "")).strip()
 
             # Parse the response: extract SUMMARY and STRUCTURED_DATA sections
-            summary_match = re.search(
-                r"SUMMARY:\s*(.*?)(?=STRUCTURED_DATA:|$)",
-                full_text,
-                re.DOTALL | re.IGNORECASE,
-            )
+            summary_match = _SUMMARY_PATTERN.search(full_text)
             if summary_match:
                 summary = summary_match.group(1).strip()
             else:
                 # Fallback: use everything before STRUCTURED_DATA as summary
-                structured_match = re.search(
-                    r"STRUCTURED_DATA:", full_text, re.IGNORECASE
-                )
+                structured_match = _STRUCTURED_DATA_HEADER_PATTERN.search(full_text)
                 if structured_match:
                     summary = full_text[: structured_match.start()].strip()
                 else:
@@ -117,9 +121,7 @@ Only include players who are confirmed to be injured/out."""
 
             # Extract structured JSON data using utility function
             # First extract the STRUCTURED_DATA section, then use utility to parse
-            structured_match = re.search(
-                r"STRUCTURED_DATA:\s*(\{.*\})", full_text, re.DOTALL | re.IGNORECASE
-            )
+            structured_match = _STRUCTURED_DATA_JSON_PATTERN.search(full_text)
             if structured_match:
                 json_str = structured_match.group(1).strip()
                 # Create a mock response structure for the utility function
@@ -180,7 +182,10 @@ class PowerRankingProcessor(BaseDashscopeProcessor):
             Power ranking event or None
         """
         # should_process() already ensures this is a raw_web_search event
-        assert isinstance(event, RawWebSearchEvent), "Event must be RawWebSearchEvent"
+        if not isinstance(event, RawWebSearchEvent):
+            raise TypeError(
+                f"Event must be RawWebSearchEvent, got {type(event).__name__}"
+            )
 
         # Extract text from search results
         result_texts = []
@@ -308,7 +313,10 @@ class ExpertPredictionProcessor(BaseDashscopeProcessor):
             Expert prediction event or None
         """
         # should_process() already ensures this is a raw_web_search event
-        assert isinstance(event, RawWebSearchEvent), "Event must be RawWebSearchEvent"
+        if not isinstance(event, RawWebSearchEvent):
+            raise TypeError(
+                f"Event must be RawWebSearchEvent, got {type(event).__name__}"
+            )
 
         # Extract text from search results
         result_texts = []

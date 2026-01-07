@@ -93,7 +93,7 @@ class GameResultEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "game_result"
+        return EventTypes.GAME_RESULT.value
 
 
 @dataclass(slots=True, frozen=True)
@@ -298,4 +298,4 @@ class GameUpdateEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "game_update"
+        return EventTypes.GAME_UPDATE.value

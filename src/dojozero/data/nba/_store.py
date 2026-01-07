@@ -116,9 +116,9 @@ class NBAStore(DataStore):
                         game_time_dt = timestamp  # Default to current time
                         if game_time_utc_str:
                             try:
-                                game_time_dt = datetime.fromisoformat(
-                                    game_time_utc_str.replace("Z", "+00:00")
-                                )
+                                from dojozero.data.nba._utils import parse_iso_datetime
+
+                                game_time_dt = parse_iso_datetime(game_time_utc_str)
                             except (ValueError, AttributeError):
                                 pass
 
@@ -221,12 +221,15 @@ class NBAStore(DataStore):
                         # Try to get game time from game info
                         game_time_dt = timestamp  # Default to current time
                         try:
-                            from dojozero.data.nba._utils import get_game_info_by_id
+                            from dojozero.data.nba._utils import (
+                                get_game_info_by_id,
+                                parse_iso_datetime,
+                            )
 
                             game_info = get_game_info_by_id(game_id)
                             if game_info and game_info.get("game_time_utc"):
-                                game_time_dt = datetime.fromisoformat(
-                                    game_info["game_time_utc"].replace("Z", "+00:00")
+                                game_time_dt = parse_iso_datetime(
+                                    game_info["game_time_utc"]
                                 )
                         except Exception:
                             pass  # Use timestamp as fallback
@@ -312,9 +315,9 @@ class NBAStore(DataStore):
                 time_actual = action.get("timeActual")
                 if time_actual:
                     try:
-                        timestamp = datetime.fromisoformat(
-                            time_actual.replace("Z", "+00:00")
-                        )
+                        from dojozero.data.nba._utils import parse_iso_datetime
+
+                        timestamp = parse_iso_datetime(time_actual)
                     except (ValueError, AttributeError):
                         pass  # Use default timestamp
 
