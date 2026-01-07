@@ -28,8 +28,8 @@ repos:
     # uv version.
     rev: 0.9.21
     hooks:
-      # Update the uv lockfile
+      # Check uv lockfile is up to date
       - id: uv-lock
-        name: Update uv lockfile
+        name: Check uv lockfile
         files: pyproject.toml
-        args: [--project, python]
+        args: [--check]
