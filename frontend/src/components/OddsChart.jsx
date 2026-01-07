@@ -3,17 +3,18 @@ import { motion } from "framer-motion";
 
 export default function OddsChart({ events, homeTeam, awayTeam, header }) {
   // Extract odds data from events
+  // Events are already normalized with event_type at top level
   const oddsData = useMemo(() => {
     const data = [];
     events.forEach((event, index) => {
       if (event.event_type === "odds_update") {
         data.push({
           index,
-          timestamp: event.timestamp,
+          timestamp: event.timestamp || event.emitted_at,
           homeOdds: event.home_odds,
           awayOdds: event.away_odds,
-          homeProbability: event.home_probability * 100,
-          awayProbability: event.away_probability * 100,
+          homeProbability: (event.home_probability || 0.5) * 100,
+          awayProbability: (event.away_probability || 0.5) * 100,
         });
       }
     });

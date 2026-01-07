@@ -144,7 +144,7 @@ export default function EventReplay({
           subtitle: `${home.teamTricode || "HOME"} ${home.score || 0} - ${
             away.score || 0
           } ${away.teamTricode || "AWAY"}`,
-          details: event.game_status_text || `Period ${event.period}`,
+          details: event.game_status_text || event.game_clock || `Period ${event.period}`,
           color: config.color,
           visual: "scoreboard",
         };
@@ -152,12 +152,12 @@ export default function EventReplay({
       case "odds_update":
         return {
           title: "Odds Changed",
-          subtitle: `Home: ${(event.home_probability * 100).toFixed(
+          subtitle: `Home: ${((event.home_probability || 0.5) * 100).toFixed(
             1
-          )}% | Away: ${(event.away_probability * 100).toFixed(1)}%`,
+          )}% | Away: ${((event.away_probability || 0.5) * 100).toFixed(1)}%`,
           details: `Odds: ${event.home_odds?.toFixed(
             2
-          )} / ${event.away_odds?.toFixed(2)}`,
+          ) || "N/A"} / ${event.away_odds?.toFixed(2) || "N/A"}`,
           color: config.color,
           visual: "chart",
         };
@@ -174,7 +174,7 @@ export default function EventReplay({
         return {
           title: "Injury Report",
           subtitle: event.query || "Injury updates",
-          details: "Player status changes",
+          details: event.summary?.substring(0, 80) || "Player status changes",
           color: config.color,
           visual: "injury",
         };
@@ -194,23 +194,52 @@ export default function EventReplay({
           color: config.color,
           visual: "basketball",
         };
+      case "game_initialize":
+        return {
+          title: "Game Setup",
+          subtitle: `${event.home_team || "Home"} vs ${event.away_team || "Away"}`,
+          details: `Game ID: ${event.game_id || "N/A"}`,
+          color: "#6B7280",
+          visual: "default",
+        };
       case "game_result":
         return {
           title: "Final Result",
-          subtitle: "Game has ended",
-          details: "Check final score",
+          subtitle: `Winner: ${event.winner === "home" ? homeTeam.name : awayTeam.name}`,
+          details: `Final: ${event.final_score?.home || 0} - ${event.final_score?.away || 0}`,
           color: config.color,
           visual: "trophy",
         };
+      case "play_by_play": {
+        const actionType = event.action_type || "";
+        const player = event.player_name || "";
+        return {
+          title: actionType.toUpperCase() || "Play",
+          subtitle: event.description || "Game action",
+          details: player ? `${player} (${event.team_tricode || ""})` : `Q${event.period || 1} ${event.clock || ""}`,
+          color: getPlayColor(actionType),
+          visual: "basketball",
+        };
+      }
       default:
         return {
-          title: config.label || type,
+          title: config.label || type || "Event",
           subtitle: "Event occurred",
-          details: JSON.stringify(event).substring(0, 80) + "...",
-          color: config.color,
+          details: event.description || "",
+          color: config.color || "#64748B",
           visual: "default",
         };
     }
+  };
+
+  // Get color based on play-by-play action type
+  const getPlayColor = (actionType) => {
+    if (["2pt", "3pt", "freethrow"].includes(actionType)) return "#10B981";
+    if (actionType === "foul") return "#F59E0B";
+    if (actionType === "turnover") return "#EF4444";
+    if (["block", "steal"].includes(actionType)) return "#3B82F6";
+    if (actionType === "rebound") return "#8B5CF6";
+    return "#64748B";
   };
 
   const getVisualComponent = (visual, color) => {

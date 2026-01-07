@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { modelProviders } from "../constants";
 
-export default function AgentPanel({ checkpoint, agentLogs, currentEventIndex }) {
+export default function AgentPanel({ agents: agentsList = [], events = [], currentEventIndex = 0, agentStates = {} }) {
   const [visibleBubbles, setVisibleBubbles] = useState([]);
   const bubbleStreamRef = useRef(null);
   const lastEventIndexRef = useRef(-1);
@@ -16,113 +16,127 @@ export default function AgentPanel({ checkpoint, agentLogs, currentEventIndex })
     return String(value);
   };
 
-  // Helper to safely get a number
-  const toNumber = (value, defaultVal = 0) => {
-    if (typeof value === "number") return value;
-    if (typeof value === "string") {
-      const parsed = parseInt(value, 10);
-      return isNaN(parsed) ? defaultVal : parsed;
+  // Extract text from content array (handles both string and array formats)
+  const extractTextFromContent = (content) => {
+    if (!content) return "";
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter((item) => item.type === "text" && item.text)
+        .map((item) => item.text)
+        .join(" ");
     }
-    return defaultVal;
+    return "";
   };
 
-  // Process agent data
+  // Process agent data from agentStates (checkpoint format)
+  // Format: { betting_agent: [{ stream: [...messages] }, ...] }
   const agents = useMemo(() => {
-    if (!checkpoint?.actor_states) return [];
-
-    return Object.entries(checkpoint.actor_states)
-      .filter(([id, state]) => {
-        const rawModelName = state?.model_name;
-        return typeof rawModelName === "string" && rawModelName.length > 0 && rawModelName !== "unknown";
-      })
-      .map(([id, state]) => {
-        const rawModelName = state?.model_name;
-        const modelName = rawModelName;
-        const providerInfo = modelProviders[modelName] || modelProviders.default;
-
-        // Get messages from agentLogs
-        const logsArray = Array.isArray(agentLogs) ? agentLogs : [];
-        const logData = logsArray.find((log) => log?.actor_id === id);
-        const messages = Array.isArray(logData?.messages) ? logData.messages : [];
-
-        // Extract all assistant messages for the bubble stream
-        const allActions = messages
-          .filter((msg) => msg?.role === "assistant")
-          .map((msg, idx) => {
-            const content = msg?.content;
-            let displayText = "";
-            let actionType = "message";
-
-            if (typeof content === "string") {
-              displayText = content;
-            } else if (Array.isArray(content)) {
-              // Handle tool calls
-              const toolCalls = content.filter((c) => c?.type === "tool_use");
-              if (toolCalls.length > 0) {
-                actionType = "tool";
-                displayText = toolCalls
-                  .map((c) => `🔧 ${c.name || "tool"}`)
-                  .join(", ");
-              } else {
-                displayText = content
-                  .map((c) => c?.text || c?.name || JSON.stringify(c))
-                  .join(", ");
-              }
-            } else if (content && typeof content === "object") {
-              displayText = JSON.stringify(content);
-            } else {
-              displayText = toDisplayString(content);
+    const agentList = [];
+    
+    // First, try to get agents from agentStates (checkpoint data)
+    for (const [actorId, stateArray] of Object.entries(agentStates)) {
+      // Skip non-agent actors (streams end with _stream)
+      if (actorId.endsWith("_stream") || actorId === "event_counter") continue;
+      
+      const modelName = actorId.toLowerCase();
+      const providerInfo = modelProviders[modelName] || modelProviders.default;
+      
+      // Count assistant messages across all states
+      let messageCount = 0;
+      if (Array.isArray(stateArray)) {
+        for (const stateItem of stateArray) {
+          for (const [streamName, messages] of Object.entries(stateItem)) {
+            if (Array.isArray(messages)) {
+              messageCount += messages.filter((m) => m.role === "assistant").length;
             }
-
-            return {
-              id: `${id}-${idx}`,
-              agentId: id,
-              text: displayText,
-              actionType,
-              timestamp: msg?.timestamp,
-              eventIndex: idx, // Map to event index proportionally
-            };
-          })
-          .filter((action) => action.text.length > 0);
-
+          }
+        }
+      }
+      
+      agentList.push({
+        id: actorId,
+        modelName,
+        phase: "completed",
+        events: messageCount,
+        providerInfo,
+        actions: [],
+        totalMessages: messageCount,
+      });
+    }
+    
+    // Fallback to agentsList if no agentStates
+    if (agentList.length === 0 && agentsList.length > 0) {
+      return agentsList.map((agent) => {
+        const actorId = agent.actor_id || agent.id || "unknown";
+        const modelName = actorId.toLowerCase();
+        const providerInfo = modelProviders[modelName] || modelProviders.default;
         return {
-          id,
+          id: actorId,
           modelName,
-          events: toNumber(state?.events, 0),
+          phase: agent.phase || "running",
+          events: 0,
           providerInfo,
-          actions: allActions,
-          totalMessages: messages.length,
+          actions: [],
+          totalMessages: 0,
         };
       });
-  }, [checkpoint, agentLogs]);
+    }
+    
+    return agentList;
+  }, [agentsList, agentStates]);
 
-  // Map actions to event indices for synchronized display
-  const actionsByEventIndex = useMemo(() => {
-    const actionMap = {};
-    agents.forEach((agent) => {
-      const totalActions = agent.actions.length;
-      if (totalActions === 0) return;
-
-      agent.actions.forEach((action, idx) => {
-        // Distribute actions across the event timeline
-        const eventIdx = Math.floor((idx / totalActions) * 100); // Map to 0-100 range
-        if (!actionMap[eventIdx]) {
-          actionMap[eventIdx] = [];
+  // Extract agent actions from agentStates (conversation history)
+  const agentActions = useMemo(() => {
+    const actions = [];
+    let globalIdx = 0;
+    
+    for (const [actorId, stateArray] of Object.entries(agentStates)) {
+      // Skip non-agent actors
+      if (actorId.endsWith("_stream") || actorId === "event_counter") continue;
+      
+      const agent = agents.find((a) => a.id === actorId);
+      if (!agent) continue;
+      
+      if (Array.isArray(stateArray)) {
+        for (const stateItem of stateArray) {
+          for (const [streamName, messages] of Object.entries(stateItem)) {
+            if (!Array.isArray(messages)) continue;
+            
+            for (const msg of messages) {
+              // Only show assistant messages with content
+              if (msg.role !== "assistant") continue;
+              
+              const text = extractTextFromContent(msg.content);
+              if (!text || text.length === 0) continue;
+              
+              actions.push({
+                id: `${actorId}-${globalIdx}`,
+                agentId: actorId,
+                text: text.substring(0, 200),
+                actionType: "message",
+                eventIndex: globalIdx,
+                agentColor: agent.providerInfo.color,
+                agentName: agent.providerInfo.name || agent.modelName,
+                agentInitials: agent.modelName
+                  .split("_")
+                  .map((w) => w[0]?.toUpperCase())
+                  .join("")
+                  .slice(0, 2) || "AI",
+                timestamp: msg.timestamp,
+              });
+              globalIdx++;
+            }
+          }
         }
-        actionMap[eventIdx].push({
-          ...action,
-          agentColor: agent.providerInfo.color,
-          agentName: agent.providerInfo.name || agent.modelName,
-          agentInitials: agent.modelName
-            .split("-")
-            .map((w) => w[0]?.toUpperCase())
-            .join("")
-            .slice(0, 2),
-        });
-      });
-    });
-    return actionMap;
-  }, [agents]);
+      }
+    }
+    
+    // Sort by timestamp if available
+    actions.sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+    
+    return actions;
+  }, [agentStates, agents]);
 
   // Update visible bubbles based on current event index
   useEffect(() => {
@@ -130,7 +144,6 @@ export default function AgentPanel({ checkpoint, agentLogs, currentEventIndex })
     if (currentEventIndex < lastEventIndexRef.current) {
       setVisibleBubbles([]);
       lastEventIndexRef.current = -1;
-      // Don't return - allow processing of index 0
     }
     
     // Skip if we're at the same index
@@ -138,37 +151,24 @@ export default function AgentPanel({ checkpoint, agentLogs, currentEventIndex })
       return;
     }
 
-    // Find new actions to show based on proportional mapping
-    const newBubbles = [];
-    const totalEvents = 422; // Approximate total events
-    
-    for (let i = Math.max(0, lastEventIndexRef.current + 1); i <= currentEventIndex; i++) {
-      // Map event index to action index proportionally
-      const progress = i / totalEvents;
-      const actionIndex = Math.floor(progress * 100);
-      
-      if (actionsByEventIndex[actionIndex]) {
-        actionsByEventIndex[actionIndex].forEach((action) => {
-          // Check if this action is already in visible bubbles
-          const alreadyVisible = visibleBubbles.some((b) => b.id === action.id);
-          const alreadyInNew = newBubbles.some((b) => b.id === action.id);
-          
-          if (!alreadyVisible && !alreadyInNew) {
-            newBubbles.push({
-              ...action,
-              showTime: Date.now(),
-            });
-          }
-        });
-      }
-    }
+    // Find new actions to show
+    const newBubbles = agentActions
+      .filter((action) => 
+        action.eventIndex > lastEventIndexRef.current && 
+        action.eventIndex <= currentEventIndex
+      )
+      .filter((action) => !visibleBubbles.some((b) => b.id === action.id))
+      .map((action) => ({
+        ...action,
+        showTime: Date.now(),
+      }));
 
     if (newBubbles.length > 0) {
       setVisibleBubbles((prev) => [...prev, ...newBubbles].slice(-15)); // Keep last 15 bubbles
     }
 
     lastEventIndexRef.current = currentEventIndex;
-  }, [currentEventIndex, actionsByEventIndex, visibleBubbles]);
+  }, [currentEventIndex, agentActions, visibleBubbles]);
 
   // Auto-scroll to bottom when new bubbles appear
   useEffect(() => {

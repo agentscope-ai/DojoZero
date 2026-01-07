@@ -10,6 +10,7 @@ export default function EventTicker({ events, homeTeam, awayTeam, currentEventIn
   const [direction, setDirection] = useState(0); // 1 for next, -1 for previous
 
   // Get the most recent events (last 20)
+  // Events are already normalized by useTrialStream
   const recentEvents = useMemo(() => {
     if (!events || events.length === 0) return [];
     const count = Math.min(20, events.length);
@@ -328,11 +329,71 @@ function EventMessage({ event, homeTeam, awayTeam }) {
       break;
     }
 
+    case "play_by_play": {
+      const player = event.player_name || '';
+      const team = event.team_tricode || '';
+      const desc = event.description || '';
+      const actionType = event.action_type || '';
+      const clock = event.clock || '';
+      const period = event.period || 1;
+      const homeScore = event.home_score || 0;
+      const awayScore = event.away_score || 0;
+
+      // Determine badge color based on action type
+      let badgeColor = "#6B7280"; // default gray
+      if (["2pt", "3pt", "freethrow"].includes(actionType)) {
+        badgeColor = "#10B981"; // green for scoring
+      } else if (actionType === "foul") {
+        badgeColor = "#F59E0B"; // yellow for fouls
+      } else if (actionType === "turnover") {
+        badgeColor = "#EF4444"; // red for turnovers
+      } else if (actionType === "block" || actionType === "steal") {
+        badgeColor = "#3B82F6"; // blue for defensive plays
+      }
+
+      content = (
+        <div style={styles.messageContent}>
+          <span style={{ ...styles.eventBadge, background: badgeColor }}>
+            🏀 {actionType.toUpperCase() || 'PLAY'}
+          </span>
+          <div style={styles.playByPlayDisplay}>
+            {player && <span style={styles.playerName}>{player}</span>}
+            {team && <span style={styles.teamBadge}>{team}</span>}
+            <span style={styles.playDesc}>{desc}</span>
+          </div>
+          <span style={styles.gameInfo}>
+            {homeScore}-{awayScore} • Q{period} {clock}
+          </span>
+        </div>
+      );
+      break;
+    }
+
+    case "game_initialize": {
+      const home = event.home_team || 'Home';
+      const away = event.away_team || 'Away';
+
+      content = (
+        <div style={styles.messageContent}>
+          <span style={{ ...styles.eventBadge, background: "#6B7280" }}>
+            📋 SETUP
+          </span>
+          <div style={styles.gameStartDisplay}>
+            <span style={styles.gameStartText}>
+              Game: {home} vs {away}
+            </span>
+            <span style={styles.gameStartSubtext}>Initializing...</span>
+          </div>
+        </div>
+      );
+      break;
+    }
+
     default: {
       content = (
         <div style={styles.messageContent}>
-          <span style={{ ...styles.eventBadge, background: config.color }}>
-            {config.icon} {config.label}
+          <span style={{ ...styles.eventBadge, background: config.color || "#6B7280" }}>
+            {config.icon || "📌"} {config.label || eventType}
           </span>
           <span style={styles.defaultText}>Event occurred</span>
         </div>
@@ -354,6 +415,8 @@ const styles = {
     alignItems: "center",
     background: "linear-gradient(90deg, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.85) 100%)",
     borderTop: "1px solid rgba(59, 130, 246, 0.3)",
+    borderBottomLeftRadius: "16px",
+    borderBottomRightRadius: "16px",
     zIndex: 30,
     overflow: "hidden",
   },
@@ -580,6 +643,26 @@ const styles = {
   noData: {
     color: "rgba(255, 255, 255, 0.5)",
     fontSize: "12px",
+  },
+  playByPlayDisplay: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    fontSize: "13px",
+    overflow: "hidden",
+    flex: 1,
+  },
+  playDesc: {
+    color: "rgba(255, 255, 255, 0.8)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  gameInfo: {
+    color: "rgba(255, 255, 255, 0.5)",
+    fontSize: "11px",
+    flexShrink: 0,
+    marginLeft: "auto",
   },
   counter: {
     padding: "0 16px",

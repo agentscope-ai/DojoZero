@@ -1,33 +1,10 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { motion, useSpring, useTransform } from "framer-motion";
 import BasketballPlayer from "./BasketballPlayer";
+import { useNBAPlayers } from "../hooks/useNBAPlayers";
 
-const HOME_PLAYERS = [
-  "/assets/nba/players/booker.png",
-  "/assets/nba/players/butler.png",
-  "/assets/nba/players/curry.png",
-  "/assets/nba/players/doncic.png",
-  "/assets/nba/players/durant.png",
-];
-const AWAY_PLAYERS = [
-  "/assets/nba/players/fox.png",
-  "/assets/nba/players/giannis.png",
-  "/assets/nba/players/harden.png",
-  "/assets/nba/players/lebron.png",
-  "/assets/nba/players/mitchell.png",
-];
-
-const TEAM_LOGOS = {
-  home: "/assets/nba/teams/lakers.svg",
-  away: "/assets/nba/teams/celtics.svg"
-};
-
-// Player roles
+// Player roles for positioning
 const PLAYER_ROLES = ["pg", "sg", "sf", "pf", "c"];
-const JERSEY_NUMBERS = {
-  home: ["1", "23", "7", "30", "50"],
-  away: ["0", "34", "11", "21", "50"],
-};
 
 // Base court zones for each role (percentage coordinates)
 const BASE_ZONES = {
@@ -88,14 +65,27 @@ export default function CourtAnimator({
   // Animation cycle counter for generating new movement patterns
   const [movementCycle, setMovementCycle] = useState(0);
 
+  // Get dynamic player data from NBA CDN
+  const {
+    homeHeadshots,
+    awayHeadshots,
+    homeJerseys,
+    awayJerseys,
+    homeLogo,
+    awayLogo,
+  } = useNBAPlayers(homeTeam, awayTeam);
+
   const homeColor = homeTeam?.color || "#3B82F6";
   const awayColor = awayTeam?.color || "#EF4444";
   const homeSecondary = homeTeam?.secondaryColor || "#ffffff";
   const awaySecondary = awayTeam?.secondaryColor || "#ffffff";
-  const homeLogo = homeTeam?.logo || TEAM_LOGOS.home;
-  const awayLogo = awayTeam?.logo || TEAM_LOGOS.away;
+  
+  // Home/Away tricodes for matching play_by_play events
+  const homeTricode = homeTeam?.tricode || "";
+  const awayTricode = awayTeam?.tricode || "";
 
-  const currentEvent = events[currentEventIndex];
+  // Events are already normalized by useTrialStream
+  const currentEvent = events[currentEventIndex] || null;
 
   // Continuous movement cycle - players always moving
   useEffect(() => {
@@ -106,7 +96,7 @@ export default function CourtAnimator({
     return () => clearInterval(interval);
   }, []);
 
-  // Event analysis - updates game state
+  // Event analysis - updates game state based on event type
   useEffect(() => {
     if (!currentEvent) {
       setGameState("warmup");
@@ -138,11 +128,73 @@ export default function CourtAnimator({
           }, 2500);
         } else {
           setGameState("playing");
-          // Alternate possession based on phase
           setPossession(Math.floor(phaseRef.current * 2) % 2 === 0 ? "home" : "away");
         }
         
         lastScoreRef.current = { home: homeScore, away: awayScore };
+        break;
+      }
+      
+      case "play_by_play": {
+        // Handle play-by-play events for real-time animation
+        const actionType = currentEvent.action_type || "";
+        const teamTricode = currentEvent.team_tricode || "";
+        const homeScore = currentEvent.home_score || lastScoreRef.current.home;
+        const awayScore = currentEvent.away_score || lastScoreRef.current.away;
+        
+        // Determine which team is acting
+        const isHomeTeam = teamTricode === homeTricode;
+        const actingTeam = isHomeTeam ? "home" : "away";
+        
+        // Update score tracking
+        if (homeScore > lastScoreRef.current.home || awayScore > lastScoreRef.current.away) {
+          // A score happened!
+          const scoringTeamNow = homeScore > lastScoreRef.current.home ? "home" : "away";
+          setScoringTeam(scoringTeamNow);
+          setGameState("scored");
+          setBallHandlerId(scoringTeamNow === "home" ? Math.floor(Math.random() * 5) : 5 + Math.floor(Math.random() * 5));
+          lastScoreRef.current = { home: homeScore, away: awayScore };
+          setTimeout(() => {
+            setGameState("playing");
+            setPossession(scoringTeamNow === "home" ? "away" : "home");
+          }, 1500);
+        } else if (["2pt", "3pt", "freethrow"].includes(actionType) && !currentEvent.description?.includes("MISS")) {
+          // Successful shot
+          setScoringTeam(actingTeam);
+          setGameState("scored");
+          setBallHandlerId(isHomeTeam ? Math.floor(Math.random() * 5) : 5 + Math.floor(Math.random() * 5));
+          setTimeout(() => {
+            setGameState("playing");
+            setPossession(isHomeTeam ? "away" : "home");
+          }, 1500);
+        } else if (actionType === "turnover" || actionType === "steal") {
+          // Possession change
+          setPossession(actingTeam === "home" ? "away" : "home");
+          setGameState("playing");
+          setBallHandlerId(actingTeam === "home" ? 5 : 0);
+        } else if (actionType === "rebound") {
+          // Rebound - team gets possession
+          setPossession(actingTeam);
+          setGameState("playing");
+          setBallHandlerId(isHomeTeam ? 4 : 9); // Center/PF usually rebounds
+        } else if (actionType === "foul") {
+          // Foul - brief pause
+          setGameState("playing");
+        } else if (actionType === "period") {
+          // Period start/end
+          if (currentEvent.description?.includes("Start")) {
+            setGameState("tipoff");
+            setTimeout(() => {
+              setGameState("playing");
+              setPossession("home");
+            }, 2000);
+          }
+        } else {
+          // Default: keep playing
+          setGameState("playing");
+          setPossession(actingTeam);
+          setBallHandlerId(isHomeTeam ? 0 : 5);
+        }
         break;
       }
       
@@ -153,18 +205,27 @@ export default function CourtAnimator({
           setPossession("home");
         }, 3000);
         break;
+      
+      case "game_initialize":
+        setGameState("warmup");
+        lastScoreRef.current = { home: 0, away: 0 };
+        break;
         
       case "game_result": {
-        const homeWon = (currentEvent.home_team?.score || 0) > (currentEvent.away_team?.score || 0);
+        const finalScore = currentEvent.final_score || {};
+        const homeWon = (finalScore.home || 0) > (finalScore.away || 0);
         setScoringTeam(homeWon ? "home" : "away");
         setGameState("gameover");
         break;
       }
         
       default:
-        setGameState("warmup");
+        // Keep current state for unknown events
+        if (gameState === "warmup") {
+          setGameState("playing");
+        }
     }
-  }, [currentEventIndex, currentEvent]);
+  }, [currentEventIndex, currentEvent, homeTricode, awayTricode, gameState]);
 
   // Update ball handler based on possession
   useEffect(() => {
@@ -330,10 +391,10 @@ export default function CourtAnimator({
               action={getPlayerAction(index)}
               teamColor={isHome ? homeColor : awayColor}
               secondaryColor={isHome ? homeSecondary : awaySecondary}
-              jersey={JERSEY_NUMBERS[isHome ? "home" : "away"][roleIndex]}
+              jersey={isHome ? homeJerseys[roleIndex] : awayJerseys[roleIndex]}
               direction={isHome ? "right" : "left"}
               size={ballHandlerId === index ? 70 : 60}
-              imageUrl={isHome ? HOME_PLAYERS[roleIndex] : AWAY_PLAYERS[roleIndex]}
+              imageUrl={isHome ? homeHeadshots[roleIndex] : awayHeadshots[roleIndex]}
               teamLogo={isHome ? homeLogo : awayLogo}
               hasBall={ballHandlerId === index}
               zIndex={index}

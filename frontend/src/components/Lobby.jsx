@@ -1,9 +1,72 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { useTheme } from "../App";
-import { API_BASE_URL, nbaTeams } from "../constants";
+import { API_BASE_URL, nbaTeams, findTeamByName, getTeamLogo } from "../constants";
 import ThemeToggle from "./ThemeToggle";
+
+// Team Logo component with fallback
+function TeamLogo({ team, size = 50 }) {
+  const [imageError, setImageError] = useState(false);
+  
+  const logoSize = size;
+  const imgSize = size * 0.625; // 50/80 ratio from original
+  
+  if (imageError || !team.logo) {
+    // Fallback: show first letter of team name
+    return (
+      <div
+        style={{
+          width: logoSize,
+          height: logoSize,
+          borderRadius: "50%",
+          background: `linear-gradient(135deg, ${team.color}88 0%, ${team.color}44 100%)`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxShadow: "0 4px 20px rgba(0, 0, 0, 0.3)",
+        }}
+      >
+        <span
+          style={{
+            fontSize: size * 0.4,
+            color: "#fff",
+            fontWeight: "bold",
+            textShadow: "0 2px 4px rgba(0,0,0,0.3)",
+          }}
+        >
+          {team.name?.charAt(0) || "?"}
+        </span>
+      </div>
+    );
+  }
+  
+  return (
+    <div
+      style={{
+        width: logoSize,
+        height: logoSize,
+        borderRadius: "50%",
+        background: `linear-gradient(135deg, ${team.color}88 0%, ${team.color}44 100%)`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        boxShadow: "0 4px 20px rgba(0, 0, 0, 0.3)",
+      }}
+    >
+      <img
+        src={team.logo}
+        alt={team.name}
+        style={{
+          width: imgSize,
+          height: imgSize,
+          objectFit: "contain",
+        }}
+        onError={() => setImageError(true)}
+      />
+    </div>
+  );
+}
 
 export default function Lobby() {
   const [trials, setTrials] = useState([]);
@@ -12,11 +75,7 @@ export default function Lobby() {
   const navigate = useNavigate();
   const { theme } = useTheme();
 
-  useEffect(() => {
-    fetchTrials();
-  }, []);
-
-  const fetchTrials = async () => {
+  const fetchTrials = useCallback(async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/trials`);
       const data = await response.json();
@@ -26,10 +85,32 @@ export default function Lobby() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchTrials();
+    // Poll for trial updates every 5 seconds
+    const interval = setInterval(fetchTrials, 5000);
+    return () => clearInterval(interval);
+  }, [fetchTrials]);
 
   const getTeamInfo = (tricode) => {
-    return nbaTeams[tricode] || { name: tricode, color: "#64748B" };
+    // First try direct tricode lookup
+    if (nbaTeams[tricode]) {
+      const team = nbaTeams[tricode];
+      return { ...team, tricode, logo: getTeamLogo(tricode) };
+    }
+    // Try finding by name (handles full names like "Brooklyn Nets")
+    const found = findTeamByName(tricode);
+    if (found) {
+      return found; // findTeamByName already includes logo
+    }
+    // Fallback with the provided name
+    return { name: tricode || "Team", city: "", color: "#64748B", logo: null };
+  };
+
+  const isTrialLive = (trial) => {
+    return trial.phase !== "stopped" && trial.phase !== "completed";
   };
 
   return (
@@ -93,7 +174,7 @@ export default function Lobby() {
                   transition={{ delay: 0.1 * index, duration: 0.5 }}
                   onMouseEnter={() => setHoveredTrial(trial.id)}
                   onMouseLeave={() => setHoveredTrial(null)}
-                  onClick={() => navigate(`/room/${trial.id}`)}
+                  onClick={() => navigate(`/room/${trial.id}`, { state: { isLive: isTrialLive(trial) } })}
                   style={{
                     ...styles.trialCard,
                     transform: isHovered ? "scale(1.02)" : "scale(1)",
@@ -109,30 +190,17 @@ export default function Lobby() {
                   <div
                     style={{
                       ...styles.statusBadge,
-                      background:
-                        trial.phase === "stopped" ? "#10B981" : "#F59E0B",
+                      background: isTrialLive(trial) ? "#F59E0B" : "#10B981",
                     }}
                   >
-                    {trial.phase === "stopped" ? "COMPLETED" : "LIVE"}
+                    {isTrialLive(trial) ? "LIVE" : "COMPLETED"}
                   </div>
 
                   {/* Teams matchup display */}
                   <div style={styles.matchupContainer}>
                     {/* Home team */}
                     <div style={styles.teamSection}>
-                      <div
-                        style={{
-                          ...styles.teamLogo,
-                          background: `linear-gradient(135deg, ${homeTeam.color}88 0%, ${homeTeam.color}44 100%)`,
-                        }}
-                      >
-                        <img
-                          src={homeTeam.logo}
-                          alt={homeTeam.name}
-                          style={styles.teamLogoImg}
-                          onError={(e) => (e.target.style.display = "none")}
-                        />
-                      </div>
+                      <TeamLogo team={homeTeam} size={80} />
                       <span className="font-display" style={styles.teamName}>
                         {homeTeam.city}
                       </span>
@@ -151,19 +219,7 @@ export default function Lobby() {
 
                     {/* Away team */}
                     <div style={styles.teamSection}>
-                      <div
-                        style={{
-                          ...styles.teamLogo,
-                          background: `linear-gradient(135deg, ${awayTeam.color}88 0%, ${awayTeam.color}44 100%)`,
-                        }}
-                      >
-                        <img
-                          src={awayTeam.logo}
-                          alt={awayTeam.name}
-                          style={styles.teamLogoImg}
-                          onError={(e) => (e.target.style.display = "none")}
-                        />
-                      </div>
+                      <TeamLogo team={awayTeam} size={80} />
                       <span className="font-display" style={styles.teamName}>
                         {awayTeam.city}
                       </span>
@@ -344,21 +400,6 @@ const styles = {
     flexDirection: "column",
     alignItems: "center",
     flex: 1,
-  },
-  teamLogo: {
-    width: "80px",
-    height: "80px",
-    borderRadius: "50%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: "12px",
-    boxShadow: "0 4px 20px rgba(0, 0, 0, 0.3)",
-  },
-  teamLogoImg: {
-    width: "50px",
-    height: "50px",
-    objectFit: "contain",
   },
   teamName: {
     fontSize: "12px",
