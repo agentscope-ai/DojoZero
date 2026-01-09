@@ -2,6 +2,17 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { modelProviders, DOJOZERO_CDN } from "../constants";
 
+/**
+ * AgentPanel component using unified span protocol.
+ * 
+ * Props from useTrialStream:
+ * - agents: Array of agent metadata from registration spans
+ *   Format: [{ id, type, name, model, modelProvider, systemPrompt, tools }]
+ * - agentStates: Grouped conversations from message spans
+ *   Format: { actorId: { streamId: [{ role, content, name, timestamp, ... }] } }
+ * - events: All events for timeline
+ * - currentEventIndex: Current playback position
+ */
 export default function AgentPanel({ agents: agentsList = [], events = [], currentEventIndex = 0, agentStates = {} }) {
   const [visibleBubbles, setVisibleBubbles] = useState([]);
   const bubbleStreamRef = useRef(null);
@@ -16,118 +27,88 @@ export default function AgentPanel({ agents: agentsList = [], events = [], curre
     return String(value);
   };
 
-  // Extract text from content array (handles both string and array formats)
-  const extractTextFromContent = (content) => {
-    if (!content) return "";
-    if (typeof content === "string") return content;
-    if (Array.isArray(content)) {
-      return content
-        .filter((item) => item.type === "text" && item.text)
-        .map((item) => item.text)
-        .join(" ");
-    }
-    return "";
-  };
-
-  // Process agent data from agentStates (checkpoint format)
-  // Format: { betting_agent: [{ stream: [...messages] }, ...] }
+  // Process agents from unified protocol
+  // agentsList comes from registration spans via useTrialStream.extractActors
   const agents = useMemo(() => {
-    const agentList = [];
-    
-    // First, try to get agents from agentStates (checkpoint data)
-    for (const [actorId, stateArray] of Object.entries(agentStates)) {
-      // Skip non-agent actors (streams end with _stream)
-      if (actorId.endsWith("_stream") || actorId === "event_counter") continue;
+    return agentsList.map((agent) => {
+      const actorId = agent.id || "unknown";
+      const modelName = agent.model || agent.name || actorId;
       
-      const modelName = actorId.toLowerCase();
-      const providerInfo = modelProviders[modelName] || modelProviders.default;
+      // Try to find provider info by model name or provider
+      let providerInfo = modelProviders.default;
+      if (agent.modelProvider) {
+        // Check if we have a provider-specific config
+        const providerKey = agent.modelProvider.toLowerCase();
+        if (modelProviders[providerKey]) {
+          providerInfo = modelProviders[providerKey];
+        }
+      }
+      // Also try matching by model name
+      const modelKey = modelName.toLowerCase().replace(/[.-]/g, "_");
+      if (modelProviders[modelKey]) {
+        providerInfo = modelProviders[modelKey];
+      }
       
-      // Count assistant messages across all states
+      // Count messages for this agent from agentStates
       let messageCount = 0;
-      if (Array.isArray(stateArray)) {
-        for (const stateItem of stateArray) {
-          for (const [streamName, messages] of Object.entries(stateItem)) {
-            if (Array.isArray(messages)) {
-              messageCount += messages.filter((m) => m.role === "assistant").length;
-            }
-          }
+      const agentConversations = agentStates[actorId] || {};
+      for (const [streamId, messages] of Object.entries(agentConversations)) {
+        if (Array.isArray(messages)) {
+          messageCount += messages.filter((m) => m.role === "assistant").length;
         }
       }
       
-      agentList.push({
+      return {
         id: actorId,
         modelName,
-        phase: "completed",
-        events: messageCount,
+        displayName: agent.name || actorId,
+        model: agent.model,
+        modelProvider: agent.modelProvider,
+        systemPrompt: agent.systemPrompt,
+        tools: agent.tools || [],
         providerInfo,
-        actions: [],
         totalMessages: messageCount,
-      });
-    }
-    
-    // Fallback to agentsList if no agentStates
-    if (agentList.length === 0 && agentsList.length > 0) {
-      return agentsList.map((agent) => {
-        const actorId = agent.actor_id || agent.id || "unknown";
-        const modelName = actorId.toLowerCase();
-        const providerInfo = modelProviders[modelName] || modelProviders.default;
-        return {
-          id: actorId,
-          modelName,
-          phase: agent.phase || "running",
-          events: 0,
-          providerInfo,
-          actions: [],
-          totalMessages: 0,
-        };
-      });
-    }
-    
-    return agentList;
+      };
+    });
   }, [agentsList, agentStates]);
 
-  // Extract agent actions from agentStates (conversation history)
+  // Extract agent actions from agentStates (grouped conversations)
+  // agentStates format: { actorId: { streamId: [messages] } }
   const agentActions = useMemo(() => {
     const actions = [];
     let globalIdx = 0;
     
-    for (const [actorId, stateArray] of Object.entries(agentStates)) {
-      // Skip non-agent actors
-      if (actorId.endsWith("_stream") || actorId === "event_counter") continue;
-      
+    for (const [actorId, conversations] of Object.entries(agentStates)) {
       const agent = agents.find((a) => a.id === actorId);
       if (!agent) continue;
       
-      if (Array.isArray(stateArray)) {
-        for (const stateItem of stateArray) {
-          for (const [streamName, messages] of Object.entries(stateItem)) {
-            if (!Array.isArray(messages)) continue;
-            
-            for (const msg of messages) {
-              // Only show assistant messages with content
-              if (msg.role !== "assistant") continue;
-              
-              const text = extractTextFromContent(msg.content);
-              if (!text || text.length === 0) continue;
-              
-              actions.push({
-                id: `${actorId}-${globalIdx}`,
-                agentId: actorId,
-                text: text.substring(0, 200),
-                actionType: "message",
-                eventIndex: globalIdx,
-                agentColor: agent.providerInfo.color,
-                agentName: agent.providerInfo.name || agent.modelName,
-                agentInitials: agent.modelName
-                  .split("_")
-                  .map((w) => w[0]?.toUpperCase())
-                  .join("")
-                  .slice(0, 2) || "AI",
-                timestamp: msg.timestamp,
-              });
-              globalIdx++;
-            }
-          }
+      for (const [streamId, messages] of Object.entries(conversations)) {
+        if (!Array.isArray(messages)) continue;
+        
+        for (const msg of messages) {
+          // Only show assistant messages with content
+          if (msg.role !== "assistant") continue;
+          
+          const text = toDisplayString(msg.content);
+          if (!text || text.length === 0) continue;
+          
+          actions.push({
+            id: `${actorId}-${streamId}-${globalIdx}`,
+            agentId: actorId,
+            text: text.substring(0, 200),
+            actionType: msg.toolCalls ? "tool" : "message",
+            eventIndex: globalIdx,
+            agentColor: agent.providerInfo.color,
+            agentName: agent.displayName || agent.providerInfo.name || agent.modelName,
+            agentInitials: (agent.displayName || agent.modelName)
+              .split(/[-_\s]/)
+              .map((w) => w[0]?.toUpperCase())
+              .join("")
+              .slice(0, 2) || "AI",
+            timestamp: msg.timestamp,
+            toolCalls: msg.toolCalls,
+          });
+          globalIdx++;
         }
       }
     }
@@ -178,8 +159,8 @@ export default function AgentPanel({ agents: agentsList = [], events = [], curre
   }, [visibleBubbles]);
 
   const getAgentAvatar = (modelName, color) => {
-    const initials = modelName
-      .split("-")
+    const initials = (modelName || "AI")
+      .split(/[-_\s]/)
       .map((w) => w[0]?.toUpperCase())
       .join("")
       .slice(0, 2);
@@ -229,7 +210,7 @@ export default function AgentPanel({ agents: agentsList = [], events = [], curre
           >
             {/* Avatar section */}
             <div style={styles.avatarSection}>
-              {getAgentAvatar(agent.modelName, agent.providerInfo.color)}
+              {getAgentAvatar(agent.displayName || agent.modelName, agent.providerInfo.color)}
               <div style={styles.providerBadge}>
                 {agent.providerInfo.logo && (
                   <img
@@ -245,18 +226,23 @@ export default function AgentPanel({ agents: agentsList = [], events = [], curre
             {/* Info section */}
             <div style={styles.infoSection}>
               <span className="font-display" style={styles.agentName}>
-                {typeof agent.providerInfo?.name === "string" ? agent.providerInfo.name : "Agent"}
+                {agent.displayName || agent.providerInfo?.name || "Agent"}
               </span>
               <span className="font-tech" style={styles.modelId}>
-                {agent.modelName}
+                {agent.model || agent.modelName}
               </span>
+              {agent.modelProvider && (
+                <span className="font-tech" style={styles.providerText}>
+                  {agent.modelProvider}
+                </span>
+              )}
             </div>
 
             {/* Stats section */}
             <div style={styles.statsSection}>
               <div style={styles.statItem}>
                 <span className="font-tech" style={styles.statLabel}>
-                  EVENTS
+                  MSGS
                 </span>
                 <span
                   className="font-tech"
@@ -265,17 +251,19 @@ export default function AgentPanel({ agents: agentsList = [], events = [], curre
                     color: agent.providerInfo.color,
                   }}
                 >
-                  {agent.events}
-                </span>
-              </div>
-              <div style={styles.statItem}>
-                <span className="font-tech" style={styles.statLabel}>
-                  MSGS
-                </span>
-                <span className="font-tech" style={styles.statValue}>
                   {agent.totalMessages}
                 </span>
               </div>
+              {agent.tools && agent.tools.length > 0 && (
+                <div style={styles.statItem}>
+                  <span className="font-tech" style={styles.statLabel}>
+                    TOOLS
+                  </span>
+                  <span className="font-tech" style={styles.statValue}>
+                    {agent.tools.length}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Accent line */}
@@ -502,6 +490,12 @@ const styles = {
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
+  },
+  providerText: {
+    fontSize: "8px",
+    color: "var(--text-secondary)",
+    letterSpacing: "0.05em",
+    textTransform: "uppercase",
   },
   statsSection: {
     display: "flex",

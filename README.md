@@ -77,53 +77,55 @@ dojo0 replay \
 
 ## Server Usage
 
-The `dojo0 serve` command starts a FastAPI dashboard server that provides REST
-APIs for managing trials and streaming real-time events to the frontend:
+DojoZero uses a two-server architecture:
+
+- **Dashboard Server** (port 8000): Trial management, trace storage
+- **Frontend Server** (port 3001): WebSocket streaming, static file serving
+
+### Dashboard Server
 
 ```bash
-# Start the backend server
+# Start the dashboard server
 dojo0 serve --host 0.0.0.0 --port 8000
-```
 
-You can use the top-level `--setting` flag to share dashboard settings
-(store/runtime and import wiring) with the server process, just like with `dojo0 run`:
-
-```bash
+# With settings file
 dojo0 --setting dojozero.yaml serve --host 0.0.0.0 --port 8000
 ```
 
-### Available API Endpoints
+API endpoints:
+- `GET /api/trials` - List all trials
+- `GET /api/trials/{id}/status` - Get trial status
+- `POST /api/trials/{id}/stop` - Stop a running trial
+- `GET /api/traces` - List trials with trace data
+- `GET /api/traces/{trial_id}` - Get spans for a trial
 
-- `GET /trials` - List all trials
-- `GET /trials/{trial_id}` - Get trial details
-- `GET /trials/{trial_id}/stream` - Server-Sent Events stream for real-time updates
+### Frontend Server
 
-## Frontend Setup & Usage
+```bash
+# Start the frontend server (connects to Dashboard at localhost:8000)
+dojo0 frontend --trace-store http://localhost:8000
 
-The frontend provides a real-time dashboard for visualizing trial progress and
-agent interactions. It's built with React and Vite.
+# With Jaeger as trace source
+dojo0 frontend --trace-store http://jaeger:16686
 
-### Setup
+# Serve React static files
+dojo0 frontend --trace-store http://localhost:8000 --static-dir ./frontend/dist
+```
 
-Install frontend dependencies (first time only):
+API endpoints:
+- `GET /api/traces` - List trials from trace store
+- `GET /api/traces/{trial_id}` - Get spans for replay
+- `WS /ws/trials/{trial_id}/stream` - Real-time span streaming
+
+## Frontend Development
 
 ```bash
 cd frontend
-npm install
+npm install      # First time only
+npm run dev      # Start dev server at http://localhost:5173
 ```
 
-### Development
-
-Start the frontend development server:
-
-```bash
-cd frontend
-npm run dev
-```
-
-The frontend will be available at `http://localhost:5173` by default. Make sure
-the backend server is running at `http://localhost:8000` for the frontend to
-connect and receive real-time updates.
+Ensure Dashboard Server is running at `http://localhost:8000`.
 
 ## Runtime & Store Configuration
 

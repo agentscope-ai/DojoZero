@@ -405,6 +405,11 @@ class Dashboard:
             type(self._runtime_provider).__name__,
         )
 
+    @property
+    def store(self) -> DashboardStore:
+        """Access the underlying DashboardStore."""
+        return self._store
+
     async def launch_trial(self, spec: TrialSpec) -> TrialStatus:
         """Instantiate and start every actor defined in *spec*."""
 

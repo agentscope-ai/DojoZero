@@ -178,11 +178,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum sleep time in seconds between events (caps long delays). Default: 20.0 seconds",
     )
 
-    # FastAPI server command
+    # Dashboard Server command
     serve_parser = subparsers.add_parser(
         "serve",
-        help="Start the dashboard FastAPI server with WebSocket streaming",
-        description="Launch the FastAPI dashboard server for real-time trial monitoring.",
+        help="Start the Dashboard Server for trial management",
+        description="Launch the Dashboard Server for running trials and exposing trace APIs.",
     )
     serve_parser.add_argument(
         "--host",
@@ -194,6 +194,43 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=8000,
         help="Port to listen on (default: 8000).",
+    )
+    serve_parser.add_argument(
+        "--otlp-endpoint",
+        dest="otlp_endpoint",
+        help="OTLP endpoint URL for external trace storage. "
+        "If not provided, enables built-in Trace Query API.",
+    )
+
+    # Frontend Server command
+    frontend_parser = subparsers.add_parser(
+        "frontend",
+        help="Start the Frontend Server for WebSocket streaming",
+        description="Launch the Frontend Server for real-time span streaming to browsers.",
+    )
+    frontend_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host address to bind to (default: 127.0.0.1).",
+    )
+    frontend_parser.add_argument(
+        "--port",
+        type=int,
+        default=3001,
+        help="Port to listen on (default: 3001).",
+    )
+    frontend_parser.add_argument(
+        "--trace-store",
+        dest="trace_store",
+        required=True,
+        help="URL to Trace Store (Dashboard or Jaeger). "
+        "Example: http://localhost:8000 (Dashboard) or http://localhost:16686 (Jaeger).",
+    )
+    frontend_parser.add_argument(
+        "--static-dir",
+        dest="static_dir",
+        type=Path,
+        help="Path to built frontend assets to serve (optional).",
     )
     return parser
 
@@ -748,8 +785,8 @@ def _get_builder_command(args: argparse.Namespace) -> int:
 
 
 async def _serve_command(args: argparse.Namespace) -> int:
-    """Handle serve command - start FastAPI server with WebSocket streaming."""
-    from dojozero.core import run_server
+    """Handle serve command - start Dashboard Server."""
+    from dojozero.core._dashboard_server import run_dashboard_server
 
     config_payload = _load_cli_config(args.setting)
 
@@ -768,12 +805,45 @@ async def _serve_command(args: argparse.Namespace) -> int:
 
     host = args.host
     port = args.port
+    otlp_endpoint = getattr(args, "otlp_endpoint", None)
 
-    LOGGER.info("Starting DojoZero server at http://%s:%d", host, port)
-    LOGGER.info("REST API: http://%s:%d/api/trials", host, port)
+    LOGGER.info("Starting Dashboard Server at http://%s:%d", host, port)
+    LOGGER.info("Trial API: http://%s:%d/api/trials", host, port)
+    if otlp_endpoint:
+        LOGGER.info("Traces will be sent to OTLP endpoint: %s", otlp_endpoint)
+    else:
+        LOGGER.info("Trace Query API: http://%s:%d/api/traces", host, port)
+
+    await run_dashboard_server(
+        dashboard=dashboard,
+        host=host,
+        port=port,
+        otlp_endpoint=otlp_endpoint,
+    )
+    return 0
+
+
+async def _frontend_command(args: argparse.Namespace) -> int:
+    """Handle frontend command - start Frontend Server."""
+    from dojozero.core._frontend_server import run_frontend_server
+
+    host = args.host
+    port = args.port
+    trace_store = args.trace_store
+    static_dir = getattr(args, "static_dir", None)
+
+    LOGGER.info("Starting Frontend Server at http://%s:%d", host, port)
+    LOGGER.info("Trace Store: %s", trace_store)
     LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
+    if static_dir:
+        LOGGER.info("Static files: %s", static_dir)
 
-    await run_server(dashboard=dashboard, host=host, port=port)
+    await run_frontend_server(
+        trace_store_url=trace_store,
+        host=host,
+        port=port,
+        static_dir=static_dir,
+    )
     return 0
 
 
@@ -793,6 +863,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _get_builder_command(args)
         if args.command == "serve":
             return asyncio.run(_serve_command(args))
+        if args.command == "frontend":
+            return asyncio.run(_frontend_command(args))
         raise DojoZeroCLIError(f"unknown command '{args.command}'")
     except DojoZeroCLIError as exc:
         LOGGER.error(str(exc))

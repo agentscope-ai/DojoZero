@@ -6,50 +6,194 @@ import { WS_BASE_URL, API_BASE_URL } from "../constants";
  */
 const WSMessageType = {
   SNAPSHOT: "snapshot",
-  EVENT: "event",
+  SPAN: "span",
   TRIAL_ENDED: "trial_ended",
   HEARTBEAT: "heartbeat",
 };
 
 /**
- * Normalize an event to a consistent format.
- * Events can come in two formats:
- * 1. Live stream: { payload: {...}, metadata: {...}, emitted_at: ... }
- * 2. Checkpoint: { event_type: "...", timestamp: "...", ... } (flat structure)
- *
- * We normalize to the flat structure with event_type at the top level.
+ * Try to parse a JSON string, return original value if parsing fails.
  */
-function normalizeEvent(event) {
-  // If event has payload, it's from live stream - extract and merge
-  if (event.payload) {
-    return {
-      ...event.payload,
-      ...event.metadata,
-      emitted_at: event.emitted_at,
-      stream_id: event.stream_id,
-      sequence: event.sequence,
+function tryParseJSON(value) {
+  if (typeof value !== "string") return value;
+  if (!value.startsWith("{") && !value.startsWith("[")) return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Convert span tags array to a map for easy access.
+ * Handles both array format [{key, value}] and object format {key: value}.
+ */
+function spanTagsToMap(tags) {
+  const tagsMap = {};
+  if (Array.isArray(tags)) {
+    for (const tag of tags) {
+      if (tag.key && tag.value !== undefined) {
+        tagsMap[tag.key] = tag.value;
+      }
+    }
+  } else if (typeof tags === "object" && tags !== null) {
+    Object.assign(tagsMap, tags);
+  }
+  return tagsMap;
+}
+
+/**
+ * Check if a span is a registration span (actor metadata).
+ */
+function isRegistrationSpan(span) {
+  return span.operationName && span.operationName.endsWith(".registered");
+}
+
+/**
+ * Check if a span is an agent message span.
+ * Agent spans have operationName starting with "agent." (e.g., agent.response, agent.input)
+ */
+function isAgentSpan(span) {
+  return span.operationName && span.operationName.startsWith("agent.");
+}
+
+/**
+ * Check if a span is a DataStream event (for EventTicker).
+ * DataStream events are NOT registration spans and NOT agent spans.
+ */
+function isDataStreamEvent(span) {
+  return !isRegistrationSpan(span) && !isAgentSpan(span);
+}
+
+/**
+ * Extract actors (agents/datastreams) from registration spans.
+ * Registration spans have operationName like "agent.registered" or "datastream.registered"
+ * and contain resource.* tags with actor metadata.
+ */
+function extractActors(spans) {
+  const actors = {};
+
+  for (const span of spans) {
+    if (!isRegistrationSpan(span)) continue;
+
+    const tagsMap = spanTagsToMap(span.tags);
+    const actorId = tagsMap["dojozero.actor.id"];
+    const actorType = tagsMap["dojozero.actor.type"];
+
+    if (!actorId) continue;
+
+    actors[actorId] = {
+      id: actorId,
+      type: actorType,
+      name: tagsMap["resource.name"] || actorId,
+      model: tagsMap["resource.model"],
+      modelProvider: tagsMap["resource.model_provider"],
+      systemPrompt: tagsMap["resource.system_prompt"],
+      tools: tryParseJSON(tagsMap["resource.tools"]) || [],
+      sourceType: tagsMap["resource.source_type"],
     };
   }
-  // Already flat (from checkpoint) - return as-is
+
+  return actors;
+}
+
+/**
+ * Group agent message spans by actor and stream for conversation view.
+ * Returns: { actorId: { streamId: [messages] } }
+ */
+function groupConversations(spans) {
+  const conversations = {};
+
+  for (const span of spans) {
+    // Skip registration spans and non-agent spans
+    if (isRegistrationSpan(span)) continue;
+    if (!span.operationName || !span.operationName.startsWith("agent.")) continue;
+
+    const tagsMap = spanTagsToMap(span.tags);
+    const actorId = tagsMap["dojozero.actor.id"];
+    const streamId = tagsMap["event.stream_id"] || "default";
+
+    if (!actorId) continue;
+
+    if (!conversations[actorId]) {
+      conversations[actorId] = {};
+    }
+    if (!conversations[actorId][streamId]) {
+      conversations[actorId][streamId] = [];
+    }
+
+    conversations[actorId][streamId].push({
+      spanId: span.spanID,
+      role: tagsMap["event.role"],
+      content: tagsMap["event.content"],
+      name: tagsMap["event.name"],
+      toolCalls: tryParseJSON(tagsMap["event.tool_calls"]),
+      toolCallId: tagsMap["event.tool_call_id"],
+      messageId: tagsMap["event.message_id"],
+      timestamp: span.startTime ? new Date(span.startTime / 1000).toISOString() : null,
+      sequence: tagsMap["dojozero.event.sequence"],
+    });
+  }
+
+  return conversations;
+}
+
+/**
+ * Convert a span to event format for UI compatibility.
+ * Spans have format: { operationName, startTime, tags: [{key, value}], ... }
+ * We convert to flat event format: { event_type, timestamp, ... }
+ */
+function spanToEvent(span) {
+  const tagsMap = spanTagsToMap(span.tags);
+
+  // Convert microsecond timestamp to ISO string
+  const timestamp = span.startTime
+    ? new Date(span.startTime / 1000).toISOString()
+    : null;
+
+  // Build event object
+  const event = {
+    event_type: span.operationName || "unknown",
+    timestamp,
+    span_id: span.spanID,
+    trace_id: span.traceID,
+    actor_id: tagsMap["dojozero.actor.id"],
+    actor_type: tagsMap["dojozero.actor.type"],
+    sequence: tagsMap["dojozero.event.sequence"],
+  };
+
+  // Extract resource.* tags (for registration spans)
+  for (const [key, value] of Object.entries(tagsMap)) {
+    if (key.startsWith("resource.")) {
+      const fieldName = key.slice(9); // Remove "resource." prefix
+      event[fieldName] = tryParseJSON(value);
+    }
+  }
+
+  // Extract business data from tags (event.* prefix)
+  for (const [key, value] of Object.entries(tagsMap)) {
+    if (key.startsWith("event.")) {
+      const fieldName = key.slice(6); // Remove "event." prefix
+      event[fieldName] = tryParseJSON(value);
+    }
+  }
+
   return event;
 }
 
 /**
  * Extract game metadata from events.
  * Looks for game_initialize and game_update events to extract team info.
- * This is specific to NBA game events.
  */
 function extractGameMetadata(events) {
   const metadata = {};
 
   for (const event of events) {
-    // Extract from game_initialize event
     if (event.event_type === "game_initialize") {
       metadata.home_team = event.home_team || "";
       metadata.away_team = event.away_team || "";
       metadata.game_id = event.game_id || "";
     }
-    // Extract team tricodes from game_update event
     if (event.event_type === "game_update") {
       const home = event.home_team;
       const away = event.away_team;
@@ -68,8 +212,46 @@ function extractGameMetadata(events) {
 }
 
 /**
+ * Process spans to extract all derived state.
+ * This is the central function that processes the unified span protocol.
+ *
+ * Separation of concerns:
+ * - events: Only DataStream events (game_update, odds_update, etc.) for EventTicker
+ * - conversations: Agent messages grouped by actor/stream for AgentPanel
+ * - agents: Agent metadata from registration spans
+ */
+function processSpans(rawSpans) {
+  // Extract actors from registration spans
+  const actors = extractActors(rawSpans);
+  const agentsList = Object.values(actors).filter((a) => a.type === "agent");
+
+  // Group conversations for agent panel (agent messages only)
+  const conversations = groupConversations(rawSpans);
+
+  // Convert ONLY DataStream events for EventTicker timeline
+  // Filter out: registration spans, agent spans
+  const dataStreamSpans = rawSpans.filter(isDataStreamEvent);
+  const events = dataStreamSpans.map(spanToEvent);
+
+  // Extract game metadata from DataStream events
+  const gameMetadata = extractGameMetadata(events);
+
+  return {
+    actors,
+    agents: agentsList,
+    conversations,
+    events,
+    metadata: gameMetadata,
+  };
+}
+
+/**
  * Hook for managing WebSocket connection to trial stream.
  * Handles live streaming for active trials and falls back to REST for completed trials.
+ *
+ * Uses the unified span protocol where ALL data flows through spans:
+ * - Resource Spans (*.registered): Actor metadata
+ * - Event Spans: Runtime events with business data
  *
  * @param {string} trialId - The trial ID to connect to
  * @param {boolean} isLive - Whether the trial is live (uses WebSocket) or completed (uses REST)
@@ -82,12 +264,14 @@ export function useTrialStream(trialId, isLive = true) {
   const [error, setError] = useState(null);
   const [trialEnded, setTrialEnded] = useState(false);
 
-  // Data state from snapshot
+  // Data state
   const [metadata, setMetadata] = useState({});
   const [phase, setPhase] = useState("");
   const [agents, setAgents] = useState([]);
   const [events, setEvents] = useState([]);
-  const [agentStates, setAgentStates] = useState({}); // Agent conversation history
+  const [spans, setSpans] = useState([]);
+  const [agentStates, setAgentStates] = useState({});
+  const [actors, setActors] = useState({});
 
   // WebSocket ref
   const wsRef = useRef(null);
@@ -95,34 +279,39 @@ export function useTrialStream(trialId, isLive = true) {
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 5;
 
-  // Process snapshot message
+  // Process snapshot message (contains all spans)
   const handleSnapshot = useCallback((data) => {
-    // Normalize all events from snapshot
-    const normalizedEvents = (data.recent_events || []).map(normalizeEvent);
+    const rawSpans = data.spans || [];
+    setSpans(rawSpans);
 
-    // Extract game metadata from events and merge with trial metadata
-    const gameMetadata = extractGameMetadata(normalizedEvents);
-    const mergedMetadata = { ...(data.metadata || {}), ...gameMetadata };
+    // Process spans using unified protocol
+    const processed = processSpans(rawSpans);
+    setActors(processed.actors);
+    setAgents(processed.agents);
+    setAgentStates(processed.conversations);
+    setEvents(processed.events);
+    setMetadata(processed.metadata);
 
-    setMetadata(mergedMetadata);
-    setPhase(data.phase || "");
-    setAgents(data.agents || []);
-    setEvents(normalizedEvents);
     setLoading(false);
     setConnected(true);
     reconnectAttempts.current = 0;
   }, []);
 
-  // Process event message - normalize and append new event to list
-  const handleEvent = useCallback((eventData) => {
-    const normalized = normalizeEvent(eventData);
-    setEvents((prev) => [...prev, normalized]);
+  // Process span message - convert and append new span to list
+  const handleSpan = useCallback((spanData) => {
+    setSpans((prev) => {
+      const newSpans = [...prev, spanData];
 
-    // Update metadata if this is a game event with team info
-    if (normalized.event_type === "game_initialize" || normalized.event_type === "game_update") {
-      const newGameMeta = extractGameMetadata([normalized]);
-      setMetadata((prev) => ({ ...prev, ...newGameMeta }));
-    }
+      // Re-process all spans to update derived state
+      const processed = processSpans(newSpans);
+      setActors(processed.actors);
+      setAgents(processed.agents);
+      setAgentStates(processed.conversations);
+      setEvents(processed.events);
+      setMetadata((currentMeta) => ({ ...currentMeta, ...processed.metadata }));
+
+      return newSpans;
+    });
   }, []);
 
   // Process trial_ended message
@@ -152,8 +341,8 @@ export function useTrialStream(trialId, isLive = true) {
         case WSMessageType.SNAPSHOT:
           handleSnapshot(message.data);
           break;
-        case WSMessageType.EVENT:
-          handleEvent(message.data);
+        case WSMessageType.SPAN:
+          handleSpan(message.data);
           break;
         case WSMessageType.TRIAL_ENDED:
           handleTrialEnded();
@@ -186,35 +375,36 @@ export function useTrialStream(trialId, isLive = true) {
         }, delay);
       }
     };
-  }, [trialId, isLive, handleSnapshot, handleEvent, handleTrialEnded, trialEnded]);
+  }, [trialId, isLive, handleSnapshot, handleSpan, handleTrialEnded, trialEnded]);
 
-  // Fetch replay data for completed trials
-  const fetchReplayData = useCallback(async () => {
+  // Fetch trace data for completed trials
+  const fetchTraceData = useCallback(async () => {
     if (!trialId) return;
 
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/trials/${trialId}/replay`);
+      const response = await fetch(`${API_BASE_URL}/traces/${trialId}`);
       if (!response.ok) {
-        throw new Error(`Failed to fetch replay: ${response.status}`);
+        throw new Error(`Failed to fetch trace: ${response.status}`);
       }
       const data = await response.json();
 
-      // Normalize all events from replay response
-      const normalizedEvents = (data.events || []).map(normalizeEvent);
+      const rawSpans = data.spans || [];
+      setSpans(rawSpans);
 
-      // Extract game metadata from events and merge with trial metadata
-      const gameMetadata = extractGameMetadata(normalizedEvents);
-      const mergedMetadata = { ...(data.metadata || {}), ...gameMetadata };
+      // Process spans using unified protocol
+      const processed = processSpans(rawSpans);
+      setActors(processed.actors);
+      setAgents(processed.agents);
+      setAgentStates(processed.conversations);
+      setEvents(processed.events);
+      setMetadata(processed.metadata);
 
-      setMetadata(mergedMetadata);
-      setPhase(data.phase || "stopped");
-      setEvents(normalizedEvents);
-      setAgentStates(data.agent_states || {});
+      setPhase("stopped");
       setTrialEnded(true);
       setConnected(true);
     } catch (err) {
-      console.error("Failed to fetch replay data:", err);
+      console.error("Failed to fetch trace data:", err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -228,7 +418,7 @@ export function useTrialStream(trialId, isLive = true) {
     if (isLive) {
       connectWebSocket();
     } else {
-      fetchReplayData();
+      fetchTraceData();
     }
 
     return () => {
@@ -241,7 +431,7 @@ export function useTrialStream(trialId, isLive = true) {
         clearTimeout(reconnectTimeoutRef.current);
       }
     };
-  }, [trialId, isLive, connectWebSocket, fetchReplayData]);
+  }, [trialId, isLive, connectWebSocket, fetchTraceData]);
 
   // Disconnect handler
   const disconnect = useCallback(() => {
@@ -267,7 +457,9 @@ export function useTrialStream(trialId, isLive = true) {
     phase,
     agents,
     events,
-    agentStates,
+    spans,
+    agentStates,  // Now contains grouped conversations: { actorId: { streamId: [messages] } }
+    actors,       // New: all actors with metadata: { actorId: { id, type, name, model, ... } }
 
     // Controls
     disconnect,
@@ -275,4 +467,3 @@ export function useTrialStream(trialId, isLive = true) {
 }
 
 export default useTrialStream;
-
