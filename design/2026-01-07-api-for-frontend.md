@@ -150,7 +150,7 @@ Spans are generated on-demand from checkpoint data:
 1. **DataStream events**: `{ event_type, timestamp, ... }` → SpanData
 2. **Agent messages**: `{ role, content, timestamp, ... }` → SpanData
 
-See [2026-01-09-span-design.md](./2026-01-09-span-design.md) for span format details.
+See [2026-01-09-span-design.md](2026-01-09-trace-data-design.md) for span format details.
 
 ## Deployment Modes
 
