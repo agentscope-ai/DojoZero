@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { modelProviders } from "../constants";
+import { modelProviders, DOJOZERO_CDN } from "../constants";
 
 export default function AgentPanel({ agents: agentsList = [], events = [], currentEventIndex = 0, agentStates = {} }) {
   const [visibleBubbles, setVisibleBubbles] = useState([]);
@@ -397,7 +397,7 @@ const styles = {
     overflow: "hidden",
     marginTop: "8px",
     gap: "12px",
-    backgroundImage: `url(/assets/nba/background/agentboard.jpg)`,
+    backgroundImage: `url(${DOJOZERO_CDN.agentboard})`,
     backgroundSize: "cover",
     backgroundPosition: "center",
     backgroundRepeat: "no-repeat",

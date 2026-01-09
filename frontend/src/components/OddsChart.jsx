@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { motion } from "framer-motion";
+import { DOJOZERO_CDN } from "../constants";
 
 export default function OddsChart({ events, homeTeam, awayTeam, header }) {
   // Extract odds data from events
@@ -275,7 +276,7 @@ const styles = {
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundImage: `url(/assets/nba/background/scoreboard.jpg)`,
+    backgroundImage: `url(${DOJOZERO_CDN.scoreboard})`,
     backgroundSize: "cover",
     backgroundPosition: "center",
     zIndex: 0,

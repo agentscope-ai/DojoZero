@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
-import { nbaTeams, findTeamByName, getTeamLogo } from "../constants";
+import { nbaTeams, findTeamByName, getTeamLogo, DOJOZERO_CDN } from "../constants";
 import { useTrialStream } from "../hooks/useTrialStream";
 import ThemeToggle from "./ThemeToggle";
 import OddsChart from "./OddsChart";
@@ -722,7 +722,7 @@ const styles = {
     flex: 1,
     display: "flex",
     flexDirection: "column",
-    background: `url(/assets/nba/background/room_background.png) center center / cover no-repeat`,
+    background: `url(${DOJOZERO_CDN.room_background}) center center / cover no-repeat`,
     borderRadius: "16px",
     border: "1px solid var(--glass-border)",
     borderBottom: "none",

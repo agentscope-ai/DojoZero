@@ -2,6 +2,13 @@
 export const API_BASE_URL = "http://localhost:8000/api";
 export const WS_BASE_URL = "ws://localhost:8000";
 
+// Dojozero CDN Assets
+export const DOJOZERO_CDN = {
+  room_background: "https://img.alicdn.com/imgextra/i4/O1CN01rGeB7i1Ma9PbVLTIw_!!6000000001450-2-tps-2176-1952.png",
+  agentboard: "https://img.alicdn.com/imgextra/i1/O1CN01Y5wkVa1pKEVJ21St9_!!6000000005341-0-tps-1378-1476.jpg",
+  scoreboard: "https://img.alicdn.com/imgextra/i4/O1CN01b1fuBG1w3TJrxcXQz_!!6000000006252-0-tps-1618-1028.jpg",
+};
+
 // Model provider logos and colors
 export const modelProviders = {
   "qwen-flash": {
