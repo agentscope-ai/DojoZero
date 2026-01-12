@@ -1,11 +1,15 @@
 """Reusable base classes for concrete DojoZero actor implementations."""
 
 import asyncio
+import json
+import logging
 from abc import ABC
 from typing import Any, Dict, Sequence
 
 from ._actors import Agent, Operator
 from ._types import StreamEvent
+
+LOGGER = logging.getLogger("dojozero.base")
 
 
 class ActorBase(ABC):
@@ -13,10 +17,20 @@ class ActorBase(ABC):
 
     def __init__(self, actor_id: str) -> None:
         self._actor_id = actor_id
+        self._trial_id: str | None = None  # Set by Dashboard when actor is created
 
     @property
     def actor_id(self) -> str:
         return self._actor_id
+
+    @property
+    def trial_id(self) -> str | None:
+        """Trial ID this actor belongs to (set by Dashboard)."""
+        return self._trial_id
+
+    def set_trial_id(self, trial_id: str) -> None:
+        """Set the trial ID for this actor (called by Dashboard)."""
+        self._trial_id = trial_id
 
 
 class AgentBase(ActorBase, ABC):
@@ -61,15 +75,68 @@ class DataStreamBase(ActorBase, ABC):
         return tuple(self._consumer_registry.keys())
 
     async def _publish(self, event: StreamEvent[Any]) -> None:
-        """Publish a stream event to all registered consumers."""
+        """Publish a stream event to all registered consumers.
+
+        Also emits a span to the global OTel exporter if configured.
+        """
         if not self._consumer_registry:
             return
+
+        # Emit span for event publication
+        self._emit_event_span(event)
+
         await asyncio.gather(
             *(
                 consumer.handle_stream_event(event)
                 for consumer in self._consumer_registry.values()
             )
         )
+
+    def _emit_event_span(self, event: StreamEvent[Any]) -> None:
+        """Emit a span for a stream event to the OTel exporter."""
+        from ._tracing import emit_span, create_span_from_event
+
+        if self._trial_id is None:
+            return
+
+        # Determine event type from payload if available
+        event_type = "stream.event"
+        payload = event.payload
+        if hasattr(payload, "event_type"):
+            event_type = payload.event_type
+        elif isinstance(payload, dict) and "event_type" in payload:
+            event_type = payload["event_type"]
+
+        # Build tags for the span
+        tags: dict[str, Any] = {
+            "dojozero.event.type": event_type,
+            "dojozero.event.sequence": event.sequence,
+        }
+
+        # Add payload data as event.* tags
+        if hasattr(payload, "to_dict"):
+            payload_dict = payload.to_dict()
+        elif isinstance(payload, dict):
+            payload_dict = payload
+        else:
+            payload_dict = {"data": str(payload)}
+
+        for key, value in payload_dict.items():
+            if key in ("event_type", "timestamp", "actor_id", "stream_id"):
+                continue  # Skip metadata fields
+            if isinstance(value, (dict, list)):
+                tags[f"event.{key}"] = json.dumps(value, default=str)
+            else:
+                tags[f"event.{key}"] = value
+
+        span = create_span_from_event(
+            trial_id=self._trial_id,
+            actor_id=self._actor_id,
+            operation_name=event_type,
+            start_time=event.emitted_at,
+            extra_tags=tags,
+        )
+        emit_span(span)
 
 
 class OperatorBase(ActorBase, ABC):

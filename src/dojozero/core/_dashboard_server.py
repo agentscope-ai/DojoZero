@@ -16,7 +16,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ._dashboard import Dashboard, TrialNotFoundError
-from ._tracing import load_spans_from_checkpoint
+from ._tracing import (
+    OTelSpanExporter,
+    set_otel_exporter,
+)
 
 LOGGER = logging.getLogger("dojozero.dashboard_server")
 
@@ -58,8 +61,22 @@ def create_dashboard_app(
             dashboard=dashboard,
             otlp_endpoint=otlp_endpoint,
         )
+
+        # Initialize OTel exporter if endpoint is configured
+        otel_exporter = None
+        if otlp_endpoint:
+            otel_exporter = OTelSpanExporter(otlp_endpoint)
+            set_otel_exporter(otel_exporter)
+            LOGGER.info("OTel exporter configured: %s", otlp_endpoint)
+
         LOGGER.info("Dashboard Server started")
         yield
+
+        # Shutdown OTel exporter
+        if otel_exporter is not None:
+            otel_exporter.shutdown()
+            set_otel_exporter(None)
+
         LOGGER.info("Dashboard Server shutting down")
 
     app = FastAPI(
@@ -153,61 +170,6 @@ def create_dashboard_app(
             content={
                 "id": status.trial_id,
                 "phase": status.phase.value,
-            }
-        )
-
-    # -------------------------------------------------------------------------
-    # Trace Query API (for Frontend Server)
-    # -------------------------------------------------------------------------
-
-    @app.get("/api/traces")
-    async def list_traces() -> JSONResponse:
-        """List all trial IDs that have checkpoint data."""
-        state = get_server_state()
-        store = state.dashboard.store
-        # List trials that have checkpoints
-        trial_ids = []
-        for record in store.list_trial_records():
-            checkpoints = store.list_checkpoints(record.trial_id)
-            if checkpoints:
-                trial_ids.append(record.trial_id)
-        result = [{"trial_id": tid} for tid in trial_ids]
-        return JSONResponse(content=result)
-
-    @app.get("/api/traces/{trial_id}")
-    async def get_trial_trace(trial_id: str) -> JSONResponse:
-        """Get trace data for a trial from checkpoint.
-
-        Uses unified span protocol - all data flows through spans:
-        - Resource spans (*.registered): Actor metadata
-        - Event spans: Runtime events with business data
-
-        No separate agent_states field - frontend extracts everything from spans.
-        """
-        state = get_server_state()
-        store = state.dashboard.store
-
-        # Get latest checkpoint
-        summaries = store.list_checkpoints(trial_id)
-        if not summaries:
-            return JSONResponse(
-                content={
-                    "trial_id": trial_id,
-                    "spans": [],
-                }
-            )
-
-        latest = max(summaries, key=lambda s: s.created_at)
-        checkpoint = store.load_checkpoint(latest.checkpoint_id)
-        actor_states = dict(checkpoint.actor_states)
-
-        # Convert to spans - includes registration spans and event spans
-        spans = load_spans_from_checkpoint(trial_id, actor_states)
-
-        return JSONResponse(
-            content={
-                "trial_id": trial_id,
-                "spans": [span.to_dict() for span in spans],
             }
         )
 

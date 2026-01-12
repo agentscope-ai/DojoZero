@@ -63,7 +63,6 @@ from ._frontend_server import (
     run_frontend_server,
 )
 from ._tracing import (
-    DashboardTraceReader,
     JaegerTraceReader,
     SpanData,
     TraceReader,
@@ -126,7 +125,6 @@ __all__ = [
     "create_frontend_app",
     "run_frontend_server",
     # Trace Store
-    "DashboardTraceReader",
     "JaegerTraceReader",
     "SpanData",
     "TraceReader",

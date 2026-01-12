@@ -33,7 +33,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ._tracing import (
-    DashboardTraceReader,
     JaegerTraceReader,
     SpanData,
     TraceReader,
@@ -170,20 +169,13 @@ def get_server_state() -> FrontendServerState:
 
 
 def create_trace_reader(trace_store_url: str) -> TraceReader:
-    """Create appropriate TraceReader based on URL.
+    """Create a JaegerTraceReader for the given URL.
 
     Args:
-        trace_store_url: URL to trace store
-            - Dashboard: http://localhost:8000
-            - Jaeger: http://localhost:16686
+        trace_store_url: URL to Jaeger trace store (e.g., http://localhost:16686)
     """
-    # Heuristic: Jaeger uses port 16686 by default
-    if ":16686" in trace_store_url or "/jaeger" in trace_store_url.lower():
-        LOGGER.info("Using Jaeger trace reader for %s", trace_store_url)
-        return JaegerTraceReader(trace_store_url)
-    else:
-        LOGGER.info("Using Dashboard trace reader for %s", trace_store_url)
-        return DashboardTraceReader(trace_store_url)
+    LOGGER.info("Using Jaeger trace reader for %s", trace_store_url)
+    return JaegerTraceReader(trace_store_url)
 
 
 def create_frontend_app(

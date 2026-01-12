@@ -88,42 +88,6 @@ class TraceReader(Protocol):
         ...
 
 
-class DashboardTraceReader:
-    """TraceReader that reads from Dashboard's built-in Trace Query API."""
-
-    def __init__(self, dashboard_url: str) -> None:
-        self._base_url = dashboard_url.rstrip("/")
-        self._client = httpx.AsyncClient(timeout=30.0)
-
-    async def list_trials(self) -> list[str]:
-        """List all trial IDs from Dashboard."""
-        response = await self._client.get(f"{self._base_url}/api/traces")
-        response.raise_for_status()
-        data = response.json()
-        return [item["trial_id"] for item in data]
-
-    async def get_spans(
-        self,
-        trial_id: str,
-        since: datetime | None = None,
-    ) -> list[SpanData]:
-        """Get spans for a trial from Dashboard."""
-        params: dict[str, str] = {}
-        if since is not None:
-            params["since"] = since.isoformat()
-        response = await self._client.get(
-            f"{self._base_url}/api/traces/{trial_id}",
-            params=params,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return [SpanData.from_dict(span) for span in data.get("spans", [])]
-
-    async def close(self) -> None:
-        """Close the HTTP client."""
-        await self._client.aclose()
-
-
 class JaegerTraceReader:
     """TraceReader that reads from Jaeger HTTP API."""
 
@@ -611,14 +575,207 @@ def load_spans_from_checkpoint(
     return registration_spans + event_spans
 
 
+class OTelSpanExporter:
+    """OpenTelemetry span exporter for real-time trace export to OTLP endpoints.
+
+    This class wraps the OpenTelemetry SDK to export DojoZero spans to an OTLP
+    endpoint (e.g., Jaeger). It uses synchronous export (no batching) for
+    real-time tracing.
+
+    Usage:
+        exporter = OTelSpanExporter(
+            otlp_endpoint="http://localhost:4318",
+            service_name="dojozero",
+        )
+        exporter.export_span(span_data)
+        exporter.shutdown()
+    """
+
+    def __init__(
+        self,
+        otlp_endpoint: str,
+        service_name: str = "dojozero",
+    ) -> None:
+        """Initialize the OTLP exporter.
+
+        Args:
+            otlp_endpoint: OTLP HTTP endpoint URL (e.g., http://localhost:4318)
+            service_name: Service name for trace attribution
+        """
+        self._endpoint = otlp_endpoint.rstrip("/")
+        self._service_name = service_name
+        self._tracer = None
+        self._provider = None
+        self._initialized = False
+
+    def _ensure_initialized(self) -> None:
+        """Lazy initialization of OpenTelemetry components."""
+        if self._initialized:
+            return
+
+        try:
+            from opentelemetry import trace
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                OTLPSpanExporter,
+            )
+            from opentelemetry.sdk.resources import Resource
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+            # Create resource with service name
+            resource = Resource.create({"service.name": self._service_name})
+
+            # Create tracer provider
+            self._provider = TracerProvider(resource=resource)
+
+            # Create OTLP exporter - use /v1/traces endpoint
+            traces_endpoint = f"{self._endpoint}/v1/traces"
+            otlp_exporter = OTLPSpanExporter(endpoint=traces_endpoint)
+
+            # Use SimpleSpanProcessor for real-time export (no batching)
+            self._provider.add_span_processor(SimpleSpanProcessor(otlp_exporter))
+
+            # Set as global tracer provider
+            trace.set_tracer_provider(self._provider)
+
+            # Get tracer
+            self._tracer = trace.get_tracer("dojozero.dashboard")
+            self._initialized = True
+
+            LOGGER.info(
+                "OTel exporter initialized: endpoint=%s service=%s",
+                traces_endpoint,
+                self._service_name,
+            )
+        except ImportError as e:
+            LOGGER.warning(
+                "OpenTelemetry SDK not available, spans will not be exported: %s", e
+            )
+            self._initialized = True  # Mark as initialized to avoid retrying
+
+    def export_span(self, span_data: SpanData) -> None:
+        """Export a SpanData to the OTLP endpoint.
+
+        Args:
+            span_data: The span to export
+        """
+        self._ensure_initialized()
+        if self._tracer is None:
+            return
+
+        try:
+            from opentelemetry.trace import SpanKind, Status, StatusCode
+
+            # Create span with the tracer
+            with self._tracer.start_as_current_span(
+                span_data.operation_name,
+                kind=SpanKind.INTERNAL,
+            ) as span:
+                # Set attributes from tags
+                for key, value in span_data.tags.items():
+                    if value is not None:
+                        # Convert to string if not a primitive type
+                        if isinstance(value, (str, int, float, bool)):
+                            span.set_attribute(key, value)
+                        else:
+                            span.set_attribute(key, str(value))
+
+                # Set span status to OK
+                span.set_status(Status(StatusCode.OK))
+
+        except Exception as e:
+            LOGGER.warning("Failed to export span '%s': %s", span_data.span_id, e)
+
+    def export_registration_span(
+        self,
+        trial_id: str,
+        actor_id: str,
+        actor_type: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Export an actor registration span.
+
+        Args:
+            trial_id: Trial identifier
+            actor_id: Actor identifier
+            actor_type: "agent" or "datastream"
+            metadata: Actor metadata (name, model, tools, etc.)
+        """
+        span = convert_actor_registration_to_span(
+            trial_id, actor_id, actor_type, metadata
+        )
+        self.export_span(span)
+
+    def export_event_span(
+        self,
+        trial_id: str,
+        actor_id: str,
+        operation_name: str,
+        tags: dict[str, Any] | None = None,
+    ) -> None:
+        """Export an event span.
+
+        Args:
+            trial_id: Trial identifier
+            actor_id: Actor identifier
+            operation_name: Operation/event type name
+            tags: Additional tags for the span
+        """
+        extra_tags = tags or {}
+        span = create_span_from_event(
+            trial_id=trial_id,
+            actor_id=actor_id,
+            operation_name=operation_name,
+            extra_tags=extra_tags,
+        )
+        self.export_span(span)
+
+    def shutdown(self) -> None:
+        """Shutdown the exporter and flush pending spans."""
+        if self._provider is not None:
+            try:
+                self._provider.shutdown()
+                LOGGER.info("OTel exporter shutdown complete")
+            except Exception as e:
+                LOGGER.warning("Error during OTel exporter shutdown: %s", e)
+
+
+# Global exporter instance (lazily initialized)
+_global_exporter: OTelSpanExporter | None = None
+
+
+def get_otel_exporter() -> OTelSpanExporter | None:
+    """Get the global OTel exporter instance."""
+    return _global_exporter
+
+
+def set_otel_exporter(exporter: OTelSpanExporter | None) -> None:
+    """Set the global OTel exporter instance."""
+    global _global_exporter
+    _global_exporter = exporter
+
+
+def emit_span(span_data: SpanData) -> None:
+    """Emit a span using the global exporter if configured.
+
+    This is a convenience function for emitting spans from anywhere in the
+    codebase without needing to pass around the exporter instance.
+    """
+    if _global_exporter is not None:
+        _global_exporter.export_span(span_data)
+
+
 __all__ = [
-    "DashboardTraceReader",
     "JaegerTraceReader",
+    "OTelSpanExporter",
     "SpanData",
     "TraceReader",
     "convert_actor_registration_to_span",
     "convert_agent_message_to_span",
     "convert_checkpoint_event_to_span",
     "create_span_from_event",
+    "emit_span",
+    "get_otel_exporter",
     "load_spans_from_checkpoint",
+    "set_otel_exporter",
 ]

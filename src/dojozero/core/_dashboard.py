@@ -664,6 +664,7 @@ class Dashboard:
                 context=context,
             )
             self._register_actor_runtime(registry, runtime)
+            self._set_actor_trial_id(runtime.instance, spec.trial_id)
             operator_instance = runtime.instance
             if not (
                 isinstance(operator_instance, Operator)
@@ -674,6 +675,9 @@ class Dashboard:
                     " does not implement the Operator protocol"
                 )
             operators[runtime.actor_id] = cast(Operator, operator_instance)
+            self._emit_actor_registration_span(
+                spec.trial_id, runtime.actor_id, "operator", actor_spec.config
+            )
             LOGGER.debug(
                 "Materialized operator '%s' for trial '%s'",
                 runtime.actor_id,
@@ -686,6 +690,7 @@ class Dashboard:
                 context=context,
             )
             self._register_actor_runtime(registry, runtime)
+            self._set_actor_trial_id(runtime.instance, spec.trial_id)
             agent_instance = runtime.instance
             if not (
                 isinstance(agent_instance, Agent) or _is_agent_like(agent_instance)
@@ -695,6 +700,9 @@ class Dashboard:
                     " does not implement the Agent protocol"
                 )
             agents[runtime.actor_id] = cast(Agent, agent_instance)
+            self._emit_actor_registration_span(
+                spec.trial_id, runtime.actor_id, "agent", actor_spec.config
+            )
         for actor_spec in spec.data_streams:
             runtime = await self._materialize_actor(
                 actor_spec,
@@ -702,6 +710,7 @@ class Dashboard:
                 context=context,
             )
             self._register_actor_runtime(registry, runtime)
+            self._set_actor_trial_id(runtime.instance, spec.trial_id)
             stream_instance = runtime.instance
             if not (
                 isinstance(stream_instance, DataStream)
@@ -712,6 +721,9 @@ class Dashboard:
                     " does not implement the DataStream protocol"
                 )
             data_streams[runtime.actor_id] = cast(DataStream, stream_instance)
+            self._emit_actor_registration_span(
+                spec.trial_id, runtime.actor_id, "datastream", actor_spec.config
+            )
         await self._wire_actor_dependencies(
             spec,
             agents=agents,
@@ -1257,6 +1269,61 @@ class Dashboard:
             return self._trials[trial_id]
         except KeyError as exc:
             raise TrialNotFoundError(f"trial '{trial_id}' does not exist") from exc
+
+    def _set_actor_trial_id(self, actor: Any, trial_id: str) -> None:
+        """Set trial_id on actor if it supports the set_trial_id method.
+
+        Note: This only works for local actors with a synchronous set_trial_id.
+        Ray actors use proxies that return coroutines, which we skip here.
+        """
+        # Skip Ray actor proxies - they return coroutines for all methods
+        actor_type_name = type(actor).__name__
+        if "RayActorProxy" in actor_type_name or "ActorProxy" in actor_type_name:
+            return
+
+        set_trial_id = getattr(actor, "set_trial_id", None)
+        if set_trial_id is not None and callable(set_trial_id):
+            try:
+                set_trial_id(trial_id)
+            except Exception as e:
+                LOGGER.debug(
+                    "Failed to set trial_id on actor: %s", e
+                )
+
+    def _emit_actor_registration_span(
+        self,
+        trial_id: str,
+        actor_id: str,
+        actor_type: str,
+        config: Any,
+    ) -> None:
+        """Emit a registration span for an actor to the OTel exporter."""
+        from ._tracing import emit_span, convert_actor_registration_to_span
+
+        # Extract metadata from config
+        metadata: dict[str, Any] = {}
+        if isinstance(config, dict):
+            metadata = {
+                "name": config.get("name", config.get("actor_id", actor_id)),
+                "model": config.get("model"),
+                "model_provider": config.get("model_provider"),
+                "system_prompt": config.get("system_prompt"),
+                "tools": config.get("tools"),
+                "source_type": config.get("source_type"),
+            }
+        else:
+            metadata = {"name": actor_id}
+
+        # Remove None values
+        metadata = {k: v for k, v in metadata.items() if v is not None}
+
+        span = convert_actor_registration_to_span(
+            trial_id=trial_id,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            metadata=metadata,
+        )
+        emit_span(span)
 
 
 __all__ = [
