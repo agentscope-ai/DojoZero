@@ -31,6 +31,7 @@ class PolymarketStore(DataStore):
         event_emitter=None,
         market_url: str | None = None,
         slug: str | None = None,
+        sport: str = "nba",
     ):
         """Initialize Polymarket store.
 
@@ -46,6 +47,7 @@ class PolymarketStore(DataStore):
             event_emitter: Event emitter for publishing events
             market_url: Optional Polymarket market URL (e.g., "https://polymarket.com/sports/nba/games/week/3/nba-sas-lal-2025-12-10")
             slug: Optional market slug (e.g., "nba-sas-lal-2025-12-10"). If market_url is provided, slug is extracted from it.
+            sport: Sport type for slug construction ("nba" or "nfl"). Defaults to "nba".
         """
         # Set default poll_intervals if not provided
         # Default: pre-game interval (5 minutes = 300 seconds)
@@ -71,6 +73,7 @@ class PolymarketStore(DataStore):
 
         self._market_url = market_url
         self._slug = slug
+        self._sport = sport.lower()  # "nba" or "nfl"
 
         # Track game status for dynamic polling intervals
         self._game_started: bool = False
@@ -148,7 +151,10 @@ class PolymarketStore(DataStore):
                 away_tricode = identifier["away_tricode"].lower()
                 home_tricode = identifier["home_tricode"].lower()
                 game_date = identifier["game_date"]  # Expected format: YYYY-MM-DD
-                params["slug"] = f"nba-{away_tricode}-{home_tricode}-{game_date}"
+                # Use sport prefix (nba or nfl)
+                params["slug"] = (
+                    f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
+                )
             elif "game_id" in identifier:
                 # Use game_id for API params (API may use "event_id" parameter name)
                 params["event_id"] = identifier["game_id"]
@@ -179,7 +185,8 @@ class PolymarketStore(DataStore):
                 """Callback to adjust polling interval based on game status."""
                 event_type = event.event_type
 
-                if event_type == "game_start":
+                # Handle both NBA and NFL game start events
+                if event_type in ("game_start", "nfl_game_start"):
                     # Game started: switch to in-game polling (5 seconds)
                     if not self._game_started:
                         logger.info(
@@ -187,17 +194,23 @@ class PolymarketStore(DataStore):
                         )
                         self.update_poll_interval("odds", 5.0)
                         self._game_started = True
-                elif event_type == "game_result":
+                # Handle both NBA and NFL game result events
+                elif event_type in ("game_result", "nfl_game_result"):
                     # Game ended: stop odds polling (no more updates needed)
                     logger.info("Game ended, stopping odds polling")
                     # Stop polling by setting _running to False
                     # This will cause the _poll_loop to exit on next iteration
                     self._running = False
 
-            # Subscribe to game_start and game_result events
+            # Subscribe to game_start and game_result events (both NBA and NFL)
             self._data_hub.subscribe_agent(
                 agent_id=f"{self.store_id}_game_status_monitor",
-                event_types=["game_start", "game_result"],
+                event_types=[
+                    "game_start",
+                    "game_result",
+                    "nfl_game_start",
+                    "nfl_game_result",
+                ],
                 callback=game_status_callback,
             )
             logger.info(

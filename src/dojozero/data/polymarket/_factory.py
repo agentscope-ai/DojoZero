@@ -15,12 +15,14 @@ class PolymarketStoreFactory(StoreFactory):
 
     Optional metadata:
         - market_url: Direct Polymarket market URL
-        - game_id: Game identifier (used as event_id in odds events)
+        - game_id: Game identifier for NBA (used as event_id in odds events)
+        - event_id: Event identifier for NFL (used as event_id in odds events)
         - away_team_tricode: Away team abbreviation (for slug construction)
         - home_team_tricode: Home team abbreviation (for slug construction)
         - game_date: Game date string (for slug construction)
         - polymarket_poll_intervals: Custom poll intervals
           Default: {"odds": 300.0} (5 minutes)
+        - sample: Trial sample name (used to determine sport type: "nba-*" or "nfl-*")
     """
 
     def get_required_metadata_keys(self) -> list[str]:
@@ -52,6 +54,13 @@ class PolymarketStoreFactory(StoreFactory):
         # Get poll intervals
         poll_intervals = metadata.get("polymarket_poll_intervals")
 
+        # Determine sport type from sample name
+        sample = str(metadata.get("sample", "nba"))
+        if sample.startswith("nfl"):
+            sport = "nfl"
+        else:
+            sport = "nba"  # Default to NBA
+
         api = PolymarketAPI()
 
         if poll_intervals:
@@ -60,6 +69,7 @@ class PolymarketStoreFactory(StoreFactory):
                 api=api,
                 poll_intervals=poll_intervals,
                 market_url=market_url,
+                sport=sport,
             )
         else:
             # Use default intervals: {"odds": 300.0}
@@ -67,6 +77,7 @@ class PolymarketStoreFactory(StoreFactory):
                 store_id=store_id,
                 api=api,
                 market_url=market_url,
+                sport=sport,
             )
 
         # Build identifier for polling

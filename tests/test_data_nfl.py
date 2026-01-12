@@ -311,7 +311,7 @@ class TestNFLStoreParseScoreboard:
         assert init_events[0].away_team == "San Francisco 49ers"
 
     def test_parse_scoreboard_emits_odds_update(self, nfl_store):
-        """Test that scoreboard parsing emits OddsUpdateEvent."""
+        """Test that scoreboard parsing emits NFLOddsUpdateEvent from ESPN sportsbook data."""
         scoreboard_data = {
             "scoreboard": {
                 "events": [
@@ -348,7 +348,7 @@ class TestNFLStoreParseScoreboard:
 
         events = nfl_store._parse_api_response(scoreboard_data)
 
-        # Should emit OddsUpdateEvent
+        # Should emit NFLOddsUpdateEvent from ESPN sportsbook data
         odds_events = [e for e in events if isinstance(e, NFLOddsUpdateEvent)]
         assert len(odds_events) == 1
         assert odds_events[0].spread == -2.5

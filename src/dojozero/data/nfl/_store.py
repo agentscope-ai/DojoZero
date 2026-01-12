@@ -186,7 +186,8 @@ class NFLStore(DataStore):
                 )
                 self._state.mark_game_initialized(event_id)
 
-            # Handle odds updates
+            # Handle odds updates from ESPN scoreboard
+            # ESPN provides sportsbook odds from providers like DraftKings, FanDuel
             odds_list = competition.get("odds", [])
             if odds_list:
                 odds = odds_list[0]  # Use first provider

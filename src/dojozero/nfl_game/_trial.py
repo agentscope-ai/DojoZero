@@ -46,7 +46,7 @@ class NFLGameTrialParams(BaseModel):
     """Trial parameters for NFL game data collection.
 
     This trial builder creates a data collection setup for NFL games
-    using the ESPN API.
+    using the ESPN API. Odds come from ESPN's sportsbook data (DraftKings, etc.).
     """
 
     # NFL game configuration
@@ -99,7 +99,7 @@ def _build_trial_spec(
     if params.data_streams:
         stream_configs = params.data_streams
     else:
-        # Default: all NFL event types
+        # Default: all NFL event types (odds from ESPN sportsbook data)
         stream_configs = [
             NFLDataStreamConfig(
                 id="nfl_game_initialize_stream", event_type="nfl_game_initialize"
@@ -115,6 +115,7 @@ def _build_trial_spec(
             ),
             NFLDataStreamConfig(id="nfl_play_stream", event_type="nfl_play"),
             NFLDataStreamConfig(id="nfl_drive_stream", event_type="nfl_drive"),
+            # ESPN sportsbook odds (DraftKings, FanDuel, etc.)
             NFLDataStreamConfig(
                 id="nfl_odds_update_stream", event_type="nfl_odds_update"
             ),
@@ -172,7 +173,7 @@ def _build_trial_spec(
         "hub_id": hub_id,
         "persistence_file": persistence_file,
         "enable_persistence": enable_persistence,
-        # Store types to create
+        # Store types to create (NFL only - odds come from ESPN)
         "store_types": ["nfl"],
     }
 
@@ -214,7 +215,7 @@ def _build_nfl_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         bool(enable_persistence_raw) if enable_persistence_raw is not None else True
     )
 
-    # Get store types from metadata
+    # Get store types from metadata (NFL only - odds come from ESPN)
     store_types_raw = metadata.get("store_types", ["nfl"])
     if isinstance(store_types_raw, list):
         store_types = [str(s) for s in store_types_raw]
@@ -250,6 +251,7 @@ register_trial_builder(
             {"id": "nfl_game_update_stream", "event_type": "nfl_game_update"},
             {"id": "nfl_play_stream", "event_type": "nfl_play"},
             {"id": "nfl_drive_stream", "event_type": "nfl_drive"},
+            # ESPN sportsbook odds (DraftKings, FanDuel, etc.)
             {"id": "nfl_odds_update_stream", "event_type": "nfl_odds_update"},
         ],
     },

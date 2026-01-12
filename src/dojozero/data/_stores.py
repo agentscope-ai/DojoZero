@@ -78,6 +78,7 @@ class DataStore(ABC):
 
         # Polling state
         self._running = False
+        self._poll_task: asyncio.Task[None] | None = None  # Reference to polling task
         self._last_poll_time: datetime | None = None
         self._last_poll_times: dict[str, datetime] = {}  # Per-endpoint last poll times
         self._poll_identifier: dict[
@@ -134,16 +135,37 @@ class DataStore(ABC):
             return
 
         self._running = True
-        asyncio.create_task(self._poll_loop())
+        self._poll_task = asyncio.create_task(self._poll_loop())
 
     async def stop_polling(self) -> None:
         """Stop polling the API and close any open connections."""
         self._running = False
+
+        # Wait for the polling task to complete before closing the session
+        if self._poll_task and not self._poll_task.done():
+            try:
+                # Give the task a short time to finish its current iteration
+                await asyncio.wait_for(self._poll_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                # If it doesn't finish in time, cancel it
+                self._poll_task.cancel()
+                try:
+                    await self._poll_task
+                except asyncio.CancelledError:
+                    pass
+            except asyncio.CancelledError:
+                pass
+            self._poll_task = None
+
+        # Small delay to allow any pending operations to complete
+        await asyncio.sleep(0.1)
+
         # Close the API session if it has a close method
         if self._api and hasattr(self._api, "close"):
             try:
                 close_method = getattr(self._api, "close")
                 await close_method()
+                logger.debug("Closed API session for store %s", self.store_id)
             except Exception as e:
                 logger.warning(
                     "Error closing API session for store %s: %s", self.store_id, e
