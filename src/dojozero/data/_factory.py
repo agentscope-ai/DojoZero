@@ -195,6 +195,13 @@ def build_runtime_context(
 
     context["_startup"] = start_data_stores
 
+    # Create cleanup callback
+    async def stop_data_stores() -> None:
+        """Stop all DataHub stores (stop polling and close sessions)."""
+        await hub.stop()
+
+    context["_cleanup"] = stop_data_stores
+
     return context
 
 
