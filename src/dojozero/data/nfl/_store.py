@@ -50,14 +50,24 @@ class NFLStore(DataStore):
         )
         self._state = NFLGameStateTracker()
 
-    def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
-        """Parse ESPN API response into DataEvents."""
+    def _parse_api_response(
+        self, data: dict[str, Any], target_event_id: str | None = None
+    ) -> Sequence[DataEvent]:
+        """Parse ESPN API response into DataEvents.
+
+        Args:
+            data: API response data
+            target_event_id: If provided, only emit events for this game ID.
+                           If None, emit events for all games (used for multi-game monitoring).
+        """
         events: list[DataEvent] = []
         timestamp = datetime.now(timezone.utc)
 
         # Handle scoreboard response
         if "scoreboard" in data:
-            scoreboard_events = self._parse_scoreboard(data["scoreboard"], timestamp)
+            scoreboard_events = self._parse_scoreboard(
+                data["scoreboard"], timestamp, target_event_id
+            )
             events.extend(scoreboard_events)
 
         # Handle summary response
@@ -73,9 +83,18 @@ class NFLStore(DataStore):
         return events
 
     def _parse_scoreboard(
-        self, data: dict[str, Any], timestamp: datetime
+        self,
+        data: dict[str, Any],
+        timestamp: datetime,
+        target_event_id: str | None = None,
     ) -> list[DataEvent]:
         """Parse scoreboard data into events.
+
+        Args:
+            data: Scoreboard API response data
+            timestamp: Timestamp to use for events
+            target_event_id: If provided, only emit events for this game ID.
+                           If None, emit events for all games.
 
         Emits:
         - NFLGameInitializeEvent for new games
@@ -92,6 +111,10 @@ class NFLStore(DataStore):
 
             event_id = str(game.get("id", ""))
             if not event_id:
+                continue
+
+            # Filter to target game if specified
+            if target_event_id and event_id != target_event_id:
                 continue
 
             # Get competition data
@@ -251,7 +274,7 @@ class NFLStore(DataStore):
         """Parse game summary data into events.
 
         Emits:
-        - NFLGameUpdateEvent with boxscore data
+        - NFLGameUpdateEvent with boxscore data (skipped if game concluded and final update already emitted)
         - NFLDriveEvent for completed drives
         """
         events: list[DataEvent] = []
@@ -259,6 +282,11 @@ class NFLStore(DataStore):
         event_id = str(data.get("eventId", ""))
         if not event_id:
             return events
+
+        # Skip emitting game updates if game is concluded and we've already emitted the final update
+        game_concluded = self._state.is_game_concluded(event_id)
+        final_update_emitted = self._state.has_final_update_emitted(event_id)
+        should_emit_update = not (game_concluded and final_update_emitted)
 
         # Parse boxscore
         boxscore = data.get("boxscore", {})
@@ -322,22 +350,27 @@ class NFLStore(DataStore):
                     else:
                         away_team_dict["score"] = score
 
-                events.append(
-                    NFLGameUpdateEvent(
-                        timestamp=timestamp,
-                        event_id=event_id,
-                        quarter=quarter,
-                        game_clock=game_clock,
-                        possession=possession_team,
-                        down=down,
-                        distance=distance,
-                        yard_line=yard_line,
-                        home_team=home_team_dict,
-                        away_team=away_team_dict,
-                        home_line_scores=home_line_scores,
-                        away_line_scores=away_line_scores,
+                # Only emit update if we should (skip duplicates for concluded games)
+                if should_emit_update:
+                    events.append(
+                        NFLGameUpdateEvent(
+                            timestamp=timestamp,
+                            event_id=event_id,
+                            quarter=quarter,
+                            game_clock=game_clock,
+                            possession=possession_team,
+                            down=down,
+                            distance=distance,
+                            yard_line=yard_line,
+                            home_team=home_team_dict,
+                            away_team=away_team_dict,
+                            home_line_scores=home_line_scores,
+                            away_line_scores=away_line_scores,
+                        )
                     )
-                )
+                    # Mark final update as emitted if game is concluded
+                    if game_concluded:
+                        self._state.mark_final_update_emitted(event_id)
 
         # Parse drives
         drives = data.get("drives", {})
@@ -549,7 +582,10 @@ class NFLStore(DataStore):
         events: list[DataEvent] = []
         identifier = identifier or {}
 
-        # Poll scoreboard for all games (or filtered by date/week)
+        # Get target event_id for filtering (if monitoring a single game)
+        target_event_id = identifier.get("event_id")
+
+        # Poll scoreboard for game status/odds updates
         if self._should_poll_endpoint("scoreboard"):
             scoreboard_params: dict[str, Any] = {}
             if "dates" in identifier:
@@ -561,7 +597,10 @@ class NFLStore(DataStore):
 
             scoreboard_data = await self._api.fetch("scoreboard", scoreboard_params)
             if scoreboard_data:
-                scoreboard_events = self._parse_api_response(scoreboard_data)
+                # Pass target_event_id to filter to single game (if configured)
+                scoreboard_events = self._parse_api_response(
+                    scoreboard_data, target_event_id
+                )
                 events.extend(scoreboard_events)
                 self._record_poll_time("scoreboard")
 

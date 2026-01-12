@@ -36,6 +36,9 @@ class NFLGameStateTracker:
             str, dict[str, Any]
         ] = {}  # event_id -> last odds snapshot
         self._current_drive: dict[str, str] = {}  # event_id -> current drive_id
+        self._final_update_emitted: set[str] = (
+            set()
+        )  # event_id -> True when final NFLGameUpdateEvent emitted
 
     def get_previous_status(self, event_id: str) -> int | None:
         """Get previous game status for transition detection.
@@ -56,6 +59,36 @@ class NFLGameStateTracker:
             status: Game status code (1=scheduled, 2=in_progress, 3=final)
         """
         self._previous_game_status[event_id] = status
+
+    def is_game_concluded(self, event_id: str) -> bool:
+        """Check if game has concluded (status = FINAL).
+
+        Args:
+            event_id: ESPN event ID
+
+        Returns:
+            True if game status is FINAL
+        """
+        return self._previous_game_status.get(event_id) == self.STATUS_FINAL
+
+    def has_final_update_emitted(self, event_id: str) -> bool:
+        """Check if final game update has been emitted.
+
+        Args:
+            event_id: ESPN event ID
+
+        Returns:
+            True if final NFLGameUpdateEvent has been emitted
+        """
+        return event_id in self._final_update_emitted
+
+    def mark_final_update_emitted(self, event_id: str) -> None:
+        """Mark that final game update has been emitted.
+
+        Args:
+            event_id: ESPN event ID
+        """
+        self._final_update_emitted.add(event_id)
 
     def has_seen_play(self, play_id: str) -> bool:
         """Check if play has been processed (deduplication).

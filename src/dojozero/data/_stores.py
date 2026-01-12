@@ -137,8 +137,17 @@ class DataStore(ABC):
         asyncio.create_task(self._poll_loop())
 
     async def stop_polling(self) -> None:
-        """Stop polling the API."""
+        """Stop polling the API and close any open connections."""
         self._running = False
+        # Close the API session if it has a close method
+        if self._api and hasattr(self._api, "close"):
+            try:
+                close_method = getattr(self._api, "close")
+                await close_method()
+            except Exception as e:
+                logger.warning(
+                    "Error closing API session for store %s: %s", self.store_id, e
+                )
 
     def _get_poll_interval(self, endpoint: str | None = None) -> float:
         """Get polling interval for a specific endpoint.
