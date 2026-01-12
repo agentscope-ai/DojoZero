@@ -6,27 +6,31 @@ This script demonstrates the generic ESPN API that works with any sport/league:
 2. Fetching detailed game summaries with boxscores
 3. Fetching play-by-play data
 4. Parsing API responses into typed events
+5. Finding finished games from recent game days
 
 Usage:
-    # Run with default settings (NFL)
-    uv run python demos/nfl_api_demo.py
+    # Run with default settings (NFL, finds recent finished games)
+    uv run python demos/espn_api_demo.py
 
     # Run with a different sport/league
-    uv run python demos/nfl_api_demo.py --sport basketball --league nba
-    uv run python demos/nfl_api_demo.py --sport soccer --league eng.1
-    uv run python demos/nfl_api_demo.py --sport hockey --league nhl
+    uv run python demos/espn_api_demo.py --sport basketball --league nba
+    uv run python demos/espn_api_demo.py --sport soccer --league eng.1
+    uv run python demos/espn_api_demo.py --sport hockey --league nhl
+
+    # Run multi-sport demo
+    uv run python demos/espn_api_demo.py --multi-sport
 
     # Run with proxy
-    DOJOZERO_PROXY_URL="http://proxy:8080" uv run python demos/nfl_api_demo.py
+    DOJOZERO_PROXY_URL="http://proxy:8080" uv run python demos/espn_api_demo.py
 
     # Specify a game event ID
-    uv run python demos/nfl_api_demo.py --event-id 401671827
+    uv run python demos/espn_api_demo.py --event-id 401671827
 """
 
 import argparse
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dojozero.data.espn import (
     ESPNExternalAPI,
@@ -61,9 +65,108 @@ SPORT_LEAGUES = {
 
 def print_separator(title: str) -> None:
     """Print a section separator."""
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 70)
     print(f" {title}")
-    print("=" * 60)
+    print("=" * 70)
+
+
+async def find_recent_finished_games(
+    api: ESPNExternalAPI, days_back: int = 7
+) -> list[dict]:
+    """Find finished games from recent days.
+
+    Args:
+        api: ESPN API instance
+        days_back: Number of days to look back
+
+    Returns:
+        List of finished game events
+    """
+    finished_games = []
+
+    for days_ago in range(days_back):
+        date = datetime.now() - timedelta(days=days_ago)
+        date_str = date.strftime("%Y%m%d")
+
+        data = await api.fetch("scoreboard", {"dates": date_str})
+        scoreboard = data.get("scoreboard", {})
+        events = scoreboard.get("events", [])
+
+        for event in events:
+            competitions = event.get("competitions", [])
+            if not competitions:
+                continue
+
+            comp = competitions[0]
+            status = comp.get("status", {}).get("type", {})
+            status_name = status.get("name", "")
+
+            # Status "STATUS_FINAL" indicates finished game
+            if status_name == "STATUS_FINAL":
+                event["_game_date"] = date.strftime("%Y-%m-%d")
+                finished_games.append(event)
+
+        if finished_games:
+            # Found games, stop looking
+            break
+
+    return finished_games
+
+
+async def demo_finished_games(api: ESPNExternalAPI) -> list[dict]:
+    """Demo finding and displaying recently finished games."""
+    print_separator(
+        f"Finding Recent Finished {api.sport.upper()}/{api.league.upper()} Games"
+    )
+
+    print("\nSearching for finished games in the last 7 days...")
+    finished_games = await find_recent_finished_games(api)
+
+    if not finished_games:
+        print("No finished games found in the last 7 days.")
+        return []
+
+    game_date = finished_games[0].get("_game_date", "Unknown")
+    print(f"\nFound {len(finished_games)} finished games from {game_date}:\n")
+
+    for event in finished_games:
+        event_id = event.get("id", "")
+        short_name = event.get("shortName", "")
+
+        competitions = event.get("competitions", [])
+        if competitions:
+            comp = competitions[0]
+
+            # Get final scores
+            competitors = comp.get("competitors", [])
+            home_team = away_team = ""
+            home_score = away_score = 0
+            for c in competitors:
+                team = c.get("team", {})
+                score = int(c.get("score", "0") or "0")
+                if c.get("homeAway") == "home":
+                    home_team = team.get("displayName", "")
+                    home_score = score
+                else:
+                    away_team = team.get("displayName", "")
+                    away_score = score
+
+            # Determine winner
+            if home_score > away_score:
+                winner = "HOME"
+            elif away_score > home_score:
+                winner = "AWAY"
+            else:
+                winner = "TIE"
+
+            print(f"  [{event_id}] {short_name}")
+            print(
+                f"    Final Score: {away_team} {away_score} - {home_score} {home_team}"
+            )
+            print(f"    Winner: {winner}")
+            print()
+
+    return finished_games
 
 
 async def demo_scoreboard(api: ESPNExternalAPI) -> list[dict]:
@@ -201,18 +304,18 @@ async def demo_plays(api: ESPNExternalAPI, event_id: str) -> None:
     """Demonstrate fetching play-by-play data."""
     print_separator(f"Play-by-Play: {event_id}")
 
-    data = await api.fetch("plays", {"event_id": event_id, "limit": 20})
+    data = await api.fetch("plays", {"event_id": event_id, "limit": 50})
     plays_data = data.get("plays", {})
 
     items = plays_data.get("items", [])
     total = plays_data.get("count", 0)
 
-    print(f"\nTotal plays: {total} (showing last {min(len(items), 10)})")
+    print(f"\nTotal plays: {total} (showing last 15)")
     print()
 
-    for play in items[-10:]:  # Show last 10 plays
+    for play in items[-15:]:  # Show last 15 plays
         play_type = play.get("type", {}).get("text", "Unknown")
-        text = play.get("text", "")[:80]
+        text = play.get("text", "")[:70]
         period = play.get("period", {}).get("number", 0)
         clock = play.get("clock", {}).get("displayValue", "")
         home_score = play.get("homeScore", 0)
@@ -352,6 +455,18 @@ async def main():
         action="store_true",
         help="Run multi-sport demo showing ESPN API works with various sports",
     )
+    parser.add_argument(
+        "--find-finished",
+        action="store_true",
+        default=True,
+        help="Find and demo with recently finished games (default: True)",
+    )
+    parser.add_argument(
+        "--no-find-finished",
+        action="store_false",
+        dest="find_finished",
+        help="Don't search for finished games, use current scoreboard",
+    )
     args = parser.parse_args()
 
     # Check proxy configuration
@@ -376,15 +491,24 @@ async def main():
 
     api = ESPNExternalAPI(sport=sport, league=league)
     try:
-        # Demo 1: Scoreboard
+        event_id = args.event_id
         events = []
-        if not args.skip_scoreboard:
+
+        # Find finished games if requested and no specific event_id
+        if args.find_finished and not event_id:
+            finished_games = await demo_finished_games(api)
+            if finished_games:
+                # Use first finished game for detailed demos
+                event_id = finished_games[0].get("id")
+                events = finished_games
+                print(f"\nUsing finished game {event_id} for detailed demos")
+
+        # Demo 1: Scoreboard (if not already shown finished games)
+        if not args.skip_scoreboard and not events:
             events = await demo_scoreboard(api)
 
-        # Get an event_id for detailed demos
-        event_id = args.event_id
+        # Get an event_id for detailed demos if we don't have one
         if not event_id and events:
-            # Use first available game
             event_id = events[0].get("id")
             print(f"\nUsing event ID: {event_id} for detailed demos")
 

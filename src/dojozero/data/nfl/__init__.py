@@ -30,6 +30,7 @@ from dojozero.data.nfl._events import (
 )
 from dojozero.data.nfl._state_tracker import NFLGameStateTracker
 from dojozero.data.nfl._store import NFLStore
+from dojozero.data.nfl._factory import NFLStoreFactory
 from dojozero.data.nfl._utils import (
     ABBREV_TO_TEAM_NAME,
     DIVISIONS,
@@ -50,6 +51,7 @@ __all__ = [
     "NFLExternalAPI",
     # Store
     "NFLStore",
+    "NFLStoreFactory",
     # State Tracker
     "NFLGameStateTracker",
     # Events

@@ -12,9 +12,12 @@ from dojozero.core import (
     register_trial_builder,
     TrialSpec,
 )
-from dojozero.data import DataHub, WebSearchAPI, WebSearchStore
-from dojozero.data.nba import NBAExternalAPI, NBAStore
-from dojozero.data.polymarket import PolymarketAPI, PolymarketStore
+from dojozero.data._factory import build_runtime_context
+
+# Import factories to ensure they are registered
+import dojozero.data.nba._factory  # noqa: F401
+import dojozero.data.websearch._factory  # noqa: F401
+import dojozero.data.polymarket._factory  # noqa: F401
 from dojozero.data.nba._utils import get_game_info_by_id
 from dojozero.data.websearch._processors import (
     ExpertPredictionProcessor,
@@ -487,19 +490,24 @@ def _build_trial_spec(
         )
         agent_specs.append(agent_spec)
 
-    # Build metadata with game information
+    # Build metadata with game information and hub config
+    # This metadata is used by build_runtime_context and store factories
     metadata: dict[str, Any] = {
         "sample": "nba-pregame-betting",
         "game_id": params.game_id,
-        "hub_id": params.hub_id,
+        "hub_id": hub_id,
+        "persistence_file": persistence_file,
+        "enable_persistence": enable_persistence,
         "event_types": params.event_types,
+        # Store types to create (used by build_runtime_context)
+        "store_types": ["nba", "websearch", "polymarket"],
     }
 
     # Add market_url if provided
     if params.market_url:
         metadata["market_url"] = params.market_url
 
-    # Add team information if available
+    # Add team information if available (used by polymarket factory)
     if home_team_tricode and away_team_tricode:
         metadata["home_team_tricode"] = home_team_tricode
         metadata["away_team_tricode"] = away_team_tricode
@@ -518,169 +526,44 @@ def _build_trial_spec(
 def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
     """Build runtime context for NBA pre-game betting trial.
 
-    Creates DataHub and WebSearchStore instances from stream configs.
-    This allows from_dict() methods to access these dependencies via context.
+    Uses the generic build_runtime_context with registered store factories
+    to create DataHub and store instances.
 
     Args:
         spec: Trial specification
 
     Returns:
-        Context dictionary with 'data_hubs' and 'stores' keys
+        Context dictionary with 'data_hubs', 'stores', and '_startup' keys
     """
-    context: dict[str, Any] = {
-        "data_hubs": {},
-        "stores": {},
-    }
+    metadata = dict(spec.metadata)  # Convert to regular dict for type compatibility
 
-    # Extract hub/store info from stream configs
-    hub_configs: dict[str, dict[str, Any]] = {}
-    store_configs: dict[str, dict[str, Any]] = {}
+    # Get hub configuration from metadata
+    hub_id_raw = metadata.get("hub_id", "nba_pregame_hub")
+    hub_id = str(hub_id_raw) if hub_id_raw else "nba_pregame_hub"
 
-    for stream_spec in spec.data_streams:
-        config = stream_spec.config
-        hub_id = config.get("hub_id")
-        persistence_file = config.get("persistence_file")
-        websearch_store_id = config.get("websearch_store_id")
+    persistence_file_raw = metadata.get("persistence_file")
+    persistence_file = str(persistence_file_raw) if persistence_file_raw else None
 
-        if hub_id and persistence_file:
-            if hub_id not in hub_configs:
-                hub_configs[hub_id] = {
-                    "hub_id": hub_id,
-                    "persistence_file": persistence_file,
-                    "enable_persistence": config.get("enable_persistence", True),
-                }
+    enable_persistence_raw = metadata.get("enable_persistence", True)
+    enable_persistence = (
+        bool(enable_persistence_raw) if enable_persistence_raw is not None else True
+    )
 
-        if websearch_store_id:
-            if websearch_store_id not in store_configs:
-                store_configs[websearch_store_id] = {
-                    "store_id": websearch_store_id,
-                }
+    # Get store types from metadata (defaults to NBA + websearch + polymarket)
+    store_types_raw = metadata.get("store_types", ["nba", "websearch", "polymarket"])
+    if isinstance(store_types_raw, list):
+        store_types = [str(s) for s in store_types_raw]
+    else:
+        store_types = ["nba", "websearch", "polymarket"]
 
-    # Create DataHub instances
-    for hub_id, hub_config in hub_configs.items():
-        if hub_id not in context["data_hubs"]:
-            hub = DataHub(
-                hub_id=hub_config["hub_id"],
-                persistence_file=hub_config["persistence_file"],
-                enable_persistence=hub_config.get("enable_persistence", True),
-            )
-            context["data_hubs"][hub_id] = hub
-
-    # Create Store instances
-    # WebSearchStore
-    for store_id, store_config in store_configs.items():
-        if store_id not in context["stores"]:
-            api = WebSearchAPI()
-            store = WebSearchStore(
-                store_id=store_config["store_id"],
-                api=api,
-            )
-            # Auto-register processors based on event_types found in stream specs
-            # Use EVENT_TYPE_PROCESSOR_MAP to determine which processors are needed
-            registered_event_types = set()
-            for stream_spec in spec.data_streams:
-                config = stream_spec.config
-                # Check both event_type (singular) and event_types (plural)
-                event_types_to_check = []
-                if config.get("event_type"):
-                    event_types_to_check.append(config.get("event_type"))
-                if config.get("event_types"):
-                    event_types_to_check.extend(config.get("event_types", []))
-
-                for event_type in event_types_to_check:
-                    if event_type and event_type in EVENT_TYPE_PROCESSOR_MAP:
-                        processor_class, source_event_types = EVENT_TYPE_PROCESSOR_MAP[
-                            event_type
-                        ]
-                        if event_type not in registered_event_types:
-                            processor = processor_class() if processor_class else None
-                            store.register_stream(
-                                event_type, processor, source_event_types
-                            )
-                            registered_event_types.add(event_type)
-            # Connect store to hub
-            hub_id = None
-            for stream_spec in spec.data_streams:
-                if stream_spec.config.get("websearch_store_id") == store_id:
-                    hub_id = stream_spec.config.get("hub_id")
-                    break
-            if hub_id and hub_id in context["data_hubs"]:
-                context["data_hubs"][hub_id].connect_store(store)
-            context["stores"][store_id] = store
-
-    # Create NBAStore for game status events
-    # Default intervals: scoreboard=5s, play_by_play=2s
-    if "nba_store" not in context["stores"]:
-        game_id = spec.metadata.get("game_id", "")
-        nba_api = NBAExternalAPI()
-        nba_store = NBAStore(
-            store_id="nba_store",
-            api=nba_api,
-            # poll_intervals will use defaults: {"scoreboard": 5.0, "play_by_play": 2.0}
-        )
-        nba_store.set_poll_identifier({"game_id": game_id})
-        # Connect to hub
-        hub_id = list(context["data_hubs"].keys())[0] if context["data_hubs"] else None
-        if hub_id:
-            context["data_hubs"][hub_id].connect_store(nba_store)
-        context["stores"]["nba_store"] = nba_store
-
-    # Create PolymarketStore for odds updates
-    # Default interval: odds=300s (5 minutes)
-    if "polymarket_store" not in context["stores"]:
-        game_id = spec.metadata.get("game_id", "")
-        market_url_raw = spec.metadata.get("market_url")
-        market_url: str | None = (
-            market_url_raw if isinstance(market_url_raw, str) else None
-        )
-
-        # Prepare identifier for polling (will be used if market_url/slug not available)
-        # Use game_id for consistency (all events will use same event_id)
-        identifier: dict[str, Any] = {"game_id": game_id}
-
-        # If market_url not provided, try to construct slug from game info
-        if not market_url:
-            away_tricode_raw = spec.metadata.get("away_team_tricode")
-            home_tricode_raw = spec.metadata.get("home_team_tricode")
-            game_date_raw = spec.metadata.get("game_date")
-            away_tricode = (
-                away_tricode_raw if isinstance(away_tricode_raw, str) else None
-            )
-            home_tricode = (
-                home_tricode_raw if isinstance(home_tricode_raw, str) else None
-            )
-            game_date = game_date_raw if isinstance(game_date_raw, str) else None
-            if away_tricode and home_tricode and game_date:
-                identifier["away_tricode"] = away_tricode
-                identifier["home_tricode"] = home_tricode
-                identifier["game_date"] = game_date
-
-        polymarket_api = PolymarketAPI()
-        polymarket_store = PolymarketStore(
-            store_id="polymarket_store",
-            api=polymarket_api,
-            # poll_intervals will use defaults: {"odds": 300.0}
-            market_url=market_url,
-        )
-        polymarket_store.set_poll_identifier(identifier)
-        # Connect to hub
-        hub_id = list(context["data_hubs"].keys())[0] if context["data_hubs"] else None
-        if hub_id:
-            context["data_hubs"][hub_id].connect_store(polymarket_store)
-        context["stores"]["polymarket_store"] = polymarket_store
-
-    # Start all stores after they're all connected and configured
-    # Add startup function to context that dashboard can call
-    async def start_data_stores() -> None:
-        """Start all DataHub stores (begin polling)."""
-        hub_id = list(context["data_hubs"].keys())[0] if context["data_hubs"] else None
-        if hub_id:
-            hub = context["data_hubs"][hub_id]
-            await hub.start()
-
-    context["_startup"] = start_data_stores
-
-    return context
+    # Build context using generic factory infrastructure
+    return build_runtime_context(
+        hub_id=hub_id,
+        persistence_file=persistence_file,
+        enable_persistence=enable_persistence,
+        metadata=metadata,
+        store_types=store_types,
+    )
 
 
 register_trial_builder(
