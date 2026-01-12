@@ -1024,6 +1024,28 @@ class Dashboard:
         for role in self._STOP_ORDER:
             role_errors = await self._stop_role(runtime, role)
             errors.extend(role_errors)
+
+        # Call cleanup function if provided by context builder (e.g., to stop DataStore polling)
+        context = getattr(runtime, "_context", None)
+        if context and "_cleanup" in context and callable(context["_cleanup"]):
+            cleanup_fn = context["_cleanup"]
+            LOGGER.debug(
+                "Calling cleanup function after stopping actors for trial '%s'",
+                runtime.spec.trial_id,
+            )
+            try:
+                if asyncio.iscoroutinefunction(cleanup_fn):
+                    await cleanup_fn()
+                else:
+                    cleanup_fn()
+            except Exception as exc:
+                LOGGER.error(
+                    "Error during cleanup for trial '%s': %s",
+                    runtime.spec.trial_id,
+                    exc,
+                )
+                errors.append(exc)
+
         if errors:
             runtime.phase = TrialPhase.FAILED
             runtime.last_error = errors[-1]
@@ -1114,6 +1136,26 @@ class Dashboard:
     async def _stop_started_actors(self, runtime: TrialRuntime) -> None:
         for role in self._STOP_ORDER:
             await self._stop_role(runtime, role)
+
+        # Also call cleanup if startup function was called (to stop stores/sessions)
+        context = getattr(runtime, "_context", None)
+        if context and "_cleanup" in context and callable(context["_cleanup"]):
+            cleanup_fn = context["_cleanup"]
+            LOGGER.debug(
+                "Calling cleanup function after startup failure for trial '%s'",
+                runtime.spec.trial_id,
+            )
+            try:
+                if asyncio.iscoroutinefunction(cleanup_fn):
+                    await cleanup_fn()
+                else:
+                    cleanup_fn()
+            except Exception as exc:
+                LOGGER.warning(
+                    "Error during cleanup after startup failure for trial '%s': %s",
+                    runtime.spec.trial_id,
+                    exc,
+                )
 
     def _build_trial_status(self, runtime: TrialRuntime) -> TrialStatus:
         actors = tuple(

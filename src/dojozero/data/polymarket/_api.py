@@ -353,3 +353,7 @@ class PolymarketAPI(ExternalAPI):
             "amount": amount,
             "status": "placed",
         }
+
+    async def close(self) -> None:
+        """Close the API (no-op for PolymarketAPI as it doesn't maintain persistent connections)."""
+        pass

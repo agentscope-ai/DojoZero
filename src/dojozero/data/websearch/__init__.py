@@ -15,6 +15,10 @@ from dojozero.data.websearch._processors import (
     PowerRankingProcessor,
 )
 from dojozero.data.websearch._store import WebSearchStore
+from dojozero.data.websearch._factory import (
+    WebSearchStoreFactory,
+    DEFAULT_PROCESSOR_MAP,
+)
 
 __all__ = [
     "WebSearchAPI",
@@ -29,4 +33,6 @@ __all__ = [
     "PowerRankingProcessor",
     "ExpertPredictionProcessor",
     "WebSearchStore",
+    "WebSearchStoreFactory",
+    "DEFAULT_PROCESSOR_MAP",
 ]

@@ -34,7 +34,11 @@ try:  # Optional Ray dependency
 except ImportError:  # pragma: no cover - ray is optional
     RayActorRuntimeProvider = None  # type: ignore[assignment]
 
-DEFAULT_IMPORTS: tuple[str, ...] = ("dojozero.samples", "dojozero.nba_moneyline")
+DEFAULT_IMPORTS: tuple[str, ...] = (
+    "dojozero.samples",
+    "dojozero.nba_moneyline",
+    "dojozero.nfl_game",
+)
 DEFAULT_CLI_CONFIG: Mapping[str, Any] = {
     "store": {
         "kind": "filesystem",
@@ -43,7 +47,7 @@ DEFAULT_CLI_CONFIG: Mapping[str, Any] = {
     "runtime": {
         "kind": "local",
     },
-    "imports": ["dojozero.samples", "dojozero.nba_moneyline"],
+    "imports": ["dojozero.samples", "dojozero.nba_moneyline", "dojozero.nfl_game"],
 }
 
 RUN_USAGE_EXAMPLES = dedent(
