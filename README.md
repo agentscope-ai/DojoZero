@@ -75,46 +75,68 @@ dojo0 replay \
   --replay-max-sleep 20.0
 ```
 
+## Quick Start (Server Mode)
+
+Run DojoZero with a web UI for real-time monitoring:
+
+```bash
+# 1. Start Jaeger (trace store)
+docker run -d --name jaeger \
+  -p 16686:16686 -p 4317:4317 -p 4318:4318 \
+  jaegertracing/all-in-one:latest
+
+# 2. Start Dashboard Server (manages trials, exports traces)
+dojo0 serve --host 0.0.0.0 --port 8000 --otlp-endpoint http://localhost:4318
+
+# 3. Submit a trial (in another terminal)
+dojo0 run --params configs/nba-pregame-betting.yaml --trial-id test --server http://localhost:8000
+
+# 4. Start Frontend Server (serves WebSocket to browser)
+dojo0 frontend --host 0.0.0.0 --port 3001 --trace-store http://localhost:16686
+
+# 5. Start React UI (in another terminal)
+cd frontend && npm install && npm run dev
+```
+
+Open http://localhost:5173 to view the dashboard.
+
 ## Server Usage
 
-DojoZero uses a two-server architecture:
+The `dojo0 serve` command starts a FastAPI dashboard server that provides REST APIs for managing trials and streaming real-time events:
 
-- **Dashboard Server** (port 8000): Trial management, trace storage
-- **Frontend Server** (port 3001): WebSocket streaming, static file serving
+- **Dashboard Server** (port 8000): Trial management, OTLP trace export
+- **Frontend Server** (port 3001): WebSocket streaming, trace queries
 
 ### Dashboard Server
 
 ```bash
-# Start the dashboard server
-dojo0 serve --host 0.0.0.0 --port 8000
+# Start with OTLP export to Jaeger
+dojo0 serve --host 0.0.0.0 --port 8000 --otlp-endpoint http://localhost:4318
 
 # With settings file
-dojo0 --setting dojozero.yaml serve --host 0.0.0.0 --port 8000
+dojo0 --setting dojozero.yaml serve --host 0.0.0.0 --port 8000 --otlp-endpoint http://localhost:4318
 ```
 
 API endpoints:
-- `GET /api/trials` - List all trials
-- `GET /api/trials/{id}/status` - Get trial status
+- `GET /api/trials` - List all trials with status
+- `POST /api/trials` - Submit a new trial
+- `GET /api/trials/{id}/status` - Get detailed trial status
 - `POST /api/trials/{id}/stop` - Stop a running trial
-- `GET /api/traces` - List trials with trace data
-- `GET /api/traces/{trial_id}` - Get spans for a trial
 
 ### Frontend Server
 
 ```bash
-# Start the frontend server (connects to Dashboard at localhost:8000)
-dojo0 frontend --trace-store http://localhost:8000
+# Start with Jaeger as trace source
+dojo0 frontend --host 0.0.0.0 --port 3001 --trace-store http://localhost:16686
 
-# With Jaeger as trace source
-dojo0 frontend --trace-store http://jaeger:16686
-
-# Serve React static files
-dojo0 frontend --trace-store http://localhost:8000 --static-dir ./frontend/dist
+# Serve React static files (production)
+dojo0 frontend --trace-store http://localhost:16686 --static-dir ./frontend/dist
 ```
 
 API endpoints:
 - `GET /api/traces` - List trials from trace store
 - `GET /api/traces/{trial_id}` - Get spans for replay
+- `GET /api/trials` - List trials with phase/metadata
 - `WS /ws/trials/{trial_id}/stream` - Real-time span streaming
 
 ## Frontend Development
@@ -125,7 +147,7 @@ npm install      # First time only
 npm run dev      # Start dev server at http://localhost:5173
 ```
 
-Ensure Dashboard Server is running at `http://localhost:8000`.
+Ensure Frontend Server is running at `http://localhost:3001`.
 
 ## Runtime & Store Configuration
 

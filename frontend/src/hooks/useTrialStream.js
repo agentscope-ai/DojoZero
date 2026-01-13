@@ -58,11 +58,64 @@ function isAgentSpan(span) {
 }
 
 /**
+ * Check if a span is a trial lifecycle span (trial.started, trial.stopped, or trial.terminated).
+ */
+function isTrialLifecycleSpan(span) {
+  return span.operationName && (
+    span.operationName === "trial.started" ||
+    span.operationName === "trial.stopped" ||
+    span.operationName === "trial.terminated"
+  );
+}
+
+/**
  * Check if a span is a DataStream event (for EventTicker).
- * DataStream events are NOT registration spans and NOT agent spans.
+ * DataStream events are NOT registration spans, NOT agent spans, and NOT trial lifecycle spans.
  */
 function isDataStreamEvent(span) {
-  return !isRegistrationSpan(span) && !isAgentSpan(span);
+  return !isRegistrationSpan(span) && !isAgentSpan(span) && !isTrialLifecycleSpan(span);
+}
+
+/**
+ * Determine trial phase from spans.
+ * Returns "running" if trial.started exists but no trial.stopped/terminated.
+ * Returns "stopped" if trial.stopped or trial.terminated exists.
+ * Returns "unknown" if no lifecycle spans found.
+ */
+function determineTrialPhase(spans) {
+  let hasStarted = false;
+  let hasStopped = false;
+  let latestStartTime = 0;
+  let latestStopTime = 0;
+
+  for (const span of spans) {
+    if (span.operationName === "trial.started") {
+      hasStarted = true;
+      if (span.startTime > latestStartTime) {
+        latestStartTime = span.startTime;
+      }
+    } else if (span.operationName === "trial.stopped" || span.operationName === "trial.terminated") {
+      hasStopped = true;
+      if (span.startTime > latestStopTime) {
+        latestStopTime = span.startTime;
+      }
+    }
+  }
+
+  // If stopped/terminated after started, trial is stopped
+  if (hasStopped && latestStopTime >= latestStartTime) {
+    return "stopped";
+  }
+  // If started but not stopped, trial is running
+  if (hasStarted && !hasStopped) {
+    return "running";
+  }
+  // If stopped but no start (shouldn't happen normally)
+  if (hasStopped) {
+    return "stopped";
+  }
+  // No lifecycle spans found - assume running if there are any spans
+  return spans.length > 0 ? "running" : "unknown";
 }
 
 /**
@@ -219,6 +272,7 @@ function extractGameMetadata(events) {
  * - events: Only DataStream events (game_update, odds_update, etc.) for EventTicker
  * - conversations: Agent messages grouped by actor/stream for AgentPanel
  * - agents: Agent metadata from registration spans
+ * - phase: Trial lifecycle phase (running/stopped) from lifecycle spans
  */
 function processSpans(rawSpans) {
   // Extract actors from registration spans
@@ -229,12 +283,15 @@ function processSpans(rawSpans) {
   const conversations = groupConversations(rawSpans);
 
   // Convert ONLY DataStream events for EventTicker timeline
-  // Filter out: registration spans, agent spans
+  // Filter out: registration spans, agent spans, lifecycle spans
   const dataStreamSpans = rawSpans.filter(isDataStreamEvent);
   const events = dataStreamSpans.map(spanToEvent);
 
   // Extract game metadata from DataStream events
   const gameMetadata = extractGameMetadata(events);
+
+  // Determine trial phase from lifecycle spans
+  const phase = determineTrialPhase(rawSpans);
 
   return {
     actors,
@@ -242,6 +299,7 @@ function processSpans(rawSpans) {
     conversations,
     events,
     metadata: gameMetadata,
+    phase,
   };
 }
 
@@ -278,6 +336,8 @@ export function useTrialStream(trialId, isLive = true) {
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 5;
+  const isMountedRef = useRef(true);  // Track if component is mounted
+  const isCleaningUpRef = useRef(false);  // Track if we're in cleanup phase
 
   // Process snapshot message (contains all spans)
   const handleSnapshot = useCallback((data) => {
@@ -292,6 +352,12 @@ export function useTrialStream(trialId, isLive = true) {
     setEvents(processed.events);
     setMetadata(processed.metadata);
 
+    // Set phase from lifecycle spans
+    setPhase(processed.phase);
+    if (processed.phase === "stopped") {
+      setTrialEnded(true);
+    }
+
     setLoading(false);
     setConnected(true);
     reconnectAttempts.current = 0;
@@ -300,6 +366,13 @@ export function useTrialStream(trialId, isLive = true) {
   // Process span message - convert and append new span to list
   const handleSpan = useCallback((spanData) => {
     setSpans((prev) => {
+      // Check for duplicate span (by spanID)
+      const spanId = spanData.spanID || spanData.span_id;
+      if (spanId && prev.some(s => (s.spanID || s.span_id) === spanId)) {
+        // Span already exists, skip
+        return prev;
+      }
+
       const newSpans = [...prev, spanData];
 
       // Re-process all spans to update derived state
@@ -310,11 +383,17 @@ export function useTrialStream(trialId, isLive = true) {
       setEvents(processed.events);
       setMetadata((currentMeta) => ({ ...currentMeta, ...processed.metadata }));
 
+      // Update phase from lifecycle spans
+      setPhase(processed.phase);
+      if (processed.phase === "stopped") {
+        setTrialEnded(true);
+      }
+
       return newSpans;
     });
   }, []);
 
-  // Process trial_ended message
+  // Process trial_ended message (legacy, now handled via spans)
   const handleTrialEnded = useCallback(() => {
     setTrialEnded(true);
     setPhase("stopped");
@@ -322,7 +401,8 @@ export function useTrialStream(trialId, isLive = true) {
 
   // Connect to WebSocket for live trials
   const connectWebSocket = useCallback(() => {
-    if (!trialId || !isLive) return;
+    // Don't connect if unmounting or cleaning up
+    if (!trialId || !isLive || !isMountedRef.current || isCleaningUpRef.current) return;
 
     const wsUrl = `${WS_BASE_URL}/ws/trials/${trialId}/stream`;
 
@@ -330,11 +410,17 @@ export function useTrialStream(trialId, isLive = true) {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log(`WebSocket connected to trial: ${trialId}`);
-      setError(null);
+      // Only log if still mounted
+      if (isMountedRef.current) {
+        console.log(`WebSocket connected to trial: ${trialId}`);
+        setError(null);
+      }
     };
 
     ws.onmessage = (event) => {
+      // Ignore messages if unmounted
+      if (!isMountedRef.current) return;
+      
       const message = JSON.parse(event.data);
 
       switch (message.type) {
@@ -356,11 +442,17 @@ export function useTrialStream(trialId, isLive = true) {
     };
 
     ws.onerror = (err) => {
-      console.error("WebSocket error:", err);
-      setError("Connection error");
+      // Only log error if not cleaning up (expected during unmount)
+      if (!isCleaningUpRef.current && isMountedRef.current) {
+        console.error("WebSocket error:", err);
+        setError("Connection error");
+      }
     };
 
     ws.onclose = (event) => {
+      // Don't log or reconnect if cleaning up
+      if (isCleaningUpRef.current || !isMountedRef.current) return;
+      
       console.log("WebSocket closed:", event.code, event.reason);
       setConnected(false);
 
@@ -377,13 +469,13 @@ export function useTrialStream(trialId, isLive = true) {
     };
   }, [trialId, isLive, handleSnapshot, handleSpan, handleTrialEnded, trialEnded]);
 
-  // Fetch trace data for completed trials
+  // Fetch trace data for completed trials (or any trial via REST)
   const fetchTraceData = useCallback(async () => {
     if (!trialId) return;
 
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/traces/${trialId}`);
+      const response = await fetch(`${API_BASE_URL}/trials/${trialId}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch trace: ${response.status}`);
       }
@@ -400,8 +492,11 @@ export function useTrialStream(trialId, isLive = true) {
       setEvents(processed.events);
       setMetadata(processed.metadata);
 
-      setPhase("stopped");
-      setTrialEnded(true);
+      // Set phase from lifecycle spans
+      setPhase(processed.phase);
+      if (processed.phase === "stopped") {
+        setTrialEnded(true);
+      }
       setConnected(true);
     } catch (err) {
       console.error("Failed to fetch trace data:", err);
@@ -413,6 +508,10 @@ export function useTrialStream(trialId, isLive = true) {
 
   // Connect/fetch based on trial mode
   useEffect(() => {
+    // Mark as mounted
+    isMountedRef.current = true;
+    isCleaningUpRef.current = false;
+    
     if (!trialId) return;
 
     if (isLive) {
@@ -422,25 +521,43 @@ export function useTrialStream(trialId, isLive = true) {
     }
 
     return () => {
-      // Cleanup
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      // Mark as cleaning up to suppress errors and reconnection attempts
+      isCleaningUpRef.current = true;
+      isMountedRef.current = false;
+      
+      // Clear any pending reconnection
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      
+      // Close WebSocket if open
+      if (wsRef.current) {
+        // Only close if not already closed/closing
+        if (wsRef.current.readyState === WebSocket.OPEN || 
+            wsRef.current.readyState === WebSocket.CONNECTING) {
+          wsRef.current.close();
+        }
+        wsRef.current = null;
       }
     };
   }, [trialId, isLive, connectWebSocket, fetchTraceData]);
 
   // Disconnect handler
   const disconnect = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
+    isCleaningUpRef.current = true;
+    
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    
+    if (wsRef.current) {
+      if (wsRef.current.readyState === WebSocket.OPEN || 
+          wsRef.current.readyState === WebSocket.CONNECTING) {
+        wsRef.current.close();
+      }
+      wsRef.current = null;
     }
     setConnected(false);
   }, []);

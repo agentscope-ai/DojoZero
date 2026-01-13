@@ -437,6 +437,14 @@ class Dashboard:
         await self._with_trial_lock(runtime, self._start_runtime)
         status = self._build_trial_status(runtime)
         self._persist_trial_status(runtime, status)
+
+        # Emit trial.started span
+        self._emit_trial_lifecycle_span(
+            trial_id=spec.trial_id,
+            phase="started",
+            metadata=dict(spec.metadata) if spec.metadata else None,
+        )
+
         LOGGER.info(
             "trial '%s' launch complete (phase=%s)",
             spec.trial_id,
@@ -452,6 +460,14 @@ class Dashboard:
         await self._with_trial_lock(runtime, self._stop_runtime)
         status = self._build_trial_status(runtime)
         self._persist_trial_status(runtime, status)
+
+        # Emit trial.stopped span
+        self._emit_trial_lifecycle_span(
+            trial_id=trial_id,
+            phase="stopped",
+            metadata={"final_phase": status.phase.value},
+        )
+
         LOGGER.info(
             "trial '%s' stopped (phase=%s)",
             trial_id,
@@ -1286,9 +1302,7 @@ class Dashboard:
             try:
                 set_trial_id(trial_id)
             except Exception as e:
-                LOGGER.debug(
-                    "Failed to set trial_id on actor: %s", e
-                )
+                LOGGER.debug("Failed to set trial_id on actor: %s", e)
 
     def _emit_actor_registration_span(
         self,
@@ -1324,6 +1338,46 @@ class Dashboard:
             metadata=metadata,
         )
         emit_span(span)
+
+    def _emit_trial_lifecycle_span(
+        self,
+        trial_id: str,
+        phase: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a trial lifecycle span (started/stopped) to the OTel exporter.
+
+        Args:
+            trial_id: The trial ID
+            phase: Either "started" or "stopped"
+            metadata: Optional metadata to include in the span
+        """
+        from ._tracing import emit_span, SpanData
+        from uuid import uuid4
+        import time
+
+        now_us = int(time.time() * 1_000_000)
+        span_id = uuid4().hex[:16]
+
+        tags: dict[str, Any] = {
+            "dojozero.trial.id": trial_id,
+            "dojozero.trial.phase": phase,
+        }
+        if metadata:
+            for key, value in metadata.items():
+                if value is not None:
+                    tags[f"trial.{key}"] = value
+
+        span = SpanData(
+            trace_id=trial_id,
+            span_id=span_id,
+            operation_name=f"trial.{phase}",
+            start_time=now_us,
+            duration=0,
+            tags=tags,
+        )
+        emit_span(span)
+        LOGGER.debug("Emitted trial.%s span for trial '%s'", phase, trial_id)
 
 
 __all__ = [

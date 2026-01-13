@@ -1,21 +1,20 @@
 """Frontend Server for DojoZero.
 
 This module implements the Frontend Server which is responsible for:
-- Reading traces from Trace Store (Jaeger or Dashboard)
+- Reading traces from Trace Store (Jaeger)
 - Pushing OTel spans to browsers via WebSocket
 - Serving React static files (optional, for production)
 
+The Frontend Server is a read-only service that only queries the trace store.
+It does not communicate with the Dashboard Server directly.
+
 Endpoints:
-- GET  /api/traces                    - List all trials (from trace store)
-- GET  /api/traces/{trial_id}         - Get complete trace data for replay
+- GET  /api/trials                    - List trials with metadata
+- GET  /api/trials/{trial_id}         - Get trial info and spans
 - WS   /ws/trials/{trial_id}/stream   - Real-time span stream
 
 Configuration:
-    # From Dashboard (local)
-    dojo0 frontend --trace-store http://localhost:8000
-
-    # From Jaeger (production)
-    dojo0 frontend --trace-store http://jaeger:16686
+    dojo0 frontend --trace-store http://localhost:16686
 """
 
 import asyncio
@@ -178,6 +177,106 @@ def create_trace_reader(trace_store_url: str) -> TraceReader:
     return JaegerTraceReader(trace_store_url)
 
 
+async def _extract_trial_info_from_traces(
+    trace_reader: TraceReader,
+    trial_id: str,
+) -> dict[str, Any]:
+    """Extract trial phase and metadata from trace spans.
+
+    Returns:
+        dict with "phase" and "metadata" extracted from spans
+    """
+    try:
+        spans = await trace_reader.get_spans(trial_id)
+    except Exception as e:
+        LOGGER.warning("Failed to get spans for trial '%s': %s", trial_id, e)
+        return {"phase": "unknown", "metadata": {}}
+
+    has_started = False
+    has_stopped = False
+    latest_start_time = 0
+    latest_stop_time = 0
+
+    # Metadata to extract from spans
+    metadata: dict[str, Any] = {}
+
+    for span in spans:
+        op_name = span.operation_name
+        tags = span.tags
+
+        # Check lifecycle spans
+        if op_name == "trial.started":
+            has_started = True
+            if span.start_time > latest_start_time:
+                latest_start_time = span.start_time
+        elif op_name in ("trial.stopped", "trial.terminated"):
+            has_stopped = True
+            if span.start_time > latest_stop_time:
+                latest_stop_time = span.start_time
+
+        # Extract game metadata from game_update spans
+        elif op_name == "game_update":
+            # Try to get team info from event tags
+            home_team = tags.get("event.home_team")
+            away_team = tags.get("event.away_team")
+
+            if isinstance(home_team, dict):
+                if home_team.get("teamTricode"):
+                    metadata["home_team_tricode"] = home_team["teamTricode"]
+                if home_team.get("teamName"):
+                    metadata["home_team_name"] = home_team["teamName"]
+            elif isinstance(home_team, str):
+                # Try to parse JSON string
+                try:
+                    parsed = json.loads(home_team)
+                    if isinstance(parsed, dict):
+                        if parsed.get("teamTricode"):
+                            metadata["home_team_tricode"] = parsed["teamTricode"]
+                        if parsed.get("teamName"):
+                            metadata["home_team_name"] = parsed["teamName"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            if isinstance(away_team, dict):
+                if away_team.get("teamTricode"):
+                    metadata["away_team_tricode"] = away_team["teamTricode"]
+                if away_team.get("teamName"):
+                    metadata["away_team_name"] = away_team["teamName"]
+            elif isinstance(away_team, str):
+                try:
+                    parsed = json.loads(away_team)
+                    if isinstance(parsed, dict):
+                        if parsed.get("teamTricode"):
+                            metadata["away_team_tricode"] = parsed["teamTricode"]
+                        if parsed.get("teamName"):
+                            metadata["away_team_name"] = parsed["teamName"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        # Extract game info from game_initialize spans
+        elif op_name == "game_initialize":
+            if tags.get("event.home_team"):
+                metadata["home_team"] = tags["event.home_team"]
+            if tags.get("event.away_team"):
+                metadata["away_team"] = tags["event.away_team"]
+            if tags.get("event.game_id"):
+                metadata["game_id"] = tags["event.game_id"]
+
+    # Determine phase
+    if has_stopped and latest_stop_time >= latest_start_time:
+        phase = "stopped"
+    elif has_started and not has_stopped:
+        phase = "running"
+    elif has_stopped:
+        phase = "stopped"
+    elif spans:
+        phase = "running"
+    else:
+        phase = "unknown"
+
+    return {"phase": phase, "metadata": metadata}
+
+
 def create_frontend_app(
     trace_store_url: str,
     static_dir: Path | None = None,
@@ -186,7 +285,7 @@ def create_frontend_app(
     """Create the Frontend Server FastAPI application.
 
     Args:
-        trace_store_url: URL to trace store (Dashboard or Jaeger)
+        trace_store_url: URL to trace store (Jaeger)
         static_dir: Path to static files (React build output)
         poll_interval: Interval for polling new spans
     """
@@ -230,22 +329,47 @@ def create_frontend_app(
     )
 
     # -------------------------------------------------------------------------
-    # REST Endpoints for Trace Queries
+    # REST Endpoints
     # -------------------------------------------------------------------------
 
-    @app.get("/api/traces")
-    async def list_traces() -> JSONResponse:
-        """List all trials with traces."""
+    @app.get("/api/trials")
+    async def list_trials() -> JSONResponse:
+        """List trials with metadata extracted from traces."""
         state = get_server_state()
+
+        # Get trial list from trace store and extract phase + metadata from spans
         trial_ids = await state.trace_reader.list_trials()
-        result = [{"trial_id": tid} for tid in trial_ids]
+
+        # Build result with phase and metadata extracted from traces
+        result = []
+        for tid in trial_ids:
+            trial_info_extracted = await _extract_trial_info_from_traces(
+                state.trace_reader, tid
+            )
+            trial_info = {
+                "id": tid,
+                "phase": trial_info_extracted["phase"],
+                "metadata": trial_info_extracted["metadata"],
+            }
+            result.append(trial_info)
+
         return JSONResponse(content=result)
 
-    @app.get("/api/traces/{trial_id}")
-    async def get_trial_trace(trial_id: str) -> JSONResponse:
-        """Get complete trace data for a trial (for replay)."""
+    @app.get("/api/trials/{trial_id}")
+    async def get_trial(trial_id: str) -> JSONResponse:
+        """Get trial info and spans."""
         state = get_server_state()
         spans = await state.trace_reader.get_spans(trial_id)
+
+        if not spans:
+            # Check if trial exists (may have no spans yet)
+            trial_ids = await state.trace_reader.list_trials()
+            if trial_id not in trial_ids:
+                return JSONResponse(
+                    content={"error": f"Trial '{trial_id}' not found"},
+                    status_code=404,
+                )
+
         return JSONResponse(
             content={
                 "trial_id": trial_id,
@@ -278,7 +402,10 @@ def create_frontend_app(
             spans = await state.trace_reader.get_spans(trial_id)
             await state.broadcaster.send_snapshot(trial_id, websocket, spans)
 
-            # Track last seen span for incremental updates
+            # Track seen span IDs to avoid duplicates
+            seen_span_ids: set[str] = {s.span_id for s in spans}
+
+            # Track last seen timestamp for efficient querying
             last_time = datetime.now(timezone.utc)
             if spans:
                 # Get the latest span timestamp
@@ -294,17 +421,30 @@ def create_frontend_app(
                         timeout=state.poll_interval,
                     )
                 except asyncio.TimeoutError:
-                    # Poll for new spans
+                    # Poll for new spans (since last_time for efficiency)
                     new_spans = await state.trace_reader.get_spans(
                         trial_id, since=last_time
                     )
-                    for span in new_spans:
-                        await state.broadcaster.broadcast_span(trial_id, span)
 
-                    if new_spans:
-                        last_us = max(s.start_time for s in new_spans)
+                    # Filter out already-seen spans (double protection)
+                    truly_new_spans = [
+                        s for s in new_spans if s.span_id not in seen_span_ids
+                    ]
+
+                    # Broadcast only new spans
+                    for span in truly_new_spans:
+                        await state.broadcaster.broadcast_span(trial_id, span)
+                        seen_span_ids.add(span.span_id)
+
+                    if truly_new_spans:
+                        last_us = max(s.start_time for s in truly_new_spans)
                         last_time = datetime.fromtimestamp(
                             last_us / 1_000_000, tz=timezone.utc
+                        )
+                        LOGGER.debug(
+                            "Sent %d new spans for trial '%s'",
+                            len(truly_new_spans),
+                            trial_id,
                         )
 
                     # Send heartbeat
@@ -373,14 +513,17 @@ async def run_frontend_server(
     """Run the Frontend Server.
 
     Args:
-        trace_store_url: URL to trace store (Dashboard or Jaeger)
+        trace_store_url: URL to trace store (Jaeger)
         host: Host to bind to
         port: Port to listen on
         static_dir: Path to static files (React build output)
     """
     import uvicorn
 
-    app = create_frontend_app(trace_store_url, static_dir=static_dir)
+    app = create_frontend_app(
+        trace_store_url,
+        static_dir=static_dir,
+    )
 
     config = uvicorn.Config(
         app,

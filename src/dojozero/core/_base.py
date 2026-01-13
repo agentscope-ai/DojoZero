@@ -114,10 +114,10 @@ class DataStreamBase(ActorBase, ABC):
         }
 
         # Add payload data as event.* tags
-        if hasattr(payload, "to_dict"):
-            payload_dict = payload.to_dict()
-        elif isinstance(payload, dict):
+        if isinstance(payload, dict):
             payload_dict = payload
+        elif hasattr(payload, "to_dict") and callable(getattr(payload, "to_dict")):
+            payload_dict = getattr(payload, "to_dict")()
         else:
             payload_dict = {"data": str(payload)}
 

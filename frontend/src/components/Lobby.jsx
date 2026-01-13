@@ -79,9 +79,19 @@ export default function Lobby() {
     try {
       const response = await fetch(`${API_BASE_URL}/trials`);
       const data = await response.json();
-      setTrials(data);
+      // Ensure data is an array (API might return error object)
+      if (Array.isArray(data)) {
+        setTrials(data);
+      } else if (data.error) {
+        console.error("API error:", data.error);
+        setTrials([]);
+      } else {
+        console.warn("Unexpected API response format:", data);
+        setTrials([]);
+      }
     } catch (error) {
       console.error("Failed to fetch trials:", error);
+      setTrials([]);
     } finally {
       setLoading(false);
     }
@@ -110,7 +120,9 @@ export default function Lobby() {
   };
 
   const isTrialLive = (trial) => {
-    return trial.phase !== "stopped" && trial.phase !== "completed";
+    // A trial is live if it's "running" or if phase is unknown but not explicitly stopped
+    const phase = trial.phase?.toLowerCase() || "unknown";
+    return phase === "running" || (phase !== "stopped" && phase !== "completed" && phase !== "terminated");
   };
 
   return (
@@ -286,7 +298,8 @@ const styles = {
     position: "relative",
     display: "flex",
     flexDirection: "column",
-    overflow: "hidden",
+    overflowX: "hidden",
+    overflowY: "auto",
   },
   backgroundOverlay: {
     position: "fixed",

@@ -24,7 +24,7 @@ function App() {
       <BrowserRouter>
         <div
           className="app-container"
-          style={{ height: "100vh", background: "var(--bg-primary)", overflow: "hidden" }}
+          style={{ minHeight: "100vh", background: "var(--bg-primary)", overflowX: "hidden", overflowY: "auto" }}
         >
           <Routes>
             <Route path="/" element={<Lobby />} />

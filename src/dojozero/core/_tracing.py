@@ -3,7 +3,6 @@
 This module provides:
 - SpanData: Normalized span representation (OTel-compatible)
 - TraceReader: Protocol for reading traces from any backend
-- DashboardTraceReader: Reads from Dashboard's built-in Trace Query API
 - JaegerTraceReader: Reads from Jaeger HTTP API
 
 Unified Span Protocol:
@@ -128,14 +127,20 @@ class JaegerTraceReader:
         trial_id: str,
         since: datetime | None = None,
     ) -> list[SpanData]:
-        """Get spans for a trial from Jaeger."""
+        """Get spans for a trial from Jaeger.
+
+        Args:
+            trial_id: The trial ID to get spans for
+            since: If provided, only return spans with start_time > since
+                   (filtered client-side as Jaeger API doesn't support this)
+        """
         params: dict[str, Any] = {
             "service": self._service_name,
             "tags": f'{{"dojozero.trial.id":"{trial_id}"}}',
             "limit": 1000,
         }
-        if since is not None:
-            params["start"] = int(since.timestamp() * 1_000_000)
+        # Note: Jaeger's 'start' param is for query time range, not span filtering
+        # We filter spans client-side using the 'since' parameter
 
         response = await self._client.get(
             f"{self._base_url}/api/traces",
@@ -144,9 +149,18 @@ class JaegerTraceReader:
         response.raise_for_status()
         data = response.json()
 
+        # Convert since to microseconds for comparison
+        since_us = int(since.timestamp() * 1_000_000) if since else 0
+
         spans: list[SpanData] = []
         for trace in data.get("data", []):
             for span in trace.get("spans", []):
+                start_time = span.get("startTime", 0)
+
+                # Filter by since timestamp (client-side filtering)
+                if since_us > 0 and start_time <= since_us:
+                    continue
+
                 tags: dict[str, Any] = {}
                 for tag in span.get("tags", []):
                     tags[tag.get("key", "")] = tag.get("value")
@@ -156,7 +170,7 @@ class JaegerTraceReader:
                         trace_id=span.get("traceID", ""),
                         span_id=span.get("spanID", ""),
                         operation_name=span.get("operationName", ""),
-                        start_time=span.get("startTime", 0),
+                        start_time=start_time,
                         duration=span.get("duration", 0),
                         parent_span_id=span.get("references", [{}])[0].get("spanID")
                         if span.get("references")

@@ -108,6 +108,7 @@ export default function EventTicker({ events, homeTeam, awayTeam, currentEventIn
  * Render individual event message with rich details
  */
 function EventMessage({ event, homeTeam, awayTeam }) {
+  if (!event) return null;
   const eventType = event.event_type || "game_update";
   const config = eventTypes[eventType] || eventTypes.game_update;
 

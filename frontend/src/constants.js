@@ -1,6 +1,8 @@
 // API Configuration
-export const API_BASE_URL = "http://localhost:8000/api";
-export const WS_BASE_URL = "ws://localhost:8000";
+// Frontend UI should only interact with Frontend Server (port 3001)
+// Frontend Server proxies to Dashboard Server and Jaeger as needed
+export const API_BASE_URL = "http://localhost:3001/api";
+export const WS_BASE_URL = "ws://localhost:3001";
 
 // Dojozero CDN Assets
 export const DOJOZERO_CDN = {

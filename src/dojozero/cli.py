@@ -123,6 +123,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Resume from the latest checkpoint for the trial when no spec is provided.",
     )
+    run_parser.add_argument(
+        "--server",
+        help="Submit trial to a running Dashboard Server (e.g., http://localhost:8000). "
+        "If not provided, runs the trial locally.",
+    )
 
     subparsers.add_parser(
         "list-builders",
@@ -176,6 +181,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=20.0,
         dest="replay_max_sleep",
         help="Maximum sleep time in seconds between events (caps long delays). Default: 20.0 seconds",
+    )
+    replay_parser.add_argument(
+        "--server",
+        help="Submit replay to a running Dashboard Server (e.g., http://localhost:8000). "
+        "The server must have access to the replay file at the same path.",
     )
 
     # Dashboard Server command
@@ -541,12 +551,88 @@ def _configure_logging(level: str) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+async def _submit_to_server(
+    server_url: str,
+    params_payload: Mapping[str, Any],
+    trial_id: str | None,
+    checkpoint_id: str | None,
+    resume_latest: bool,
+) -> int:
+    """Submit a trial to a running Dashboard Server."""
+    import httpx
+
+    scenario = params_payload.get("scenario")
+    if scenario is None and "environment" in params_payload:
+        scenario = params_payload["environment"]
+    if not isinstance(scenario, Mapping):
+        raise DojoZeroCLIError("spec.scenario must be a mapping")
+
+    builder_name = scenario.get("name")
+    if not isinstance(builder_name, str) or not builder_name:
+        raise DojoZeroCLIError("spec.scenario.name must be a non-empty string")
+
+    # Build request payload
+    request_payload: dict[str, Any] = {
+        "scenario": {
+            "name": builder_name,
+            "module": scenario.get("module"),
+            "config": scenario.get("config", {}),
+        },
+        "metadata": params_payload.get("metadata", {}),
+    }
+
+    if trial_id:
+        request_payload["trial_id"] = trial_id
+
+    # Handle resume configuration
+    if checkpoint_id or resume_latest:
+        request_payload["resume"] = {
+            "checkpoint_id": checkpoint_id,
+            "latest": resume_latest,
+        }
+
+    # Submit to server
+    base_url = server_url.rstrip("/")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        LOGGER.info("Submitting trial to server: %s", base_url)
+        response = await client.post(
+            f"{base_url}/api/trials",
+            json=request_payload,
+        )
+
+        if response.status_code == 201:
+            result = response.json()
+            LOGGER.info(
+                "Trial '%s' submitted successfully (phase: %s)",
+                result.get("id"),
+                result.get("phase"),
+            )
+            return 0
+        else:
+            error = response.json().get("error", response.text)
+            raise DojoZeroCLIError(f"Failed to submit trial: {error}")
+
+
 async def _run_command(args: argparse.Namespace) -> int:
     config_payload = _load_cli_config(args.setting)
     params_payload = (
         _load_yaml_mapping(args.params, label="params") if args.params else None
     )
 
+    # Check if submitting to a remote server
+    server_url = getattr(args, "server", None)
+    if server_url:
+        if params_payload is None:
+            raise DojoZeroCLIError("--params is required when submitting to a server")
+        return await _submit_to_server(
+            server_url=server_url,
+            params_payload=params_payload,
+            trial_id=args.trial_id,
+            checkpoint_id=args.checkpoint_id,
+            resume_latest=bool(args.resume_latest),
+        )
+
+    # Local execution mode
     config_imports = _gather_imports(config_payload)
     params_imports = _gather_imports(params_payload)
     requested_imports = list(args.import_modules or [])
@@ -599,12 +685,82 @@ async def _run_command(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _submit_replay_to_server(
+    server_url: str,
+    params_payload: MutableMapping[str, Any],
+    trial_id: str | None,
+    replay_file: Path,
+    speed_up: float,
+    max_sleep: float,
+) -> int:
+    """Submit a replay trial to a remote Dashboard Server."""
+    import httpx
+
+    request_payload: dict[str, Any] = {
+        "params": dict(params_payload),
+        "replay": {
+            "file": str(replay_file.absolute()),
+            "speed_up": speed_up,
+            "max_sleep": max_sleep,
+        },
+    }
+    if trial_id:
+        request_payload["trial_id"] = trial_id
+
+    base_url = server_url.rstrip("/")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        LOGGER.info("Submitting replay trial to server: %s", base_url)
+        response = await client.post(
+            f"{base_url}/api/trials",
+            json=request_payload,
+        )
+
+        if response.status_code in (200, 201, 202):
+            result = response.json()
+            LOGGER.info(
+                "Replay trial '%s' submitted successfully (phase: %s)",
+                result.get("id"),
+                result.get("phase"),
+            )
+            return 0
+        else:
+            error = response.json().get("error", response.text)
+            raise DojoZeroCLIError(f"Failed to submit replay trial: {error}")
+
+
 async def _replay_command(args: argparse.Namespace) -> int:
     """Handle replay command."""
     from uuid import uuid4
 
-    config_payload = _load_cli_config(args.setting)
     params_payload = _load_yaml_mapping(args.params, label="params")
+    trial_id = args.trial_id or uuid4().hex
+    replay_file = args.replay_file
+    speed_up = args.replay_speed_up
+    max_sleep = args.replay_max_sleep
+
+    if not replay_file.exists():
+        raise DojoZeroCLIError(f"Replay file not found: {replay_file}")
+
+    if speed_up <= 0:
+        raise DojoZeroCLIError(f"Replay speed-up must be positive, got: {speed_up}")
+
+    if max_sleep <= 0:
+        raise DojoZeroCLIError(f"Replay max-sleep must be positive, got: {max_sleep}")
+
+    # Check if submitting to a remote server
+    server_url = getattr(args, "server", None)
+    if server_url:
+        return await _submit_replay_to_server(
+            server_url=server_url,
+            params_payload=params_payload,
+            trial_id=args.trial_id,
+            replay_file=replay_file,
+            speed_up=speed_up,
+            max_sleep=max_sleep,
+        )
+
+    # Local execution mode
+    config_payload = _load_cli_config(args.setting)
 
     config_imports = _gather_imports(config_payload)
     params_imports = _gather_imports(params_payload)
@@ -620,20 +776,6 @@ async def _replay_command(args: argparse.Namespace) -> int:
     store = _create_store(config_payload)
     runtime_provider = _create_runtime_provider(config_payload)
     dashboard = Dashboard(store=store, runtime_provider=runtime_provider)
-
-    trial_id = args.trial_id or uuid4().hex
-    replay_file = args.replay_file
-    speed_up = args.replay_speed_up
-    max_sleep = args.replay_max_sleep
-
-    if not replay_file.exists():
-        raise DojoZeroCLIError(f"Replay file not found: {replay_file}")
-
-    if speed_up <= 0:
-        raise DojoZeroCLIError(f"Replay speed-up must be positive, got: {speed_up}")
-
-    if max_sleep <= 0:
-        raise DojoZeroCLIError(f"Replay max-sleep must be positive, got: {max_sleep}")
 
     # Prepare trial spec from params
     spec = _prepare_trial_spec(trial_id, params_payload)
@@ -812,7 +954,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
     if otlp_endpoint:
         LOGGER.info("Traces will be sent to OTLP endpoint: %s", otlp_endpoint)
     else:
-        LOGGER.info("Trace Query API: http://%s:%d/api/traces", host, port)
+        LOGGER.info("Trials API: http://%s:%d/api/trials", host, port)
 
     await run_dashboard_server(
         dashboard=dashboard,
