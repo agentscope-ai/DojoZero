@@ -85,7 +85,15 @@ DOJOZERO_DASHSCOPE_API_KEY=your_dashscope_api_key_here
 DOJOZERO_PROXY_URL=http://proxy.example.com:8080
 
 # Polymarket private key for CLOB authentication
-POLY_PRIVATE_KEY=0x...
+DOJOZERO_POLY_PRIVATE_KEY=0x...
+
+# OSS (Alibaba Cloud Object Storage) - for uploading collected data
+# Leave empty to disable OSS upload
+DOJOZERO_OSS_ACCESS_KEY_ID=
+DOJOZERO_OSS_ACCESS_KEY_SECRET=
+DOJOZERO_OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
+DOJOZERO_OSS_BUCKET=
+DOJOZERO_OSS_PREFIX=
 EOF
     echo "✓ Created .env.template - please copy to .env and fill in your API keys"
 else
@@ -99,21 +107,96 @@ chmod +x "$PROJECT_ROOT/deploy/run_daily.sh"
 chmod +x "$PROJECT_ROOT/tools/nba_game_collector.py"
 echo "✓ Scripts are executable"
 
+# Cron job setup (interactive)
+echo ""
+echo "=========================================="
+echo "Cron Job Setup (Optional)"
+echo "=========================================="
+echo ""
+read -p "Would you like to set up a daily cron job? [y/N] " SETUP_CRON
+
+if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
+    # Get cron time
+    echo ""
+    echo "What time should the collector run daily?"
+    echo "  - NBA games typically start between 7 PM - 10 PM ET"
+    echo "  - Recommended: Run early morning to catch all games for the day"
+    read -p "Enter hour (0-23) [default: 6]: " CRON_HOUR
+    CRON_HOUR="${CRON_HOUR:-6}"
+    read -p "Enter minute (0-59) [default: 0]: " CRON_MINUTE
+    CRON_MINUTE="${CRON_MINUTE:-0}"
+
+    # Ask about OSS upload
+    echo ""
+    read -p "Enable OSS upload for collected data? [y/N] " ENABLE_OSS
+    if [[ "$ENABLE_OSS" =~ ^[Yy]$ ]]; then
+        OSS_ENV="OSS_UPLOAD=true "
+        echo "  OSS upload will be enabled. Make sure OSS credentials are configured in .env"
+    else
+        OSS_ENV=""
+    fi
+
+    # Build cron entry
+    LOG_FILE="$PROJECT_ROOT/cron.log"
+    CRON_ENTRY="$CRON_MINUTE $CRON_HOUR * * * ${OSS_ENV}$PROJECT_ROOT/deploy/run_daily.sh >> $LOG_FILE 2>&1"
+
+    echo ""
+    echo "The following cron entry will be added:"
+    echo "  $CRON_ENTRY"
+    echo ""
+    read -p "Proceed with adding this cron job? [y/N] " CONFIRM_CRON
+
+    if [[ "$CONFIRM_CRON" =~ ^[Yy]$ ]]; then
+        # Check if entry already exists
+        EXISTING_CRON=$(crontab -l 2>/dev/null || true)
+        if echo "$EXISTING_CRON" | grep -q "run_daily.sh"; then
+            echo ""
+            echo "WARNING: A cron entry for run_daily.sh already exists:"
+            echo "$EXISTING_CRON" | grep "run_daily.sh"
+            echo ""
+            read -p "Replace existing entry? [y/N] " REPLACE_CRON
+            if [[ "$REPLACE_CRON" =~ ^[Yy]$ ]]; then
+                # Remove existing entry and add new one
+                (echo "$EXISTING_CRON" | grep -v "run_daily.sh"; echo "$CRON_ENTRY") | crontab -
+                echo "✓ Cron job updated"
+            else
+                echo "Skipping cron setup (existing entry preserved)"
+            fi
+        else
+            # Add new entry
+            (crontab -l 2>/dev/null || true; echo "$CRON_ENTRY") | crontab -
+            echo "✓ Cron job added"
+        fi
+
+        echo ""
+        echo "Current crontab:"
+        crontab -l | grep "run_daily.sh" || echo "  (no matching entries)"
+    else
+        echo "Skipping cron setup"
+    fi
+else
+    echo "Skipping cron setup. You can set it up later - see deploy/DEPLOYMENT.md"
+fi
+
 echo ""
 echo "=========================================="
 echo "Setup complete!"
 echo "=========================================="
 echo ""
 echo "Next steps:"
-echo "1. Copy .env.template to .env and fill in your API keys:"
-echo "   cp $PROJECT_ROOT/.env.template $PROJECT_ROOT/.env"
-echo "   # Edit .env with your API keys"
+if [ ! -f "$PROJECT_ROOT/.env" ]; then
+    echo "1. Copy .env.template to .env and fill in your API keys:"
+    echo "   cp $PROJECT_ROOT/.env.template $PROJECT_ROOT/.env"
+    echo "   # Edit .env with your API keys"
+    echo ""
+    echo "2. Test the collector manually:"
+    echo "   $PROJECT_ROOT/deploy/run_daily.sh"
+else
+    echo "1. Test the collector manually:"
+    echo "   $PROJECT_ROOT/deploy/run_daily.sh"
+fi
 echo ""
-echo "2. Test the collector manually:"
-echo "   $PROJECT_ROOT/deploy/run_daily.sh"
-echo ""
-echo "3. Set up cron job for daily execution:"
-echo "   See deploy/DEPLOYMENT.md for instructions"
+echo "For more options, see deploy/DEPLOYMENT.md"
 echo ""
 
 

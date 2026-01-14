@@ -10,6 +10,13 @@
 ## Automation
 
 **Cron (recommended):**
+
+The setup script can configure cron for you:
+```bash
+./deploy/setup.sh  # Follow prompts to set up cron
+```
+
+Or manually:
 ```bash
 crontab -e
 # Add: 0 6 * * * /path/to/DojoZero/deploy/run_daily.sh >> /path/to/DojoZero/cron.log 2>&1
@@ -72,6 +79,72 @@ find data/nba-betting/ -name "*.log" -mtime +30 -delete
 
 # Backup
 tar -czf nba-betting-backup-$(date +%Y%m%d).tar.gz data/nba-betting/
+```
+
+## OSS Upload (Optional)
+
+Upload collected data to Alibaba Cloud OSS for centralized storage.
+
+### Configuration
+
+Add to `.env`:
+```bash
+# OSS credentials (required for upload)
+DOJOZERO_OSS_ACCESS_KEY_ID=LTAI5t...
+DOJOZERO_OSS_ACCESS_KEY_SECRET=abc123...
+DOJOZERO_OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
+DOJOZERO_OSS_BUCKET=your-bucket-name
+DOJOZERO_OSS_PREFIX=prod/  # Optional prefix for all keys
+```
+
+### Common Endpoints
+
+| Region | Endpoint |
+|--------|----------|
+| China (Hangzhou) | `oss-cn-hangzhou.aliyuncs.com` |
+| China (Shanghai) | `oss-cn-shanghai.aliyuncs.com` |
+| China (Beijing) | `oss-cn-beijing.aliyuncs.com` |
+| Singapore | `oss-ap-southeast-1.aliyuncs.com` |
+| US (Virginia) | `oss-us-east-1.aliyuncs.com` |
+
+### Usage
+
+**Enable via environment variable:**
+```bash
+OSS_UPLOAD=true ./deploy/run_daily.sh
+```
+
+**Or directly with the collector:**
+```bash
+python tools/nba_game_collector.py --data-dir data/nba-betting --oss-upload
+python tools/nfl_game_collector.py --data-dir data/nfl --oss-upload
+```
+
+**Override bucket/prefix via CLI:**
+```bash
+python tools/nba_game_collector.py --data-dir data/nba-betting \
+    --oss-upload --oss-bucket staging-bucket --oss-prefix test/
+```
+
+### OSS Structure
+
+Files are uploaded mirroring the local structure:
+```
+{prefix}/nba/{date}/{game_id}.yaml
+{prefix}/nba/{date}/{game_id}.jsonl
+{prefix}/nba/{date}/{game_id}.log
+
+{prefix}/nfl/{date}/{event_id}.yaml
+{prefix}/nfl/{date}/{event_id}.jsonl
+{prefix}/nfl/{date}/{event_id}.log
+```
+
+### Cron with OSS
+
+```bash
+crontab -e
+# Add:
+0 6 * * * OSS_UPLOAD=true /path/to/DojoZero/deploy/run_daily.sh >> /path/to/DojoZero/cron.log 2>&1
 ```
 
 ## Advanced
