@@ -87,6 +87,11 @@ class LocalActorRuntimeProvider(ActorRuntimeProvider):
             raise ValueError(
                 f"actor id mismatch: spec '{spec.actor_id}' != instance '{actor.actor_id}'"
             )
+
+        # Inject trial_id directly into the actor instance
+        if spec.trial_id is not None:
+            setattr(actor, "_trial_id", spec.trial_id)
+
         handler = LocalActorHandler(actor)
         if spec.resume_state is not None:
             await handler.load_state(spec.resume_state)

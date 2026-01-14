@@ -96,8 +96,12 @@ class _RayActorHost:
         config: Mapping[str, Any],
         actor_id: str,
         resume_state: ActorState | None,
+        trial_id: str | None = None,
     ) -> None:
         actor = actor_cls.from_dict(config)
+        # Inject trial_id directly into the actor instance
+        if trial_id is not None:
+            setattr(actor, "_trial_id", trial_id)
         if actor.actor_id != actor_id:
             raise ValueError(
                 f"actor id mismatch: spec '{actor_id}' != instance '{actor.actor_id}'"
@@ -224,6 +228,7 @@ class RayActorRuntimeProvider(ActorRuntimeProvider):
                 spec.config,
                 spec.actor_id,
                 spec.resume_state,
+                spec.trial_id,
             )
         )
         return RayActorHandler(

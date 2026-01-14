@@ -118,6 +118,7 @@ class ActorSpec(Generic[ConfigSpecT]):
     actor_cls: Type[Actor[ConfigSpecT]]
     config: ConfigSpecT
     resume_state: ActorState | None = None
+    trial_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.actor_id:
@@ -405,6 +406,11 @@ class Dashboard:
             type(self._runtime_provider).__name__,
         )
 
+    @property
+    def store(self) -> DashboardStore:
+        """Access the underlying DashboardStore."""
+        return self._store
+
     async def launch_trial(self, spec: TrialSpec) -> TrialStatus:
         """Instantiate and start every actor defined in *spec*."""
 
@@ -432,6 +438,14 @@ class Dashboard:
         await self._with_trial_lock(runtime, self._start_runtime)
         status = self._build_trial_status(runtime)
         self._persist_trial_status(runtime, status)
+
+        # Emit trial.started span
+        self._emit_trial_lifecycle_span(
+            trial_id=spec.trial_id,
+            phase="started",
+            metadata=dict(spec.metadata) if spec.metadata else None,
+        )
+
         LOGGER.info(
             "trial '%s' launch complete (phase=%s)",
             spec.trial_id,
@@ -447,6 +461,14 @@ class Dashboard:
         await self._with_trial_lock(runtime, self._stop_runtime)
         status = self._build_trial_status(runtime)
         self._persist_trial_status(runtime, status)
+
+        # Emit trial.stopped span
+        self._emit_trial_lifecycle_span(
+            trial_id=trial_id,
+            phase="stopped",
+            metadata={"final_phase": status.phase.value},
+        )
+
         LOGGER.info(
             "trial '%s' stopped (phase=%s)",
             trial_id,
@@ -653,6 +675,7 @@ class Dashboard:
         data_streams: Dict[str, DataStream] = {}
 
         for actor_spec in spec.operators:
+            actor_spec.trial_id = spec.trial_id
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.OPERATOR,
@@ -669,12 +692,16 @@ class Dashboard:
                     " does not implement the Operator protocol"
                 )
             operators[runtime.actor_id] = cast(Operator, operator_instance)
+            self._emit_actor_registration_span(
+                spec.trial_id, runtime.actor_id, "operator", actor_spec.config
+            )
             LOGGER.debug(
                 "Materialized operator '%s' for trial '%s'",
                 runtime.actor_id,
                 spec.trial_id,
             )
         for actor_spec in spec.agents:
+            actor_spec.trial_id = spec.trial_id
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.AGENT,
@@ -690,7 +717,11 @@ class Dashboard:
                     " does not implement the Agent protocol"
                 )
             agents[runtime.actor_id] = cast(Agent, agent_instance)
+            self._emit_actor_registration_span(
+                spec.trial_id, runtime.actor_id, "agent", actor_spec.config
+            )
         for actor_spec in spec.data_streams:
+            actor_spec.trial_id = spec.trial_id
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.DATA_STREAM,
@@ -707,6 +738,9 @@ class Dashboard:
                     " does not implement the DataStream protocol"
                 )
             data_streams[runtime.actor_id] = cast(DataStream, stream_instance)
+            self._emit_actor_registration_span(
+                spec.trial_id, runtime.actor_id, "datastream", actor_spec.config
+            )
         await self._wire_actor_dependencies(
             spec,
             agents=agents,
@@ -1294,6 +1328,81 @@ class Dashboard:
             return self._trials[trial_id]
         except KeyError as exc:
             raise TrialNotFoundError(f"trial '{trial_id}' does not exist") from exc
+
+    def _emit_actor_registration_span(
+        self,
+        trial_id: str,
+        actor_id: str,
+        actor_type: str,
+        config: Any,
+    ) -> None:
+        """Emit a registration span for an actor to the OTel exporter."""
+        from ._tracing import emit_span, convert_actor_registration_to_span
+
+        # Extract metadata from config
+        metadata: dict[str, Any] = {}
+        if isinstance(config, dict):
+            metadata = {
+                "name": config.get("name", config.get("actor_id", actor_id)),
+                "model": config.get("model"),
+                "model_provider": config.get("model_provider"),
+                "system_prompt": config.get("system_prompt"),
+                "tools": config.get("tools"),
+                "source_type": config.get("source_type"),
+            }
+        else:
+            metadata = {"name": actor_id}
+
+        # Remove None values
+        metadata = {k: v for k, v in metadata.items() if v is not None}
+
+        span = convert_actor_registration_to_span(
+            trial_id=trial_id,
+            actor_id=actor_id,
+            actor_type=actor_type,
+            metadata=metadata,
+        )
+        emit_span(span)
+
+    def _emit_trial_lifecycle_span(
+        self,
+        trial_id: str,
+        phase: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a trial lifecycle span (started/stopped) to the OTel exporter.
+
+        Args:
+            trial_id: The trial ID
+            phase: Either "started" or "stopped"
+            metadata: Optional metadata to include in the span
+        """
+        from ._tracing import emit_span, SpanData
+        from uuid import uuid4
+        import time
+
+        now_us = int(time.time() * 1_000_000)
+        span_id = uuid4().hex[:16]
+
+        tags: dict[str, Any] = {
+            "dojozero.trial.id": trial_id,
+            "dojozero.trial.phase": phase,
+        }
+        if metadata:
+            for key, value in metadata.items():
+                if value is not None:
+                    tags[f"trial.{key}"] = value
+
+        span = SpanData(
+            trace_id=trial_id,
+            span_id=span_id,
+            operation_name=f"trial.{phase}",
+            start_time=now_us,
+            duration=0,
+            tags=tags,
+        )
+        emit_span(span)
+        LOGGER.debug("Emitted trial.%s span for trial '%s'", phase, trial_id)
 
 
 __all__ = [
