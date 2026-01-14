@@ -118,6 +118,7 @@ class ActorSpec(Generic[ConfigSpecT]):
     actor_cls: Type[Actor[ConfigSpecT]]
     config: ConfigSpecT
     resume_state: ActorState | None = None
+    trial_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.actor_id:
@@ -674,13 +675,13 @@ class Dashboard:
         data_streams: Dict[str, DataStream] = {}
 
         for actor_spec in spec.operators:
+            actor_spec.trial_id = spec.trial_id
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.OPERATOR,
                 context=context,
             )
             self._register_actor_runtime(registry, runtime)
-            self._set_actor_trial_id(runtime.instance, spec.trial_id)
             operator_instance = runtime.instance
             if not (
                 isinstance(operator_instance, Operator)
@@ -700,13 +701,13 @@ class Dashboard:
                 spec.trial_id,
             )
         for actor_spec in spec.agents:
+            actor_spec.trial_id = spec.trial_id
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.AGENT,
                 context=context,
             )
             self._register_actor_runtime(registry, runtime)
-            self._set_actor_trial_id(runtime.instance, spec.trial_id)
             agent_instance = runtime.instance
             if not (
                 isinstance(agent_instance, Agent) or _is_agent_like(agent_instance)
@@ -720,13 +721,13 @@ class Dashboard:
                 spec.trial_id, runtime.actor_id, "agent", actor_spec.config
             )
         for actor_spec in spec.data_streams:
+            actor_spec.trial_id = spec.trial_id
             runtime = await self._materialize_actor(
                 actor_spec,
                 ActorRole.DATA_STREAM,
                 context=context,
             )
             self._register_actor_runtime(registry, runtime)
-            self._set_actor_trial_id(runtime.instance, spec.trial_id)
             stream_instance = runtime.instance
             if not (
                 isinstance(stream_instance, DataStream)
@@ -1285,24 +1286,6 @@ class Dashboard:
             return self._trials[trial_id]
         except KeyError as exc:
             raise TrialNotFoundError(f"trial '{trial_id}' does not exist") from exc
-
-    def _set_actor_trial_id(self, actor: Any, trial_id: str) -> None:
-        """Set trial_id on actor if it supports the set_trial_id method.
-
-        Note: This only works for local actors with a synchronous set_trial_id.
-        Ray actors use proxies that return coroutines, which we skip here.
-        """
-        # Skip Ray actor proxies - they return coroutines for all methods
-        actor_type_name = type(actor).__name__
-        if "RayActorProxy" in actor_type_name or "ActorProxy" in actor_type_name:
-            return
-
-        set_trial_id = getattr(actor, "set_trial_id", None)
-        if set_trial_id is not None and callable(set_trial_id):
-            try:
-                set_trial_id(trial_id)
-            except Exception as e:
-                LOGGER.debug("Failed to set trial_id on actor: %s", e)
 
     def _emit_actor_registration_span(
         self,

@@ -25,12 +25,8 @@ class ActorBase(ABC):
 
     @property
     def trial_id(self) -> str | None:
-        """Trial ID this actor belongs to (set by Dashboard)."""
+        """Trial ID this actor belongs to (injected by RuntimeProvider)."""
         return self._trial_id
-
-    def set_trial_id(self, trial_id: str) -> None:
-        """Set the trial ID for this actor (called by Dashboard)."""
-        self._trial_id = trial_id
 
 
 class AgentBase(ActorBase, ABC):

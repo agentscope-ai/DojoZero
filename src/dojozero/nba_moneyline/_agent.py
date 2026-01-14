@@ -101,12 +101,8 @@ class BettingAgent(ReActAgent):
 
     @property
     def trial_id(self) -> str | None:
-        """Trial ID this agent belongs to (set by Dashboard)."""
+        """Trial ID this agent belongs to (injected by RuntimeProvider)."""
         return self._trial_id
-
-    def set_trial_id(self, trial_id: str) -> None:
-        """Set the trial ID for this agent (called by Dashboard)."""
-        self._trial_id = trial_id
 
     @classmethod
     def from_dict(cls, config: BettingAgentConfig) -> "BettingAgent":
