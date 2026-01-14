@@ -1,8 +1,8 @@
-"""End-to-end API integration tests for DojoZero Dashboard and Frontend servers.
+"""End-to-end API integration tests for DojoZero Dashboard and Arena servers.
 
 This test module validates the complete API flow as documented in the design doc:
 1. Dashboard Server (`dojo0 serve`) - Trial management and OTLP export
-2. Frontend Server (`dojo0 frontend`) - Trace queries and WebSocket streaming
+2. Arena Server (`dojo0 arena`) - Trace queries and WebSocket streaming
 3. Jaeger - Trace storage backend
 
 Test Requirements:
@@ -33,7 +33,7 @@ from dojozero.core import (
     LocalActorRuntimeProvider,
 )
 from dojozero.core._dashboard_server import create_dashboard_app
-from dojozero.core._frontend_server import create_frontend_app
+from dojozero.core._arena_server import create_arena_app
 from dojozero.core._tracing import (
     JaegerTraceReader,
     OTelSpanExporter,
@@ -106,9 +106,9 @@ def dashboard_app(dashboard, otel_exporter):
 
 
 @pytest.fixture
-def frontend_app():
-    """Create Frontend Server FastAPI app pointing to Jaeger."""
-    app = create_frontend_app(
+def arena_app():
+    """Create Arena Server FastAPI app pointing to Jaeger."""
+    app = create_arena_app(
         trace_store_url=JAEGER_UI_URL,
         poll_interval=0.5,
     )
@@ -123,9 +123,9 @@ def dashboard_client(dashboard_app):
 
 
 @pytest.fixture
-def frontend_client(frontend_app):
-    """Test client for Frontend Server."""
-    with TestClient(frontend_app, raise_server_exceptions=False) as client:
+def arena_client(arena_app):
+    """Test client for Arena Server."""
+    with TestClient(arena_app, raise_server_exceptions=False) as client:
         yield client
 
 
@@ -306,37 +306,37 @@ class TestDashboardServer:
 
 
 # -----------------------------------------------------------------------------
-# Frontend Server API Tests
+# Arena Server API Tests
 # -----------------------------------------------------------------------------
 
 
-class TestFrontendServer:
-    """Tests for Frontend Server API endpoints."""
+class TestArenaServer:
+    """Tests for Arena Server API endpoints."""
 
-    def test_health_check(self, frontend_client):
+    def test_health_check(self, arena_client):
         """Test GET /health endpoint."""
-        response = frontend_client.get("/health")
+        response = arena_client.get("/health")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
 
-    def test_list_trials(self, frontend_client):
+    def test_list_trials(self, arena_client):
         """Test GET /api/trials endpoint."""
-        response = frontend_client.get("/api/trials")
+        response = arena_client.get("/api/trials")
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
 
-    def test_get_trial_not_found(self, frontend_client):
+    def test_get_trial_not_found(self, arena_client):
         """Test GET /api/trials/{trial_id} for non-existent trial."""
-        response = frontend_client.get("/api/trials/non-existent-trial-xyz")
+        response = arena_client.get("/api/trials/non-existent-trial-xyz")
         assert response.status_code == 404
 
-    def test_get_trial_with_spans(self, frontend_client, otel_exporter):
+    def test_get_trial_with_spans(self, arena_client, otel_exporter):
         """Test GET /api/trials/{trial_id} returns spans when available."""
         # This test relies on spans being exported to Jaeger from other tests
         # or previous runs. Just verify the endpoint format is correct.
-        response = frontend_client.get("/api/trials")
+        response = arena_client.get("/api/trials")
         assert response.status_code == 200
 
 
@@ -406,11 +406,11 @@ class TestE2EFlow:
         # Note: Jaeger may take time to index, so this is informational
 
     @pytest.mark.asyncio
-    async def test_frontend_receives_spans_from_jaeger(
-        self, dashboard_client, frontend_client, otel_exporter
+    async def test_arena_receives_spans_from_jaeger(
+        self, dashboard_client, arena_client, otel_exporter
     ):
-        """Test that Frontend Server can query spans that Dashboard exported."""
-        trial_id = f"e2e-frontend-{int(time.time())}"
+        """Test that Arena Server can query spans that Dashboard exported."""
+        trial_id = f"e2e-arena-{int(time.time())}"
 
         # 1. Submit trial via Dashboard
         response = dashboard_client.post(
@@ -431,21 +431,21 @@ class TestE2EFlow:
         # 2. Wait for spans to be exported to Jaeger
         await asyncio.sleep(3.0)
 
-        # 3. Query Frontend Server for trial
-        trials_response = frontend_client.get("/api/trials")
+        # 3. Query Arena Server for trial
+        trials_response = arena_client.get("/api/trials")
         assert trials_response.status_code == 200
         trials = trials_response.json()
-        print(f"\n[Frontend] Found {len(trials)} trials")
+        print(f"\n[Arena] Found {len(trials)} trials")
 
         # 4. Try to get specific trial spans
-        trial_response = frontend_client.get(f"/api/trials/{trial_id}")
+        trial_response = arena_client.get(f"/api/trials/{trial_id}")
         # Note: May be 404 if Jaeger hasn't indexed yet
-        print(f"[Frontend] Trial {trial_id} response: {trial_response.status_code}")
+        print(f"[Arena] Trial {trial_id} response: {trial_response.status_code}")
 
         if trial_response.status_code == 200:
             data = trial_response.json()
             spans = data.get("spans", [])
-            print(f"[Frontend] Found {len(spans)} spans for trial {trial_id}")
+            print(f"[Arena] Found {len(spans)} spans for trial {trial_id}")
 
 
 # -----------------------------------------------------------------------------
@@ -454,13 +454,13 @@ class TestE2EFlow:
 
 
 class TestWebSocketStreaming:
-    """Tests for Frontend Server WebSocket streaming."""
+    """Tests for Arena Server WebSocket streaming."""
 
-    def test_websocket_connection(self, frontend_client):
+    def test_websocket_connection(self, arena_client):
         """Test WebSocket connection to /ws/trials/{trial_id}/stream."""
         trial_id = f"ws-test-{int(time.time())}"
 
-        with frontend_client.websocket_connect(
+        with arena_client.websocket_connect(
             f"/ws/trials/{trial_id}/stream"
         ) as websocket:
             # Should receive snapshot message immediately
@@ -478,7 +478,7 @@ class TestWebSocketStreaming:
             assert message["type"] in ("heartbeat", "span", "snapshot")
 
     def test_websocket_receives_spans(
-        self, dashboard_client, frontend_client, otel_exporter
+        self, dashboard_client, arena_client, otel_exporter
     ):
         """Test that WebSocket receives spans as they are emitted."""
         trial_id = f"ws-spans-{int(time.time())}"
@@ -501,7 +501,7 @@ class TestWebSocketStreaming:
 
         # Connect to WebSocket and collect messages
         received_types = set()
-        with frontend_client.websocket_connect(
+        with arena_client.websocket_connect(
             f"/ws/trials/{trial_id}/stream"
         ) as websocket:
             # Collect messages for a few seconds
@@ -525,7 +525,7 @@ class TestWebSocketStreaming:
 
 @pytest.mark.asyncio
 async def test_complete_api_workflow(
-    dashboard_client, frontend_client, jaeger_reader, otel_exporter
+    dashboard_client, arena_client, jaeger_reader, otel_exporter
 ):
     """
     Complete end-to-end test simulating the documented workflow:
@@ -533,8 +533,8 @@ async def test_complete_api_workflow(
     1. Start Jaeger (assumed running)
     2. Dashboard Server receives trial submission
     3. Trial runs and emits OTLP spans to Jaeger
-    4. Frontend Server queries Jaeger for trial data
-    5. Frontend Server streams spans via WebSocket
+    4. Arena Server queries Jaeger for trial data
+    5. Arena Server streams spans via WebSocket
     """
     trial_id = f"complete-workflow-{int(time.time())}"
     print(f"\n{'=' * 60}")
@@ -597,27 +597,27 @@ async def test_complete_api_workflow(
         op_names = sorted(set(s.operation_name for s in spans))
         print(f"  Operation names: {op_names}")
 
-    # Step 7: Query Frontend Server for trial list
-    frontend_trials_response = frontend_client.get("/api/trials")
-    assert frontend_trials_response.status_code == 200
-    frontend_trials = frontend_trials_response.json()
-    print(f"✓ Frontend trials list: {len(frontend_trials)} trials")
+    # Step 7: Query Arena Server for trial list
+    arena_trials_response = arena_client.get("/api/trials")
+    assert arena_trials_response.status_code == 200
+    arena_trials = arena_trials_response.json()
+    print(f"✓ Arena trials list: {len(arena_trials)} trials")
 
-    # Step 8: Query Frontend Server for specific trial
-    frontend_trial_response = frontend_client.get(f"/api/trials/{trial_id}")
-    if frontend_trial_response.status_code == 200:
-        trial_data = frontend_trial_response.json()
-        frontend_spans = trial_data.get("spans", [])
-        print(f"✓ Frontend trial query: {len(frontend_spans)} spans")
+    # Step 8: Query Arena Server for specific trial
+    arena_trial_response = arena_client.get(f"/api/trials/{trial_id}")
+    if arena_trial_response.status_code == 200:
+        trial_data = arena_trial_response.json()
+        arena_spans = trial_data.get("spans", [])
+        print(f"✓ Arena trial query: {len(arena_spans)} spans")
     else:
         print(
-            f"  Frontend trial query: {frontend_trial_response.status_code} (may need more time)"
+            f"  Arena trial query: {arena_trial_response.status_code} (may need more time)"
         )
 
     # Step 9: Test WebSocket streaming
     print("  Testing WebSocket connection...")
     ws_messages = []
-    with frontend_client.websocket_connect(f"/ws/trials/{trial_id}/stream") as ws:
+    with arena_client.websocket_connect(f"/ws/trials/{trial_id}/stream") as ws:
         # Receive initial snapshot
         data = ws.receive_text()
         msg = json.loads(data)
@@ -661,9 +661,9 @@ class TestCLIIntegration:
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
 
-    def test_frontend_health_via_http(self, frontend_client):
-        """Verify Frontend Server health endpoint works as documented."""
-        response = frontend_client.get("/health")
+    def test_arena_health_via_http(self, arena_client):
+        """Verify Arena Server health endpoint works as documented."""
+        response = arena_client.get("/health")
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
 

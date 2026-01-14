@@ -212,35 +212,35 @@ def _build_parser() -> argparse.ArgumentParser:
         "If not provided, enables built-in Trace Query API.",
     )
 
-    # Frontend Server command
-    frontend_parser = subparsers.add_parser(
-        "frontend",
-        help="Start the Frontend Server for WebSocket streaming",
-        description="Launch the Frontend Server for real-time span streaming to browsers.",
+    # Arena Server command
+    arena_parser = subparsers.add_parser(
+        "arena",
+        help="Start the Arena Server for WebSocket streaming",
+        description="Launch the Arena Server for real-time span streaming to browsers.",
     )
-    frontend_parser.add_argument(
+    arena_parser.add_argument(
         "--host",
         default="127.0.0.1",
         help="Host address to bind to (default: 127.0.0.1).",
     )
-    frontend_parser.add_argument(
+    arena_parser.add_argument(
         "--port",
         type=int,
         default=3001,
         help="Port to listen on (default: 3001).",
     )
-    frontend_parser.add_argument(
+    arena_parser.add_argument(
         "--trace-store",
         dest="trace_store",
         required=True,
         help="URL to Trace Store (Dashboard or Jaeger). "
         "Example: http://localhost:8000 (Dashboard) or http://localhost:16686 (Jaeger).",
     )
-    frontend_parser.add_argument(
+    arena_parser.add_argument(
         "--static-dir",
         dest="static_dir",
         type=Path,
-        help="Path to built frontend assets to serve (optional).",
+        help="Path to built static assets to serve (optional).",
     )
     return parser
 
@@ -965,22 +965,22 @@ async def _serve_command(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _frontend_command(args: argparse.Namespace) -> int:
-    """Handle frontend command - start Frontend Server."""
-    from dojozero.core._frontend_server import run_frontend_server
+async def _arena_command(args: argparse.Namespace) -> int:
+    """Handle arena command - start Arena Server."""
+    from dojozero.core._arena_server import run_arena_server
 
     host = args.host
     port = args.port
     trace_store = args.trace_store
     static_dir = getattr(args, "static_dir", None)
 
-    LOGGER.info("Starting Frontend Server at http://%s:%d", host, port)
+    LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
     LOGGER.info("Trace Store: %s", trace_store)
     LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
     if static_dir:
         LOGGER.info("Static files: %s", static_dir)
 
-    await run_frontend_server(
+    await run_arena_server(
         trace_store_url=trace_store,
         host=host,
         port=port,
@@ -1005,8 +1005,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _get_builder_command(args)
         if args.command == "serve":
             return asyncio.run(_serve_command(args))
-        if args.command == "frontend":
-            return asyncio.run(_frontend_command(args))
+        if args.command == "arena":
+            return asyncio.run(_arena_command(args))
         raise DojoZeroCLIError(f"unknown command '{args.command}'")
     except DojoZeroCLIError as exc:
         LOGGER.error(str(exc))

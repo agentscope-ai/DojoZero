@@ -5,7 +5,6 @@ from dojozero.nba_moneyline._agent import (
     BettingAgentConfig,
     DummyAgent,
     DummyAgentConfig,
-    format_event,
 )
 from dojozero.nba_moneyline._group import BettingAgentGroup
 from dojozero.nba_moneyline._datastream import (
@@ -33,5 +32,4 @@ __all__ = [
     "EventCounterOperatorConfig",
     "NBAPreGameBettingTrialParams",
     "register_trial_builder",
-    "format_event",
 ]

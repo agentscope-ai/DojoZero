@@ -136,7 +136,7 @@ For replaying historical data, `load_spans_from_checkpoint()` converts checkpoin
 
 ## API Integration
 
-`GET /api/traces/{trial_id}` returns all spans for a trial. The frontend derives all needed state (actors, conversations, timeline) from spans alone—no separate `agent_states` endpoint needed.
+`GET /api/traces/{trial_id}` returns all spans for a trial. The arena UI derives all needed state (actors, conversations, timeline) from spans alone—no separate `agent_states` endpoint needed.
 
 Query parameters:
 - `since`: ISO timestamp to filter spans after a given time

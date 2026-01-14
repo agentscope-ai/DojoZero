@@ -14,7 +14,7 @@ Unified Span Protocol:
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -27,7 +27,7 @@ LOGGER = logging.getLogger("dojozero.trace_store")
 class SpanData:
     """Normalized span data structure (OTel-compatible).
 
-    This is the format used both for storage and transmission to frontend.
+    This is the format used both for storage and transmission to arena UI.
     """
 
     trace_id: str
@@ -74,21 +74,43 @@ class SpanData:
 class TraceReader(Protocol):
     """Protocol for reading traces from any backend."""
 
-    async def list_trials(self) -> list[str]:
-        """List all trial IDs with traces."""
+    async def list_trials(
+        self,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int = 500,
+    ) -> list[str]:
+        """List trial IDs with traces.
+
+        Args:
+            start_time: Start of time range (inclusive). Defaults to 7 days ago.
+            end_time: End of time range (inclusive). Defaults to now.
+            limit: Maximum number of trials to return.
+
+        Returns:
+            List of unique trial IDs.
+        """
         ...
 
     async def get_spans(
         self,
         trial_id: str,
-        since: datetime | None = None,
+        start_time: datetime | None = None,
     ) -> list[SpanData]:
-        """Get spans for a trial."""
+        """Get spans for a trial.
+
+        Args:
+            trial_id: The trial ID to get spans for.
+            start_time: If provided, only return spans with start_time > this value.
+        """
         ...
 
 
 class JaegerTraceReader:
     """TraceReader that reads from Jaeger HTTP API."""
+
+    # Default lookback period for trial listing (7 days)
+    DEFAULT_LOOKBACK_DAYS = 7
 
     def __init__(
         self,
@@ -99,48 +121,48 @@ class JaegerTraceReader:
         self._service_name = service_name
         self._client = httpx.AsyncClient(timeout=30.0)
 
-    async def list_trials(self) -> list[str]:
-        """List all trial IDs from Jaeger.
-
-        Uses Jaeger's trace search API and extracts unique trial IDs from span tags.
-        """
-        response = await self._client.get(
-            f"{self._base_url}/api/traces",
-            params={
-                "service": self._service_name,
-                "limit": 100,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        trial_ids: set[str] = set()
-        for trace in data.get("data", []):
-            for span in trace.get("spans", []):
-                for tag in span.get("tags", []):
-                    if tag.get("key") == "dojozero.trial.id":
-                        trial_ids.add(str(tag.get("value", "")))
-        return list(trial_ids)
-
-    async def get_spans(
+    async def list_trials(
         self,
-        trial_id: str,
-        since: datetime | None = None,
-    ) -> list[SpanData]:
-        """Get spans for a trial from Jaeger.
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int = 500,
+    ) -> list[str]:
+        """List trial IDs from Jaeger by querying trial.started spans.
+
+        This efficiently finds trials by filtering on operation_name="trial.started"
+        instead of exhaustively searching all spans.
 
         Args:
-            trial_id: The trial ID to get spans for
-            since: If provided, only return spans with start_time > since
-                   (filtered client-side as Jaeger API doesn't support this)
+            start_time: Start of time range (inclusive). Defaults to 7 days ago.
+            end_time: End of time range (inclusive). Defaults to now.
+            limit: Maximum number of traces to return. Defaults to 500.
+
+        Returns:
+            List of unique trial IDs found in the time range.
         """
+        # Calculate time range in microseconds (Jaeger API uses microseconds)
+        now = datetime.now(timezone.utc)
+
+        if end_time is None:
+            end_time = now
+        end_us = int(end_time.timestamp() * 1_000_000)
+
+        if start_time is not None:
+            start_us = int(start_time.timestamp() * 1_000_000)
+        else:
+            # Default to 7 days ago
+            start_dt = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
+            start_us = int(start_dt.timestamp() * 1_000_000)
+
+        # Query Jaeger for trial.started spans only
+        # This is much more efficient than searching all spans
         params: dict[str, Any] = {
             "service": self._service_name,
-            "tags": f'{{"dojozero.trial.id":"{trial_id}"}}',
-            "limit": 1000,
+            "operation": "trial.started",  # Filter by operation name
+            "start": start_us,
+            "end": end_us,
+            "limit": limit,
         }
-        # Note: Jaeger's 'start' param is for query time range, not span filtering
-        # We filter spans client-side using the 'since' parameter
 
         response = await self._client.get(
             f"{self._base_url}/api/traces",
@@ -149,16 +171,55 @@ class JaegerTraceReader:
         response.raise_for_status()
         data = response.json()
 
-        # Convert since to microseconds for comparison
-        since_us = int(since.timestamp() * 1_000_000) if since else 0
+        # Extract trial IDs from trial.started spans
+        trial_ids: set[str] = set()
+        for trace in data.get("data", []):
+            for span in trace.get("spans", []):
+                # Only process trial.started spans (should be all of them due to filter)
+                if span.get("operationName") == "trial.started":
+                    for tag in span.get("tags", []):
+                        if tag.get("key") == "dojozero.trial.id":
+                            trial_ids.add(str(tag.get("value", "")))
+                            break
+        return list(trial_ids)
+
+    async def get_spans(
+        self,
+        trial_id: str,
+        start_time: datetime | None = None,
+    ) -> list[SpanData]:
+        """Get spans for a trial from Jaeger.
+
+        Args:
+            trial_id: The trial ID to get spans for.
+            start_time: If provided, only return spans with start_time > this value
+                        (filtered client-side as Jaeger API doesn't support this).
+        """
+        params: dict[str, Any] = {
+            "service": self._service_name,
+            "tags": f'{{"dojozero.trial.id":"{trial_id}"}}',
+            "limit": 1000,
+        }
+        # Note: Jaeger's 'start' param is for query time range, not span filtering
+        # We filter spans client-side using the 'start_time' parameter
+
+        response = await self._client.get(
+            f"{self._base_url}/api/traces",
+            params=params,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        # Convert start_time to microseconds for comparison
+        start_time_us = int(start_time.timestamp() * 1_000_000) if start_time else 0
 
         spans: list[SpanData] = []
         for trace in data.get("data", []):
             for span in trace.get("spans", []):
-                start_time = span.get("startTime", 0)
+                span_start_time = span.get("startTime", 0)
 
-                # Filter by since timestamp (client-side filtering)
-                if since_us > 0 and start_time <= since_us:
+                # Filter by start_time (client-side filtering)
+                if start_time_us > 0 and span_start_time <= start_time_us:
                     continue
 
                 tags: dict[str, Any] = {}
@@ -170,7 +231,7 @@ class JaegerTraceReader:
                         trace_id=span.get("traceID", ""),
                         span_id=span.get("spanID", ""),
                         operation_name=span.get("operationName", ""),
-                        start_time=start_time,
+                        start_time=span_start_time,
                         duration=span.get("duration", 0),
                         parent_span_id=span.get("references", [{}])[0].get("spanID")
                         if span.get("references")
@@ -445,7 +506,7 @@ def convert_agent_message_to_span(
     elif role == "system":
         operation_name = "agent.tool_result"
 
-    # Use event.* prefix so frontend spanToEvent can extract fields
+    # Use event.* prefix so arena UI spanToEvent can extract fields
     tags: dict[str, Any] = {
         "dojozero.trial.id": trial_id,
         "dojozero.actor.id": actor_id,
@@ -486,7 +547,7 @@ def convert_agent_message_to_span(
 def load_spans_from_checkpoint(
     trial_id: str,
     actor_states: dict[str, Any],
-    since_us: int = 0,
+    start_time_us: int = 0,
 ) -> list[SpanData]:
     """Load all data from checkpoint actor_states and convert to spans.
 
@@ -503,7 +564,7 @@ def load_spans_from_checkpoint(
     Args:
         trial_id: The trial ID.
         actor_states: Dictionary of actor_id -> actor state from checkpoint.
-        since_us: Filter spans starting after this timestamp (microseconds).
+        start_time_us: Filter spans starting after this timestamp (microseconds).
 
     Returns:
         List of SpanData sorted by start_time (registration spans first).
@@ -557,7 +618,7 @@ def load_spans_from_checkpoint(
                 span = convert_checkpoint_event_to_span(
                     trial_id, evt, sequence, actor_id
                 )
-                if span.start_time >= since_us:
+                if span.start_time >= start_time_us:
                     event_spans.append(span)
                 sequence += 1
 
@@ -578,7 +639,7 @@ def load_spans_from_checkpoint(
                             trial_id, actor_id, stream_id, msg, sequence
                         )
                         # Skip empty messages (returns None)
-                        if span is not None and span.start_time >= since_us:
+                        if span is not None and span.start_time >= start_time_us:
                             event_spans.append(span)
                         sequence += 1
 

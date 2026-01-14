@@ -1,11 +1,11 @@
-# Dashboard and Frontend API Design
+# Dashboard and Arena API Design
 
 ## Overview
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Dashboard     │────▶│   Jaeger/OTLP   │◀────│ Frontend Server │
-│  (dojo0 serve)  │     │  (trace store)  │     │ (dojo0 frontend)│
+│   Dashboard     │────▶│   Jaeger/OTLP   │◀────│  Arena Server   │
+│  (dojo0 serve)  │     │  (trace store)  │     │  (dojo0 arena)  │
 └─────────────────┘     └─────────────────┘     └────────┬────────┘
                                                          │
                OTLP export                 Polls (1s)    │ WebSocket
@@ -15,21 +15,21 @@
                                                 └─────────────────┘
 ```
 
-The dashboard and frontend server APIs are decoupled by design.
+The dashboard and arena server APIs are decoupled by design.
 
 Dashboard is responsible for managing actors
 and their lifecycles. It uses Open Telemetry traces to
 export actions performed by the actors. The traces are
 exported to a trace store (Jaeger).
 
-Frontend server is responsible for querying the Jaeger trace
-store and returning historical events to the frontend UI. It
+Arena server is responsible for querying the Jaeger trace
+store and returning historical events to the arena UI. It
 also forwards realtime actions performed by the actors observed
-via the trace store. The frontend server uses a polling mechanism
+via the trace store. The arena server uses a polling mechanism
 to query the trace store (streaming may be considered as future work).
 
-The frontend UI relies solely on the frontend server for data
-needs. The frontend server and the UI are completely decoupled
+The arena UI relies solely on the arena server for data
+needs. The arena server and the UI are completely decoupled
 from the dashboard at runtime. The only communication is via
 the trace store.
 
@@ -39,9 +39,9 @@ The Dashboard exposes a serving endpoint via the `dojo0 serve` command.
 Once started, the dashboard server accepts trial submissions through 
 the `dojo0 run` command.
 
-## Frontend Server API
+## Arena Server API
 
-The Frontend Server is the sole data source for the browser UI. It polls
+The Arena Server is the sole data source for the browser UI. It polls
 the trace store (Jaeger) for new spans and streams them to connected clients.
 The browser never communicates directly with Dashboard or Jaeger.
 
@@ -69,16 +69,16 @@ dojo0 serve --host 0.0.0.0 --port 8000 --otlp-endpoint http://localhost:4318
 dojo0 run --params configs/nba-pregame-betting.yaml --trial-id test --server http://localhost:8000
 ```
 
-### 4. Start Frontend Server
+### 4. Start Arena Server
 
 ```bash
-dojo0 frontend --host 0.0.0.0 --port 3001 --trace-store http://localhost:16686
+dojo0 arena --host 0.0.0.0 --port 3001 --trace-store http://localhost:16686
 ```
 
 ### 5. Start React UI (Development)
 
 ```bash
-cd frontend
+cd frontend  # or your specific arena frontend directory
 npm install  # first time only
 npm run dev
 ```
@@ -129,18 +129,14 @@ Options:
 }
 ```
 
-## Frontend Server API
+## Arena Server API
 
-The Frontend Server (`dojo0 frontend`) reads from trace store and streams to browsers.
+The Arena Server (`dojo0 arena`) reads from trace store and streams to browsers.
 
 ### Endpoints
 
 ```
-# Trace Queries (from Jaeger)
-GET  /api/traces                    - List all trial IDs
-GET  /api/traces/{trial_id}         - Get complete trace for replay
-
-# Trial Info (derived from traces)
+# Trial Info
 GET  /api/trials                    - List trials with phase/metadata
 GET  /api/trials/{trial_id}         - Get trial info
 

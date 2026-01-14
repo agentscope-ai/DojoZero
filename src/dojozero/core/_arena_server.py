@@ -1,11 +1,11 @@
-"""Frontend Server for DojoZero.
+"""Arena Server for DojoZero.
 
-This module implements the Frontend Server which is responsible for:
+This module implements the Arena Server which is responsible for:
 - Reading traces from Trace Store (Jaeger)
 - Pushing OTel spans to browsers via WebSocket
 - Serving React static files (optional, for production)
 
-The Frontend Server is a read-only service that only queries the trace store.
+The Arena Server is a read-only service that only queries the trace store.
 It does not communicate with the Dashboard Server directly.
 
 Endpoints:
@@ -14,7 +14,7 @@ Endpoints:
 - WS   /ws/trials/{trial_id}/stream   - Real-time span stream
 
 Configuration:
-    dojo0 frontend --trace-store http://localhost:16686
+    dojo0 arena --trace-store http://localhost:16686
 """
 
 import asyncio
@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,7 +37,7 @@ from ._tracing import (
     TraceReader,
 )
 
-LOGGER = logging.getLogger("dojozero.frontend_server")
+LOGGER = logging.getLogger("dojozero.arena_server")
 
 
 class WSMessageType:
@@ -145,8 +145,8 @@ class SpanBroadcaster:
 
 
 @dataclass
-class FrontendServerState:
-    """Shared state for the Frontend Server."""
+class ArenaServerState:
+    """Shared state for the Arena Server."""
 
     trace_reader: TraceReader
     broadcaster: SpanBroadcaster = field(default_factory=SpanBroadcaster)
@@ -157,10 +157,10 @@ class FrontendServerState:
     _last_poll: dict[str, datetime] = field(default_factory=dict)
 
 
-_server_state: FrontendServerState | None = None
+_server_state: ArenaServerState | None = None
 
 
-def get_server_state() -> FrontendServerState:
+def get_server_state() -> ArenaServerState:
     """Get the current server state."""
     if _server_state is None:
         raise RuntimeError("Server not initialized")
@@ -277,12 +277,12 @@ async def _extract_trial_info_from_traces(
     return {"phase": phase, "metadata": metadata}
 
 
-def create_frontend_app(
+def create_arena_app(
     trace_store_url: str,
     static_dir: Path | None = None,
     poll_interval: float = 1.0,
 ) -> FastAPI:
-    """Create the Frontend Server FastAPI application.
+    """Create the Arena Server FastAPI application.
 
     Args:
         trace_store_url: URL to trace store (Jaeger)
@@ -295,14 +295,14 @@ def create_frontend_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         global _server_state
-        _server_state = FrontendServerState(
+        _server_state = ArenaServerState(
             trace_reader=trace_reader,
             broadcaster=broadcaster,
             static_dir=static_dir,
             poll_interval=poll_interval,
         )
         LOGGER.info(
-            "Frontend Server started (trace_store: %s, static_dir: %s)",
+            "Arena Server started (trace_store: %s, static_dir: %s)",
             trace_store_url,
             static_dir,
         )
@@ -311,11 +311,11 @@ def create_frontend_app(
         close_fn = getattr(trace_reader, "close", None)
         if close_fn is not None:
             await close_fn()
-        LOGGER.info("Frontend Server shutting down")
+        LOGGER.info("Arena Server shutting down")
 
     app = FastAPI(
-        title="DojoZero Frontend Server",
-        description="WebSocket streaming and trace queries for frontend",
+        title="DojoZero Arena Server",
+        description="WebSocket streaming and trace queries for arena UI",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -333,12 +333,49 @@ def create_frontend_app(
     # -------------------------------------------------------------------------
 
     @app.get("/api/trials")
-    async def list_trials() -> JSONResponse:
-        """List trials with metadata extracted from traces."""
+    async def list_trials(
+        start_time: int | None = Query(
+            default=None,
+            description="Start time as Unix timestamp (seconds). Defaults to 7 days ago.",
+        ),
+        end_time: int | None = Query(
+            default=None,
+            description="End time as Unix timestamp (seconds). Defaults to now.",
+        ),
+        limit: int = Query(
+            default=500,
+            description="Maximum number of trials to return.",
+            ge=1,
+            le=1000,
+        ),
+    ) -> JSONResponse:
+        """List trials with metadata extracted from traces.
+
+        Query Parameters:
+            start_time: Start time as Unix timestamp in seconds (default: 7 days ago)
+            end_time: End time as Unix timestamp in seconds (default: now)
+            limit: Maximum number of trials to return (default: 500, max: 1000)
+        """
         state = get_server_state()
 
-        # Get trial list from trace store and extract phase + metadata from spans
-        trial_ids = await state.trace_reader.list_trials()
+        # Convert Unix timestamps to datetime
+        start_dt = (
+            datetime.fromtimestamp(start_time, tz=timezone.utc)
+            if start_time is not None
+            else None
+        )
+        end_dt = (
+            datetime.fromtimestamp(end_time, tz=timezone.utc)
+            if end_time is not None
+            else None
+        )
+
+        # Get trial list from trace store with time range filter
+        trial_ids = await state.trace_reader.list_trials(
+            start_time=start_dt,
+            end_time=end_dt,
+            limit=limit,
+        )
 
         # Build result with phase and metadata extracted from traces
         result = []
@@ -421,9 +458,9 @@ def create_frontend_app(
                         timeout=state.poll_interval,
                     )
                 except asyncio.TimeoutError:
-                    # Poll for new spans (since last_time for efficiency)
+                    # Poll for new spans (start_time for incremental updates)
                     new_spans = await state.trace_reader.get_spans(
-                        trial_id, since=last_time
+                        trial_id, start_time=last_time
                     )
 
                     # Filter out already-seen spans (double protection)
@@ -504,13 +541,13 @@ def create_frontend_app(
     return app
 
 
-async def run_frontend_server(
+async def run_arena_server(
     trace_store_url: str,
     host: str = "127.0.0.1",
     port: int = 3001,
     static_dir: Path | None = None,
 ) -> None:
-    """Run the Frontend Server.
+    """Run the Arena Server.
 
     Args:
         trace_store_url: URL to trace store (Jaeger)
@@ -520,7 +557,7 @@ async def run_frontend_server(
     """
     import uvicorn
 
-    app = create_frontend_app(
+    app = create_arena_app(
         trace_store_url,
         static_dir=static_dir,
     )
@@ -536,11 +573,11 @@ async def run_frontend_server(
 
 
 __all__ = [
-    "FrontendServerState",
+    "ArenaServerState",
     "SpanBroadcaster",
     "WSMessageType",
-    "create_frontend_app",
+    "create_arena_app",
     "create_trace_reader",
     "get_server_state",
-    "run_frontend_server",
+    "run_arena_server",
 ]

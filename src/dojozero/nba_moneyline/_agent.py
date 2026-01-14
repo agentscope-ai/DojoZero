@@ -93,10 +93,11 @@ class BettingAgent(ReActAgent):
         self._operator_registry: dict[str, Operator] = {}
         self._event_count = 0
         self._state: list[dict] = []
-        # Event queue for handling concurrent events
-        self._event_queue: deque[StreamEvent[Any]] = deque()
+        # Event queue stores (event, retry_count) tuples for retry tracking
+        self._event_queue: deque[tuple[StreamEvent[Any], int]] = deque()
         self._is_processing: bool = False
         self._processing_lock = asyncio.Lock()
+        self._max_event_retry_count = 3
 
     @property
     def trial_id(self) -> str | None:
@@ -338,14 +339,52 @@ class BettingAgent(ReActAgent):
         # Update state
         memory = await self.memory.get_memory()
         memory_dicts = [m.to_dict() for m in memory]
-        for event in events:
-            self._state.append({event.stream_id: memory_dicts})
+        self._state = memory_dicts
 
         logger.info(
             "agent '%s' processed %d event(s)",
             self.actor_id,
             len(events),
         )
+
+    async def _process_events_with_retry(
+        self,
+        events: list[StreamEvent[Any]],
+        retry_count: int = 0,
+    ) -> bool:
+        """Process events with retry logic.
+
+        Args:
+            events: List of events to process
+            retry_count: Current retry attempt (0-based)
+
+        Returns:
+            True if processing succeeded, False if failed after all retries
+        """
+        try:
+            await self._process_events(events)
+            return True
+        except Exception as e:
+            if retry_count < self._max_event_retry_count:
+                logger.warning(
+                    "agent '%s' batch processing failed (attempt %d/%d), retrying: %s",
+                    self.actor_id,
+                    retry_count + 1,
+                    self._max_event_retry_count,
+                    e,
+                )
+                return await self._process_events_with_retry(events, retry_count + 1)
+            else:
+                logger.error(
+                    "agent '%s' batch of %d event(s) failed after %d attempts, "
+                    "dropping events: seq=%s",
+                    self.actor_id,
+                    len(events),
+                    self._max_event_retry_count,
+                    [ev.sequence for ev in events],
+                    exc_info=True,
+                )
+                return False
 
     async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
         """Process incoming stream event with the ReActAgent.
@@ -355,6 +394,7 @@ class BettingAgent(ReActAgent):
         - If the agent is busy processing, new events are queued
         - After processing completes, all queued events are consolidated
           into a single message for the next processing cycle
+        - Failed events are retried up to max_event_retry_count times
 
         Emits OTLP trace spans for each agent message:
         - agent.input: User input from stream event(s)
@@ -369,8 +409,8 @@ class BettingAgent(ReActAgent):
 
         async with self._processing_lock:
             if self._is_processing:
-                # Agent is busy, queue this event
-                self._event_queue.append(event)
+                # Agent is busy, queue this event with retry_count=0
+                self._event_queue.append((event, 0))
                 logger.info(
                     "agent '%s' queued event seq=%s (queue size: %d)",
                     self.actor_id,
@@ -383,33 +423,42 @@ class BettingAgent(ReActAgent):
             self._is_processing = True
 
         try:
-            # Process the current event
-            await self._process_events([event])
+            # Process the current event with retry
+            await self._process_events_with_retry([event])
 
             # Process any queued events
             while True:
                 async with self._processing_lock:
                     if not self._event_queue:
-                        # No more queued events
-                        self._is_processing = False
                         break
 
-                    # Collect all queued events
-                    queued_events = list(self._event_queue)
+                    # Take a snapshot of current queue
+                    queued_items = list(self._event_queue)
                     self._event_queue.clear()
 
+                # Extract events and find max retry count for the batch
+                queued_events = [item[0] for item in queued_items]
+                max_retry = max(item[1] for item in queued_items)
+
                 logger.info(
-                    "agent '%s' processing %d queued event(s)",
+                    "agent '%s' processing %d queued event(s) (max_retry_count=%d)",
                     self.actor_id,
                     len(queued_events),
+                    max_retry,
                 )
-                await self._process_events(queued_events)
+                await self._process_events_with_retry(
+                    queued_events, retry_count=max_retry
+                )
 
         except Exception:
-            # Ensure we reset the processing flag on error
+            logger.exception(
+                "agent '%s' unexpected error in event processing loop",
+                self.actor_id,
+            )
+            raise
+        finally:
             async with self._processing_lock:
                 self._is_processing = False
-            raise
 
     async def save_state(self) -> Mapping[str, Any]:
         """Return serializable state for checkpointing."""

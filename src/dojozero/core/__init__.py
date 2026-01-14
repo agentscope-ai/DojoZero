@@ -55,12 +55,12 @@ from ._dashboard_server import (
     create_dashboard_app,
     run_dashboard_server,
 )
-from ._frontend_server import (
-    FrontendServerState,
+from ._arena_server import (
+    ArenaServerState,
     SpanBroadcaster,
     WSMessageType,
-    create_frontend_app,
-    run_frontend_server,
+    create_arena_app,
+    run_arena_server,
 )
 from ._tracing import (
     JaegerTraceReader,
@@ -118,12 +118,12 @@ __all__ = [
     "DashboardServerState",
     "create_dashboard_app",
     "run_dashboard_server",
-    # Frontend Server
-    "FrontendServerState",
+    # Arena Server
+    "ArenaServerState",
     "SpanBroadcaster",
     "WSMessageType",
-    "create_frontend_app",
-    "run_frontend_server",
+    "create_arena_app",
+    "run_arena_server",
     # Trace Store
     "JaegerTraceReader",
     "SpanData",

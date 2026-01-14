@@ -1,8 +1,8 @@
 // API Configuration
 // Frontend UI should only interact with Frontend Server (port 3001)
-// Frontend Server proxies to Dashboard Server and Jaeger as needed
-export const API_BASE_URL = "http://localhost:3001/api";
-export const WS_BASE_URL = "ws://localhost:3001";
+// These values are loaded from .env file (VITE_API_BASE_URL, VITE_WS_BASE_URL)
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001/api";
+export const WS_BASE_URL = import.meta.env.VITE_WS_BASE_URL || "ws://localhost:3001";
 
 // Dojozero CDN Assets
 export const DOJOZERO_CDN = {

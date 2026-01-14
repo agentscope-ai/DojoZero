@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
 import { useTheme } from "../App";
 import { API_BASE_URL, nbaTeams, findTeamByName, getTeamLogo } from "../constants";
 import ThemeToggle from "./ThemeToggle";
@@ -68,16 +70,78 @@ function TeamLogo({ team, size = 50 }) {
   );
 }
 
+// Preset time range options (in days)
+const TIME_PRESETS = [
+  { days: 1, label: "1d" },
+  { days: 7, label: "7d" },
+  { days: 30, label: "30d" },
+];
+
+// Helper to get start timestamp for N days ago
+function getDaysAgoTimestamp(days) {
+  const now = new Date();
+  const past = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  return Math.floor(past.getTime() / 1000);
+}
+
+// Helper to get current timestamp
+function getNowTimestamp() {
+  return Math.floor(Date.now() / 1000);
+}
+
 export default function Lobby() {
   const [trials, setTrials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [hoveredTrial, setHoveredTrial] = useState(null);
+  
+  // Time range state - default to 7 days
+  const [activePreset, setActivePreset] = useState(7); // Which preset button is active (null if custom)
+  const [startTime, setStartTime] = useState(() => getDaysAgoTimestamp(7));
+  const [endTime, setEndTime] = useState(() => getNowTimestamp());
+  
+  // Custom date picker state
+  const [customStartDate, setCustomStartDate] = useState(null);
+  const [customEndDate, setCustomEndDate] = useState(null);
+  
   const navigate = useNavigate();
   const { theme } = useTheme();
 
+  // Handle preset button click
+  const handlePresetClick = (days) => {
+    setActivePreset(days);
+    setStartTime(getDaysAgoTimestamp(days));
+    setEndTime(getNowTimestamp());
+    setCustomStartDate(null);
+    setCustomEndDate(null);
+    setLoading(true);
+  };
+
+  // Handle custom date range change
+  const handleCustomDateChange = (dates) => {
+    const [start, end] = dates;
+    setCustomStartDate(start);
+    setCustomEndDate(end);
+    
+    if (start && end) {
+      // Both dates selected - apply the filter
+      setActivePreset(null);
+      setStartTime(Math.floor(start.getTime() / 1000));
+      // Set end time to end of day
+      const endOfDay = new Date(end);
+      endOfDay.setHours(23, 59, 59, 999);
+      setEndTime(Math.floor(endOfDay.getTime() / 1000));
+      setLoading(true);
+    }
+  };
+
   const fetchTrials = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/trials`);
+      const params = new URLSearchParams({
+        start_time: startTime.toString(),
+        end_time: endTime.toString(),
+        limit: "500",
+      });
+      const response = await fetch(`${API_BASE_URL}/trials?${params}`);
       const data = await response.json();
       // Ensure data is an array (API might return error object)
       if (Array.isArray(data)) {
@@ -95,14 +159,17 @@ export default function Lobby() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [startTime, endTime]);
 
   useEffect(() => {
     fetchTrials();
-    // Poll for trial updates every 5 seconds
-    const interval = setInterval(fetchTrials, 5000);
-    return () => clearInterval(interval);
   }, [fetchTrials]);
+
+  // Manual refresh handler
+  const handleRefresh = () => {
+    setLoading(true);
+    fetchTrials();
+  };
 
   const getTeamInfo = (tricode) => {
     // First try direct tricode lookup
@@ -151,15 +218,89 @@ export default function Lobby() {
 
       {/* Main content */}
       <main style={styles.main}>
-        <motion.h2
-          className="font-tech"
-          style={styles.sectionTitle}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.3 }}
-        >
-          SELECT BETTING ROOM
-        </motion.h2>
+        <div style={styles.sectionHeader}>
+          <motion.h2
+            className="font-tech"
+            style={styles.sectionTitle}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.3 }}
+          >
+            SELECT BETTING ROOM
+          </motion.h2>
+          
+          {/* Time range selector */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.4 }}
+            style={styles.timeRangeContainer}
+          >
+            <span className="font-tech" style={styles.timeRangeLabel}>
+              TIME
+            </span>
+            
+            {/* Preset buttons */}
+            <div style={styles.presetButtons}>
+              {TIME_PRESETS.map((preset) => (
+                <button
+                  key={preset.days}
+                  onClick={() => handlePresetClick(preset.days)}
+                  className={`time-preset-btn ${activePreset === preset.days ? 'active' : ''}`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            
+            {/* Divider */}
+            <div style={styles.timeRangeDivider} />
+            
+            {/* Custom date picker */}
+            <div style={styles.datePickerWrapper}>
+              <DatePicker
+                selectsRange
+                startDate={customStartDate}
+                endDate={customEndDate}
+                onChange={handleCustomDateChange}
+                placeholderText="Custom"
+                className="custom-datepicker"
+                dateFormat="MM/dd"
+                maxDate={new Date()}
+                isClearable
+              />
+            </div>
+            
+            {/* Divider */}
+            <div style={styles.timeRangeDivider} />
+            
+            {/* Refresh button */}
+            <button
+              onClick={handleRefresh}
+              disabled={loading}
+              className="refresh-btn"
+              style={styles.refreshButton}
+              title="Refresh"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  animation: loading ? "spin 1s linear infinite" : "none",
+                }}
+              >
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+            </button>
+          </motion.div>
+        </div>
 
         {loading ? (
           <div style={styles.loadingContainer}>
@@ -301,6 +442,56 @@ const styles = {
     overflowX: "hidden",
     overflowY: "auto",
   },
+  sectionHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "30px",
+    flexWrap: "wrap",
+    gap: "16px",
+  },
+  timeRangeContainer: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    background: "var(--glass-bg)",
+    border: "1px solid var(--glass-border)",
+    borderRadius: "8px",
+    padding: "6px 12px",
+  },
+  timeRangeLabel: {
+    fontSize: "10px",
+    color: "var(--text-muted)",
+    letterSpacing: "0.1em",
+    marginRight: "4px",
+  },
+  presetButtons: {
+    display: "flex",
+    gap: "4px",
+  },
+  timeRangeDivider: {
+    width: "1px",
+    height: "16px",
+    background: "var(--glass-border)",
+    margin: "0 4px",
+  },
+  datePickerWrapper: {
+    position: "relative",
+  },
+  refreshButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "28px",
+    height: "28px",
+    padding: "0",
+    background: "transparent",
+    border: "1px solid var(--glass-border)",
+    borderRadius: "6px",
+    color: "var(--text-secondary)",
+    cursor: "pointer",
+    transition: "all 0.2s ease",
+  },
   backgroundOverlay: {
     position: "fixed",
     inset: 0,
@@ -368,7 +559,7 @@ const styles = {
     fontSize: "16px",
     color: "var(--text-secondary)",
     letterSpacing: "0.2em",
-    marginBottom: "30px",
+    margin: 0,
   },
   loadingContainer: {
     display: "grid",

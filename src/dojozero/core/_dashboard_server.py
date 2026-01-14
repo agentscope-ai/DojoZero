@@ -7,17 +7,17 @@ This module implements the Dashboard Server which is responsible for:
 - Serving as trace store for Frontend Server
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
-
-from pathlib import Path
 
 from ._dashboard import (
     Dashboard,
@@ -86,16 +86,15 @@ class DashboardServerState:
     dashboard: Dashboard
     otlp_endpoint: str | None = None
     imported_modules: set[str] = field(default_factory=set)
+    import_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
-_server_state: DashboardServerState | None = None
-
-
-def get_server_state() -> DashboardServerState:
-    """Get the current server state."""
-    if _server_state is None:
+def get_server_state(request: Request) -> DashboardServerState:
+    """Dependency to get server state from app.state."""
+    state = getattr(request.app.state, "server_state", None)
+    if state is None:
         raise RuntimeError("Server not initialized")
-    return _server_state
+    return state
 
 
 async def _launch_replay_trial(
@@ -195,8 +194,8 @@ def create_dashboard_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global _server_state
-        _server_state = DashboardServerState(
+        # Store state on app.state instead of global variable
+        app.state.server_state = DashboardServerState(
             dashboard=dashboard,
             otlp_endpoint=otlp_endpoint,
         )
@@ -266,9 +265,10 @@ def create_dashboard_app(
     # -------------------------------------------------------------------------
 
     @app.get("/api/trials")
-    async def list_trials() -> JSONResponse:
+    async def list_trials(
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
         """List all known trials with their status."""
-        state = get_server_state()
         trials = state.dashboard.list_trials()
 
         result = []
@@ -292,7 +292,10 @@ def create_dashboard_app(
         return JSONResponse(content=result)
 
     @app.post("/api/trials")
-    async def submit_trial(request: TrialSubmitRequest) -> JSONResponse:
+    async def submit_trial(
+        request: TrialSubmitRequest,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
         """Submit a new trial to the dashboard server.
 
         This endpoint accepts trial specifications via JSON and launches them
@@ -321,10 +324,7 @@ def create_dashboard_app(
         }
         """
         import importlib
-        from pathlib import Path
         from uuid import uuid4
-
-        state = get_server_state()
 
         # Generate trial_id if not provided
         trial_id = request.trial_id or uuid4().hex
@@ -361,21 +361,22 @@ def create_dashboard_app(
                 status_code=400,
             )
 
-        # Import module if specified and not already imported
+        # Import module if specified and not already imported (with lock for thread safety)
         if scenario.module:
             module_name = scenario.module
-            if module_name not in state.imported_modules:
-                try:
-                    importlib.import_module(module_name)
-                    state.imported_modules.add(module_name)
-                    LOGGER.info("Imported module: %s", module_name)
-                except ImportError as e:
-                    return JSONResponse(
-                        content={
-                            "error": f"Failed to import module '{module_name}': {e}"
-                        },
-                        status_code=400,
-                    )
+            async with state.import_lock:
+                if module_name not in state.imported_modules:
+                    try:
+                        importlib.import_module(module_name)
+                        state.imported_modules.add(module_name)
+                        LOGGER.info("Imported module: %s", module_name)
+                    except ImportError as e:
+                        return JSONResponse(
+                            content={
+                                "error": f"Failed to import module '{module_name}': {e}"
+                            },
+                            status_code=400,
+                        )
 
         # Get builder definition
         try:
@@ -461,9 +462,11 @@ def create_dashboard_app(
         )
 
     @app.get("/api/trials/{trial_id}/status")
-    async def get_trial_status(trial_id: str) -> JSONResponse:
+    async def get_trial_status(
+        trial_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
         """Get status for a specific trial."""
-        state = get_server_state()
         try:
             status = state.dashboard.get_trial_status(trial_id)
         except TrialNotFoundError:
@@ -491,9 +494,11 @@ def create_dashboard_app(
         )
 
     @app.post("/api/trials/{trial_id}/stop")
-    async def stop_trial(trial_id: str) -> JSONResponse:
+    async def stop_trial(
+        trial_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
         """Stop a running trial."""
-        state = get_server_state()
         try:
             status = await state.dashboard.stop_trial(trial_id)
         except TrialNotFoundError:
