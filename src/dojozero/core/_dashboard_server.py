@@ -1,0 +1,562 @@
+"""Dashboard Server for DojoZero.
+
+This module implements the Dashboard Server which is responsible for:
+- Running trials (agents, operators, data streams)
+- Emitting OTel traces for all actor operations
+- Providing REST API for trial control (submit, stop, checkpoint)
+- Serving as trace store for Frontend Server
+"""
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ValidationError
+
+from ._dashboard import (
+    Dashboard,
+    DashboardError,
+    TrialExistsError,
+    TrialNotFoundError,
+    TrialSpec,
+    TrialStatus,
+)
+from ._registry import (
+    TrialBuilderNotFoundError,
+    get_trial_builder_definition,
+)
+from ._tracing import (
+    OTelSpanExporter,
+    set_otel_exporter,
+)
+
+LOGGER = logging.getLogger("dojozero.dashboard_server")
+
+
+class ScenarioConfig(BaseModel):
+    """Scenario configuration for trial submission."""
+
+    name: str
+    module: str | None = None
+    config: dict[str, Any] = {}
+
+
+class ResumeConfig(BaseModel):
+    """Resume configuration for trial submission."""
+
+    checkpoint_id: str | None = None
+    latest: bool = False
+
+
+class ReplayConfig(BaseModel):
+    """Replay configuration for trial submission."""
+
+    file: str  # Path to replay file (must be accessible on server)
+    speed_up: float = 1.0
+    max_sleep: float = 20.0
+
+
+class TrialSubmitRequest(BaseModel):
+    """Request body for submitting a new trial.
+
+    Either 'scenario' or 'params' must be provided.
+    When using 'params', the scenario is extracted from params['scenario'].
+    """
+
+    model_config = {"extra": "ignore"}
+
+    trial_id: str | None = None
+    scenario: ScenarioConfig | None = None
+    params: dict[str, Any] | None = None  # Alternative: raw params payload
+    metadata: dict[str, Any] | None = None
+    resume: ResumeConfig | None = None
+    replay: ReplayConfig | None = None
+
+
+@dataclass
+class DashboardServerState:
+    """Shared state for the Dashboard Server."""
+
+    dashboard: Dashboard
+    otlp_endpoint: str | None = None
+    imported_modules: set[str] = field(default_factory=set)
+    import_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def get_server_state(request: Request) -> DashboardServerState:
+    """Dependency to get server state from app.state."""
+    state = getattr(request.app.state, "server_state", None)
+    if state is None:
+        raise RuntimeError("Server not initialized")
+    return state
+
+
+async def _launch_replay_trial(
+    dashboard: Dashboard,
+    spec: TrialSpec,
+    replay_file: Path,
+    speed_up: float,
+    max_sleep: float,
+) -> TrialStatus:
+    """Launch a trial in replay mode.
+
+    This sets up the replay infrastructure and launches the trial with
+    events replayed from the specified file.
+    """
+    from typing import Any
+
+    from dojozero.data import DataHub, ReplayCoordinator
+
+    builder_name = spec.metadata.get("builder_name")
+    if not builder_name:
+        raise DashboardError("builder_name is required in metadata for replay")
+    builder_name = str(builder_name)
+
+    # Extract hub_id from spec (from stream configs)
+    hub_id = None
+    for stream_spec in spec.data_streams:
+        config = stream_spec.config
+        if config.get("hub_id"):
+            hub_id = config["hub_id"]
+            break
+
+    if not hub_id:
+        hub_id = str(spec.metadata.get("hub_id", "data_hub"))
+
+    # Create DataHub in replay mode
+    hub = DataHub(
+        hub_id=hub_id,
+        persistence_file=None,
+        enable_persistence=False,
+    )
+
+    # Create ReplayCoordinator
+    coordinator = ReplayCoordinator(data_hub=hub, replay_file=replay_file)
+    coordinator.set_speed(speed_up=speed_up, max_sleep=max_sleep)
+
+    # Load events
+    LOGGER.info("Loading events from replay file: %s", replay_file)
+    await coordinator.start_replay()
+
+    # Override context builder
+    builder_def = get_trial_builder_definition(builder_name)
+    original_context_builder = builder_def.context_builder
+
+    def replay_context_builder(spec: TrialSpec) -> dict[str, Any]:
+        return {
+            "data_hubs": {hub_id: hub},
+            "stores": {},
+        }
+
+    builder_def.context_builder = replay_context_builder
+
+    try:
+        # Launch trial
+        status = await dashboard.launch_trial(spec)
+
+        # Start replay in background
+        import asyncio
+
+        async def run_replay():
+            try:
+                await coordinator.replay_all()
+                LOGGER.info("Replay completed for trial '%s'", spec.trial_id)
+            except Exception as e:
+                LOGGER.error("Replay failed: %s", e)
+            finally:
+                coordinator.stop_replay()
+                builder_def.context_builder = original_context_builder
+
+        asyncio.create_task(run_replay())
+        return status
+    except Exception:
+        builder_def.context_builder = original_context_builder
+        raise
+
+
+def create_dashboard_app(
+    dashboard: Dashboard,
+    otlp_endpoint: str | None = None,
+) -> FastAPI:
+    """Create the Dashboard Server FastAPI application.
+
+    Args:
+        dashboard: Dashboard instance for trial management
+        otlp_endpoint: OTLP endpoint URL for external trace storage.
+                      If None, uses built-in DashboardStore for traces.
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Store state on app.state instead of global variable
+        app.state.server_state = DashboardServerState(
+            dashboard=dashboard,
+            otlp_endpoint=otlp_endpoint,
+        )
+
+        # Initialize OTel exporter if endpoint is configured
+        otel_exporter = None
+        if otlp_endpoint:
+            otel_exporter = OTelSpanExporter(otlp_endpoint)
+            set_otel_exporter(otel_exporter)
+            LOGGER.info("OTel exporter configured: %s", otlp_endpoint)
+
+        LOGGER.info("Dashboard Server started")
+        yield
+
+        # Graceful shutdown: stop all running trials and emit stopped spans
+        LOGGER.info("Dashboard Server shutting down - stopping all trials")
+        try:
+            running_trials = [
+                status
+                for status in dashboard.list_trials()
+                if status.phase.value in ("running", "starting")
+            ]
+            for trial_status in running_trials:
+                try:
+                    LOGGER.info(
+                        "Stopping trial '%s' due to server shutdown",
+                        trial_status.trial_id,
+                    )
+                    await dashboard.stop_trial(trial_status.trial_id)
+                except Exception as e:
+                    LOGGER.warning(
+                        "Failed to stop trial '%s': %s", trial_status.trial_id, e
+                    )
+                    # Still emit a terminated span even if stop fails
+                    dashboard._emit_trial_lifecycle_span(
+                        trial_id=trial_status.trial_id,
+                        phase="terminated",
+                        metadata={"reason": "server_shutdown", "error": str(e)},
+                    )
+        except Exception as e:
+            LOGGER.error("Error during trial cleanup: %s", e)
+
+        # Shutdown OTel exporter
+        if otel_exporter is not None:
+            otel_exporter.shutdown()
+            set_otel_exporter(None)
+
+        LOGGER.info("Dashboard Server shutdown complete")
+
+    app = FastAPI(
+        title="DojoZero Dashboard Server",
+        description="REST API for trial management and trace collection",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # -------------------------------------------------------------------------
+    # Trial Control Endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/trials")
+    async def list_trials(
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """List all known trials with their status."""
+        trials = state.dashboard.list_trials()
+
+        result = []
+        for trial_status in trials:
+            trial_info = {
+                "id": trial_status.trial_id,
+                "phase": trial_status.phase.value,
+                "metadata": dict(trial_status.metadata),
+                "agents": [
+                    {
+                        "actor_id": actor.actor_id,
+                        "role": actor.role.value,
+                        "phase": actor.phase.value,
+                    }
+                    for actor in trial_status.actors
+                    if actor.role.value == "agent"
+                ],
+            }
+            result.append(trial_info)
+
+        return JSONResponse(content=result)
+
+    @app.post("/api/trials")
+    async def submit_trial(
+        request: TrialSubmitRequest,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Submit a new trial to the dashboard server.
+
+        This endpoint accepts trial specifications via JSON and launches them
+        on the server. The trial_id is optional - if not provided, a UUID
+        will be generated.
+
+        Request body (option 1 - scenario):
+        {
+            "trial_id": "optional-trial-id",
+            "scenario": {
+                "name": "builder_name",
+                "module": "optional.module.to.import",
+                "config": {...}
+            },
+            "metadata": {...},
+            "resume": {"checkpoint_id": "...", "latest": false},
+            "replay": {"file": "/path/to/events.jsonl", "speed_up": 1.0, "max_sleep": 20.0}
+        }
+
+        Request body (option 2 - params):
+        {
+            "trial_id": "optional-trial-id",
+            "params": {"scenario": {"name": "..."}, ...},
+            "resume": {...},
+            "replay": {...}
+        }
+        """
+        import importlib
+        from uuid import uuid4
+
+        # Generate trial_id if not provided
+        trial_id = request.trial_id or uuid4().hex
+
+        # Determine scenario source: direct scenario or from params
+        scenario = request.scenario
+        scenario_config = {}
+
+        # Initialize metadata dict if None
+        metadata = request.metadata or {}
+
+        if request.params:
+            # Extract scenario from params payload
+            params_scenario = request.params.get("scenario", {})
+            if isinstance(params_scenario, dict):
+                scenario_name = params_scenario.get("name")
+                scenario_module = params_scenario.get("module")
+                scenario_config = params_scenario.get("config", {})
+                if scenario_name:
+                    scenario = ScenarioConfig(
+                        name=scenario_name,
+                        module=scenario_module,
+                        config=scenario_config,
+                    )
+            # Extract metadata from params if not provided directly
+            if not metadata and "metadata" in request.params:
+                params_metadata = request.params.get("metadata", {})
+                if isinstance(params_metadata, dict):
+                    metadata.update(params_metadata)
+
+        if not scenario:
+            return JSONResponse(
+                content={"error": "Either 'scenario' or 'params.scenario' is required"},
+                status_code=400,
+            )
+
+        # Import module if specified and not already imported (with lock for thread safety)
+        if scenario.module:
+            module_name = scenario.module
+            async with state.import_lock:
+                if module_name not in state.imported_modules:
+                    try:
+                        importlib.import_module(module_name)
+                        state.imported_modules.add(module_name)
+                        LOGGER.info("Imported module: %s", module_name)
+                    except ImportError as e:
+                        return JSONResponse(
+                            content={
+                                "error": f"Failed to import module '{module_name}': {e}"
+                            },
+                            status_code=400,
+                        )
+
+        # Get builder definition
+        try:
+            definition = get_trial_builder_definition(scenario.name)
+        except TrialBuilderNotFoundError as e:
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=400,
+            )
+
+        # Build the trial spec
+        try:
+            spec = definition.build(trial_id, scenario.config or scenario_config)
+        except ValidationError as e:
+            return JSONResponse(
+                content={"error": f"Invalid config for builder '{scenario.name}': {e}"},
+                status_code=400,
+            )
+
+        # Add metadata
+        if metadata:
+            spec.metadata.update(metadata)
+
+        # Handle resume configuration
+        if request.resume:
+            if request.resume.checkpoint_id:
+                spec.resume_from_checkpoint_id = request.resume.checkpoint_id
+            elif request.resume.latest:
+                spec.resume_from_latest = True
+
+        # Handle replay configuration
+        if request.replay:
+            replay_file = Path(request.replay.file)
+            if not replay_file.exists():
+                return JSONResponse(
+                    content={"error": f"Replay file not found: {replay_file}"},
+                    status_code=400,
+                )
+            # Add replay metadata - the dashboard will handle this
+            spec.metadata["replay_file"] = str(replay_file)
+            spec.metadata["replay_mode"] = True
+            spec.metadata["replay_speed_up"] = request.replay.speed_up
+            spec.metadata["replay_max_sleep"] = request.replay.max_sleep
+            spec.metadata["builder_name"] = scenario.name
+
+        # Launch the trial (replay handling is done by dashboard based on metadata)
+        try:
+            if request.replay:
+                # For replay, use the replay launch path
+                status = await _launch_replay_trial(
+                    dashboard=state.dashboard,
+                    spec=spec,
+                    replay_file=Path(request.replay.file),
+                    speed_up=request.replay.speed_up,
+                    max_sleep=request.replay.max_sleep,
+                )
+            else:
+                status = await state.dashboard.launch_trial(spec)
+        except TrialExistsError as e:
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=409,
+            )
+        except DashboardError as e:
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=400,
+            )
+        except Exception as e:
+            LOGGER.error("Failed to launch trial: %s", e, exc_info=True)
+            return JSONResponse(
+                content={"error": f"Failed to launch trial: {e}"},
+                status_code=500,
+            )
+
+        return JSONResponse(
+            content={
+                "id": status.trial_id,
+                "phase": status.phase.value,
+                "metadata": dict(status.metadata),
+            },
+            status_code=201,
+        )
+
+    @app.get("/api/trials/{trial_id}/status")
+    async def get_trial_status(
+        trial_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Get status for a specific trial."""
+        try:
+            status = state.dashboard.get_trial_status(trial_id)
+        except TrialNotFoundError:
+            return JSONResponse(
+                content={"error": f"Trial '{trial_id}' not found"},
+                status_code=404,
+            )
+
+        return JSONResponse(
+            content={
+                "id": status.trial_id,
+                "phase": status.phase.value,
+                "metadata": dict(status.metadata),
+                "actors": [
+                    {
+                        "actor_id": actor.actor_id,
+                        "role": actor.role.value,
+                        "phase": actor.phase.value,
+                        "last_error": actor.last_error,
+                    }
+                    for actor in status.actors
+                ],
+                "last_error": status.last_error,
+            }
+        )
+
+    @app.post("/api/trials/{trial_id}/stop")
+    async def stop_trial(
+        trial_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Stop a running trial."""
+        try:
+            status = await state.dashboard.stop_trial(trial_id)
+        except TrialNotFoundError:
+            return JSONResponse(
+                content={"error": f"Trial '{trial_id}' not found"},
+                status_code=404,
+            )
+
+        return JSONResponse(
+            content={
+                "id": status.trial_id,
+                "phase": status.phase.value,
+            }
+        )
+
+    # -------------------------------------------------------------------------
+    # Health Check
+    # -------------------------------------------------------------------------
+
+    @app.get("/health")
+    async def health_check():
+        """Health check endpoint."""
+        return {"status": "ok"}
+
+    return app
+
+
+async def run_dashboard_server(
+    dashboard: Dashboard,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    otlp_endpoint: str | None = None,
+) -> None:
+    """Run the Dashboard Server.
+
+    Args:
+        dashboard: Dashboard instance
+        host: Host to bind to
+        port: Port to listen on
+        otlp_endpoint: OTLP endpoint for external trace storage (optional)
+    """
+    import uvicorn
+
+    app = create_dashboard_app(dashboard, otlp_endpoint=otlp_endpoint)
+
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
+__all__ = [
+    "DashboardServerState",
+    "create_dashboard_app",
+    "get_server_state",
+    "run_dashboard_server",
+]

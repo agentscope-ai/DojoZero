@@ -202,19 +202,40 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
         """Protocol hook: dashboard snapshot for checkpoints."""
         return {
             "sequence": self._sequence,
-            "received_events": len(self._received_events),
+            "received_events_count": len(self._received_events),
             "initialized": self._initialized,
+            # Include full event history in chronological order
+            "events": [event.to_dict() for event in self._received_events],
         }
 
     async def load_state(self, state: Mapping[str, Any]) -> None:
         """Protocol hook: dashboard restores a checkpoint before resuming."""
+        from dojozero.data._models import DataEventFactory
+
         self._sequence = int(state.get("sequence", 0))
         self._initialized = bool(state.get("initialized", False))
+
+        # Restore events from checkpoint (if present)
+        events_data = state.get("events", [])
+        self._received_events = []
+        for event_dict in events_data:
+            try:
+                event = DataEventFactory.from_dict(event_dict)
+                if event is not None:
+                    self._received_events.append(event)
+            except Exception as e:
+                logger.warning(
+                    "stream '%s' failed to restore event: %s",
+                    self.actor_id,
+                    e,
+                )
+
         logger.info(
-            "stream '%s' restored: sequence=%d initialized=%s",
+            "stream '%s' restored: sequence=%d initialized=%s events=%d",
             self.actor_id,
             self._sequence,
             self._initialized,
+            len(self._received_events),
         )
 
     @property

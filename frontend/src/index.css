@@ -1,0 +1,783 @@
+/* NBA 2K Style Global CSS */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&display=swap');
+
+:root {
+  /* Dark theme (default) */
+  --bg-primary: #0A0E17;
+  --bg-secondary: #111827;
+  --bg-tertiary: #1F2937;
+  --glass: rgba(17, 24, 39, 0.85);
+  --glass-border: rgba(75, 85, 99, 0.4);
+  --glass-highlight: rgba(255, 255, 255, 0.05);
+  --text-primary: #F9FAFB;
+  --text-secondary: #9CA3AF;
+  --text-muted: #6B7280;
+  --accent: #3B82F6;
+  --accent-glow: rgba(59, 130, 246, 0.5);
+  --accent-secondary: #8B5CF6;
+  --success: #10B981;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  
+  /* Metallic gradients */
+  --metal-gold: linear-gradient(135deg, #D4A853 0%, #F7E199 25%, #D4A853 50%, #A67C33 100%);
+  --metal-silver: linear-gradient(135deg, #C0C0C0 0%, #F5F5F5 25%, #C0C0C0 50%, #808080 100%);
+  --metal-bronze: linear-gradient(135deg, #CD7F32 0%, #E8B878 25%, #CD7F32 50%, #8B5A2B 100%);
+  
+  /* Glass morphism */
+  --frosted-glass: rgba(255, 255, 255, 0.05);
+  --frosted-border: rgba(255, 255, 255, 0.1);
+  
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg-primary: #F3F4F6;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #E5E7EB;
+  --glass: rgba(255, 255, 255, 0.9);
+  --glass-border: rgba(209, 213, 219, 0.6);
+  --glass-highlight: rgba(0, 0, 0, 0.02);
+  --text-primary: #111827;
+  --text-secondary: #6B7280;
+  --text-muted: #9CA3AF;
+  --accent: #2563EB;
+  --accent-glow: rgba(37, 99, 235, 0.3);
+  --frosted-glass: rgba(0, 0, 0, 0.02);
+  --frosted-border: rgba(0, 0, 0, 0.08);
+  
+  color-scheme: light;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body {
+  font-family: 'Rajdhani', sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Typography */
+.font-display {
+  font-family: 'Bebas Neue', sans-serif;
+  letter-spacing: 0.05em;
+}
+
+.font-tech {
+  font-family: 'Orbitron', sans-serif;
+}
+
+.font-ui {
+  font-family: 'Rajdhani', sans-serif;
+}
+
+/* Glass Card */
+.glass-card {
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+.glass-card-subtle {
+  background: var(--frosted-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--frosted-border);
+  border-radius: 12px;
+}
+
+/* Metal texture card */
+.metal-card {
+  background: linear-gradient(
+    145deg,
+    rgba(30, 41, 59, 0.9) 0%,
+    rgba(15, 23, 42, 0.95) 50%,
+    rgba(30, 41, 59, 0.9) 100%
+  );
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  box-shadow:
+    0 10px 40px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+
+.metal-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+}
+
+/* Glow effects */
+.glow-accent {
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.glow-success {
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+}
+
+.glow-warning {
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.4);
+}
+
+.glow-danger {
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
+}
+
+/* Animated gradient border */
+.gradient-border {
+  position: relative;
+  background: var(--bg-secondary);
+  border-radius: 16px;
+}
+
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(45deg, var(--accent), var(--accent-secondary), var(--accent));
+  background-size: 200% 200%;
+  border-radius: 18px;
+  z-index: -1;
+  animation: gradient-rotate 3s linear infinite;
+}
+
+@keyframes gradient-rotate {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* NBA 2K style scanlines overlay */
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+}
+
+/* Neon text glow */
+.neon-text {
+  text-shadow: 
+    0 0 10px currentColor,
+    0 0 20px currentColor,
+    0 0 40px currentColor;
+}
+
+/* Button styles */
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent) 0%, #1D4ED8 100%);
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 25px rgba(59, 130, 246, 0.5);
+}
+
+.btn-secondary {
+  background: var(--glass);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+}
+
+/* Remove focus outline for buttons */
+button:focus {
+  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Time range preset buttons */
+.time-preset-btn {
+  font-family: 'Orbitron', sans-serif;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.time-preset-btn:hover {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--text-primary);
+}
+
+.time-preset-btn:focus {
+  outline: none;
+}
+
+.time-preset-btn.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 6px rgba(59, 130, 246, 0.3);
+}
+
+.time-preset-btn.active:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Refresh button */
+.refresh-btn:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.refresh-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Spin animation for refresh button */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--glass-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-slide-in {
+  animation: slide-in-right 0.5s ease-out;
+}
+
+.animate-fade-in {
+  animation: fade-in-up 0.5s ease-out;
+}
+
+/* Danmaku animation */
+@keyframes danmaku-flow {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-100vw - 100%));
+  }
+}
+
+.danmaku-text {
+  animation: danmaku-flow 12s linear forwards;
+  white-space: nowrap;
+}
+
+/* Bloomberg-style ticker animation */
+@keyframes tickerScroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+/* Chart glow effect */
+.chart-glow {
+  filter: drop-shadow(0 0 8px var(--accent));
+}
+
+/* Team color utilities */
+.team-bg-mia { background-color: #98002E; }
+.team-bg-tor { background-color: #CE1141; }
+.team-bg-lal { background-color: #552583; }
+.team-bg-bos { background-color: #007A33; }
+.team-bg-gsw { background-color: #1D428A; }
+
+/* Loading shimmer */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 0%,
+    var(--glass-border) 50%,
+    var(--bg-tertiary) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ============================================
+   NBA 2K Arena Animations
+   ============================================ */
+
+/* Crowd bobbing/cheering animation */
+@keyframes crowdBob {
+  0%, 100% { 
+    transform: translateY(0) scaleY(1);
+  }
+  50% { 
+    transform: translateY(-2px) scaleY(1.05);
+  }
+}
+
+/* Crowd wave animation */
+.crowd-wave {
+  animation: crowdWave 3s ease-in-out infinite;
+}
+
+@keyframes crowdWave {
+  0%, 100% { 
+    transform: translateY(0);
+  }
+  25% { 
+    transform: translateY(-5px);
+  }
+  75% { 
+    transform: translateY(2px);
+  }
+}
+
+/* LED ribbon scrolling */
+@keyframes ledScroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+/* Camera flash effect */
+@keyframes cameraFlash {
+  0%, 90%, 100% {
+    opacity: 0.3;
+  }
+  92%, 94% {
+    opacity: 1;
+    box-shadow: 0 0 10px 5px rgba(255, 255, 200, 0.8);
+  }
+}
+
+/* Arena particle floating */
+.arena-particle {
+  animation: particleFloat 5s ease-in-out infinite;
+}
+
+@keyframes particleFloat {
+  0%, 100% {
+    transform: translateY(0) translateX(0);
+    opacity: 0.3;
+  }
+  25% {
+    transform: translateY(-10px) translateX(5px);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translateY(-5px) translateX(-5px);
+    opacity: 0.4;
+  }
+  75% {
+    transform: translateY(-15px) translateX(3px);
+    opacity: 0.5;
+  }
+}
+
+/* Basketball player animations */
+@keyframes playerJump {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-20px);
+  }
+}
+
+@keyframes playerDribble {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes ballBounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(30px);
+  }
+}
+
+@keyframes playerRun {
+  0%, 100% {
+    transform: translateX(0) translateY(0);
+  }
+  25% {
+    transform: translateX(2px) translateY(-3px);
+  }
+  50% {
+    transform: translateX(0) translateY(0);
+  }
+  75% {
+    transform: translateX(-2px) translateY(-3px);
+  }
+}
+
+@keyframes playerCelebrate {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-10px) rotate(-5deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(0deg);
+  }
+  75% {
+    transform: translateY(-10px) rotate(5deg);
+  }
+}
+
+/* Score flash overlay */
+@keyframes scoreFlash {
+  0% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.2);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+/* Spotlight sweep */
+@keyframes spotlightSweep {
+  0%, 100% {
+    transform: translateX(0) rotate(0deg);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translateX(10px) rotate(5deg);
+    opacity: 0.5;
+  }
+}
+
+/* Court shine effect */
+@keyframes courtShine {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Basketball trajectory */
+@keyframes basketballArc {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: translate(50px, -80px) rotate(180deg);
+  }
+  100% {
+    transform: translate(100px, -20px) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+/* Injury pulse */
+@keyframes injuryPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 15px rgba(239, 68, 68, 0);
+  }
+}
+
+/* Odds change indicator */
+@keyframes oddsChange {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Victory confetti base */
+@keyframes confettiFall {
+  0% {
+    transform: translateY(-100%) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100vh) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+/* Arena ambient glow pulse */
+@keyframes ambientGlow {
+  0%, 100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* ============================================
+   React DatePicker Custom Styles
+   ============================================ */
+
+.custom-datepicker {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--text-secondary, #9CA3AF);
+  font-size: 11px;
+  font-family: 'Orbitron', sans-serif;
+  cursor: pointer;
+  outline: none;
+  width: 140px;
+  transition: all 0.15s ease;
+}
+
+.custom-datepicker:hover {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.custom-datepicker:focus {
+  border-color: var(--accent, #3B82F6);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.custom-datepicker::placeholder {
+  color: var(--text-muted, #6B7280);
+}
+
+/* DatePicker popup container */
+.react-datepicker {
+  background: var(--bg-secondary, #111827) !important;
+  border: 1px solid var(--glass-border, rgba(75, 85, 99, 0.4)) !important;
+  border-radius: 12px !important;
+  font-family: 'Rajdhani', sans-serif !important;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
+}
+
+.react-datepicker__header {
+  background: var(--bg-tertiary, #1F2937) !important;
+  border-bottom: 1px solid var(--glass-border, rgba(75, 85, 99, 0.4)) !important;
+  border-radius: 12px 12px 0 0 !important;
+  padding-top: 12px !important;
+}
+
+.react-datepicker__current-month,
+.react-datepicker-time__header,
+.react-datepicker-year-header {
+  color: var(--text-primary, #F9FAFB) !important;
+  font-family: 'Orbitron', sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+}
+
+.react-datepicker__day-name {
+  color: var(--text-muted, #6B7280) !important;
+  font-size: 12px !important;
+}
+
+.react-datepicker__day {
+  color: var(--text-secondary, #9CA3AF) !important;
+  border-radius: 6px !important;
+  transition: all 0.15s ease !important;
+}
+
+.react-datepicker__day:hover {
+  background: var(--accent, #3B82F6) !important;
+  color: white !important;
+}
+
+.react-datepicker__day--selected,
+.react-datepicker__day--in-selecting-range,
+.react-datepicker__day--in-range {
+  background: var(--accent, #3B82F6) !important;
+  color: white !important;
+}
+
+.react-datepicker__day--keyboard-selected {
+  background: rgba(59, 130, 246, 0.3) !important;
+}
+
+.react-datepicker__day--disabled {
+  color: var(--text-muted, #6B7280) !important;
+  opacity: 0.4;
+}
+
+.react-datepicker__navigation {
+  top: 12px !important;
+}
+
+.react-datepicker__navigation-icon::before {
+  border-color: var(--text-secondary, #9CA3AF) !important;
+}
+
+.react-datepicker__navigation:hover *::before {
+  border-color: var(--accent, #3B82F6) !important;
+}
+
+.react-datepicker__triangle {
+  display: none !important;
+}
+
+.react-datepicker-popper {
+  z-index: 100 !important;
+}
+
+/* Clear button styling */
+.react-datepicker__close-icon::after {
+  background-color: var(--text-muted, #6B7280) !important;
+  font-size: 14px !important;
+  height: 16px !important;
+  width: 16px !important;
+  padding: 0 !important;
+  line-height: 14px !important;
+}
+
+.react-datepicker__close-icon:hover::after {
+  background-color: var(--danger, #EF4444) !important;
+}
