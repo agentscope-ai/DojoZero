@@ -8,6 +8,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Configuration
 DATA_DIR="${DATA_DIR:-$PROJECT_ROOT/data/nba-betting}"
 DATE="${1:-$(date +%Y-%m-%d)}"  # Use provided date or today
+OSS_UPLOAD="${OSS_UPLOAD:-false}"  # Set to "true" to enable OSS upload
 
 # Change to project root
 cd "$PROJECT_ROOT"
@@ -44,18 +45,27 @@ elif command -v gtimeout &> /dev/null; then
     TIMEOUT_CMD="gtimeout"  # macOS with coreutils
 fi
 
+# Build OSS flags if enabled
+OSS_FLAGS=""
+if [ "$OSS_UPLOAD" = "true" ]; then
+    OSS_FLAGS="--oss-upload"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] OSS upload enabled"
+fi
+
 # Run collector (it handles its own logging)
 if [ -n "$TIMEOUT_CMD" ]; then
     "$TIMEOUT_CMD" "$TIMEOUT_SECONDS" python3 "$PROJECT_ROOT/tools/nba_game_collector.py" \
         --data-dir "$DATA_DIR" \
         --date "$DATE" \
-        --log-level INFO
+        --log-level INFO \
+        $OSS_FLAGS
     EXIT_CODE=$?
 else
     python3 "$PROJECT_ROOT/tools/nba_game_collector.py" \
         --data-dir "$DATA_DIR" \
         --date "$DATE" \
-        --log-level INFO
+        --log-level INFO \
+        $OSS_FLAGS
     EXIT_CODE=$?
 fi
 

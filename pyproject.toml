@@ -19,6 +19,7 @@ dependencies = [
     "agentscope>=1.0.8",
     "nba_api>=1.11.3",
     "py-clob-client>=0.1.0",
+    "oss2>=2.18.0",
     "fastapi>=0.128.0",
     "uvicorn>=0.40.0",
     "httpx>=0.28.0",
