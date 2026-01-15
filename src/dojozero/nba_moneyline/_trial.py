@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from dojozero.core import (
+    ActorContext,
     AgentSpec,
     DataStreamSpec,
     OperatorSpec,
@@ -515,7 +516,7 @@ def _build_trial_spec(
     )
 
 
-def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
+def _build_nba_runtime_context(spec: TrialSpec) -> ActorContext:
     """Build runtime context for NBA pre-game betting trial.
 
     Creates DataHub and WebSearchStore instances from stream configs.
@@ -525,12 +526,10 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         spec: Trial specification
 
     Returns:
-        Context dictionary with 'data_hubs' and 'stores' keys
+        ActorContext with trial_id, data_hubs, and stores
     """
-    context: dict[str, Any] = {
-        "data_hubs": {},
-        "stores": {},
-    }
+    data_hubs: dict[str, Any] = {}
+    stores: dict[str, Any] = {}
 
     # Extract hub/store info from stream configs
     hub_configs: dict[str, dict[str, Any]] = {}
@@ -558,18 +557,18 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
 
     # Create DataHub instances
     for hub_id, hub_config in hub_configs.items():
-        if hub_id not in context["data_hubs"]:
+        if hub_id not in data_hubs:
             hub = DataHub(
                 hub_id=hub_config["hub_id"],
                 persistence_file=hub_config["persistence_file"],
                 enable_persistence=hub_config.get("enable_persistence", True),
             )
-            context["data_hubs"][hub_id] = hub
+            data_hubs[hub_id] = hub
 
     # Create Store instances
     # WebSearchStore
     for store_id, store_config in store_configs.items():
-        if store_id not in context["stores"]:
+        if store_id not in stores:
             api = WebSearchAPI()
             store = WebSearchStore(
                 store_id=store_config["store_id"],
@@ -604,13 +603,13 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
                 if stream_spec.config.get("websearch_store_id") == store_id:
                     hub_id = stream_spec.config.get("hub_id")
                     break
-            if hub_id and hub_id in context["data_hubs"]:
-                context["data_hubs"][hub_id].connect_store(store)
-            context["stores"][store_id] = store
+            if hub_id and hub_id in data_hubs:
+                data_hubs[hub_id].connect_store(store)
+            stores[store_id] = store
 
     # Create NBAStore for game status events
     # Default intervals: scoreboard=5s, play_by_play=2s
-    if "nba_store" not in context["stores"]:
+    if "nba_store" not in stores:
         game_id = spec.metadata.get("game_id", "")
         nba_api = NBAExternalAPI()
         nba_store = NBAStore(
@@ -620,14 +619,14 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         )
         nba_store.set_poll_identifier({"game_id": game_id})
         # Connect to hub
-        hub_id = list(context["data_hubs"].keys())[0] if context["data_hubs"] else None
+        hub_id = list(data_hubs.keys())[0] if data_hubs else None
         if hub_id:
-            context["data_hubs"][hub_id].connect_store(nba_store)
-        context["stores"]["nba_store"] = nba_store
+            data_hubs[hub_id].connect_store(nba_store)
+        stores["nba_store"] = nba_store
 
     # Create PolymarketStore for odds updates
     # Default interval: odds=300s (5 minutes)
-    if "polymarket_store" not in context["stores"]:
+    if "polymarket_store" not in stores:
         game_id = spec.metadata.get("game_id", "")
         market_url_raw = spec.metadata.get("market_url")
         market_url: str | None = (
@@ -664,23 +663,26 @@ def _build_nba_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         )
         polymarket_store.set_poll_identifier(identifier)
         # Connect to hub
-        hub_id = list(context["data_hubs"].keys())[0] if context["data_hubs"] else None
+        hub_id = list(data_hubs.keys())[0] if data_hubs else None
         if hub_id:
-            context["data_hubs"][hub_id].connect_store(polymarket_store)
-        context["stores"]["polymarket_store"] = polymarket_store
+            data_hubs[hub_id].connect_store(polymarket_store)
+        stores["polymarket_store"] = polymarket_store
 
     # Start all stores after they're all connected and configured
     # Add startup function to context that dashboard can call
     async def start_data_stores() -> None:
         """Start all DataHub stores (begin polling)."""
-        hub_id = list(context["data_hubs"].keys())[0] if context["data_hubs"] else None
+        hub_id = list(data_hubs.keys())[0] if data_hubs else None
         if hub_id:
-            hub = context["data_hubs"][hub_id]
+            hub = data_hubs[hub_id]
             await hub.start()
 
-    context["_startup"] = start_data_stores
-
-    return context
+    return ActorContext(
+        trial_id=spec.trial_id,
+        data_hubs=data_hubs,
+        stores=stores,
+        startup=start_data_stores,
+    )
 
 
 register_trial_builder(

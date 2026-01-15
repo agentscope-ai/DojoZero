@@ -22,7 +22,7 @@ from dojozero.agents import (
     create_formatter,
     create_toolkit,
 )
-from dojozero.core import Agent, AgentBase, Operator, StreamEvent
+from dojozero.core import ActorContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
 from dojozero.data._models import DataEvent
 from dojozero.nba_moneyline._formatters import format_event, parse_response_content
@@ -55,11 +55,14 @@ class DummyAgentConfig(_ActorIdConfig, total=False):
     operator_id: str  # ID of the event counter operator to use
 
 
-class BettingAgent(ReActAgent):
-    """ReActAgent extended with DojoZero stream event handling.
+class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
+    """Agent for NBA betting that uses ReActAgent for LLM reasoning.
 
-    Inherits from agentscope's ReActAgent and adds:
-    - actor_id for DojoZero identification
+    Inherits from AgentBase to implement the Actor protocol and uses
+    composition to wrap an agentscope ReActAgent for LLM functionality.
+
+    Features:
+    - actor_id and trial_id for DojoZero identification
     - Operator registration
     - StreamEvent handling with event queueing
     - State persistence for checkpointing
@@ -74,13 +77,16 @@ class BettingAgent(ReActAgent):
     def __init__(
         self,
         actor_id: str,
+        trial_id: str,
         name: str,
         sys_prompt: str,
         model: ChatModelBase,
         formatter: FormatterBase,
         toolkit: Toolkit | None = None,
     ) -> None:
-        super().__init__(
+        super().__init__(actor_id, trial_id)
+        # Create internal ReActAgent for LLM reasoning
+        self._react_agent = ReActAgent(
             name=name,
             sys_prompt=sys_prompt,
             model=model,
@@ -88,9 +94,6 @@ class BettingAgent(ReActAgent):
             toolkit=toolkit or Toolkit(),
             memory=InMemoryMemory(),
         )
-        self._actor_id = actor_id
-        self._trial_id: str | None = None
-        self._operator_registry: dict[str, Operator] = {}
         self._event_count = 0
         self._state: list[dict] = []
         # Event queue stores (event, retry_count) tuples for retry tracking
@@ -100,12 +103,31 @@ class BettingAgent(ReActAgent):
         self._max_event_retry_count = 3
 
     @property
-    def trial_id(self) -> str | None:
-        """Trial ID this agent belongs to (injected by RuntimeProvider)."""
-        return self._trial_id
+    def name(self) -> str:
+        """Agent name from the internal ReActAgent."""
+        return self._react_agent.name
+
+    @property
+    def memory(self) -> Any:
+        """Memory from the internal ReActAgent."""
+        return self._react_agent.memory
+
+    @property
+    def toolkit(self) -> Toolkit:
+        """Toolkit from the internal ReActAgent."""
+        return self._react_agent.toolkit
+
+    @toolkit.setter
+    def toolkit(self, value: Toolkit) -> None:
+        """Set toolkit on the internal ReActAgent."""
+        self._react_agent.toolkit = value
 
     @classmethod
-    def from_dict(cls, config: BettingAgentConfig) -> "BettingAgent":
+    def from_dict(
+        cls,
+        config: BettingAgentConfig,
+        context: ActorContext,
+    ) -> "BettingAgent":
         """Create agent from config dict.
 
         Supports two modes:
@@ -122,6 +144,7 @@ class BettingAgent(ReActAgent):
             model_type = llm_config.get("model_type", "openai")
             return cls(
                 actor_id=actor_id,
+                trial_id=context.trial_id,
                 name=yaml_config.get("name", actor_id),
                 sys_prompt=yaml_config.get("sys_prompt", ""),
                 model=create_model(llm_config),
@@ -133,6 +156,7 @@ class BettingAgent(ReActAgent):
         model_type = llm_config.get("model_type", "openai")
         return cls(
             actor_id=actor_id,
+            trial_id=context.trial_id,
             name=config.get("name", actor_id),
             sys_prompt=config.get("sys_prompt", ""),
             model=create_model(llm_config),
@@ -144,6 +168,7 @@ class BettingAgent(ReActAgent):
         cls,
         config_path: str | Path,
         actor_id: str,
+        trial_id: str,
         toolkit: Toolkit | None = None,
     ) -> "BettingAgent":
         """Create agent from YAML config file.
@@ -151,6 +176,7 @@ class BettingAgent(ReActAgent):
         Args:
             config_path: Path to YAML config file
             actor_id: The actor ID for this agent
+            trial_id: The trial ID for this agent
             toolkit: Optional toolkit to use
         """
         config = load_agent_config(config_path)
@@ -159,16 +185,13 @@ class BettingAgent(ReActAgent):
 
         return cls(
             actor_id=actor_id,
+            trial_id=trial_id,
             name=config["name"],
             sys_prompt=config["sys_prompt"],
             model=create_model(llm_config),
             formatter=create_formatter(model_type),
             toolkit=toolkit or Toolkit(),
         )
-
-    @property
-    def actor_id(self) -> str:
-        return self._actor_id
 
     async def register_operators(self, operators: Sequence[Operator]) -> None:
         """Register operators and auto-register broker tools if available."""
@@ -223,9 +246,6 @@ class BettingAgent(ReActAgent):
         tool_calls: list[dict] | None = None,
     ) -> None:
         """Emit a span for an agent message to the OTel exporter."""
-        if self._trial_id is None:
-            return
-
         tags: dict[str, Any] = {
             "dojozero.event.type": operation_name,
             "dojozero.event.sequence": self._event_count,
@@ -239,8 +259,8 @@ class BettingAgent(ReActAgent):
             tags["event.tool_calls"] = json.dumps(tool_calls, default=str)
 
         span = create_span_from_event(
-            trial_id=self._trial_id,
-            actor_id=self._actor_id,
+            trial_id=self.trial_id,
+            actor_id=self.actor_id,
             operation_name=operation_name,
             extra_tags=tags,
         )
@@ -318,7 +338,7 @@ class BettingAgent(ReActAgent):
         )
 
         # Call agent
-        response = await self(msg)
+        response = await self._react_agent(msg)
 
         # Emit span for agent response
         if response is not None:
@@ -496,8 +516,10 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     primarily just counting events. Emits OTLP trace spans for processed events.
     """
 
-    def __init__(self, actor_id: str, operator_id: str | None = None) -> None:
-        super().__init__(actor_id)
+    def __init__(
+        self, actor_id: str, trial_id: str, operator_id: str | None = None
+    ) -> None:
+        super().__init__(actor_id, trial_id)
         self._operator_id = operator_id
         self._operator: _EventCounterOperatorLike | None = None
         self._events_processed = 0
@@ -533,9 +555,11 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     def from_dict(
         cls,
         config: DummyAgentConfig,
+        context: ActorContext,
     ) -> "DummyAgent":
         return cls(
             actor_id=str(config["actor_id"]),
+            trial_id=context.trial_id,
             operator_id=config.get("operator_id"),
         )
 

@@ -3,6 +3,7 @@
 import logging
 from typing import Any, TypedDict
 
+from dojozero.core import ActorContext
 from dojozero.data import DataHub, WebSearchStore
 from dojozero.data._streams import DataHubDataStream as BaseDataHubDataStream
 from dojozero.nba_moneyline._initializer import NBAStreamInitializer
@@ -48,6 +49,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         self,
         *,
         actor_id: str,
+        trial_id: str,
         hub: DataHub | None = None,
         event_type: str | None = None,
         event_types: list[str] | None = None,
@@ -74,6 +76,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
 
         super().__init__(
             actor_id=actor_id,
+            trial_id=trial_id,
             hub=hub,
             event_type=event_type,
             event_types=event_types,
@@ -84,29 +87,27 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
     def from_dict(
         cls,
         config: NBAPreGameBettingDataHubDataStreamConfig,
-        context: dict[str, Any] | None = None,
+        context: ActorContext,
     ) -> "NBAPreGameBettingDataHubDataStream":
         # Get hub and store from context (provided by dashboard during materialization)
         hub: DataHub | None = None
         store: WebSearchStore | None = None
 
-        if context and "data_hubs" in context:
-            hub_id = config.get("hub_id", "default_hub")
-            hub = context["data_hubs"].get(hub_id)
+        hub_id = config.get("hub_id", "default_hub")
+        hub = context.data_hubs.get(hub_id)
 
-        if context and "stores" in context:
-            store_id = config.get("websearch_store_id")
-            if store_id:
-                store = context["stores"].get(store_id)
+        store_id = config.get("websearch_store_id")
+        if store_id:
+            store = context.stores.get(store_id)
 
         if hub is None:
             # Fallback: create new hub (shouldn't happen in normal flow)
-            hub_id = config.get("hub_id", "default_hub")
             persistence_file = config.get("persistence_file", "outputs/events.jsonl")
             hub = DataHub(hub_id=hub_id, persistence_file=persistence_file)
 
         return cls(
             actor_id=config["actor_id"],
+            trial_id=context.trial_id,
             hub=hub,
             event_type=config.get("event_type"),
             event_types=config.get("event_types", []),

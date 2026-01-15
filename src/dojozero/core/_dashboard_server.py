@@ -35,6 +35,7 @@ from ._tracing import (
     OTelSpanExporter,
     set_otel_exporter,
 )
+from ._types import ActorContext
 
 LOGGER = logging.getLogger("dojozero.dashboard_server")
 
@@ -109,7 +110,6 @@ async def _launch_replay_trial(
     This sets up the replay infrastructure and launches the trial with
     events replayed from the specified file.
     """
-    from typing import Any
 
     from dojozero.data import DataHub, ReplayCoordinator
 
@@ -148,11 +148,12 @@ async def _launch_replay_trial(
     builder_def = get_trial_builder_definition(builder_name)
     original_context_builder = builder_def.context_builder
 
-    def replay_context_builder(spec: TrialSpec) -> dict[str, Any]:
-        return {
-            "data_hubs": {hub_id: hub},
-            "stores": {},
-        }
+    def replay_context_builder(spec: TrialSpec) -> ActorContext:
+        return ActorContext(
+            trial_id=spec.trial_id,
+            data_hubs={hub_id: hub},
+            stores={},
+        )
 
     builder_def.context_builder = replay_context_builder
 

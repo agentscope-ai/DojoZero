@@ -29,6 +29,7 @@ from typing import Any, Mapping, Protocol, Sequence, TypedDict, cast
 from pydantic import BaseModel, Field
 
 from dojozero.core import (
+    ActorContext,
     Agent,
     AgentBase,
     AgentSpec,
@@ -98,12 +99,13 @@ class BoundedRandomStringDataStream(
         self,
         *,
         actor_id: str,
+        trial_id: str,
         total_events: int,
         payload_length: int,
         interval_seconds: float,
         seed: int | None,
     ) -> None:
-        super().__init__(actor_id)
+        super().__init__(actor_id, trial_id)
         if total_events < 0:
             raise ValueError("total_events must be non-negative")
         if payload_length <= 0:
@@ -129,9 +131,11 @@ class BoundedRandomStringDataStream(
     def from_dict(
         cls,
         config: BoundedRandomStringDataStreamConfig,
+        context: ActorContext,
     ) -> "BoundedRandomStringDataStream":
         return cls(
             actor_id=config["actor_id"],
+            trial_id=context.trial_id,
             total_events=config.get("total_events", 10),
             payload_length=config.get("payload_length", 8),
             interval_seconds=config.get("interval_seconds", 0.0),
@@ -252,8 +256,8 @@ class BoundedRandomStringDataStream(
 class CounterOperator(OperatorBase, Operator[CounterOperatorConfig]):
     """Operator that exposes a ""count"" RPC."""
 
-    def __init__(self, actor_id: str) -> None:
-        super().__init__(actor_id)
+    def __init__(self, actor_id: str, trial_id: str) -> None:
+        super().__init__(actor_id, trial_id)
         self._count = 0
         self._lock = asyncio.Lock()
 
@@ -261,8 +265,9 @@ class CounterOperator(OperatorBase, Operator[CounterOperatorConfig]):
     def from_dict(
         cls,
         config: CounterOperatorConfig,
+        context: ActorContext,
     ) -> "CounterOperator":
-        return cls(actor_id=str(config["actor_id"]))
+        return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 
     async def start(self) -> None:
         """Protocol hook: dashboard calls this before traffic is routed."""
@@ -309,8 +314,8 @@ class CounterOperator(OperatorBase, Operator[CounterOperatorConfig]):
 class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
     """Agent that increments the shared operator counter per event."""
 
-    def __init__(self, actor_id: str, operator_id: str) -> None:
-        super().__init__(actor_id)
+    def __init__(self, actor_id: str, trial_id: str, operator_id: str) -> None:
+        super().__init__(actor_id, trial_id)
         self._operator_id = operator_id
         self._operator: _CounterOperatorLike | None = None
         self._events = 0
@@ -320,9 +325,11 @@ class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
     def from_dict(
         cls,
         config: CounterAgentConfig,
+        context: ActorContext,
     ) -> "CounterAgent":
         return cls(
             actor_id=str(config["actor_id"]),
+            trial_id=context.trial_id,
             operator_id=str(config["operator_id"]),
         )
 

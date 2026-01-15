@@ -9,6 +9,7 @@ from ray.actor import ActorHandle
 
 from dojozero.core._actors import Actor, ActorState
 from dojozero.core._runtime import ActorHandler, ActorRuntimeProvider
+from dojozero.core._types import ActorContext
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from dojozero.core._dashboard import ActorSpec
@@ -96,12 +97,9 @@ class _RayActorHost:
         config: Mapping[str, Any],
         actor_id: str,
         resume_state: ActorState | None,
-        trial_id: str | None = None,
+        context: ActorContext,
     ) -> None:
-        actor = actor_cls.from_dict(config)
-        # Inject trial_id directly into the actor instance
-        if trial_id is not None:
-            setattr(actor, "_trial_id", trial_id)
+        actor = actor_cls.from_dict(config, context)
         if actor.actor_id != actor_id:
             raise ValueError(
                 f"actor id mismatch: spec '{actor_id}' != instance '{actor.actor_id}'"
@@ -218,7 +216,7 @@ class RayActorRuntimeProvider(ActorRuntimeProvider):
     async def create_handler(
         self,
         spec: "ActorSpec[Any]",
-        context: dict[str, Any] | None = None,
+        context: ActorContext,
     ) -> RayActorHandler:
         self._ensure_ray()
         handle = cast(ActorHandle, _RayActorHost.remote())
@@ -228,7 +226,7 @@ class RayActorRuntimeProvider(ActorRuntimeProvider):
                 spec.config,
                 spec.actor_id,
                 spec.resume_state,
-                spec.trial_id,
+                context,
             )
         )
         return RayActorHandler(

@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from dojozero.nba_moneyline import BettingAgent
 from dojozero.agents import load_agent_config, create_model, create_formatter
-from dojozero.core import StreamEvent
+from dojozero.core import ActorContext, StreamEvent
 from dojozero.nba_moneyline._broker import BrokerOperator
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
 from dojozero.data.polymarket._events import OddsUpdateEvent
@@ -26,7 +26,7 @@ AGENT_ID = "basic"
 CONFIG_PATH = Path(__file__).parent.parent / "configs" / "agents" / "basic.yaml"
 
 
-def create_test_agent(config_path: Path) -> BettingAgent:
+def create_test_agent(config_path: Path, trial_id: str = "test-trial") -> BettingAgent:
     """Create agent with test-specific env vars, overriding YAML config."""
     config = load_agent_config(config_path)
     llm_config = config["llm"].copy()
@@ -35,6 +35,7 @@ def create_test_agent(config_path: Path) -> BettingAgent:
     model_type = llm_config.get("model_type", "openai")
     return BettingAgent(
         actor_id=config["name"],
+        trial_id=trial_id,
         name=config["name"],
         sys_prompt=config["sys_prompt"],
         model=create_model(llm_config),
@@ -45,11 +46,18 @@ def create_test_agent(config_path: Path) -> BettingAgent:
 @pytest.fixture
 def broker():
     """Create BrokerOperator with initial balance for test agent."""
+    context = ActorContext(
+        trial_id="test-trial",
+        data_hubs={},
+        stores={},
+        startup=None,
+    )
     return BrokerOperator.from_dict(
         {
             "actor_id": "nba-broker",
             "initial_balance": "1000.00",
-        }
+        },
+        context,
     )
 
 
@@ -156,11 +164,18 @@ if __name__ == "__main__":
     import asyncio
 
     async def main():
+        context = ActorContext(
+            trial_id="test-trial",
+            data_hubs={},
+            stores={},
+            startup=None,
+        )
         broker = BrokerOperator.from_dict(
             {
                 "actor_id": "nba-broker",
                 "initial_balance": "1000.00",
-            }
+            },
+            context,
         )
         agent = create_test_agent(CONFIG_PATH)
 

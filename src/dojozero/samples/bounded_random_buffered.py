@@ -12,6 +12,7 @@ from typing import Any, Mapping, Protocol, Sequence, cast
 from pydantic import Field
 
 from dojozero.core import (
+    ActorContext,
     Agent,
     AgentBase,
     AgentSpec,
@@ -61,10 +62,11 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
     def __init__(
         self,
         actor_id: str,
+        trial_id: str,
         operator_id: str,
         flush_interval_seconds: float,
     ) -> None:
-        super().__init__(actor_id)
+        super().__init__(actor_id, trial_id)
         self._operator_id = operator_id
         self._operator: _CounterOperatorLike | None = None
         self._flush_interval = max(float(flush_interval_seconds), 0.001)
@@ -78,10 +80,12 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
     def from_dict(
         cls,
         spec: CounterAgentBufferedConfig,
+        context: ActorContext,
     ) -> "CounterAgentBuffered":
         interval = float(spec.get("flush_interval_seconds", 5.0))
         return cls(
             actor_id=str(spec["actor_id"]),
+            trial_id=context.trial_id,
             operator_id=str(spec["operator_id"]),
             flush_interval_seconds=interval,
         )

@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from dojozero.nba_moneyline import BettingAgent, BettingAgentGroup
 from dojozero.agents._config import load_agent_config, create_model, create_formatter
-from dojozero.core import StreamEvent
+from dojozero.core import ActorContext, StreamEvent
 from dojozero.nba_moneyline._broker import BrokerOperator
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
 from dojozero.data.polymarket._events import OddsUpdateEvent
@@ -28,7 +28,7 @@ SHEEP_CONFIG = CONFIG_DIR / "sheep.yaml"
 SHARK_CONFIG = CONFIG_DIR / "shark.yaml"
 
 
-def create_test_agent(config_path: Path) -> BettingAgent:
+def create_test_agent(config_path: Path, trial_id: str) -> BettingAgent:
     """Create agent with test-specific env vars, overriding YAML config."""
     config = load_agent_config(config_path)
     llm_config = config["llm"].copy()
@@ -37,6 +37,7 @@ def create_test_agent(config_path: Path) -> BettingAgent:
     model_type = llm_config.get("model_type", "openai")
     return BettingAgent(
         actor_id=config["name"],
+        trial_id=trial_id,
         name=config["name"],
         sys_prompt=config["sys_prompt"],
         model=create_model(llm_config),
@@ -47,20 +48,39 @@ def create_test_agent(config_path: Path) -> BettingAgent:
 class TestBettingAgentGroup(BettingAgentGroup):
     """Test-specific group that creates agents with test env vars."""
 
-    def __init__(self, config_paths: list[Path]) -> None:
-        # Skip parent __init__, create agents with test env vars directly
-        self._agents = [create_test_agent(path) for path in config_paths]
-        self._agent_colors: dict[str, str] = {}
+    def __init__(
+        self,
+        config_paths: list[Path],
+        actor_id: str = "test-group",
+        trial_id: str = "test-trial",
+        max_rounds: int = 1,
+    ) -> None:
+        # Create agents with test env vars directly
+        agents = [create_test_agent(path, trial_id) for path in config_paths]
+        # Initialize parent with actor_id, trial_id, and agents
+        super().__init__(
+            actor_id=actor_id,
+            trial_id=trial_id,
+            agents=agents,
+            max_rounds=max_rounds,
+        )
 
 
 @pytest.fixture
 def broker():
     """Create BrokerOperator with initial balance for all agents."""
+    context = ActorContext(
+        trial_id="test-trial",
+        data_hubs={},
+        stores={},
+        startup=None,
+    )
     return BrokerOperator.from_dict(
         {
             "actor_id": "nba-broker",
             "initial_balance": "1000.00",
-        }
+        },
+        context,
     )
 
 
@@ -68,7 +88,8 @@ def broker():
 def agent_group():
     """Create BettingAgentGroup with whale, sheep, shark agents using test env vars."""
     return TestBettingAgentGroup(
-        config_paths=[WHALE_CONFIG, SHEEP_CONFIG, SHARK_CONFIG]
+        config_paths=[WHALE_CONFIG, SHEEP_CONFIG, SHARK_CONFIG],
+        max_rounds=2,
     )
 
 
@@ -126,7 +147,8 @@ async def test_group_receives_event_and_discusses(broker, agent_group):
     print(f"\nSending event to group: {event.payload}")
 
     # Group handles event - agents discuss via MsgHub
-    messages = await agent_group.handle_stream_event(event, max_rounds=2)
+    # Use internal method to get messages back for testing
+    messages = await agent_group._handle_stream_event_with_rounds(event, max_rounds=2)
 
     print(f"\nGroup discussion produced {len(messages)} messages")
     for msg in messages:
@@ -176,11 +198,18 @@ if __name__ == "__main__":
     )
 
     async def main():
+        context = ActorContext(
+            trial_id="test-trial",
+            data_hubs={},
+            stores={},
+            startup=None,
+        )
         broker = BrokerOperator.from_dict(
             {
                 "actor_id": "nba-broker",
                 "initial_balance": "1000.00",
-            }
+            },
+            context,
         )
 
         group = TestBettingAgentGroup(
