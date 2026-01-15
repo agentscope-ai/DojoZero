@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from dojozero.core import (
+    ActorContext,
     DataStreamSpec,
     register_trial_builder,
     TrialSpec,
@@ -190,7 +191,7 @@ def _build_trial_spec(
     )
 
 
-def _build_nfl_runtime_context(spec: TrialSpec) -> dict[str, Any]:
+def _build_nfl_runtime_context(spec: TrialSpec) -> ActorContext:
     """Build runtime context for NFL game trial.
 
     Uses the generic build_runtime_context with registered store factories.
@@ -199,7 +200,7 @@ def _build_nfl_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         spec: Trial specification
 
     Returns:
-        Context dictionary with 'data_hubs', 'stores', and '_startup' keys
+        ActorContext with trial_id, data_hubs, stores, and startup callback
     """
     metadata = dict(spec.metadata)  # Convert to regular dict for type compatibility
 
@@ -223,12 +224,20 @@ def _build_nfl_runtime_context(spec: TrialSpec) -> dict[str, Any]:
         store_types = ["nfl"]
 
     # Build context using generic factory infrastructure
-    return build_runtime_context(
+    context_dict = build_runtime_context(
         hub_id=hub_id,
         persistence_file=persistence_file,
         enable_persistence=enable_persistence,
         metadata=metadata,
         store_types=store_types,
+    )
+
+    # Wrap in ActorContext for type safety
+    return ActorContext(
+        trial_id=spec.trial_id,
+        data_hubs=context_dict.get("data_hubs", {}),
+        stores=context_dict.get("stores", {}),
+        startup=context_dict.get("_startup"),
     )
 
 
