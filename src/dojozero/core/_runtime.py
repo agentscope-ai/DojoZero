@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, TYPE_CHECKING
 
 from ._actors import Actor, ActorState
-from ._types import ActorContext
+from ._types import RuntimeContext
 
 if TYPE_CHECKING:  # pragma: no cover - import-time circular guard
     from ._dashboard import ActorSpec
@@ -32,7 +32,7 @@ class ActorRuntimeProvider(Protocol):
     """Factory that turns :class:`ActorSpec` declarations into handlers."""
 
     async def create_handler(
-        self, spec: "ActorSpec[Any]", context: ActorContext
+        self, spec: "ActorSpec[Any]", context: RuntimeContext
     ) -> ActorHandler: ...
 
 
@@ -69,7 +69,7 @@ class LocalActorRuntimeProvider(ActorRuntimeProvider):
     async def create_handler(
         self,
         spec: "ActorSpec[Any]",
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> LocalActorHandler:
         if not hasattr(spec.actor_cls, "from_dict"):
             raise TypeError(f"actor class {spec.actor_cls} has no from_dict method")
@@ -88,7 +88,7 @@ class LocalActorRuntimeProvider(ActorRuntimeProvider):
 
 
 __all__ = [
-    "ActorContext",
+    "RuntimeContext",
     "ActorHandler",
     "ActorRuntimeProvider",
     "LocalActorHandler",

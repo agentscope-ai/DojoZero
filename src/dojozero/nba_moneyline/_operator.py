@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Any, Mapping, TypedDict
 
-from dojozero.core import ActorContext, Operator, OperatorBase, StreamEvent
+from dojozero.core import RuntimeContext, Operator, OperatorBase, StreamEvent
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class EventCounterOperator(OperatorBase, Operator[EventCounterOperatorConfig]):
     def from_dict(
         cls,
         config: EventCounterOperatorConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "EventCounterOperator":
         return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 

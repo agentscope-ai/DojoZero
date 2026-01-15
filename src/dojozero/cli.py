@@ -15,7 +15,7 @@ import yaml
 from pydantic import ValidationError
 
 from dojozero.core import (
-    ActorContext,
+    RuntimeContext,
     Dashboard,
     DashboardError,
     FileSystemDashboardStore,
@@ -850,9 +850,9 @@ async def _replay_command(args: argparse.Namespace) -> int:
         original_context_builder = builder_def.context_builder
 
         # Create replay context builder
-        def replay_context_builder(spec: TrialSpec) -> ActorContext:
+        def replay_context_builder(spec: TrialSpec) -> RuntimeContext:
             """Replay-specific context builder that provides replay hub, no stores."""
-            return ActorContext(
+            return RuntimeContext(
                 trial_id=spec.trial_id,
                 data_hubs={hub_id: hub},
                 stores={},  # No stores in replay mode

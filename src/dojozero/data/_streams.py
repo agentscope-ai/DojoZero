@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Any, Mapping, Protocol, TypedDict
 
-from dojozero.core import ActorContext, DataStream, DataStreamBase, StreamEvent
+from dojozero.core import RuntimeContext, DataStream, DataStreamBase, StreamEvent
 from dojozero.data import DataHub
 from dojozero.data._models import DataEvent
 
@@ -72,7 +72,7 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
     def from_dict(
         cls,
         config: DataHubDataStreamConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "DataHubDataStream":
         # Get hub from context (provided by dashboard during materialization)
         hub: DataHub | None = None

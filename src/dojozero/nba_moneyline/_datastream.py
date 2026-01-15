@@ -3,7 +3,7 @@
 import logging
 from typing import Any, TypedDict
 
-from dojozero.core import ActorContext
+from dojozero.core import RuntimeContext
 from dojozero.data import DataHub, WebSearchStore
 from dojozero.data._streams import DataHubDataStream as BaseDataHubDataStream
 from dojozero.nba_moneyline._initializer import NBAStreamInitializer
@@ -87,7 +87,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
     def from_dict(
         cls,
         config: NBAPreGameBettingDataHubDataStreamConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "NBAPreGameBettingDataHubDataStream":
         # Get hub and store from context (provided by dashboard during materialization)
         hub: DataHub | None = None

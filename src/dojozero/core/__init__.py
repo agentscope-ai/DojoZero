@@ -72,7 +72,7 @@ from ._tracing import (
     load_spans_from_checkpoint,
 )
 from ._types import (
-    ActorContext,
+    RuntimeContext,
     JSONDict,
     JSONPrimitive,
     JSONValue,
@@ -149,7 +149,7 @@ __all__ = [
     "register_trial_builder",
     "unregister_trial_builder",
     # Types
-    "ActorContext",
+    "RuntimeContext",
     "JSONDict",
     "JSONPrimitive",
     "JSONValue",

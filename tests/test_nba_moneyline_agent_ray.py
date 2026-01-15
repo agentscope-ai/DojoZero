@@ -12,7 +12,7 @@ import ray
 
 from dojozero.nba_moneyline import BettingAgent, BettingAgentConfig
 from dojozero.agents import load_agent_config
-from dojozero.core import ActorContext, AgentSpec, OperatorSpec, StreamEvent
+from dojozero.core import RuntimeContext, AgentSpec, OperatorSpec, StreamEvent
 from dojozero.ray_runtime import RayActorRuntimeProvider
 from dojozero.nba_moneyline._broker import BrokerOperator
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
@@ -93,7 +93,7 @@ def agent_spec() -> AgentSpec:
 async def test_betting_agent_as_ray_actor(ray_env, broker_spec, agent_spec):
     """Test full flow: DataStream -> Ray Agent -> place_bet -> Ray Operator."""
     provider = RayActorRuntimeProvider(auto_init=False)
-    context = ActorContext(
+    context = RuntimeContext(
         trial_id="test-trial",
         data_hubs={},
         stores={},

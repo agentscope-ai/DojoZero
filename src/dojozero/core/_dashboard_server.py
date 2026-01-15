@@ -35,7 +35,7 @@ from ._tracing import (
     OTelSpanExporter,
     set_otel_exporter,
 )
-from ._types import ActorContext
+from ._types import RuntimeContext
 
 LOGGER = logging.getLogger("dojozero.dashboard_server")
 
@@ -148,8 +148,8 @@ async def _launch_replay_trial(
     builder_def = get_trial_builder_definition(builder_name)
     original_context_builder = builder_def.context_builder
 
-    def replay_context_builder(spec: TrialSpec) -> ActorContext:
-        return ActorContext(
+    def replay_context_builder(spec: TrialSpec) -> RuntimeContext:
+        return RuntimeContext(
             trial_id=spec.trial_id,
             data_hubs={hub_id: hub},
             stores={},

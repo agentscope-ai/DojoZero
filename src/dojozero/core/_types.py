@@ -24,7 +24,7 @@ StartupCallback = Callable[[], Awaitable[None]]
 
 
 @dataclass(slots=True)
-class ActorContext:
+class RuntimeContext:
     """Typed context passed to actors during construction.
 
     This context is built by the runtime and passed to actor ``from_dict`` methods.
@@ -42,6 +42,9 @@ class ActorContext:
 
     startup: StartupCallback | None = None
     """Optional async callback to start data stores after actors are wired."""
+
+    cleanup: StartupCallback | None = None
+    """Optional async callback to stop data stores during shutdown."""
 
 
 def _utcnow() -> datetime:

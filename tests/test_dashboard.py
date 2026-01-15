@@ -3,7 +3,7 @@ from typing import Any, Mapping, TypedDict
 import pytest
 
 from dojozero.core import (
-    ActorContext,
+    RuntimeContext,
     Agent,
     AgentBase,
     AgentSpec,
@@ -55,7 +55,7 @@ class DummyOperator(OperatorBase, Operator[DummyOperatorConfig]):
     def from_dict(
         cls,
         config: DummyOperatorConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "DummyOperator":
         return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 
@@ -86,7 +86,7 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     def from_dict(
         cls,
         config: DummyAgentConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "DummyAgent":
         return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 
@@ -117,7 +117,7 @@ class DummyDataStream(DataStreamBase, DataStream[DummyStreamConfig]):
     def from_dict(
         cls,
         config: DummyStreamConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "DummyDataStream":
         return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 

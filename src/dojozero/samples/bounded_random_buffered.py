@@ -12,7 +12,7 @@ from typing import Any, Mapping, Protocol, Sequence, cast
 from pydantic import Field
 
 from dojozero.core import (
-    ActorContext,
+    RuntimeContext,
     Agent,
     AgentBase,
     AgentSpec,
@@ -80,7 +80,7 @@ class CounterAgentBuffered(AgentBase, Agent[CounterAgentBufferedConfig]):
     def from_dict(
         cls,
         spec: CounterAgentBufferedConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "CounterAgentBuffered":
         interval = float(spec.get("flush_interval_seconds", 5.0))
         return cls(

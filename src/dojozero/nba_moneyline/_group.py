@@ -8,7 +8,7 @@ from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 from agentscope.pipeline import MsgHub
 
-from dojozero.core import ActorContext, Agent, AgentBase, Operator, StreamEvent
+from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 
 from ._agent import BettingAgent
 
@@ -68,7 +68,7 @@ class BettingAgentGroup(AgentBase, Agent[BettingAgentGroupConfig]):
     def from_dict(
         cls,
         config: BettingAgentGroupConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "BettingAgentGroup":
         """Create agent group from configuration.
 

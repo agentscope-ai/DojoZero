@@ -29,7 +29,7 @@ from typing import Any, Mapping, Protocol, Sequence, TypedDict, cast
 from pydantic import BaseModel, Field
 
 from dojozero.core import (
-    ActorContext,
+    RuntimeContext,
     Agent,
     AgentBase,
     AgentSpec,
@@ -131,7 +131,7 @@ class BoundedRandomStringDataStream(
     def from_dict(
         cls,
         config: BoundedRandomStringDataStreamConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "BoundedRandomStringDataStream":
         return cls(
             actor_id=config["actor_id"],
@@ -265,7 +265,7 @@ class CounterOperator(OperatorBase, Operator[CounterOperatorConfig]):
     def from_dict(
         cls,
         config: CounterOperatorConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "CounterOperator":
         return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 
@@ -325,7 +325,7 @@ class CounterAgent(AgentBase, Agent[CounterAgentConfig]):
     def from_dict(
         cls,
         config: CounterAgentConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "CounterAgent":
         return cls(
             actor_id=str(config["actor_id"]),

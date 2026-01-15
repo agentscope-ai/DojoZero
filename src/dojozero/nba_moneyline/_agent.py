@@ -22,7 +22,7 @@ from dojozero.agents import (
     create_formatter,
     create_toolkit,
 )
-from dojozero.core import ActorContext, Agent, AgentBase, Operator, StreamEvent
+from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
 from dojozero.data._models import DataEvent
 from dojozero.nba_moneyline._formatters import format_event, parse_response_content
@@ -126,7 +126,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
     def from_dict(
         cls,
         config: BettingAgentConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "BettingAgent":
         """Create agent from config dict.
 
@@ -555,7 +555,7 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     def from_dict(
         cls,
         config: DummyAgentConfig,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> "DummyAgent":
         return cls(
             actor_id=str(config["actor_id"]),

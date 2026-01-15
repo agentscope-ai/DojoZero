@@ -40,7 +40,7 @@ from ._runtime import (
     ActorRuntimeProvider,
     LocalActorRuntimeProvider,
 )
-from ._types import ActorContext, JSONDict
+from ._types import RuntimeContext, JSONDict
 
 LOGGER = logging.getLogger("dojozero.dashboard")
 
@@ -217,7 +217,7 @@ class TrialRuntime:
     phase: TrialPhase = TrialPhase.INITIALIZED
     last_error: Exception | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
-    _context: ActorContext | None = field(
+    _context: RuntimeContext | None = field(
         default=None, repr=False
     )  # Runtime context (stores, hubs, etc.)
 
@@ -756,7 +756,7 @@ class Dashboard:
         self,
         spec: ActorSpec[Any],
         role: ActorRole,
-        context: ActorContext,
+        context: RuntimeContext,
     ) -> ActorRuntime[Any]:
         try:
             handler = await self._runtime_provider.create_handler(spec, context=context)
@@ -764,7 +764,7 @@ class Dashboard:
             raise DashboardError(str(exc)) from exc
         return ActorRuntime(spec=spec, handler=handler, role=role)
 
-    def _build_runtime_context(self, spec: TrialSpec) -> ActorContext:
+    def _build_runtime_context(self, spec: TrialSpec) -> RuntimeContext:
         """Build runtime context using context builder from trial builder registry.
 
         If the trial builder provides a context_builder, use it. Otherwise,
@@ -774,7 +774,7 @@ class Dashboard:
             spec: Trial specification
 
         Returns:
-            ActorContext with trial_id and optionally data_hubs/stores
+            RuntimeContext with trial_id and optionally data_hubs/stores
         """
         # Try to get context builder from trial builder registry
         # Extract builder name from spec metadata
@@ -792,7 +792,7 @@ class Dashboard:
                 pass
 
         # Default: minimal context with just trial_id
-        return ActorContext(trial_id=spec.trial_id)
+        return RuntimeContext(trial_id=spec.trial_id)
 
     def _register_actor_runtime(
         self, registry: Dict[str, ActorRuntime[Any]], runtime: ActorRuntime[Any]
@@ -1061,8 +1061,8 @@ class Dashboard:
 
         # Call cleanup function if provided by context builder (e.g., to stop DataStore polling)
         context = getattr(runtime, "_context", None)
-        if context and "_cleanup" in context and callable(context["_cleanup"]):
-            cleanup_fn = context["_cleanup"]
+        cleanup_fn = getattr(context, "cleanup", None) if context else None
+        if cleanup_fn and callable(cleanup_fn):
             LOGGER.debug(
                 "Calling cleanup function after stopping actors for trial '%s'",
                 runtime.spec.trial_id,
@@ -1173,8 +1173,8 @@ class Dashboard:
 
         # Also call cleanup if startup function was called (to stop stores/sessions)
         context = getattr(runtime, "_context", None)
-        if context and "_cleanup" in context and callable(context["_cleanup"]):
-            cleanup_fn = context["_cleanup"]
+        cleanup_fn = getattr(context, "cleanup", None) if context else None
+        if cleanup_fn and callable(cleanup_fn):
             LOGGER.debug(
                 "Calling cleanup function after startup failure for trial '%s'",
                 runtime.spec.trial_id,

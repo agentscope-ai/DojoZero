@@ -10,7 +10,7 @@ from typing import (
     runtime_checkable,
 )
 
-from ._types import ActorContext, JSONValue, StreamEvent
+from ._types import RuntimeContext, JSONValue, StreamEvent
 
 ActorConfig = Mapping[str, JSONValue]
 ActorState = Mapping[str, JSONValue]
@@ -33,7 +33,9 @@ class Actor(Protocol[ConfigT]):
         ...
 
     @classmethod
-    def from_dict(cls: Type[ActorT], config: ConfigT, context: ActorContext) -> ActorT:
+    def from_dict(
+        cls: Type[ActorT], config: ConfigT, context: RuntimeContext
+    ) -> ActorT:
         """Build a configured actor from a serialized configuration payload.
 
         Args:

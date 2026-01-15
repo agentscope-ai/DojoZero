@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from dojozero.nba_moneyline import BettingAgent, BettingAgentGroup
 from dojozero.agents._config import load_agent_config, create_model, create_formatter
-from dojozero.core import ActorContext, StreamEvent
+from dojozero.core import RuntimeContext, StreamEvent
 from dojozero.nba_moneyline._broker import BrokerOperator
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
 from dojozero.data.polymarket._events import OddsUpdateEvent
@@ -69,7 +69,7 @@ class TestBettingAgentGroup(BettingAgentGroup):
 @pytest.fixture
 def broker():
     """Create BrokerOperator with initial balance for all agents."""
-    context = ActorContext(
+    context = RuntimeContext(
         trial_id="test-trial",
         data_hubs={},
         stores={},
@@ -198,7 +198,7 @@ if __name__ == "__main__":
     )
 
     async def main():
-        context = ActorContext(
+        context = RuntimeContext(
             trial_id="test-trial",
             data_hubs={},
             stores={},

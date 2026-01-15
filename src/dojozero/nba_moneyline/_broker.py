@@ -20,7 +20,7 @@ from collections import defaultdict
 from typing import List, Sequence, Set, TypedDict
 
 from dojozero.core import (
-    ActorContext,
+    RuntimeContext,
     Agent,
     Operator,
     OperatorBase,
@@ -395,7 +395,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
     @classmethod
     def from_dict(
-        cls, config: Dict[str, Any], context: ActorContext
+        cls, config: Dict[str, Any], context: RuntimeContext
     ) -> "BrokerOperator":
         """Create broker from configuration dictionary"""
         broker_config: BrokerOperatorConfig = {
