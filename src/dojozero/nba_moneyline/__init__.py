@@ -6,7 +6,7 @@ from dojozero.nba_moneyline._agent import (
     DummyAgent,
     DummyAgentConfig,
 )
-from dojozero.nba_moneyline._group import BettingAgentGroup
+from dojozero.nba_moneyline._group import BettingAgentGroup, BettingAgentGroupConfig
 from dojozero.nba_moneyline._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
@@ -24,6 +24,7 @@ __all__ = [
     "BettingAgent",
     "BettingAgentConfig",
     "BettingAgentGroup",
+    "BettingAgentGroupConfig",
     "NBAPreGameBettingDataHubDataStream",
     "NBAPreGameBettingDataHubDataStreamConfig",
     "DummyAgent",

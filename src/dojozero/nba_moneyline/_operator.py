@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Any, Mapping, TypedDict
 
-from dojozero.core import Operator, OperatorBase, StreamEvent
+from dojozero.core import RuntimeContext, Operator, OperatorBase, StreamEvent
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,8 @@ class EventCounterOperator(OperatorBase, Operator[EventCounterOperatorConfig]):
     per event type for detailed statistics.
     """
 
-    def __init__(self, actor_id: str) -> None:
-        super().__init__(actor_id)
+    def __init__(self, actor_id: str, trial_id: str) -> None:
+        super().__init__(actor_id, trial_id)
         self._count = 0
         self._typed_counts: dict[str, int] = {}
         self._lock = asyncio.Lock()
@@ -37,8 +37,9 @@ class EventCounterOperator(OperatorBase, Operator[EventCounterOperatorConfig]):
     def from_dict(
         cls,
         config: EventCounterOperatorConfig,
+        context: RuntimeContext,
     ) -> "EventCounterOperator":
-        return cls(actor_id=str(config["actor_id"]))
+        return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 
     async def start(self) -> None:
         """Protocol hook: dashboard calls this before traffic is routed."""

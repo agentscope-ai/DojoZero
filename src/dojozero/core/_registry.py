@@ -15,10 +15,11 @@ from typing import (
 from pydantic import BaseModel
 
 from ._dashboard import TrialSpec
+from ._types import RuntimeContext
 
 ParamModelT = TypeVar("ParamModelT", bound=BaseModel)
 TrialBuilderFn = Callable[[str, ParamModelT], TrialSpec]  # trial_id, params
-RuntimeContextBuilder = Callable[["TrialSpec"], dict[str, Any]]
+RuntimeContextBuilder = Callable[["TrialSpec"], RuntimeContext]
 
 
 @dataclass(slots=True)

@@ -2,13 +2,49 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Generic, Mapping, MutableMapping, Sequence, TypeVar
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Generic,
+    Mapping,
+    MutableMapping,
+    Sequence,
+    TypeVar,
+)
 
 JSONPrimitive = str | int | float | bool | None
 JSONValue = JSONPrimitive | Sequence["JSONValue"] | Mapping[str, "JSONValue"]
 JSONDict = MutableMapping[str, JSONValue]
 
 PayloadT = TypeVar("PayloadT")
+
+# Type alias for async startup functions
+StartupCallback = Callable[[], Awaitable[None]]
+
+
+@dataclass(slots=True)
+class RuntimeContext:
+    """Typed context passed to actors during construction.
+
+    This context is built by the runtime and passed to actor ``from_dict`` methods.
+    It contains the trial_id and shared infrastructure like data hubs and stores.
+    """
+
+    trial_id: str
+    """The trial identifier this actor belongs to."""
+
+    data_hubs: dict[str, Any] = field(default_factory=dict)
+    """Mapping of hub_id to DataHub instances for data infrastructure."""
+
+    stores: dict[str, Any] = field(default_factory=dict)
+    """Mapping of store_id to Store instances for data access."""
+
+    startup: StartupCallback | None = None
+    """Optional async callback to start data stores after actors are wired."""
+
+    cleanup: StartupCallback | None = None
+    """Optional async callback to stop data stores during shutdown."""
 
 
 def _utcnow() -> datetime:

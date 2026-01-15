@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, TYPE_CHECKING
 
 from ._actors import Actor, ActorState
+from ._types import RuntimeContext
 
 if TYPE_CHECKING:  # pragma: no cover - import-time circular guard
     from ._dashboard import ActorSpec
@@ -31,7 +32,7 @@ class ActorRuntimeProvider(Protocol):
     """Factory that turns :class:`ActorSpec` declarations into handlers."""
 
     async def create_handler(
-        self, spec: "ActorSpec[Any]", context: dict[str, Any] | None = None
+        self, spec: "ActorSpec[Any]", context: RuntimeContext
     ) -> ActorHandler: ...
 
 
@@ -68,29 +69,17 @@ class LocalActorRuntimeProvider(ActorRuntimeProvider):
     async def create_handler(
         self,
         spec: "ActorSpec[Any]",
-        context: dict[str, Any] | None = None,
+        context: RuntimeContext,
     ) -> LocalActorHandler:
-        # Pass context to from_dict if the method accepts it
-        if hasattr(spec.actor_cls, "from_dict"):
-            from_dict_method = getattr(spec.actor_cls, "from_dict")
-            import inspect
-
-            sig = inspect.signature(from_dict_method)
-            if "context" in sig.parameters:
-                actor = from_dict_method(spec.config, context=context)
-            else:
-                actor = from_dict_method(spec.config)
-        else:
+        if not hasattr(spec.actor_cls, "from_dict"):
             raise TypeError(f"actor class {spec.actor_cls} has no from_dict method")
+
+        actor = spec.actor_cls.from_dict(spec.config, context)
 
         if actor.actor_id != spec.actor_id:
             raise ValueError(
                 f"actor id mismatch: spec '{spec.actor_id}' != instance '{actor.actor_id}'"
             )
-
-        # Inject trial_id directly into the actor instance
-        if spec.trial_id is not None:
-            setattr(actor, "_trial_id", spec.trial_id)
 
         handler = LocalActorHandler(actor)
         if spec.resume_state is not None:
@@ -99,6 +88,7 @@ class LocalActorRuntimeProvider(ActorRuntimeProvider):
 
 
 __all__ = [
+    "RuntimeContext",
     "ActorHandler",
     "ActorRuntimeProvider",
     "LocalActorHandler",

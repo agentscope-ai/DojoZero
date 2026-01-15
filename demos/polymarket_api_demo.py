@@ -215,7 +215,10 @@ async def test_polymarket_store_logic(market_url: str):
         from decimal import Decimal
 
         # Create a test broker
-        broker = BrokerOperator({"actor_id": "test_broker", "initial_balance": "1000"})
+        broker = BrokerOperator(
+            {"actor_id": "test_broker", "initial_balance": "1000"},
+            trial_id="demo-trial",
+        )
         await broker.start()
 
         # Get odds from store

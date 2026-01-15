@@ -20,6 +20,7 @@ from collections import defaultdict
 from typing import List, Sequence, Set, TypedDict
 
 from dojozero.core import (
+    RuntimeContext,
     Agent,
     Operator,
     OperatorBase,
@@ -362,8 +363,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     - Bet settlement based on event results
     """
 
-    def __init__(self, config: BrokerOperatorConfig):
-        super().__init__(config["actor_id"])
+    def __init__(self, config: BrokerOperatorConfig, trial_id: str):
+        super().__init__(config["actor_id"], trial_id)
 
         # Account management
         self._accounts: Dict[str, Account] = {}
@@ -393,13 +394,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self.initial_balance = config.get("initial_balance", "0")
 
     @classmethod
-    def from_dict(cls, config: Dict[str, Any]) -> "BrokerOperator":
+    def from_dict(
+        cls, config: Dict[str, Any], context: RuntimeContext
+    ) -> "BrokerOperator":
         """Create broker from configuration dictionary"""
         broker_config: BrokerOperatorConfig = {
             "actor_id": config["actor_id"],
             "initial_balance": config.get("initial_balance", "0"),
         }
-        return cls(broker_config)
+        return cls(broker_config, context.trial_id)
 
     async def start(self) -> None:
         """Protocol hook: called before traffic is routed"""

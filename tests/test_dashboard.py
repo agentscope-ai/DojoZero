@@ -3,6 +3,7 @@ from typing import Any, Mapping, TypedDict
 import pytest
 
 from dojozero.core import (
+    RuntimeContext,
     Agent,
     AgentBase,
     AgentSpec,
@@ -45,8 +46,8 @@ class DummyStreamConfig(TypedDict):
 
 
 class DummyOperator(OperatorBase, Operator[DummyOperatorConfig]):
-    def __init__(self, actor_id: str) -> None:
-        super().__init__(actor_id)
+    def __init__(self, actor_id: str, trial_id: str) -> None:
+        super().__init__(actor_id, trial_id)
         self.events_handled = 0
         self.restored_events = 0
 
@@ -54,8 +55,9 @@ class DummyOperator(OperatorBase, Operator[DummyOperatorConfig]):
     def from_dict(
         cls,
         config: DummyOperatorConfig,
+        context: RuntimeContext,
     ) -> "DummyOperator":
-        return cls(actor_id=str(config["actor_id"]))
+        return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 
     async def start(self) -> None:
         _record(self.actor_id, "start")
@@ -75,8 +77,8 @@ class DummyOperator(OperatorBase, Operator[DummyOperatorConfig]):
 
 
 class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
-    def __init__(self, actor_id: str) -> None:
-        super().__init__(actor_id)
+    def __init__(self, actor_id: str, trial_id: str) -> None:
+        super().__init__(actor_id, trial_id)
         self.event_count = 0
         self.restored_count = 0
 
@@ -84,8 +86,9 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
     def from_dict(
         cls,
         config: DummyAgentConfig,
+        context: RuntimeContext,
     ) -> "DummyAgent":
-        return cls(actor_id=str(config["actor_id"]))
+        return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 
     async def start(self) -> None:
         _record(self.actor_id, "start")
@@ -105,8 +108,8 @@ class DummyAgent(AgentBase, Agent[DummyAgentConfig]):
 
 
 class DummyDataStream(DataStreamBase, DataStream[DummyStreamConfig]):
-    def __init__(self, actor_id: str) -> None:
-        super().__init__(actor_id)
+    def __init__(self, actor_id: str, trial_id: str) -> None:
+        super().__init__(actor_id, trial_id)
         self.emitted = 0
         self.restored_emissions = 0
 
@@ -114,8 +117,9 @@ class DummyDataStream(DataStreamBase, DataStream[DummyStreamConfig]):
     def from_dict(
         cls,
         config: DummyStreamConfig,
+        context: RuntimeContext,
     ) -> "DummyDataStream":
-        return cls(actor_id=str(config["actor_id"]))
+        return cls(actor_id=str(config["actor_id"]), trial_id=context.trial_id)
 
     async def start(self) -> None:
         _record(self.actor_id, "start")

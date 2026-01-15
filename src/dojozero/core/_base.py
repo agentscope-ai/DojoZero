@@ -15,25 +15,25 @@ LOGGER = logging.getLogger("dojozero.base")
 class ActorBase(ABC):
     """Base class for all DojoZero actors that enforces common requirements."""
 
-    def __init__(self, actor_id: str) -> None:
+    def __init__(self, actor_id: str, trial_id: str) -> None:
         self._actor_id = actor_id
-        self._trial_id: str | None = None  # Set by Dashboard when actor is created
+        self._trial_id = trial_id
 
     @property
     def actor_id(self) -> str:
         return self._actor_id
 
     @property
-    def trial_id(self) -> str | None:
-        """Trial ID this actor belongs to (injected by RuntimeProvider)."""
+    def trial_id(self) -> str:
+        """Trial ID this actor belongs to."""
         return self._trial_id
 
 
 class AgentBase(ActorBase, ABC):
     """Base helper for agents to expose and access reachable operators."""
 
-    def __init__(self, actor_id: str) -> None:
-        super().__init__(actor_id)
+    def __init__(self, actor_id: str, trial_id: str) -> None:
+        super().__init__(actor_id, trial_id)
         self._operator_registry: Dict[str, Operator] = {}
 
     def register_operators(self, operators: Sequence[Operator]) -> None:
@@ -53,8 +53,8 @@ class AgentBase(ActorBase, ABC):
 class DataStreamBase(ActorBase, ABC):
     """Base helper for stream actors that manages consumer fan-out."""
 
-    def __init__(self, actor_id: str) -> None:
-        super().__init__(actor_id)
+    def __init__(self, actor_id: str, trial_id: str) -> None:
+        super().__init__(actor_id, trial_id)
         self._consumer_registry: Dict[str, "Agent | Operator"] = {}
 
     def register_consumers(self, consumers: Sequence["Agent | Operator"]) -> None:
@@ -91,9 +91,6 @@ class DataStreamBase(ActorBase, ABC):
     def _emit_event_span(self, event: StreamEvent[Any]) -> None:
         """Emit a span for a stream event to the OTel exporter."""
         from ._tracing import emit_span, create_span_from_event
-
-        if self._trial_id is None:
-            return
 
         # Determine event type from payload if available
         event_type = "stream.event"
@@ -138,8 +135,8 @@ class DataStreamBase(ActorBase, ABC):
 class OperatorBase(ActorBase, ABC):
     """Base helper for operator actors to handle stream events."""
 
-    def __init__(self, actor_id: str) -> None:
-        super().__init__(actor_id)
+    def __init__(self, actor_id: str, trial_id: str) -> None:
+        super().__init__(actor_id, trial_id)
         self._agent_registry: Dict[str, Agent] = {}
 
     def register_agents(self, agents: Sequence[Agent]) -> None:

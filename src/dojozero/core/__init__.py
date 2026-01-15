@@ -71,7 +71,14 @@ from ._tracing import (
     create_span_from_event,
     load_spans_from_checkpoint,
 )
-from ._types import JSONDict, JSONPrimitive, JSONValue, QueryResult, StreamEvent
+from ._types import (
+    RuntimeContext,
+    JSONDict,
+    JSONPrimitive,
+    JSONValue,
+    QueryResult,
+    StreamEvent,
+)
 
 __all__ = [
     # Actors
@@ -142,6 +149,7 @@ __all__ = [
     "register_trial_builder",
     "unregister_trial_builder",
     # Types
+    "RuntimeContext",
     "JSONDict",
     "JSONPrimitive",
     "JSONValue",

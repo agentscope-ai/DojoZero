@@ -11,10 +11,12 @@ Usage:
         def create_store(self, store_id, metadata, hub):
             ...
 
-    # Build runtime context (in trial builders)
+    # Build actor context (in trial builders)
     context = build_runtime_context(
-        spec=trial_spec,
+        trial_id=spec.trial_id,
+        hub_id=hub_id,
         store_types=["nba", "websearch", "polymarket"],
+        ...
     )
 """
 
@@ -22,6 +24,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
+from dojozero.core._types import RuntimeContext
 from dojozero.data._hub import DataHub
 from dojozero.data._stores import DataStore
 
@@ -118,19 +121,21 @@ def list_store_factories() -> list[str]:
 
 
 def build_runtime_context(
+    trial_id: str,
     hub_id: str,
     persistence_file: str | None,
     enable_persistence: bool,
     metadata: dict[str, Any],
     store_types: list[str],
-) -> dict[str, Any]:
-    """Build runtime context with DataHub and stores using registered factories.
+) -> RuntimeContext:
+    """Build RuntimeContext with DataHub and stores using registered factories.
 
     This is a generic context builder that creates a DataHub and populates it
     with stores based on the requested store types. Each store type must have
     a registered factory.
 
     Args:
+        trial_id: Trial identifier for the context
         hub_id: Unique identifier for the DataHub
         persistence_file: Path to persistence file (or None to disable)
         enable_persistence: Whether to enable event persistence
@@ -138,18 +143,13 @@ def build_runtime_context(
         store_types: List of store type names to create (e.g., ["nba", "websearch"])
 
     Returns:
-        Context dictionary with:
-        - data_hubs: {hub_id: DataHub}
-        - stores: {store_id: DataStore}
-        - _startup: async function to start all stores
+        RuntimeContext with trial_id, data_hubs, stores, startup, and cleanup callbacks
 
     Raises:
         ValueError: If a requested store type has no registered factory
     """
-    context: dict[str, Any] = {
-        "data_hubs": {},
-        "stores": {},
-    }
+    data_hubs: dict[str, DataHub] = {}
+    stores: dict[str, DataStore] = {}
 
     # Create DataHub
     hub = DataHub(
@@ -157,7 +157,7 @@ def build_runtime_context(
         persistence_file=persistence_file,
         enable_persistence=enable_persistence,
     )
-    context["data_hubs"][hub_id] = hub
+    data_hubs[hub_id] = hub
 
     # Create stores using registered factories
     for store_type in store_types:
@@ -182,7 +182,7 @@ def build_runtime_context(
         store_id = f"{store_type}_store"
         try:
             store = factory.create_store(store_id, metadata, hub)
-            context["stores"][store_id] = store
+            stores[store_id] = store
             logger.debug("Created store: %s (type: %s)", store_id, store_type)
         except Exception as e:
             logger.error("Failed to create store '%s': %s", store_type, e)
@@ -193,16 +193,18 @@ def build_runtime_context(
         """Start all DataHub stores (begin polling)."""
         await hub.start()
 
-    context["_startup"] = start_data_stores
-
     # Create cleanup callback
     async def stop_data_stores() -> None:
         """Stop all DataHub stores (stop polling and close sessions)."""
         await hub.stop()
 
-    context["_cleanup"] = stop_data_stores
-
-    return context
+    return RuntimeContext(
+        trial_id=trial_id,
+        data_hubs=data_hubs,
+        stores=stores,
+        startup=start_data_stores,
+        cleanup=stop_data_stores,
+    )
 
 
 __all__ = [

@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Any, Mapping, Protocol, TypedDict
 
-from dojozero.core import DataStream, DataStreamBase, StreamEvent
+from dojozero.core import RuntimeContext, DataStream, DataStreamBase, StreamEvent
 from dojozero.data import DataHub
 from dojozero.data._models import DataEvent
 
@@ -53,12 +53,13 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
         self,
         *,
         actor_id: str,
+        trial_id: str,
         hub: DataHub | None = None,
         event_type: str | None = None,
         event_types: list[str] | None = None,
         initializer: StreamInitializer | None = None,
     ) -> None:
-        super().__init__(actor_id)
+        super().__init__(actor_id, trial_id)
         self._hub = hub
         self._event_type = event_type
         self._event_types = event_types or []
@@ -71,23 +72,22 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
     def from_dict(
         cls,
         config: DataHubDataStreamConfig,
-        context: dict[str, Any] | None = None,
+        context: RuntimeContext,
     ) -> "DataHubDataStream":
         # Get hub from context (provided by dashboard during materialization)
         hub: DataHub | None = None
 
-        if context and "data_hubs" in context:
-            hub_id = config.get("hub_id", "default_hub")
-            hub = context["data_hubs"].get(hub_id)
+        hub_id = config.get("hub_id", "default_hub")
+        hub = context.data_hubs.get(hub_id)
 
         if hub is None:
             # Fallback: create new hub (shouldn't happen in normal flow)
-            hub_id = config.get("hub_id", "default_hub")
             persistence_file = config.get("persistence_file", "outputs/events.jsonl")
             hub = DataHub(hub_id=hub_id, persistence_file=persistence_file)
 
         return cls(
             actor_id=config["actor_id"],
+            trial_id=context.trial_id,
             hub=hub,
             event_type=config.get("event_type"),
             event_types=config.get("event_types", []),
