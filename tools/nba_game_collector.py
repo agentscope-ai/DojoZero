@@ -267,7 +267,7 @@ class GameTrialManager:
         cmd = [
             sys.executable,
             "-m",
-            "dojo0.cli",
+            "dojozero.cli",
             "--log-level",
             self.log_level,
             "run",
@@ -349,6 +349,16 @@ class GameTrialManager:
             self.game_id,
         )
 
+        # Wait for initial data collection before checking game status.
+        # This ensures at least one polling cycle completes.
+        initial_wait_seconds = 90
+        self.log(
+            logging.INFO,
+            "Waiting %d seconds for initial data collection before monitoring game status",
+            initial_wait_seconds,
+        )
+        await asyncio.sleep(initial_wait_seconds)
+
         while True:
             # Check if process is still running
             if self.process.poll() is not None:
@@ -379,9 +389,10 @@ class GameTrialManager:
                 break
 
             # Check game status
+            # Use the game's actual date, not today's date
             try:
-                # Fetch current game status
-                games = get_games_for_date(datetime.now(), print_games=False)
+                check_date = self.game_date or datetime.now().strftime("%Y-%m-%d")
+                games = get_games_for_date(check_date, print_games=False)
                 current_game = next(
                     (g for g in games if str(g.get("gameId")) == self.game_id), None
                 )

@@ -9,11 +9,16 @@ from dojozero.data.websearch._events import (
     WebSearchIntent,
 )
 from dojozero.data.websearch._processors import (
+    BaseDashscopeProcessor,
     ExpertPredictionProcessor,
     InjurySummaryProcessor,
     PowerRankingProcessor,
 )
 from dojozero.data.websearch._store import WebSearchStore
+from dojozero.data.websearch._factory import (
+    WebSearchStoreFactory,
+    DEFAULT_PROCESSOR_MAP,
+)
 
 __all__ = [
     "WebSearchAPI",
@@ -23,8 +28,11 @@ __all__ = [
     "PowerRankingEvent",
     "ExpertPredictionEvent",
     "WebSearchIntent",
+    "BaseDashscopeProcessor",
     "InjurySummaryProcessor",
     "PowerRankingProcessor",
     "ExpertPredictionProcessor",
     "WebSearchStore",
+    "WebSearchStoreFactory",
+    "DEFAULT_PROCESSOR_MAP",
 ]

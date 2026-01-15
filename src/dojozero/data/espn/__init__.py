@@ -1,0 +1,61 @@
+"""ESPN data infrastructure module.
+
+Provides generic ESPN API integration for any ESPN-supported sport/league.
+
+Supported sports and leagues:
+    - football/nfl, football/college-football
+    - basketball/nba, basketball/mens-college-basketball, basketball/wnba
+    - baseball/mlb
+    - hockey/nhl
+    - soccer/eng.1, soccer/usa.1, soccer/esp.1, etc.
+    - tennis/atp, tennis/wta
+    - golf/pga
+    - mma/ufc
+    - racing/f1
+
+Example:
+    from dojozero.data.espn import ESPNStore, ESPNExternalAPI
+
+    # Create a store for any sport
+    nfl_store = ESPNStore(sport="football", league="nfl")
+    nba_store = ESPNStore(sport="basketball", league="nba")
+    epl_store = ESPNStore(sport="soccer", league="eng.1")
+
+    # Use the API directly
+    api = ESPNExternalAPI(sport="football", league="nfl")
+    scoreboard = await api.fetch("scoreboard")
+"""
+
+from dojozero.data.espn._api import ESPNExternalAPI, get_proxy
+from dojozero.data.espn._events import (
+    ESPNCompetitor,
+    ESPNGameEndEvent,
+    ESPNGameInitializeEvent,
+    ESPNGameStartEvent,
+    ESPNGameUpdateEvent,
+    ESPNOddsUpdateEvent,
+    ESPNPlayEvent,
+    ESPNTeamInfo,
+)
+from dojozero.data.espn._state_tracker import ESPNStateTracker
+from dojozero.data.espn._store import ESPNStore
+
+__all__ = [
+    # API
+    "ESPNExternalAPI",
+    "get_proxy",
+    # Store
+    "ESPNStore",
+    # State Tracker
+    "ESPNStateTracker",
+    # Events
+    "ESPNGameInitializeEvent",
+    "ESPNGameStartEvent",
+    "ESPNGameEndEvent",
+    "ESPNGameUpdateEvent",
+    "ESPNPlayEvent",
+    "ESPNOddsUpdateEvent",
+    # Utility Types
+    "ESPNTeamInfo",
+    "ESPNCompetitor",
+]

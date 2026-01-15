@@ -117,8 +117,9 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
 
             if should_forward:
                 self._received_events.append(event)
-                # Schedule async publish
-                asyncio.create_task(self._publish_event(event))
+                # Schedule async publish with error handling
+                task = asyncio.create_task(self._publish_event(event))
+                task.add_done_callback(self._handle_task_exception)
 
         # Determine event types to subscribe to
         subscribe_event_types = self._event_types.copy()
@@ -142,7 +143,25 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
             self._initialized = True
             # Schedule initializer to run in background - don't await it
             # This allows pipeline setup to complete while searches happen asynchronously
-            asyncio.create_task(self._run_initializer())
+            task = asyncio.create_task(self._run_initializer())
+            task.add_done_callback(self._handle_task_exception)
+
+    def _handle_task_exception(self, task: asyncio.Task[None]) -> None:
+        """Handle exceptions from background tasks.
+
+        Args:
+            task: Completed task to check for exceptions
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Background task failed in stream '%s': %s",
+                self.actor_id,
+                exc,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
 
     async def _run_initializer(self) -> None:
         """Run the initializer in the background without blocking."""

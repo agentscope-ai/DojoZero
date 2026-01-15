@@ -1,12 +1,16 @@
 """DataStore: Manages external APIs, polling, and event emission."""
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from dojozero.data._models import DataEvent
 from dojozero.data._processors import DataProcessor
+
+logger = logging.getLogger(__name__)
+
 
 if TYPE_CHECKING:
     from dojozero.data._hub import DataHub
@@ -74,6 +78,7 @@ class DataStore(ABC):
 
         # Polling state
         self._running = False
+        self._poll_task: asyncio.Task[None] | None = None  # Reference to polling task
         self._last_poll_time: datetime | None = None
         self._last_poll_times: dict[str, datetime] = {}  # Per-endpoint last poll times
         self._poll_identifier: dict[
@@ -130,11 +135,75 @@ class DataStore(ABC):
             return
 
         self._running = True
-        asyncio.create_task(self._poll_loop())
+        self._poll_task = asyncio.create_task(self._poll_loop())
 
     async def stop_polling(self) -> None:
-        """Stop polling the API."""
+        """Stop polling the API and close any open connections."""
+        logger.info(
+            "stop_polling called for store %s, _poll_task=%s, _api=%s",
+            self.store_id,
+            self._poll_task,
+            type(self._api).__name__ if self._api else None,
+        )
         self._running = False
+
+        # Wait for the polling task to complete before closing the session
+        if self._poll_task and not self._poll_task.done():
+            logger.info("Waiting for poll task to complete for store %s", self.store_id)
+            try:
+                # Give the task a short time to finish its current iteration
+                await asyncio.wait_for(self._poll_task, timeout=5.0)
+                logger.info("Poll task completed normally for store %s", self.store_id)
+            except asyncio.TimeoutError:
+                # If it doesn't finish in time, cancel it
+                logger.info(
+                    "Poll task timed out, cancelling for store %s", self.store_id
+                )
+                self._poll_task.cancel()
+                try:
+                    await self._poll_task
+                except asyncio.CancelledError:
+                    logger.info("Poll task cancelled for store %s", self.store_id)
+            except asyncio.CancelledError:
+                logger.info(
+                    "Poll task was already cancelled for store %s", self.store_id
+                )
+            self._poll_task = None
+        else:
+            logger.info(
+                "No poll task to wait for store %s (task=%s, done=%s)",
+                self.store_id,
+                self._poll_task,
+                self._poll_task.done() if self._poll_task else "N/A",
+            )
+
+        # Small delay to allow any pending operations to complete
+        await asyncio.sleep(0.1)
+
+        # Close the API session if it has a close method
+        if self._api and hasattr(self._api, "close"):
+            logger.info(
+                "Closing API session for store %s (api=%s)",
+                self.store_id,
+                type(self._api).__name__,
+            )
+            try:
+                close_method = getattr(self._api, "close")
+                await close_method()
+                logger.info(
+                    "Successfully closed API session for store %s", self.store_id
+                )
+            except Exception as e:
+                logger.warning(
+                    "Error closing API session for store %s: %s", self.store_id, e
+                )
+        else:
+            logger.info(
+                "No close method on API for store %s (api=%s, has_close=%s)",
+                self.store_id,
+                type(self._api).__name__ if self._api else None,
+                hasattr(self._api, "close") if self._api else False,
+            )
 
     def _get_poll_interval(self, endpoint: str | None = None) -> float:
         """Get polling interval for a specific endpoint.
@@ -230,7 +299,7 @@ class DataStore(ABC):
                     self._last_poll_time = max(e.timestamp for e in raw_events)
 
             except Exception as e:
-                print(f"Error in poll loop for store {self.store_id}: {e}")
+                logger.error("Error in poll loop for store %s: %s", self.store_id, e)
 
             # Wait before next poll - read interval dynamically to support runtime updates
             # Recalculate minimum interval on each iteration (in case it was updated)

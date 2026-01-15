@@ -190,7 +190,6 @@ def extract_json_from_dashscope_response(
     Args:
         response: Dashscope API response dictionary
         expected_type: Expected JSON type (dict or list). Defaults to dict.
-        repair_incomplete: Whether to attempt repairing incomplete JSON. Defaults to True.
 
     Returns:
         Parsed JSON object (dict or list) or None if extraction/parsing fails

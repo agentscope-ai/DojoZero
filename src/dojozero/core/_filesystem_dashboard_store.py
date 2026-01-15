@@ -389,7 +389,9 @@ class FileSystemDashboardStore(DashboardStore):
 
     def _write_json(self, path: Path, payload: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        # Use unique tmp filename to avoid race conditions when multiple processes
+        # write to the same file simultaneously
+        tmp_path = path.with_suffix(f".{uuid4().hex}.tmp")
         with tmp_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
         tmp_path.replace(path)

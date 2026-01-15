@@ -52,6 +52,17 @@ class EventTypes(str, Enum):
     POWER_RANKING = "power_ranking"
     EXPERT_PREDICTION = "expert_prediction"
 
+    # =========================================================================
+    # NFL Game Lifecycle
+    # =========================================================================
+    NFL_GAME_INITIALIZE = "nfl_game_initialize"
+    NFL_GAME_START = "nfl_game_start"
+    NFL_GAME_RESULT = "nfl_game_result"
+    NFL_GAME_UPDATE = "nfl_game_update"
+    NFL_PLAY = "nfl_play"
+    NFL_DRIVE = "nfl_drive"
+    NFL_ODDS_UPDATE = "nfl_odds_update"
+
 
 @overload
 def register_event(event_class: type[EventT]) -> type[EventT]: ...

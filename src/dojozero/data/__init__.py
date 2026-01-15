@@ -11,6 +11,13 @@ from dojozero.data._streams import (
     DataHubDataStreamConfig,
     StreamInitializer,
 )
+from dojozero.data._factory import (
+    StoreFactory,
+    register_store_factory,
+    get_store_factory,
+    list_store_factories,
+    build_runtime_context,
+)
 
 # Domain-specific implementations
 # Import all event classes to trigger auto-registration
@@ -52,6 +59,12 @@ __all__ = [
     "DataHubDataStream",
     "DataHubDataStreamConfig",
     "StreamInitializer",
+    # Factory infrastructure
+    "StoreFactory",
+    "register_store_factory",
+    "get_store_factory",
+    "list_store_factories",
+    "build_runtime_context",
     # NBA
     "PlayByPlayEvent",
     "NBAExternalAPI",
