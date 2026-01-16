@@ -116,13 +116,13 @@ OSS_UPLOAD=true ./deploy/run_daily.sh
 
 **Or directly with the collector:**
 ```bash
-python tools/nba_game_collector.py --data-dir data/nba-betting --oss-upload
-python tools/nfl_game_collector.py --data-dir data/nfl --oss-upload
+python tools/nba_game_collector.py collect --data-dir data/nba-betting --oss-upload
+python tools/nfl_game_collector.py collect --data-dir data/nfl --oss-upload
 ```
 
 **Override bucket/prefix via CLI:**
 ```bash
-python tools/nba_game_collector.py --data-dir data/nba-betting \
+python tools/nba_game_collector.py collect --data-dir data/nba-betting \
     --oss-upload --oss-bucket staging-bucket --oss-prefix test/
 ```
 

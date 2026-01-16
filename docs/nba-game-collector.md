@@ -2,29 +2,55 @@
 
 Automated driver for collecting replay data for NBA games. Orchestrates data collection by checking NBA API for daily games, setting up separate trials for each game, starting trials 2 hours before game time, and running until games conclude.
 
-## Usage
+## Commands
 
-**Basic (today's games):**
+### List Games
+
+List games for a date range (defaults to today):
+
 ```bash
-python tools/nba_game_collector.py --data-dir data/nba-betting
+# List today's games
+python tools/nba_game_collector.py list
+
+# List games for a specific date
+python tools/nba_game_collector.py list --start-date 2025-12-16
+
+# List games for a date range
+python tools/nba_game_collector.py list --start-date 2025-12-10 --end-date 2025-12-16
 ```
 
-**Specific date:**
+**List options:**
+- `--start-date`: Start date (YYYY-MM-DD). Default: today
+- `--end-date`: End date (YYYY-MM-DD). Default: same as start date
+- `--log-level`: Logging level (default: WARNING)
+
+### Collect Data
+
+Collect game data for a date:
+
 ```bash
-python tools/nba_game_collector.py --data-dir data/nba-betting --date 2025-12-16
+# Collect today's games
+python tools/nba_game_collector.py collect --data-dir data/nba-betting
+
+# Collect for a specific date
+python tools/nba_game_collector.py collect --data-dir data/nba-betting --date 2025-12-16
 ```
 
-**Options:**
-- `--data-dir`: **Required**. Data directory where all files are organized: `{data-dir}/{date}/{game_id}.{yaml,jsonl,log}`
+**Collect options:**
+- `--data-dir`: Data directory where all files are organized: `{data-dir}/{date}/{game_id}.{yaml,jsonl,log}`
 - `--date`: Date to collect games for (YYYY-MM-DD). Default: today
+- `--game-id`: Specific game ID to collect (optional)
 - `--base-config`: Base config template (default: `configs/nba-pregame-betting.yaml`)
 - `--pre-start-hours`: Hours before game to start trial (default: 2.0)
 - `--check-interval`: Seconds between game status checks (default: 60.0)
-- `--log-level`: Logging level for both collector and trial subprocesses: DEBUG, INFO, WARNING, ERROR (default: INFO)
+- `--log-level`: Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
+- `--oss-upload`: Enable OSS upload after collection
+- `--oss-bucket`: Override OSS bucket name
+- `--oss-prefix`: Override OSS prefix
 
 **Debug logging:**
 ```bash
-python tools/nba_game_collector.py --data-dir data/nba-betting --log-level DEBUG
+python tools/nba_game_collector.py collect --data-dir data/nba-betting --log-level DEBUG
 ```
 
 ## File Structure

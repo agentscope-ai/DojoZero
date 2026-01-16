@@ -781,66 +781,180 @@ async def run_collection(
     logger.info("=" * 80)
 
 
+def list_games_in_range(
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> None:
+    """List games in a date range.
+
+    Args:
+        start_date: Start date (YYYY-MM-DD). If None, defaults to today.
+        end_date: End date (YYYY-MM-DD). If None, defaults to start_date (single day).
+    """
+    # Parse start date
+    if start_date:
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+        except ValueError:
+            logger.error(
+                "Invalid start date format: %s (expected YYYY-MM-DD)", start_date
+            )
+            return
+    else:
+        start = datetime.now()
+
+    # Parse end date
+    if end_date:
+        try:
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            logger.error("Invalid end date format: %s (expected YYYY-MM-DD)", end_date)
+            return
+    else:
+        end = start
+
+    # Ensure start <= end
+    if start > end:
+        start, end = end, start
+
+    # Iterate through date range
+    current = start
+    total_games = 0
+
+    print(f"\n{'=' * 80}")
+    print(f"NBA Games from {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
+    print(f"{'=' * 80}\n")
+
+    while current <= end:
+        date_str = current.strftime("%Y-%m-%d")
+        games = get_games_for_date(date_str, print_games=False)
+
+        if games:
+            print(f"Date: {date_str} ({len(games)} game(s))")
+            print("-" * 40)
+            for game in games:
+                game_id = game.get("gameId", "")
+                away_team = game.get("awayTeam", {}).get("teamName", "Unknown")
+                home_team = game.get("homeTeam", {}).get("teamName", "Unknown")
+                away_tricode = game.get("awayTeam", {}).get("teamTricode", "???")
+                home_tricode = game.get("homeTeam", {}).get("teamTricode", "???")
+                status_text = game.get("gameStatusText", "Unknown")
+                game_status = game.get("gameStatus", 0)
+
+                # Format time
+                time_str = "N/A"
+                if game.get("gameTimeLTZ"):
+                    time_str = game["gameTimeLTZ"].strftime("%H:%M %Z")
+
+                # Format score if game has started
+                score_str = ""
+                if game_status in (2, 3):  # In progress or finished
+                    away_score = game.get("awayTeam", {}).get("score", 0)
+                    home_score = game.get("homeTeam", {}).get("score", 0)
+                    score_str = f" | {away_score}-{home_score}"
+
+                print(
+                    f"  {game_id}: {away_tricode} @ {home_tricode} "
+                    f"({away_team} vs {home_team}) | {time_str} | {status_text}{score_str}"
+                )
+                total_games += 1
+            print()
+        else:
+            print(f"Date: {date_str} - No games scheduled\n")
+
+        current += timedelta(days=1)
+
+    print(f"{'=' * 80}")
+    print(f"Total: {total_games} game(s)")
+    print(f"{'=' * 80}\n")
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
         description="NBA Game Collector - Orchestrates data collection for NBA games"
     )
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # List games subcommand
+    list_parser = subparsers.add_parser("list", help="List NBA games in a date range")
+    list_parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="Start date (YYYY-MM-DD). Default: today",
+    )
+    list_parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        help="End date (YYYY-MM-DD). Default: same as start date",
+    )
+    list_parser.add_argument(
+        "--log-level",
+        type=str,
+        default="WARNING",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level (default: WARNING)",
+    )
+
+    # Collect subcommand
+    collect_parser = subparsers.add_parser("collect", help="Collect data for NBA games")
+    collect_parser.add_argument(
         "--date",
         type=str,
         default=None,
         help="Date to collect games for (YYYY-MM-DD). Default: today",
     )
-    parser.add_argument(
+    collect_parser.add_argument(
         "--game-id",
         type=str,
         default=None,
         help="Specific game ID to collect data for. If provided, only this game will be processed.",
     )
-    parser.add_argument(
+    collect_parser.add_argument(
         "--base-config",
         type=Path,
         default=Path(__file__).parent.parent / "configs" / "nba-pregame-betting.yaml",
         help="Path to base config template (default: configs/nba-pregame-betting.yaml)",
     )
-    parser.add_argument(
+    collect_parser.add_argument(
         "--data-dir",
         type=Path,
         default=None,
         help="Data directory for date-organized structure: {data-dir}/{date}/{game_id}.yaml and {data-dir}/{date}/{game_id}.jsonl",
     )
-    parser.add_argument(
+    collect_parser.add_argument(
         "--pre-start-hours",
         type=float,
         default=2.0,
         help="Hours before game to start trial (default: 2.0)",
     )
-    parser.add_argument(
+    collect_parser.add_argument(
         "--check-interval",
         type=float,
         default=60.0,
         help="Interval in seconds to check game status (default: 60.0)",
     )
-    parser.add_argument(
+    collect_parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)",
     )
-    parser.add_argument(
+    collect_parser.add_argument(
         "--oss-upload",
         action="store_true",
         help="Upload files to OSS after trial completion",
     )
-    parser.add_argument(
+    collect_parser.add_argument(
         "--oss-bucket",
         type=str,
         default=None,
         help="Override OSS bucket name (default: from DOJOZERO_OSS_BUCKET env var)",
     )
-    parser.add_argument(
+    collect_parser.add_argument(
         "--oss-prefix",
         type=str,
         default=None,
@@ -849,6 +963,13 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    # Handle no command (default to collect for backward compatibility)
+    if args.command is None:
+        # Check if any collect-specific args are present for backward compatibility
+        # Re-parse with collect defaults
+        parser.print_help()
+        return 0
+
     # Configure logging
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
@@ -856,62 +977,74 @@ def main() -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Validate base config
-    if not args.base_config.exists():
-        logger.error("Base config file not found: %s", args.base_config)
-        return 1
-
-    # Run collection
-    try:
-        # If game_id is provided, use collect_game_for_id (trumps date logic)
-        if args.game_id:
-            managers = asyncio.run(
-                collect_game_for_id(
-                    game_id=args.game_id,
-                    base_config=args.base_config,
-                    pre_start_hours=args.pre_start_hours,
-                    check_interval_seconds=args.check_interval,
-                    data_dir=args.data_dir,
-                    log_level=args.log_level,
-                    oss_upload=args.oss_upload,
-                    oss_bucket=args.oss_bucket,
-                    oss_prefix=args.oss_prefix,
-                )
-            )
-        else:
-            # Determine date for date-based collection
-            if args.date:
-                game_date = args.date
-            else:
-                game_date = datetime.now()
-
-            managers = asyncio.run(
-                collect_games_for_date(
-                    game_date=game_date,
-                    base_config=args.base_config,
-                    pre_start_hours=args.pre_start_hours,
-                    check_interval_seconds=args.check_interval,
-                    data_dir=args.data_dir,
-                    log_level=args.log_level,
-                    oss_upload=args.oss_upload,
-                    oss_bucket=args.oss_bucket,
-                    oss_prefix=args.oss_prefix,
-                )
-            )
-
-        if not managers:
-            logger.info("No games to collect")
-            return 0
-
-        asyncio.run(run_collection(managers))
+    # Handle list command
+    if args.command == "list":
+        list_games_in_range(
+            start_date=args.start_date,
+            end_date=args.end_date,
+        )
         return 0
 
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-        return 130
-    except Exception as e:
-        logger.error("Fatal error: %s", e, exc_info=True)
-        return 1
+    # Handle collect command
+    if args.command == "collect":
+        # Validate base config
+        if not args.base_config.exists():
+            logger.error("Base config file not found: %s", args.base_config)
+            return 1
+
+        # Run collection
+        try:
+            # If game_id is provided, use collect_game_for_id (trumps date logic)
+            if args.game_id:
+                managers = asyncio.run(
+                    collect_game_for_id(
+                        game_id=args.game_id,
+                        base_config=args.base_config,
+                        pre_start_hours=args.pre_start_hours,
+                        check_interval_seconds=args.check_interval,
+                        data_dir=args.data_dir,
+                        log_level=args.log_level,
+                        oss_upload=args.oss_upload,
+                        oss_bucket=args.oss_bucket,
+                        oss_prefix=args.oss_prefix,
+                    )
+                )
+            else:
+                # Determine date for date-based collection
+                if args.date:
+                    game_date = args.date
+                else:
+                    game_date = datetime.now()
+
+                managers = asyncio.run(
+                    collect_games_for_date(
+                        game_date=game_date,
+                        base_config=args.base_config,
+                        pre_start_hours=args.pre_start_hours,
+                        check_interval_seconds=args.check_interval,
+                        data_dir=args.data_dir,
+                        log_level=args.log_level,
+                        oss_upload=args.oss_upload,
+                        oss_bucket=args.oss_bucket,
+                        oss_prefix=args.oss_prefix,
+                    )
+                )
+
+            if not managers:
+                logger.info("No games to collect")
+                return 0
+
+            asyncio.run(run_collection(managers))
+            return 0
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
+            return 130
+        except Exception as e:
+            logger.error("Fatal error: %s", e, exc_info=True)
+            return 1
+
+    return 0
 
 
 if __name__ == "__main__":

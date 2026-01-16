@@ -55,6 +55,7 @@ fi
 # Run collector (it handles its own logging)
 if [ -n "$TIMEOUT_CMD" ]; then
     "$TIMEOUT_CMD" "$TIMEOUT_SECONDS" python3 "$PROJECT_ROOT/tools/nba_game_collector.py" \
+        collect \
         --data-dir "$DATA_DIR" \
         --date "$DATE" \
         --log-level INFO \
@@ -62,6 +63,7 @@ if [ -n "$TIMEOUT_CMD" ]; then
     EXIT_CODE=$?
 else
     python3 "$PROJECT_ROOT/tools/nba_game_collector.py" \
+        collect \
         --data-dir "$DATA_DIR" \
         --date "$DATE" \
         --log-level INFO \

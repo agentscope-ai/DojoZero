@@ -1118,84 +1118,215 @@ async def run_collection(managers: list[NFLGameTrialManager]) -> None:
     logger.info("=" * 80)
 
 
+async def list_games_in_range(
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> None:
+    """List NFL games in a date range.
+
+    Args:
+        start_date: Start date (YYYY-MM-DD). If None, defaults to today.
+        end_date: End date (YYYY-MM-DD). If None, defaults to start_date (single day).
+    """
+    # Parse start date
+    if start_date:
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+        except ValueError:
+            logger.error(
+                "Invalid start date format: %s (expected YYYY-MM-DD)", start_date
+            )
+            return
+    else:
+        start = datetime.now()
+
+    # Parse end date
+    if end_date:
+        try:
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            logger.error("Invalid end date format: %s (expected YYYY-MM-DD)", end_date)
+            return
+    else:
+        end = start
+
+    # Ensure start <= end
+    if start > end:
+        start, end = end, start
+
+    # Iterate through date range
+    current = start
+    total_games = 0
+
+    print(f"\n{'=' * 80}")
+    print(f"NFL Games from {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
+    print(f"{'=' * 80}\n")
+
+    while current <= end:
+        date_str = current.strftime("%Y-%m-%d")
+        games = await get_nfl_games_for_date(date_str, print_games=False)
+
+        if games:
+            print(f"Date: {date_str} ({len(games)} game(s))")
+            print("-" * 40)
+            for game in games:
+                event_id = game.get("eventId", "")
+                away_abbrev = game.get("awayTeam", {}).get("abbreviation", "???")
+                home_abbrev = game.get("homeTeam", {}).get("abbreviation", "???")
+                away_team = game.get("awayTeam", {}).get("teamName", "Unknown")
+                home_team = game.get("homeTeam", {}).get("teamName", "Unknown")
+                status_text = game.get("gameStatusText", "Unknown")
+                game_status = game.get("gameStatus", 0)
+
+                # Format time
+                time_str = "N/A"
+                if game.get("gameTimeLTZ"):
+                    time_str = game["gameTimeLTZ"].strftime("%H:%M %Z")
+
+                # Format score if game has started
+                score_str = ""
+                if game_status in (2, 3):  # In progress or finished
+                    away_score = game.get("awayTeam", {}).get("score", 0)
+                    home_score = game.get("homeTeam", {}).get("score", 0)
+                    score_str = f" | {away_score}-{home_score}"
+
+                # Format odds if available
+                odds_str = ""
+                if game.get("odds"):
+                    odds = game["odds"]
+                    spread = odds.get("spread", 0)
+                    over_under = odds.get("overUnder", 0)
+                    if spread or over_under:
+                        odds_str = f" | Spread: {spread:+.1f}, O/U: {over_under}"
+
+                print(
+                    f"  {event_id}: {away_abbrev} @ {home_abbrev} "
+                    f"({away_team} vs {home_team}) | {time_str} | {status_text}{score_str}{odds_str}"
+                )
+                total_games += 1
+            print()
+        else:
+            print(f"Date: {date_str} - No games scheduled\n")
+
+        current += timedelta(days=1)
+
+    print(f"{'=' * 80}")
+    print(f"Total: {total_games} game(s)")
+    print(f"{'=' * 80}\n")
+
+
 def main() -> int:
     """Main entry point."""
     arg_parser = argparse.ArgumentParser(
         description="NFL Game Collector - Orchestrates data collection for NFL games"
     )
-    arg_parser.add_argument(
-        "--date",
+    subparsers = arg_parser.add_subparsers(dest="command", help="Available commands")
+
+    # List games subcommand
+    list_parser = subparsers.add_parser("list", help="List NFL games in a date range")
+    list_parser.add_argument(
+        "--start-date",
         type=str,
         default=None,
-        help="Date to collect games for (YYYY-MM-DD). Default: today",
+        help="Start date (YYYY-MM-DD). Default: today",
     )
-    arg_parser.add_argument(
+    list_parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        help="End date (YYYY-MM-DD). Default: same as start date",
+    )
+    list_parser.add_argument(
         "--week",
         type=int,
         default=None,
-        help="NFL week number to collect games for (1-18 for regular season)",
+        help="NFL week number to list games for (overrides date range)",
     )
-    arg_parser.add_argument(
+    list_parser.add_argument(
         "--season-type",
         type=int,
         default=2,
         choices=[1, 2, 3],
         help="Season type: 1=preseason, 2=regular, 3=postseason (default: 2)",
     )
-    arg_parser.add_argument(
+    list_parser.add_argument(
+        "--log-level",
+        type=str,
+        default="WARNING",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level (default: WARNING)",
+    )
+
+    # Collect subcommand
+    collect_parser = subparsers.add_parser("collect", help="Collect data for NFL games")
+    collect_parser.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help="Date to collect games for (YYYY-MM-DD). Default: today",
+    )
+    collect_parser.add_argument(
+        "--week",
+        type=int,
+        default=None,
+        help="NFL week number to collect games for (1-18 for regular season)",
+    )
+    collect_parser.add_argument(
+        "--season-type",
+        type=int,
+        default=2,
+        choices=[1, 2, 3],
+        help="Season type: 1=preseason, 2=regular, 3=postseason (default: 2)",
+    )
+    collect_parser.add_argument(
         "--event-id",
         type=str,
         default=None,
         help="Specific ESPN event ID to collect data for",
     )
-    arg_parser.add_argument(
+    collect_parser.add_argument(
         "--base-config",
         type=Path,
         default=Path(__file__).parent.parent / "configs" / "nfl-game.yaml",
         help="Path to base config template (default: configs/nfl-game.yaml)",
     )
-    arg_parser.add_argument(
+    collect_parser.add_argument(
         "--data-dir",
         type=Path,
         default=None,
         help="Data directory for date-organized structure",
     )
-    arg_parser.add_argument(
+    collect_parser.add_argument(
         "--pre-start-hours",
         type=float,
         default=1.0,
         help="Hours before kickoff to start trial (default: 1.0)",
     )
-    arg_parser.add_argument(
+    collect_parser.add_argument(
         "--check-interval",
         type=float,
         default=60.0,
         help="Interval in seconds to check game status (default: 60.0)",
     )
-    arg_parser.add_argument(
+    collect_parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)",
     )
-    arg_parser.add_argument(
-        "--list-only",
-        action="store_true",
-        help="Only list games, don't start collection",
-    )
-    arg_parser.add_argument(
+    collect_parser.add_argument(
         "--oss-upload",
         action="store_true",
         help="Upload files to OSS after trial completion",
     )
-    arg_parser.add_argument(
+    collect_parser.add_argument(
         "--oss-bucket",
         type=str,
         default=None,
         help="Override OSS bucket name (default: from DOJOZERO_OSS_BUCKET env var)",
     )
-    arg_parser.add_argument(
+    collect_parser.add_argument(
         "--oss-prefix",
         type=str,
         default=None,
@@ -1204,91 +1335,106 @@ def main() -> int:
 
     args = arg_parser.parse_args()
 
+    # Handle no command
+    if args.command is None:
+        arg_parser.print_help()
+        return 0
+
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # List-only mode: just show games
-    if args.list_only:
+    # Handle list command
+    if args.command == "list":
         if args.week:
+            # List by week
             asyncio.run(
                 get_nfl_games_for_week(args.week, args.season_type, print_games=True)
             )
         else:
-            game_date = args.date if args.date else datetime.now()
-            asyncio.run(get_nfl_games_for_date(game_date, print_games=True))
+            # List by date range
+            asyncio.run(
+                list_games_in_range(
+                    start_date=args.start_date,
+                    end_date=args.end_date,
+                )
+            )
         return 0
 
-    # Validate base config
-    if not args.base_config.exists():
-        logger.error("Base config file not found: %s", args.base_config)
-        logger.info(
-            "Please create an NFL config template at %s or specify --base-config",
-            args.base_config,
-        )
-        return 1
+    # Handle collect command
+    if args.command == "collect":
+        # Validate base config
+        if not args.base_config.exists():
+            logger.error("Base config file not found: %s", args.base_config)
+            logger.info(
+                "Please create an NFL config template at %s or specify --base-config",
+                args.base_config,
+            )
+            return 1
 
-    try:
-        if args.event_id:
-            managers = asyncio.run(
-                collect_game_for_event_id(
-                    event_id=args.event_id,
-                    base_config=args.base_config,
-                    pre_start_hours=args.pre_start_hours,
-                    check_interval_seconds=args.check_interval,
-                    data_dir=args.data_dir,
-                    log_level=args.log_level,
-                    oss_upload=args.oss_upload,
-                    oss_bucket=args.oss_bucket,
-                    oss_prefix=args.oss_prefix,
+        try:
+            if args.event_id:
+                managers = asyncio.run(
+                    collect_game_for_event_id(
+                        event_id=args.event_id,
+                        base_config=args.base_config,
+                        pre_start_hours=args.pre_start_hours,
+                        check_interval_seconds=args.check_interval,
+                        data_dir=args.data_dir,
+                        log_level=args.log_level,
+                        oss_upload=args.oss_upload,
+                        oss_bucket=args.oss_bucket,
+                        oss_prefix=args.oss_prefix,
+                    )
                 )
-            )
-        elif args.week:
-            managers = asyncio.run(
-                collect_games_for_week(
-                    week=args.week,
-                    base_config=args.base_config,
-                    season_type=args.season_type,
-                    pre_start_hours=args.pre_start_hours,
-                    check_interval_seconds=args.check_interval,
-                    data_dir=args.data_dir,
-                    log_level=args.log_level,
-                    oss_upload=args.oss_upload,
-                    oss_bucket=args.oss_bucket,
-                    oss_prefix=args.oss_prefix,
+            elif args.week:
+                managers = asyncio.run(
+                    collect_games_for_week(
+                        week=args.week,
+                        base_config=args.base_config,
+                        season_type=args.season_type,
+                        pre_start_hours=args.pre_start_hours,
+                        check_interval_seconds=args.check_interval,
+                        data_dir=args.data_dir,
+                        log_level=args.log_level,
+                        oss_upload=args.oss_upload,
+                        oss_bucket=args.oss_bucket,
+                        oss_prefix=args.oss_prefix,
+                    )
                 )
-            )
-        else:
-            game_date = args.date if args.date else datetime.now()
-            managers = asyncio.run(
-                collect_games_for_date(
-                    game_date=game_date,
-                    base_config=args.base_config,
-                    pre_start_hours=args.pre_start_hours,
-                    check_interval_seconds=args.check_interval,
-                    data_dir=args.data_dir,
-                    log_level=args.log_level,
-                    oss_upload=args.oss_upload,
-                    oss_bucket=args.oss_bucket,
-                    oss_prefix=args.oss_prefix,
+            else:
+                game_date = args.date if args.date else datetime.now()
+                managers = asyncio.run(
+                    collect_games_for_date(
+                        game_date=game_date,
+                        base_config=args.base_config,
+                        pre_start_hours=args.pre_start_hours,
+                        check_interval_seconds=args.check_interval,
+                        data_dir=args.data_dir,
+                        log_level=args.log_level,
+                        oss_upload=args.oss_upload,
+                        oss_bucket=args.oss_bucket,
+                        oss_prefix=args.oss_prefix,
+                    )
                 )
-            )
 
-        if not managers:
-            logger.info("No games to collect")
+            if not managers:
+                logger.info("No games to collect")
+                return 0
+
+            asyncio.run(run_collection(managers))
             return 0
 
-        asyncio.run(run_collection(managers))
-        return 0
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
+            return 130
+        except Exception as e:
+            logger.error("Fatal error: %s", e, exc_info=True)
+            return 1
 
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-        return 130
-    except Exception as e:
-        logger.error("Fatal error: %s", e, exc_info=True)
-        return 1
+    return 0
 
 
 if __name__ == "__main__":
