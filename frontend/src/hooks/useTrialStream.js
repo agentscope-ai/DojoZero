@@ -235,6 +235,34 @@ function spanToEvent(span) {
 }
 
 /**
+ * Extract trial metadata from trial.started span.
+ * Metadata is stored in tags with "trial." prefix (e.g., trial.home_team_tricode).
+ */
+function extractTrialMetadata(spans) {
+  const metadata = {};
+
+  for (const span of spans) {
+    if (span.operationName === "trial.started") {
+      const tags = span.tags || [];
+      const tagsMap = Array.isArray(tags)
+        ? Object.fromEntries(tags.map((t) => [t.key, t.value]))
+        : tags;
+
+      // Extract trial.* tags (excluding system tags like trial.phase)
+      for (const [key, value] of Object.entries(tagsMap)) {
+        if (key.startsWith("trial.") && key !== "trial.phase") {
+          const metadataKey = key.slice(6); // Remove "trial." prefix
+          metadata[metadataKey] = value;
+        }
+      }
+      break; // Only need the first trial.started span
+    }
+  }
+
+  return metadata;
+}
+
+/**
  * Extract game metadata from events.
  * Looks for game_initialize and game_update events to extract team info.
  */
@@ -287,8 +315,14 @@ function processSpans(rawSpans) {
   const dataStreamSpans = rawSpans.filter(isDataStreamEvent);
   const events = dataStreamSpans.map(spanToEvent);
 
-  // Extract game metadata from DataStream events
+  // Extract trial metadata from trial.started span (base info like team tricodes)
+  const trialMetadata = extractTrialMetadata(rawSpans);
+
+  // Extract game metadata from DataStream events (runtime info like scores)
   const gameMetadata = extractGameMetadata(events);
+
+  // Merge metadata: trial metadata as base, game metadata can override
+  const metadata = { ...trialMetadata, ...gameMetadata };
 
   // Determine trial phase from lifecycle spans
   const phase = determineTrialPhase(rawSpans);
@@ -298,7 +332,7 @@ function processSpans(rawSpans) {
     agents: agentsList,
     conversations,
     events,
-    metadata: gameMetadata,
+    metadata,
     phase,
   };
 }
