@@ -194,6 +194,7 @@ async def _extract_trial_info_from_traces(
 
     has_started = False
     has_stopped = False
+    has_game_result = False  # Indicates game has completed
     latest_start_time = 0
     latest_stop_time = 0
 
@@ -204,11 +205,42 @@ async def _extract_trial_info_from_traces(
         op_name = span.operation_name
         tags = span.tags
 
+        # Check for game_result span (indicates game completion)
+        if op_name == "game_result":
+            has_game_result = True
+            # Extract final score and winner
+            if tags.get("event.final_score"):
+                final_score = tags["event.final_score"]
+                if isinstance(final_score, str):
+                    try:
+                        metadata["final_score"] = json.loads(final_score)
+                    except (json.JSONDecodeError, TypeError):
+                        metadata["final_score"] = final_score
+                else:
+                    metadata["final_score"] = final_score
+            if tags.get("event.winner"):
+                metadata["winner"] = tags["event.winner"]
+
         # Check lifecycle spans
-        if op_name == "trial.started":
+        elif op_name == "trial.started":
             has_started = True
             if span.start_time > latest_start_time:
                 latest_start_time = span.start_time
+                # Extract metadata from trial.started span tags
+                # Tags are prefixed with "trial." (e.g., "trial.home_team_tricode")
+                for key, value in tags.items():
+                    if key.startswith("trial."):
+                        # Remove "trial." prefix and store in metadata
+                        meta_key = key[6:]  # len("trial.") = 6
+                        # Map common keys to frontend-expected format
+                        if meta_key in (
+                            "home_team_tricode",
+                            "away_team_tricode",
+                            "game_id",
+                            "game_date",
+                            "builder_name",
+                        ):
+                            metadata[meta_key] = value
         elif op_name in ("trial.stopped", "trial.terminated"):
             has_stopped = True
             if span.start_time > latest_stop_time:
@@ -265,6 +297,9 @@ async def _extract_trial_info_from_traces(
     # Determine phase
     if has_stopped and latest_stop_time >= latest_start_time:
         phase = "stopped"
+    elif has_game_result:
+        # Game has concluded (game_result span found)
+        phase = "completed"
     elif has_started and not has_stopped:
         phase = "running"
     elif has_stopped:

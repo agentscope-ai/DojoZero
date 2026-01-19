@@ -1,6 +1,7 @@
 """Trial builder for NBA pre-game betting scenario."""
 
 import logging
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -104,6 +105,14 @@ class NBAPreGameBettingTrialParams(BaseModel):
 
     # NBA game configuration
     game_id: str = Field(..., description="NBA.com game ID (e.g., '0022500290')")
+    game_date: str | None = Field(
+        default=None,
+        description=(
+            "Game date in YYYY-MM-DD format. If not provided, will try to:\n"
+            "1. Fetch from NBA API\n"
+            "2. Extract from persistence_file path (e.g., 'data/nba-betting/2026-01-15/...')"
+        ),
+    )
 
     # Hub configuration (optional, can be nested or flat)
     hub: HubConfig | None = Field(default=None)
@@ -183,14 +192,16 @@ def _build_trial_spec(
     away_team_tricode: str | None = None
     home_team_name: str | None = None
     away_team_name: str | None = None
-    game_date: str | None = None
+    game_date: str | None = params.game_date  # Use provided game_date if available
 
     if game_info:
         home_team_tricode = game_info.get("home_team_tricode")
         away_team_tricode = game_info.get("away_team_tricode")
         home_team_name = game_info.get("home_team")
         away_team_name = game_info.get("away_team")
-        game_date = game_info.get("game_date")
+        # Only use game_info date if not already provided in params
+        if not game_date:
+            game_date = game_info.get("game_date")
         logger.info(
             "Found game info: %s on %s",
             f"{away_team_tricode} @ {home_team_tricode}",
@@ -202,6 +213,21 @@ def _build_trial_spec(
             params.game_id,
         )
         raise ValueError(f"Could not find game info for game_id={params.game_id}.")
+
+    # Fallback: extract game_date from persistence_file path if still not available
+    # Path format: data/nba-betting/YYYY-MM-DD/game_id.jsonl
+    if not game_date:
+        persistence_path = (
+            params.hub.persistence_file if params.hub else params.persistence_file
+        )
+        if persistence_path:
+            # Look for date pattern in path
+            date_match = re.search(r"(\d{4}-\d{2}-\d{2})", persistence_path)
+            if date_match:
+                game_date = date_match.group(1)
+                logger.info(
+                    "Extracted game_date from persistence_file path: %s", game_date
+                )
 
     # Extract hub configuration (support both hierarchical and flat)
     if params.hub:
