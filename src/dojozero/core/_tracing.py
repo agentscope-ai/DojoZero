@@ -195,13 +195,21 @@ class JaegerTraceReader:
             start_time: If provided, only return spans with start_time > this value
                         (filtered client-side as Jaeger API doesn't support this).
         """
+        tags_json = json.dumps({"dojozero.trial.id": trial_id})
+
+        # Calculate time range for the query (default: last 30 days to now)
+        now = datetime.now(timezone.utc)
+        end_us = int(now.timestamp() * 1_000_000)
+        start_query_dt = now - timedelta(days=30)
+        start_us = int(start_query_dt.timestamp() * 1_000_000)
+
         params: dict[str, Any] = {
             "service": self._service_name,
-            "tags": f'{{"dojozero.trial.id":"{trial_id}"}}',
+            "tags": tags_json,
+            "start": start_us,
+            "end": end_us,
             "limit": 1000,
         }
-        # Note: Jaeger's 'start' param is for query time range, not span filtering
-        # We filter spans client-side using the 'start_time' parameter
 
         response = await self._client.get(
             f"{self._base_url}/api/traces",

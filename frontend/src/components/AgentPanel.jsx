@@ -1,6 +1,11 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { modelProviders, DOJOZERO_CDN } from "../constants";
+
+// Maximum text length before truncation
+const MAX_TEXT_LENGTH = 1000;
+// Display truncation threshold
+const DISPLAY_TRUNCATE_LENGTH = 300;
 
 /**
  * AgentPanel component using unified span protocol.
@@ -15,8 +20,22 @@ import { modelProviders, DOJOZERO_CDN } from "../constants";
  */
 export default function AgentPanel({ agents: agentsList = [], events = [], currentEventIndex = 0, agentStates = {} }) {
   const [visibleBubbles, setVisibleBubbles] = useState([]);
+  const [expandedBubbles, setExpandedBubbles] = useState(new Set());
   const bubbleStreamRef = useRef(null);
   const lastEventIndexRef = useRef(-1);
+
+  // Toggle expand/collapse for a bubble
+  const toggleExpand = useCallback((bubbleId) => {
+    setExpandedBubbles((prev) => {
+      const next = new Set(prev);
+      if (next.has(bubbleId)) {
+        next.delete(bubbleId);
+      } else {
+        next.add(bubbleId);
+      }
+      return next;
+    });
+  }, []);
 
   // Helper to safely convert any value to a displayable string
   const toDisplayString = (value) => {
@@ -95,7 +114,7 @@ export default function AgentPanel({ agents: agentsList = [], events = [], curre
           actions.push({
             id: `${actorId}-${streamId}-${globalIdx}`,
             agentId: actorId,
-            text: text.substring(0, 200),
+            text: text.substring(0, MAX_TEXT_LENGTH),
             actionType: msg.toolCalls ? "tool" : "message",
             eventIndex: globalIdx,
             agentColor: agent.providerInfo.color,
@@ -181,17 +200,6 @@ export default function AgentPanel({ agents: agentsList = [], events = [], curre
     );
   };
 
-  const getMiniAvatar = (initials, color) => (
-    <div
-      style={{
-        ...styles.miniAvatar,
-        background: color,
-        boxShadow: `0 0 10px ${color}44`,
-      }}
-    >
-      <span style={styles.miniAvatarText}>{initials}</span>
-    </div>
-  );
 
   return (
     <div style={styles.container}>
@@ -311,47 +319,50 @@ export default function AgentPanel({ agents: agentsList = [], events = [], curre
 
         <div ref={bubbleStreamRef} style={styles.bubbleStream}>
           <AnimatePresence>
-            {visibleBubbles.map((bubble, index) => (
-              <motion.div
-                key={bubble.id}
-                initial={{ opacity: 0, x: -20, scale: 0.9 }}
-                animate={{ opacity: 1, x: 0, scale: 1 }}
-                exit={{ opacity: 0, x: 20, scale: 0.9 }}
-                transition={{ 
-                  duration: 0.3,
-                  delay: index === visibleBubbles.length - 1 ? 0 : 0,
-                }}
-                style={styles.bubbleItem}
-              >
-                {/* Agent mini avatar */}
-                {getMiniAvatar(bubble.agentInitials, bubble.agentColor)}
+            {visibleBubbles.map((bubble, index) => {
+              const isExpanded = expandedBubbles.has(bubble.id);
+              const needsTruncation = bubble.text.length > DISPLAY_TRUNCATE_LENGTH;
+              const displayText = isExpanded || !needsTruncation 
+                ? bubble.text 
+                : bubble.text.substring(0, DISPLAY_TRUNCATE_LENGTH) + "...";
 
-                {/* Bubble content */}
-                <div
+              return (
+                <motion.div
+                  key={bubble.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.2 }}
                   style={{
-                    ...styles.bubbleContent,
-                    borderLeft: `3px solid ${bubble.agentColor}`,
+                    ...styles.bubbleItem,
+                    borderLeft: `2px solid ${bubble.agentColor}`,
                   }}
                 >
+                  {/* Minimal header with agent name */}
                   <div style={styles.bubbleHeader}>
-                    <span
-                      className="font-tech"
-                      style={{ ...styles.bubbleAgentName, color: bubble.agentColor }}
-                    >
+                    <span style={{ ...styles.bubbleAgentName, color: bubble.agentColor }}>
                       {bubble.agentName}
                     </span>
                     {bubble.actionType === "tool" && (
                       <span style={styles.toolBadge}>TOOL</span>
                     )}
                   </div>
-                  <p style={styles.bubbleText}>
-                    {bubble.text.length > 120
-                      ? bubble.text.substring(0, 120) + "..."
-                      : bubble.text}
-                  </p>
-                </div>
-              </motion.div>
-            ))}
+
+                  {/* Message text */}
+                  <p style={styles.bubbleText}>{displayText}</p>
+
+                  {/* Expand/Collapse button */}
+                  {needsTruncation && (
+                    <button
+                      onClick={() => toggleExpand(bubble.id)}
+                      style={styles.expandButton}
+                    >
+                      {isExpanded ? "Collapse" : "Expand"}
+                    </button>
+                  )}
+                </motion.div>
+              );
+            })}
           </AnimatePresence>
 
           {visibleBubbles.length === 0 && (
@@ -383,14 +394,14 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
-    marginTop: "8px",
-    gap: "12px",
+    marginTop: "4px",
+    gap: "6px",
     backgroundImage: `url(${DOJOZERO_CDN.agentboard})`,
     backgroundSize: "cover",
     backgroundPosition: "center",
     backgroundRepeat: "no-repeat",
-    borderRadius: "12px",
-    padding: "16px",
+    borderRadius: "8px",
+    padding: "8px",
     position: "relative",
   },
   overlay: {
@@ -399,14 +410,14 @@ const styles = {
     left: 0,
     right: 0,
     bottom: 0,
-    background: "linear-gradient(180deg, rgba(15, 23, 42, 0.85) 0%, rgba(15, 23, 42, 0.75) 50%, rgba(15, 23, 42, 0.85) 100%)",
-    borderRadius: "12px",
+    background: "linear-gradient(180deg, rgba(15, 23, 42, 0.88) 0%, rgba(15, 23, 42, 0.82) 50%, rgba(15, 23, 42, 0.88) 100%)",
+    borderRadius: "8px",
     pointerEvents: "none",
     zIndex: 0,
   },
   agentsRow: {
     display: "flex",
-    gap: "10px",
+    gap: "6px",
     flexShrink: 0,
     flexWrap: "wrap",
     position: "relative",
@@ -414,15 +425,15 @@ const styles = {
   },
   agentCard: {
     flex: "1 1 auto",
-    minWidth: "160px",
+    minWidth: "140px",
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    gap: "8px",
-    padding: "12px 10px",
-    background: "linear-gradient(145deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%)",
-    border: "1px solid var(--glass-border)",
-    borderRadius: "10px",
+    gap: "4px",
+    padding: "8px 6px",
+    background: "rgba(30, 41, 59, 0.7)",
+    border: "1px solid rgba(255, 255, 255, 0.08)",
+    borderRadius: "6px",
     position: "relative",
     overflow: "hidden",
   },
@@ -431,8 +442,8 @@ const styles = {
     flexShrink: 0,
   },
   avatar: {
-    width: "40px",
-    height: "40px",
+    width: "32px",
+    height: "32px",
     borderRadius: "50%",
     display: "flex",
     alignItems: "center",
@@ -440,53 +451,53 @@ const styles = {
     position: "relative",
   },
   avatarText: {
-    fontSize: "14px",
+    fontSize: "12px",
     color: "#fff",
     fontWeight: "700",
   },
   avatarRing: {
     position: "absolute",
-    inset: "-3px",
+    inset: "-2px",
     borderRadius: "50%",
-    border: "2px solid rgba(255, 255, 255, 0.2)",
+    border: "1px solid rgba(255, 255, 255, 0.15)",
   },
   providerBadge: {
     position: "absolute",
-    bottom: "-4px",
-    right: "-4px",
-    width: "20px",
-    height: "20px",
+    bottom: "-2px",
+    right: "-2px",
+    width: "16px",
+    height: "16px",
     borderRadius: "50%",
     background: "var(--bg-secondary)",
-    border: "2px solid var(--bg-tertiary)",
+    border: "1px solid var(--bg-tertiary)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
   },
   providerLogo: {
-    width: "14px",
-    height: "14px",
+    width: "11px",
+    height: "11px",
     objectFit: "contain",
   },
   infoSection: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    gap: "2px",
+    gap: "1px",
   },
   agentName: {
-    fontSize: "13px",
+    fontSize: "12px",
     color: "var(--text-primary)",
-    letterSpacing: "0.05em",
+    letterSpacing: "0.03em",
     textAlign: "center",
   },
   modelId: {
     fontSize: "9px",
     color: "var(--text-muted)",
-    letterSpacing: "0.05em",
+    letterSpacing: "0.03em",
     textAlign: "center",
-    maxWidth: "140px",
+    maxWidth: "130px",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
@@ -494,27 +505,27 @@ const styles = {
   providerText: {
     fontSize: "8px",
     color: "var(--text-secondary)",
-    letterSpacing: "0.05em",
+    letterSpacing: "0.03em",
     textTransform: "uppercase",
   },
   statsSection: {
     display: "flex",
-    gap: "16px",
-    marginTop: "4px",
+    gap: "12px",
+    marginTop: "2px",
   },
   statItem: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    gap: "1px",
+    gap: "0px",
   },
   statLabel: {
     fontSize: "8px",
     color: "var(--text-muted)",
-    letterSpacing: "0.1em",
+    letterSpacing: "0.08em",
   },
   statValue: {
-    fontSize: "14px",
+    fontSize: "13px",
     color: "var(--text-primary)",
     fontWeight: "600",
   },
@@ -523,7 +534,7 @@ const styles = {
     bottom: 0,
     left: 0,
     right: 0,
-    height: "3px",
+    height: "2px",
   },
   emptyState: {
     flex: 1,
@@ -531,16 +542,16 @@ const styles = {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    gap: "12px",
-    padding: "24px",
+    gap: "8px",
+    padding: "16px",
     opacity: 0.6,
     position: "relative",
     zIndex: 1,
   },
   emptyText: {
-    fontSize: "11px",
+    fontSize: "10px",
     color: "var(--text-muted)",
-    letterSpacing: "0.15em",
+    letterSpacing: "0.1em",
   },
 
   // Bubble Stream Styles
@@ -549,9 +560,9 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
-    background: "var(--frosted-glass)",
-    border: "1px solid var(--frosted-border)",
-    borderRadius: "8px",
+    background: "rgba(15, 23, 42, 0.5)",
+    border: "1px solid rgba(255, 255, 255, 0.06)",
+    borderRadius: "6px",
     position: "relative",
     zIndex: 1,
   },
@@ -559,78 +570,73 @@ const styles = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    padding: "10px 14px",
-    borderBottom: "1px solid var(--frosted-border)",
+    padding: "6px 10px",
+    borderBottom: "1px solid rgba(255, 255, 255, 0.06)",
     flexShrink: 0,
   },
   streamTitle: {
-    fontSize: "10px",
+    fontSize: "9px",
     color: "var(--text-muted)",
-    letterSpacing: "0.15em",
+    letterSpacing: "0.1em",
   },
   bubbleCount: {
-    fontSize: "10px",
+    fontSize: "9px",
     color: "var(--text-secondary)",
-    letterSpacing: "0.05em",
+    letterSpacing: "0.03em",
   },
   bubbleStream: {
     flex: 1,
     overflowY: "auto",
-    padding: "12px",
+    padding: "6px",
     display: "flex",
     flexDirection: "column",
-    gap: "10px",
+    gap: "4px",
   },
   bubbleItem: {
     display: "flex",
-    gap: "10px",
-    alignItems: "flex-start",
-  },
-  miniAvatar: {
-    width: "28px",
-    height: "28px",
-    borderRadius: "50%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  miniAvatarText: {
-    fontSize: "10px",
-    color: "#fff",
-    fontWeight: "700",
-  },
-  bubbleContent: {
-    flex: 1,
-    background: "rgba(30, 41, 59, 0.6)",
-    borderRadius: "8px",
-    padding: "10px 12px",
+    flexDirection: "column",
+    gap: "4px",
+    padding: "8px 10px",
+    background: "rgba(30, 41, 59, 0.4)",
+    borderRadius: "4px",
   },
   bubbleHeader: {
     display: "flex",
     alignItems: "center",
-    gap: "8px",
-    marginBottom: "4px",
+    gap: "6px",
   },
   bubbleAgentName: {
     fontSize: "11px",
     fontWeight: "600",
-    letterSpacing: "0.05em",
+    letterSpacing: "0.02em",
   },
   toolBadge: {
     fontSize: "8px",
-    color: "var(--accent-secondary)",
-    background: "rgba(168, 85, 247, 0.2)",
-    padding: "2px 6px",
-    borderRadius: "4px",
-    letterSpacing: "0.1em",
+    color: "#a78bfa",
+    background: "rgba(167, 139, 250, 0.15)",
+    padding: "1px 5px",
+    borderRadius: "3px",
+    letterSpacing: "0.05em",
   },
   bubbleText: {
     margin: 0,
-    fontSize: "12px",
-    color: "var(--text-secondary)",
-    lineHeight: 1.4,
+    fontSize: "13px",
+    color: "#e2e8f0",
+    lineHeight: 1.55,
     wordBreak: "break-word",
+    whiteSpace: "pre-wrap",
+  },
+  expandButton: {
+    alignSelf: "flex-start",
+    marginTop: "2px",
+    padding: "2px 8px",
+    fontSize: "10px",
+    color: "#94a3b8",
+    background: "rgba(148, 163, 184, 0.1)",
+    border: "1px solid rgba(148, 163, 184, 0.2)",
+    borderRadius: "3px",
+    cursor: "pointer",
+    transition: "all 0.15s ease",
   },
   streamEmpty: {
     flex: 1,
@@ -638,12 +644,12 @@ const styles = {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    gap: "12px",
+    gap: "8px",
     opacity: 0.5,
   },
   streamEmptyText: {
-    fontSize: "11px",
+    fontSize: "10px",
     color: "var(--text-muted)",
-    letterSpacing: "0.1em",
+    letterSpacing: "0.08em",
   },
 };

@@ -204,63 +204,23 @@ async def _extract_trial_info_from_traces(
         op_name = span.operation_name
         tags = span.tags
 
-        # Check lifecycle spans
+        # Check lifecycle spans and extract metadata
         if op_name == "trial.started":
             has_started = True
             if span.start_time > latest_start_time:
                 latest_start_time = span.start_time
+
+            # Extract metadata from trial.* tags (excluding system tags)
+            for key, value in tags.items():
+                if key.startswith("trial.") and key not in ("trial.phase",):
+                    # Convert trial.home_team_tricode -> home_team_tricode
+                    metadata_key = key[6:]  # Remove "trial." prefix
+                    metadata[metadata_key] = value
+
         elif op_name in ("trial.stopped", "trial.terminated"):
             has_stopped = True
             if span.start_time > latest_stop_time:
                 latest_stop_time = span.start_time
-
-        # Extract game metadata from game_update spans
-        elif op_name == "game_update":
-            # Try to get team info from event tags
-            home_team = tags.get("event.home_team")
-            away_team = tags.get("event.away_team")
-
-            if isinstance(home_team, dict):
-                if home_team.get("teamTricode"):
-                    metadata["home_team_tricode"] = home_team["teamTricode"]
-                if home_team.get("teamName"):
-                    metadata["home_team_name"] = home_team["teamName"]
-            elif isinstance(home_team, str):
-                # Try to parse JSON string
-                try:
-                    parsed = json.loads(home_team)
-                    if isinstance(parsed, dict):
-                        if parsed.get("teamTricode"):
-                            metadata["home_team_tricode"] = parsed["teamTricode"]
-                        if parsed.get("teamName"):
-                            metadata["home_team_name"] = parsed["teamName"]
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-            if isinstance(away_team, dict):
-                if away_team.get("teamTricode"):
-                    metadata["away_team_tricode"] = away_team["teamTricode"]
-                if away_team.get("teamName"):
-                    metadata["away_team_name"] = away_team["teamName"]
-            elif isinstance(away_team, str):
-                try:
-                    parsed = json.loads(away_team)
-                    if isinstance(parsed, dict):
-                        if parsed.get("teamTricode"):
-                            metadata["away_team_tricode"] = parsed["teamTricode"]
-                        if parsed.get("teamName"):
-                            metadata["away_team_name"] = parsed["teamName"]
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-        # Extract game info from game_initialize spans
-        elif op_name == "game_initialize":
-            if tags.get("event.home_team"):
-                metadata["home_team"] = tags["event.home_team"]
-            if tags.get("event.away_team"):
-                metadata["away_team"] = tags["event.away_team"]
-            if tags.get("event.game_id"):
-                metadata["game_id"] = tags["event.game_id"]
 
     # Determine phase
     if has_stopped and latest_stop_time >= latest_start_time:

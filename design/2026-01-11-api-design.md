@@ -69,6 +69,12 @@ dojo0 serve --host 0.0.0.0 --port 8000 --otlp-endpoint http://localhost:4318
 dojo0 run --params configs/nba-pregame-betting.yaml --trial-id test --server http://localhost:8000
 ```
 
+Or submit a replay trial for backtesting:
+
+```bash
+dojo0 replay --params configs/nba-pregame-betting.yaml --replay-file outputs/nba_betting_events.jsonl --trial-id replay-test --replay-speed-up 1.0 --replay-max-sleep 20 --server http://localhost:8000
+```
+
 ### 4. Start Arena Server
 
 ```bash
