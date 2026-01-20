@@ -17,17 +17,17 @@ python tools/nba_trial_runner.py list --start-date 2025-12-16
 python tools/nba_trial_runner.py list --start-date 2025-12-10 --end-date 2025-12-16
 ```
 
-### Collect Data
+### Run Trials
 
 ```bash
-# Collect today's games
-python tools/nba_trial_runner.py collect --data-dir data/nba-betting
+# Run trials for today's games
+python tools/nba_trial_runner.py run --data-dir data/nba-betting
 
-# Collect for a specific date
-python tools/nba_trial_runner.py collect --data-dir data/nba-betting --date 2025-12-16
+# Run for a specific date
+python tools/nba_trial_runner.py run --data-dir data/nba-betting --date 2025-12-16
 
-# Collect specific game
-python tools/nba_trial_runner.py collect --data-dir data/nba-betting --game-id 0062500001
+# Run specific game
+python tools/nba_trial_runner.py run --data-dir data/nba-betting --game-id 0062500001
 ```
 
 **Options:**

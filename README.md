@@ -263,7 +263,7 @@ emit a ready-made YAML spec for local experimentation.
 ## Tools
 
 Utility scripts for data collection and management are available in the `tools/` directory.
-See [tools/nba-game-collector.md](./tools/nba-game-collector.md) for documentation on:
+See [docs/nba-trial-runner.md](./docs/nba-trial-runner.md) for documentation on:
 
-- **NBA Game Collector**: Automated driver for collecting replay data for NBA games
+- **NBA Trial Runner**: Automated driver for running trials and collecting replay data for NBA games
 - **JSONL Deduplication**: Tool for removing duplicate events from replay files (see `tools/deduplicate_jsonl.py`)
