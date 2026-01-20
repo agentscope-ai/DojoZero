@@ -450,8 +450,14 @@ class SLSTraceReader:
                     trial_ids.append(trial_id)
 
             return trial_ids
-        except Exception as e:
-            LOGGER.error("Failed to list trials from SLS: %s", e)
+        except httpx.HTTPStatusError as e:
+            LOGGER.error("SLS HTTP error listing trials: %s", e)
+            return []
+        except httpx.RequestError as e:
+            LOGGER.error("SLS request error listing trials: %s", e)
+            return []
+        except (KeyError, TypeError, ValueError) as e:
+            LOGGER.error("Failed to parse SLS response for trials: %s", e)
             return []
 
     async def get_spans(
@@ -511,8 +517,16 @@ class SLSTraceReader:
             # Sort by start time
             spans.sort(key=lambda s: s.start_time)
             return spans
-        except Exception as e:
-            LOGGER.error("Failed to get spans from SLS for trial '%s': %s", trial_id, e)
+        except httpx.HTTPStatusError as e:
+            LOGGER.error("SLS HTTP error getting spans for trial '%s': %s", trial_id, e)
+            return []
+        except httpx.RequestError as e:
+            LOGGER.error(
+                "SLS request error getting spans for trial '%s': %s", trial_id, e
+            )
+            return []
+        except (KeyError, TypeError, ValueError) as e:
+            LOGGER.error("Failed to parse SLS response for trial '%s': %s", trial_id, e)
             return []
 
     def _convert_sls_row_to_span(self, row: dict[str, Any]) -> SpanData | None:
@@ -569,7 +583,7 @@ class SLSTraceReader:
                 tags=tags,
                 logs=row.get("logs", []),
             )
-        except Exception as e:
+        except (KeyError, ValueError, TypeError) as e:
             LOGGER.warning("Failed to convert SLS row to span: %s", e)
             return None
 
@@ -1236,7 +1250,13 @@ class OTelSpanExporter:
                 # Set span status to OK
                 span.set_status(Status(StatusCode.OK))
 
-        except Exception as e:
+        except ImportError as e:
+            LOGGER.warning(
+                "OpenTelemetry import error exporting span '%s': %s",
+                span_data.span_id,
+                e,
+            )
+        except (ValueError, TypeError, AttributeError) as e:
             LOGGER.warning("Failed to export span '%s': %s", span_data.span_id, e)
 
     def export_registration_span(
@@ -1289,7 +1309,7 @@ class OTelSpanExporter:
             try:
                 self._provider.shutdown()
                 LOGGER.info("OTel exporter shutdown complete")
-            except Exception as e:
+            except (RuntimeError, OSError, TimeoutError) as e:
                 LOGGER.warning("Error during OTel exporter shutdown: %s", e)
 
 
