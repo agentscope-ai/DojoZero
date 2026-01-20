@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""NFL Game Collector Driver
+"""NFL Trial Runner
 
-Orchestrates data collection for NFL games:
+Orchestrates betting trials for NFL games:
 - Checks ESPN API for games on a given date or week
 - Sets up separate trial/config for each game
 - Starts trial before game kickoff time
-- Uses proper naming (config and replay files with event IDs)
+- Runs agents that analyze data and place bets
 - Runs until game concludes
-- Logs crucial trial start/end/saved status
+- Persists all events to replay files
 """
 
 import argparse
@@ -826,7 +826,7 @@ class NFLGameTrialManager:
         return uploaded_keys
 
 
-async def collect_games_for_date(
+async def run_trials_for_date(
     game_date: datetime | str,
     base_config: Path,
     pre_start_hours: float = 1.0,
@@ -837,10 +837,10 @@ async def collect_games_for_date(
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
 ) -> list[NFLGameTrialManager]:
-    """Collect data for all NFL games on a given date.
+    """Run trials for all NFL games on a given date.
 
     Args:
-        game_date: Date to collect games for
+        game_date: Date to run trials for
         base_config: Path to base config template
         pre_start_hours: Hours before game to start trial
         check_interval_seconds: Interval to check game status
@@ -892,7 +892,7 @@ async def collect_games_for_date(
     return managers
 
 
-async def collect_games_for_week(
+async def run_trials_for_week(
     week: int,
     base_config: Path,
     season_type: int = 2,
@@ -904,7 +904,7 @@ async def collect_games_for_week(
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
 ) -> list[NFLGameTrialManager]:
-    """Collect data for all NFL games in a given week.
+    """Run trials for all NFL games in a given week.
 
     Args:
         week: Week number
@@ -959,7 +959,7 @@ async def collect_games_for_week(
     return managers
 
 
-async def collect_game_for_event_id(
+async def run_trial_for_event(
     event_id: str,
     base_config: Path,
     pre_start_hours: float = 1.0,
@@ -970,7 +970,7 @@ async def collect_game_for_event_id(
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
 ) -> list[NFLGameTrialManager]:
-    """Collect data for a specific NFL game by event ID.
+    """Run trial for a specific NFL game by event ID.
 
     Args:
         event_id: ESPN event ID
@@ -1073,8 +1073,8 @@ async def collect_game_for_event_id(
         await api.close()
 
 
-async def run_collection(managers: list[NFLGameTrialManager]) -> None:
-    """Run collection for all game managers.
+async def run_trials(managers: list[NFLGameTrialManager]) -> None:
+    """Run trials for all game managers.
 
     Args:
         managers: List of NFLGameTrialManager instances
@@ -1104,7 +1104,7 @@ async def run_collection(managers: list[NFLGameTrialManager]) -> None:
                 manager.log_status()
 
             except Exception as e:
-                logger.error("Error in collection for game %s: %s", manager.event_id, e)
+                logger.error("Error in trial for game %s: %s", manager.event_id, e)
                 manager.log_status()
 
         tasks.append(asyncio.create_task(run_game(manager)))
@@ -1218,7 +1218,7 @@ async def list_games_in_range(
 def main() -> int:
     """Main entry point."""
     arg_parser = argparse.ArgumentParser(
-        description="NFL Game Collector - Orchestrates data collection for NFL games"
+        description="NFL Trial Runner - Orchestrates betting trials for NFL games"
     )
     subparsers = arg_parser.add_subparsers(dest="command", help="Available commands")
 
@@ -1257,76 +1257,76 @@ def main() -> int:
         help="Logging level (default: WARNING)",
     )
 
-    # Collect subcommand
-    collect_parser = subparsers.add_parser("collect", help="Collect data for NFL games")
-    collect_parser.add_argument(
+    # Run trials subcommand
+    run_parser = subparsers.add_parser("run", help="Run betting trials for NFL games")
+    run_parser.add_argument(
         "--date",
         type=str,
         default=None,
-        help="Date to collect games for (YYYY-MM-DD). Default: today",
+        help="Date to run trials for (YYYY-MM-DD). Default: today",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--week",
         type=int,
         default=None,
-        help="NFL week number to collect games for (1-18 for regular season)",
+        help="NFL week number to run trials for (1-18 for regular season)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--season-type",
         type=int,
         default=2,
         choices=[1, 2, 3],
         help="Season type: 1=preseason, 2=regular, 3=postseason (default: 2)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--event-id",
         type=str,
         default=None,
-        help="Specific ESPN event ID to collect data for",
+        help="Specific ESPN event ID to run trial for",
     )
-    collect_parser.add_argument(
-        "--base-config",
+    run_parser.add_argument(
+        "--config",
         type=Path,
         default=Path(__file__).parent.parent / "configs" / "nfl-game.yaml",
-        help="Path to base config template (default: configs/nfl-game.yaml)",
+        help="Path to trial config template (default: configs/nfl-game.yaml)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--data-dir",
         type=Path,
         default=None,
-        help="Data directory for date-organized structure",
+        help="Data directory for output",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--pre-start-hours",
         type=float,
         default=1.0,
         help="Hours before kickoff to start trial (default: 1.0)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--check-interval",
         type=float,
         default=60.0,
         help="Interval in seconds to check game status (default: 60.0)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--oss-upload",
         action="store_true",
         help="Upload files to OSS after trial completion",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--oss-bucket",
         type=str,
         default=None,
         help="Override OSS bucket name (default: from DOJOZERO_OSS_BUCKET env var)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--oss-prefix",
         type=str,
         default=None,
@@ -1363,23 +1363,23 @@ def main() -> int:
             )
         return 0
 
-    # Handle collect command
-    if args.command == "collect":
-        # Validate base config
-        if not args.base_config.exists():
-            logger.error("Base config file not found: %s", args.base_config)
+    # Handle run command
+    if args.command == "run":
+        # Validate config
+        if not args.config.exists():
+            logger.error("Config file not found: %s", args.config)
             logger.info(
-                "Please create an NFL config template at %s or specify --base-config",
-                args.base_config,
+                "Please create an NFL config template at %s or specify --config",
+                args.config,
             )
             return 1
 
         try:
             if args.event_id:
                 managers = asyncio.run(
-                    collect_game_for_event_id(
+                    run_trial_for_event(
                         event_id=args.event_id,
-                        base_config=args.base_config,
+                        base_config=args.config,
                         pre_start_hours=args.pre_start_hours,
                         check_interval_seconds=args.check_interval,
                         data_dir=args.data_dir,
@@ -1391,9 +1391,9 @@ def main() -> int:
                 )
             elif args.week:
                 managers = asyncio.run(
-                    collect_games_for_week(
+                    run_trials_for_week(
                         week=args.week,
-                        base_config=args.base_config,
+                        base_config=args.config,
                         season_type=args.season_type,
                         pre_start_hours=args.pre_start_hours,
                         check_interval_seconds=args.check_interval,
@@ -1407,9 +1407,9 @@ def main() -> int:
             else:
                 game_date = args.date if args.date else datetime.now()
                 managers = asyncio.run(
-                    collect_games_for_date(
+                    run_trials_for_date(
                         game_date=game_date,
-                        base_config=args.base_config,
+                        base_config=args.config,
                         pre_start_hours=args.pre_start_hours,
                         check_interval_seconds=args.check_interval,
                         data_dir=args.data_dir,
@@ -1421,10 +1421,10 @@ def main() -> int:
                 )
 
             if not managers:
-                logger.info("No games to collect")
+                logger.info("No games found for trials")
                 return 0
 
-            asyncio.run(run_collection(managers))
+            asyncio.run(run_trials(managers))
             return 0
 
         except KeyboardInterrupt:

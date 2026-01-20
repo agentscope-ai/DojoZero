@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""NBA Game Collector Driver
+"""NBA Trial Runner
 
-Orchestrates data collection for NBA games:
+Orchestrates betting trials for NBA games:
 - Checks NBA API for daily games
 - Sets up separate trial/config for each game
 - Starts trial 2 hours before game time
-- Uses proper naming (config and replay files with game IDs)
+- Runs agents that analyze data and place bets
 - Runs until game concludes
-- Logs crucial trial start/end/saved status
+- Persists all events to replay files
 """
 
 import argparse
@@ -574,7 +574,7 @@ class GameTrialManager:
         return uploaded_keys
 
 
-async def collect_game_for_id(
+async def run_trial_for_game(
     game_id: str,
     base_config: Path,
     pre_start_hours: float = 2.0,
@@ -585,13 +585,13 @@ async def collect_game_for_id(
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
 ) -> list[GameTrialManager]:
-    """Collect data for a specific game by ID.
+    """Run trial for a specific game by ID.
 
-    Searches across recent dates to find the game, then extracts full game data.
+    Searches across recent dates to find the game, then sets up and runs the trial.
     If the game is not found, returns an empty list.
 
     Args:
-        game_id: Game ID to collect data for
+        game_id: Game ID to run trial for
         base_config: Path to base config template
         pre_start_hours: Hours before game to start trial
         check_interval_seconds: Interval to check game status
@@ -655,7 +655,7 @@ async def collect_game_for_id(
     return [manager]
 
 
-async def collect_games_for_date(
+async def run_trials_for_date(
     game_date: datetime | str,
     base_config: Path,
     pre_start_hours: float = 2.0,
@@ -666,10 +666,10 @@ async def collect_games_for_date(
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
 ) -> list[GameTrialManager]:
-    """Collect data for all games on a given date.
+    """Run trials for all games on a given date.
 
     Args:
-        game_date: Date to collect games for
+        game_date: Date to run trials for
         base_config: Path to base config template
         pre_start_hours: Hours before game to start trial
         check_interval_seconds: Interval to check game status
@@ -728,10 +728,10 @@ async def collect_games_for_date(
     return managers
 
 
-async def run_collection(
+async def run_trials(
     managers: list[GameTrialManager],
 ) -> None:
-    """Run collection for all game managers.
+    """Run trials for all game managers.
 
     Args:
         managers: List of GameTrialManager instances
@@ -765,7 +765,7 @@ async def run_collection(
                 manager.log_status()
 
             except Exception as e:
-                logger.error("Error in collection for game %s: %s", manager.game_id, e)
+                logger.error("Error in trial for game %s: %s", manager.game_id, e)
                 manager.log_status()
 
         tasks.append(asyncio.create_task(run_game(manager)))
@@ -872,7 +872,7 @@ def list_games_in_range(
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="NBA Game Collector - Orchestrates data collection for NBA games"
+        description="NBA Trial Runner - Orchestrates betting trials for NBA games"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -898,63 +898,63 @@ def main() -> int:
         help="Logging level (default: WARNING)",
     )
 
-    # Collect subcommand
-    collect_parser = subparsers.add_parser("collect", help="Collect data for NBA games")
-    collect_parser.add_argument(
+    # Run trials subcommand
+    run_parser = subparsers.add_parser("run", help="Run betting trials for NBA games")
+    run_parser.add_argument(
         "--date",
         type=str,
         default=None,
-        help="Date to collect games for (YYYY-MM-DD). Default: today",
+        help="Date to run trials for (YYYY-MM-DD). Default: today",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--game-id",
         type=str,
         default=None,
-        help="Specific game ID to collect data for. If provided, only this game will be processed.",
+        help="Specific game ID to run trial for. If provided, only this game will be processed.",
     )
-    collect_parser.add_argument(
-        "--base-config",
+    run_parser.add_argument(
+        "--config",
         type=Path,
         default=Path(__file__).parent.parent / "configs" / "nba-pregame-betting.yaml",
-        help="Path to base config template (default: configs/nba-pregame-betting.yaml)",
+        help="Path to trial config template (default: configs/nba-pregame-betting.yaml)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--data-dir",
         type=Path,
         default=None,
-        help="Data directory for date-organized structure: {data-dir}/{date}/{game_id}.yaml and {data-dir}/{date}/{game_id}.jsonl",
+        help="Data directory for output: {data-dir}/{date}/{game_id}.yaml and {data-dir}/{date}/{game_id}.jsonl",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--pre-start-hours",
         type=float,
         default=2.0,
         help="Hours before game to start trial (default: 2.0)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--check-interval",
         type=float,
         default=60.0,
         help="Interval in seconds to check game status (default: 60.0)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--oss-upload",
         action="store_true",
         help="Upload files to OSS after trial completion",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--oss-bucket",
         type=str,
         default=None,
         help="Override OSS bucket name (default: from DOJOZERO_OSS_BUCKET env var)",
     )
-    collect_parser.add_argument(
+    run_parser.add_argument(
         "--oss-prefix",
         type=str,
         default=None,
@@ -963,10 +963,8 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # Handle no command (default to collect for backward compatibility)
+    # Handle no command
     if args.command is None:
-        # Check if any collect-specific args are present for backward compatibility
-        # Re-parse with collect defaults
         parser.print_help()
         return 0
 
@@ -985,21 +983,21 @@ def main() -> int:
         )
         return 0
 
-    # Handle collect command
-    if args.command == "collect":
-        # Validate base config
-        if not args.base_config.exists():
-            logger.error("Base config file not found: %s", args.base_config)
+    # Handle run command
+    if args.command == "run":
+        # Validate config
+        if not args.config.exists():
+            logger.error("Config file not found: %s", args.config)
             return 1
 
-        # Run collection
+        # Run trials
         try:
-            # If game_id is provided, use collect_game_for_id (trumps date logic)
+            # If game_id is provided, run trial for specific game
             if args.game_id:
                 managers = asyncio.run(
-                    collect_game_for_id(
+                    run_trial_for_game(
                         game_id=args.game_id,
-                        base_config=args.base_config,
+                        base_config=args.config,
                         pre_start_hours=args.pre_start_hours,
                         check_interval_seconds=args.check_interval,
                         data_dir=args.data_dir,
@@ -1010,16 +1008,16 @@ def main() -> int:
                     )
                 )
             else:
-                # Determine date for date-based collection
+                # Run trials for all games on date
                 if args.date:
                     game_date = args.date
                 else:
                     game_date = datetime.now()
 
                 managers = asyncio.run(
-                    collect_games_for_date(
+                    run_trials_for_date(
                         game_date=game_date,
-                        base_config=args.base_config,
+                        base_config=args.config,
                         pre_start_hours=args.pre_start_hours,
                         check_interval_seconds=args.check_interval,
                         data_dir=args.data_dir,
@@ -1031,10 +1029,10 @@ def main() -> int:
                 )
 
             if not managers:
-                logger.info("No games to collect")
+                logger.info("No games found for trials")
                 return 0
 
-            asyncio.run(run_collection(managers))
+            asyncio.run(run_trials(managers))
             return 0
 
         except KeyboardInterrupt:
