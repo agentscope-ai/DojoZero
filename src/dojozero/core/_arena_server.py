@@ -214,6 +214,10 @@ async def _extract_trial_info_from_traces(
             if span.start_time > latest_stop_time:
                 latest_stop_time = span.start_time
 
+        # Check for game completion spans (NBA/NFL game results)
+        elif op_name in ("game_result", "nfl_game_result") or "game_result" in op_name:
+            has_game_result = True
+
     # Determine phase
     if has_stopped and latest_stop_time >= latest_start_time:
         phase = "stopped"
