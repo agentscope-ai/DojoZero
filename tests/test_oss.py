@@ -50,43 +50,52 @@ class TestOSSClientInit:
 
     def test_init_sets_attributes(self):
         """Test that __init__ sets all attributes correctly."""
-        client = OSSClient(
-            access_key_id="test-key-id",
-            access_key_secret="test-key-secret",
-            bucket_name="test-bucket",
-            endpoint="oss-cn-hangzhou.aliyuncs.com",
-            prefix="prod/",
-        )
+        with patch("dojozero.utils.oss.oss2"):
+            client = OSSClient(
+                bucket_name="test-bucket",
+                endpoint="oss-cn-hangzhou.aliyuncs.com",
+                prefix="prod/",
+                access_key_id="test-key-id",
+                access_key_secret="test-key-secret",
+            )
 
-        assert client.access_key_id == "test-key-id"
-        assert client.access_key_secret == "test-key-secret"
         assert client.bucket_name == "test-bucket"
         assert client.endpoint == "oss-cn-hangzhou.aliyuncs.com"
         assert client.prefix == "prod/"
 
     def test_init_empty_prefix(self):
         """Test that empty prefix stays empty."""
-        client = OSSClient(
-            access_key_id="key",
-            access_key_secret="secret",
-            bucket_name="bucket",
-            endpoint="endpoint",
-            prefix="",
-        )
+        with patch("dojozero.utils.oss.oss2"):
+            client = OSSClient(
+                bucket_name="bucket",
+                endpoint="endpoint",
+                prefix="",
+                access_key_id="key",
+                access_key_secret="secret",
+            )
 
         assert client.prefix == ""
 
     def test_init_prefix_without_trailing_slash(self):
         """Test that prefix without trailing slash gets one added."""
-        client = OSSClient(
-            access_key_id="key",
-            access_key_secret="secret",
-            bucket_name="bucket",
-            endpoint="endpoint",
-            prefix="prod",
-        )
+        with patch("dojozero.utils.oss.oss2"):
+            client = OSSClient(
+                bucket_name="bucket",
+                endpoint="endpoint",
+                prefix="prod",
+                access_key_id="key",
+                access_key_secret="secret",
+            )
 
         assert client.prefix == "prod/"
+
+    def test_init_requires_credentials(self):
+        """Test that __init__ requires either provider or static credentials."""
+        with pytest.raises(ValueError, match="Either credentials_provider or"):
+            OSSClient(
+                bucket_name="bucket",
+                endpoint="endpoint",
+            )
 
 
 class TestOSSClientFromEnv:
@@ -169,10 +178,12 @@ class TestOSSClientFromEnv:
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
 
-        client = OSSClient.from_env()
+        with patch("dojozero.utils.oss.oss2"):
+            client = OSSClient.from_env()
 
-        assert client.access_key_id == "test-key-id"
-        assert client.access_key_secret == "test-key-secret"
+        # Verify client was created with correct bucket/endpoint
+        assert client.bucket_name == "bucket"
+        assert client.endpoint == "endpoint"
 
 
 class TestOSSClientMakeKey:
