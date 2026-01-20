@@ -37,10 +37,10 @@ Or manually:
 ```bash
 crontab -e
 # NBA trials at 6 AM:
-# 0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml >> cron.log 2>&1
+# 0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --data-dir data/nba-betting >> cron.log 2>&1
 
 # NFL trials at 10 AM:
-# 0 10 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nfl-game.yaml >> cron_nfl.log 2>&1
+# 0 10 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nfl-game.yaml --data-dir data/nfl >> cron_nfl.log 2>&1
 ```
 
 **Systemd (Linux):**
@@ -178,7 +178,7 @@ Files are uploaded mirroring the local structure:
 ```bash
 crontab -e
 # Add:
-0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --oss-upload >> cron.log 2>&1
+0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --data-dir data/nba-betting --oss-upload >> cron.log 2>&1
 ```
 
 ## Advanced
