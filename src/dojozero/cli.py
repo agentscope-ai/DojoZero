@@ -216,6 +216,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="OTLP endpoint URL for external trace storage. "
         "If not provided, enables built-in Trace Query API.",
     )
+    serve_parser.add_argument(
+        "--trace-backend",
+        dest="trace_backend",
+        choices=["jaeger", "sls"],
+        default="jaeger",
+        help="Trace backend type (default: jaeger). "
+        "Use 'sls' for Alibaba Cloud Simple Log Service.",
+    )
 
     # Arena Server command
     arena_parser = subparsers.add_parser(
@@ -246,6 +254,14 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="static_dir",
         type=Path,
         help="Path to built static assets to serve (optional).",
+    )
+    arena_parser.add_argument(
+        "--trace-backend",
+        dest="trace_backend",
+        choices=["jaeger", "sls"],
+        default="jaeger",
+        help="Trace backend type (default: jaeger). "
+        "Use 'sls' for Alibaba Cloud Simple Log Service.",
     )
     return parser
 
@@ -954,11 +970,16 @@ async def _serve_command(args: argparse.Namespace) -> int:
     host = args.host
     port = args.port
     otlp_endpoint = getattr(args, "otlp_endpoint", None)
+    trace_backend = getattr(args, "trace_backend", "jaeger")
 
     LOGGER.info("Starting Dashboard Server at http://%s:%d", host, port)
     LOGGER.info("Trial API: http://%s:%d/api/trials", host, port)
     if otlp_endpoint:
-        LOGGER.info("Traces will be sent to OTLP endpoint: %s", otlp_endpoint)
+        LOGGER.info(
+            "Traces will be sent to OTLP endpoint: %s (backend: %s)",
+            otlp_endpoint,
+            trace_backend,
+        )
     else:
         LOGGER.info("Trials API: http://%s:%d/api/trials", host, port)
 
@@ -967,6 +988,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         host=host,
         port=port,
         otlp_endpoint=otlp_endpoint,
+        trace_backend=trace_backend,
     )
     return 0
 
@@ -979,9 +1001,10 @@ async def _arena_command(args: argparse.Namespace) -> int:
     port = args.port
     trace_store = args.trace_store
     static_dir = getattr(args, "static_dir", None)
+    trace_backend = getattr(args, "trace_backend", "jaeger")
 
     LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
-    LOGGER.info("Trace Store: %s", trace_store)
+    LOGGER.info("Trace Store: %s (backend: %s)", trace_store, trace_backend)
     LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
     if static_dir:
         LOGGER.info("Static files: %s", static_dir)
@@ -991,6 +1014,7 @@ async def _arena_command(args: argparse.Namespace) -> int:
         host=host,
         port=port,
         static_dir=static_dir,
+        trace_backend=trace_backend,
     )
     return 0
 

@@ -26,6 +26,7 @@ dependencies = [
     "opentelemetry-api>=1.29.0",
     "opentelemetry-sdk>=1.29.0",
     "opentelemetry-exporter-otlp-proto-http>=1.29.0",
+    "alibabacloud-credentials>=1.0.0",
 ]
 
 [project.scripts]

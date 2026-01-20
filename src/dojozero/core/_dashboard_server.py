@@ -33,6 +33,7 @@ from ._registry import (
 )
 from ._tracing import (
     OTelSpanExporter,
+    get_sls_exporter_headers,
     set_otel_exporter,
 )
 from ._types import RuntimeContext
@@ -86,6 +87,7 @@ class DashboardServerState:
 
     dashboard: Dashboard
     otlp_endpoint: str | None = None
+    trace_backend: str = "jaeger"
     imported_modules: set[str] = field(default_factory=set)
     import_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -184,6 +186,7 @@ async def _launch_replay_trial(
 def create_dashboard_app(
     dashboard: Dashboard,
     otlp_endpoint: str | None = None,
+    trace_backend: str = "jaeger",
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
@@ -191,6 +194,7 @@ def create_dashboard_app(
         dashboard: Dashboard instance for trial management
         otlp_endpoint: OTLP endpoint URL for external trace storage.
                       If None, uses built-in DashboardStore for traces.
+        trace_backend: Trace backend type ("jaeger" or "sls")
     """
 
     @asynccontextmanager
@@ -199,14 +203,33 @@ def create_dashboard_app(
         app.state.server_state = DashboardServerState(
             dashboard=dashboard,
             otlp_endpoint=otlp_endpoint,
+            trace_backend=trace_backend,
         )
 
         # Initialize OTel exporter if endpoint is configured
         otel_exporter = None
         if otlp_endpoint:
-            otel_exporter = OTelSpanExporter(otlp_endpoint)
+            # Get auth headers for SLS backend
+            headers = None
+            if trace_backend == "sls":
+                headers = get_sls_exporter_headers()
+                if headers:
+                    LOGGER.info("SLS authentication headers configured")
+                else:
+                    LOGGER.warning(
+                        "SLS backend selected but credentials not configured. "
+                        "Configure via: 1) Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID), "
+                        "2) ~/.alibabacloud/credentials file, or 3) ECS RAM role. "
+                        "Also set DOJOZERO_SLS_PROJECT."
+                    )
+
+            otel_exporter = OTelSpanExporter(otlp_endpoint, headers=headers)
             set_otel_exporter(otel_exporter)
-            LOGGER.info("OTel exporter configured: %s", otlp_endpoint)
+            LOGGER.info(
+                "OTel exporter configured: %s (backend: %s)",
+                otlp_endpoint,
+                trace_backend,
+            )
 
         LOGGER.info("Dashboard Server started")
         yield
@@ -532,6 +555,7 @@ async def run_dashboard_server(
     host: str = "127.0.0.1",
     port: int = 8000,
     otlp_endpoint: str | None = None,
+    trace_backend: str = "jaeger",
 ) -> None:
     """Run the Dashboard Server.
 
@@ -540,10 +564,13 @@ async def run_dashboard_server(
         host: Host to bind to
         port: Port to listen on
         otlp_endpoint: OTLP endpoint for external trace storage (optional)
+        trace_backend: Trace backend type ("jaeger" or "sls")
     """
     import uvicorn
 
-    app = create_dashboard_app(dashboard, otlp_endpoint=otlp_endpoint)
+    app = create_dashboard_app(
+        dashboard, otlp_endpoint=otlp_endpoint, trace_backend=trace_backend
+    )
 
     config = uvicorn.Config(
         app,

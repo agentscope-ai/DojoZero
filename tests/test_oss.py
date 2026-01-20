@@ -7,6 +7,44 @@ import pytest
 from dojozero.utils.oss import OSSClient, upload_directory, upload_file
 
 
+@pytest.fixture
+def mock_credentials():
+    """Mock the credential provider for tests."""
+    from dojozero.core._credentials import Credentials
+
+    mock_creds = Credentials(
+        access_key_id="test-key-id",
+        access_key_secret="test-key-secret",
+        security_token=None,
+    )
+    mock_provider = MagicMock()
+    mock_provider.get_credentials.return_value = mock_creds
+
+    with patch(
+        "dojozero.core._credentials.get_credential_provider", return_value=mock_provider
+    ):
+        yield mock_creds
+
+
+@pytest.fixture
+def mock_empty_credentials():
+    """Mock the credential provider with empty credentials."""
+    from dojozero.core._credentials import Credentials
+
+    mock_creds = Credentials(
+        access_key_id="",
+        access_key_secret="",
+        security_token=None,
+    )
+    mock_provider = MagicMock()
+    mock_provider.get_credentials.return_value = mock_creds
+
+    with patch(
+        "dojozero.core._credentials.get_credential_provider", return_value=mock_provider
+    ):
+        yield mock_creds
+
+
 class TestOSSClientInit:
     """Tests for OSSClient initialization."""
 
@@ -54,50 +92,34 @@ class TestOSSClientInit:
 class TestOSSClientFromEnv:
     """Tests for OSSClient.from_env() factory method."""
 
-    def test_from_env_missing_access_key_id_raises(self, monkeypatch):
-        """Test that missing access key ID raises ValueError."""
-        monkeypatch.delenv("DOJOZERO_OSS_ACCESS_KEY_ID", raising=False)
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", "secret")
+    def test_from_env_missing_credentials_raises(
+        self, monkeypatch, mock_empty_credentials
+    ):
+        """Test that missing credentials raises ValueError."""
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
 
-        with pytest.raises(ValueError, match="DOJOZERO_OSS_ACCESS_KEY_ID"):
+        with pytest.raises(ValueError, match="No valid credentials found"):
             OSSClient.from_env()
 
-    def test_from_env_missing_access_key_secret_raises(self, monkeypatch):
-        """Test that missing access key secret raises ValueError."""
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_ID", "key-id")
-        monkeypatch.delenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", raising=False)
-        monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
-        monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
-
-        with pytest.raises(ValueError, match="DOJOZERO_OSS_ACCESS_KEY_SECRET"):
-            OSSClient.from_env()
-
-    def test_from_env_missing_endpoint_raises(self, monkeypatch):
+    def test_from_env_missing_endpoint_raises(self, monkeypatch, mock_credentials):
         """Test that missing endpoint raises ValueError."""
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_ID", "key-id")
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", "secret")
         monkeypatch.delenv("DOJOZERO_OSS_ENDPOINT", raising=False)
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
 
         with pytest.raises(ValueError, match="DOJOZERO_OSS_ENDPOINT"):
             OSSClient.from_env()
 
-    def test_from_env_missing_bucket_raises(self, monkeypatch):
+    def test_from_env_missing_bucket_raises(self, monkeypatch, mock_credentials):
         """Test that missing bucket raises ValueError."""
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_ID", "key-id")
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", "secret")
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.delenv("DOJOZERO_OSS_BUCKET", raising=False)
 
         with pytest.raises(ValueError, match="Bucket name not provided"):
             OSSClient.from_env()
 
-    def test_from_env_bucket_override(self, monkeypatch):
+    def test_from_env_bucket_override(self, monkeypatch, mock_credentials):
         """Test that bucket_name parameter overrides env var."""
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_ID", "key-id")
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", "secret")
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "env-bucket")
         monkeypatch.setenv("DOJOZERO_OSS_PREFIX", "")
@@ -106,10 +128,8 @@ class TestOSSClientFromEnv:
 
         assert client.bucket_name == "override-bucket"
 
-    def test_from_env_prefix_override(self, monkeypatch):
+    def test_from_env_prefix_override(self, monkeypatch, mock_credentials):
         """Test that prefix parameter overrides env var."""
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_ID", "key-id")
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", "secret")
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
         monkeypatch.setenv("DOJOZERO_OSS_PREFIX", "env-prefix/")
@@ -118,10 +138,10 @@ class TestOSSClientFromEnv:
 
         assert client.prefix == "override-prefix/"
 
-    def test_from_env_prefix_override_with_empty_string(self, monkeypatch):
+    def test_from_env_prefix_override_with_empty_string(
+        self, monkeypatch, mock_credentials
+    ):
         """Test that empty string prefix override clears env prefix."""
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_ID", "key-id")
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", "secret")
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
         monkeypatch.setenv("DOJOZERO_OSS_PREFIX", "env-prefix/")
@@ -130,10 +150,10 @@ class TestOSSClientFromEnv:
 
         assert client.prefix == ""
 
-    def test_from_env_uses_env_prefix_when_not_overridden(self, monkeypatch):
+    def test_from_env_uses_env_prefix_when_not_overridden(
+        self, monkeypatch, mock_credentials
+    ):
         """Test that env prefix is used when not overridden."""
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_ID", "key-id")
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", "secret")
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
         monkeypatch.setenv("DOJOZERO_OSS_PREFIX", "env-prefix")
@@ -141,6 +161,18 @@ class TestOSSClientFromEnv:
         client = OSSClient.from_env()
 
         assert client.prefix == "env-prefix/"
+
+    def test_from_env_uses_credentials_from_provider(
+        self, monkeypatch, mock_credentials
+    ):
+        """Test that credentials come from the credential provider."""
+        monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
+        monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
+
+        client = OSSClient.from_env()
+
+        assert client.access_key_id == "test-key-id"
+        assert client.access_key_secret == "test-key-secret"
 
 
 class TestOSSClientMakeKey:
@@ -391,13 +423,13 @@ class TestOSSClientFileExists:
 class TestConvenienceFunctions:
     """Tests for module-level convenience functions."""
 
-    def test_upload_file_creates_client_and_uploads(self, tmp_path, monkeypatch):
+    def test_upload_file_creates_client_and_uploads(
+        self, tmp_path, monkeypatch, mock_credentials
+    ):
         """Test that upload_file convenience function works."""
         test_file = tmp_path / "test.txt"
         test_file.write_text("content")
 
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_ID", "key-id")
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", "secret")
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
         monkeypatch.setenv("DOJOZERO_OSS_PREFIX", "")
@@ -411,12 +443,12 @@ class TestConvenienceFunctions:
         assert result == "remote/test.txt"
         mock_bucket.put_object_from_file.assert_called_once()
 
-    def test_upload_directory_creates_client_and_uploads(self, tmp_path, monkeypatch):
+    def test_upload_directory_creates_client_and_uploads(
+        self, tmp_path, monkeypatch, mock_credentials
+    ):
         """Test that upload_directory convenience function works."""
         (tmp_path / "file.txt").write_text("content")
 
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_ID", "key-id")
-        monkeypatch.setenv("DOJOZERO_OSS_ACCESS_KEY_SECRET", "secret")
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
         monkeypatch.setenv("DOJOZERO_OSS_PREFIX", "")
