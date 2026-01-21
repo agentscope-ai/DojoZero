@@ -22,7 +22,7 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: uv run pytest
+        entry: uv run pytest -m "not integration"
         language: system
         pass_filenames: false
 

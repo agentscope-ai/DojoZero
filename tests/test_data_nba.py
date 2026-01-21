@@ -73,7 +73,14 @@ class TestNBAStoreParseBoxscore:
             }
         }
 
-        events = nba_store._parse_api_response(boxscore_data)
+        # Mock get_game_info_by_id to avoid real API calls
+        with patch(
+            "dojozero.data.nba._utils.get_game_info_by_id",
+            return_value={
+                "game_time_utc": "2024-01-15T03:00:00Z",
+            },
+        ):
+            events = nba_store._parse_api_response(boxscore_data)
 
         # Should emit GameUpdateEvent and GameInitializeEvent
         update_events = [e for e in events if isinstance(e, GameUpdateEvent)]
@@ -161,15 +168,20 @@ class TestNBAStoreParseBoxscore:
             }
         }
 
-        # First call should emit GameInitializeEvent
-        events1 = nba_store._parse_api_response(boxscore_data)
-        init_events1 = [e for e in events1 if isinstance(e, GameInitializeEvent)]
-        assert len(init_events1) == 1
+        # Mock get_game_info_by_id to avoid real API calls
+        with patch(
+            "dojozero.data.nba._utils.get_game_info_by_id",
+            return_value={"game_time_utc": "2024-01-15T03:00:00Z"},
+        ):
+            # First call should emit GameInitializeEvent
+            events1 = nba_store._parse_api_response(boxscore_data)
+            init_events1 = [e for e in events1 if isinstance(e, GameInitializeEvent)]
+            assert len(init_events1) == 1
 
-        # Second call should NOT emit GameInitializeEvent
-        events2 = nba_store._parse_api_response(boxscore_data)
-        init_events2 = [e for e in events2 if isinstance(e, GameInitializeEvent)]
-        assert len(init_events2) == 0
+            # Second call should NOT emit GameInitializeEvent
+            events2 = nba_store._parse_api_response(boxscore_data)
+            init_events2 = [e for e in events2 if isinstance(e, GameInitializeEvent)]
+            assert len(init_events2) == 0
 
 
 class TestNBAStoreParsePlayByPlay:

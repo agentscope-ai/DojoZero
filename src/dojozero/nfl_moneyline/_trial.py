@@ -1,6 +1,7 @@
 """Trial builder for NFL pre-game betting scenario."""
 
 import logging
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -177,6 +178,21 @@ def _build_trial_spec(
         "Building NFL trial for event_id=%s (team info will be populated from store)",
         event_id,
     )
+
+    # Fallback: extract game_date from persistence_file path if not available
+    # Path format: data/nfl-betting/YYYY-MM-DD/event_id.jsonl
+    if not game_date:
+        persistence_path = (
+            params.hub.persistence_file if params.hub else params.persistence_file
+        )
+        if persistence_path:
+            # Look for date pattern in path
+            date_match = re.search(r"(\d{4}-\d{2}-\d{2})", persistence_path)
+            if date_match:
+                game_date = date_match.group(1)
+                logger.info(
+                    "Extracted game_date from persistence_file path: %s", game_date
+                )
 
     # Extract hub configuration (support both hierarchical and flat)
     if params.hub:
