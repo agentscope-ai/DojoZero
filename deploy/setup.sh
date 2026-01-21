@@ -94,9 +94,9 @@ ALIBABA_CLOUD_ACCESS_KEY_SECRET=
 # Option 2: Use ~/.alibabacloud/credentials file (recommended)
 
 # OSS (Alibaba Cloud Object Storage) - for uploading trial data
-DOJOZERO_OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
-DOJOZERO_OSS_BUCKET=
-DOJOZERO_OSS_PREFIX=
+DOJOZERO_OSS_ENDPOINT=oss-cn-wulanchabu.aliyuncs.com
+DOJOZERO_OSS_BUCKET=dojozero-store
+DOJOZERO_OSS_PREFIX=data/
 
 # SLS (Simple Log Service) - for trace storage
 # Project and endpoint derived from --trace-store-url (e.g., https://myproject.cn-hangzhou.log.aliyuncs.com)
