@@ -1,7 +1,7 @@
 scenario:
   name: nfl-pregame-betting
   config:
-    game_id: '401547417'  # Example NFL game ID
+    event_id: '401547417'  # Example NFL event ID
 
     hub:
       persistence_file: outputs/nfl_betting_events.jsonl
