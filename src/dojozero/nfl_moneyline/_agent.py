@@ -4,15 +4,20 @@ This module provides NFL-specific BettingAgent with NFL event formatting.
 """
 
 import logging
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from dojozero.betting import (
     BettingAgent as BaseBettingAgent,
     BettingAgentConfig,
+    EventFormatter,
 )
 from dojozero.core import RuntimeContext
 
 from dojozero.nfl_moneyline._formatters import format_event
+
+if TYPE_CHECKING:
+    from agentscope.tool import Toolkit
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +31,7 @@ class BettingAgent(BaseBettingAgent):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         # If no event_formatter provided, use NFL-specific formatter
-        if "event_formatter" not in kwargs:
+        if kwargs.get("event_formatter") is None:
             kwargs["event_formatter"] = format_event
         super().__init__(*args, **kwargs)
 
@@ -77,10 +82,11 @@ class BettingAgent(BaseBettingAgent):
     @classmethod
     def from_yaml(
         cls,
-        config_path: str,
+        config_path: "str | Path",
         actor_id: str,
         trial_id: str,
-        toolkit: Any | None = None,
+        toolkit: "Toolkit | None" = None,
+        event_formatter: "EventFormatter | None" = None,
     ) -> "BettingAgent":
         """Create NFL BettingAgent from YAML config file with NFL formatter.
 
@@ -89,6 +95,7 @@ class BettingAgent(BaseBettingAgent):
             actor_id: The actor ID for this agent
             trial_id: The trial ID for this agent
             toolkit: Optional toolkit to use
+            event_formatter: Optional custom event formatter. Defaults to NFL-specific one.
         """
         from pathlib import Path
 
@@ -111,7 +118,7 @@ class BettingAgent(BaseBettingAgent):
             model=create_model(llm_config),
             formatter=create_formatter(model_type),
             toolkit=toolkit,
-            event_formatter=format_event,
+            event_formatter=event_formatter,
         )
 
 

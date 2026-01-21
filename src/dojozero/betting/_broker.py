@@ -156,16 +156,16 @@ class BettingEvent:
             away_team=data["away_team"],
             game_time=datetime.fromisoformat(data["game_time"]),
             status=EventStatus(data["status"]),
-            home_odds=Decimal(data["home_odds"]) if data.get("home_odds") else None,
-            away_odds=Decimal(data["away_odds"]) if data.get("away_odds") else None,
+            home_odds=Decimal(val) if (val := data.get("home_odds")) else None,
+            away_odds=Decimal(val) if (val := data.get("away_odds")) else None,
             last_odds_update=(
-                datetime.fromisoformat(data["last_odds_update"])
-                if data.get("last_odds_update")
+                datetime.fromisoformat(val)
+                if (val := data.get("last_odds_update"))
                 else None
             ),
             betting_closed_at=(
-                datetime.fromisoformat(data["betting_closed_at"])
-                if data.get("betting_closed_at")
+                datetime.fromisoformat(val)
+                if (val := data.get("betting_closed_at"))
                 else None
             ),
         )
