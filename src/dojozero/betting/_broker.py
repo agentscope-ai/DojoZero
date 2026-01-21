@@ -46,6 +46,15 @@ class EventStatus(Enum):
     SETTLED = "SETTLED"  # All bets settled
 
 
+# Valid status transitions for betting events
+VALID_STATUS_TRANSITIONS = {
+    EventStatus.SCHEDULED: {EventStatus.LIVE, EventStatus.CLOSED},
+    EventStatus.LIVE: {EventStatus.CLOSED},
+    EventStatus.CLOSED: {EventStatus.SETTLED},
+    EventStatus.SETTLED: set(),
+}
+
+
 class OrderType(Enum):
     """Type of bet order"""
 
@@ -520,19 +529,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     await self._handle_game_update(data_event, event_id)
 
                 elif event_type == self.EVENT_TYPE_GAME_START:
-                    await self.update_event_status(
-                        event_id=data_event.event_id, status=EventStatus.LIVE
-                    )
+                    await self._handle_game_start(data_event, event_id)
 
                 elif event_type == self.EVENT_TYPE_GAME_RESULT:
-                    await self.update_event_status(
-                        event_id=data_event.event_id, status=EventStatus.CLOSED
-                    )
-                    await self.settle_event(
-                        event_id=data_event.event_id,
-                        winner=data_event.winner,
-                        final_score=data_event.final_score,
-                    )
+                    await self._handle_game_result(data_event, event_id)
                 else:
                     logger.debug("Unhandled event type: %s", event_type)
 
@@ -577,7 +577,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 away_team_str,
                 game_time_dt,
             )
-            await self.initialize_event(
+            await self._initialize_event(
                 event_id=event_id,
                 home_team=home_team_str,
                 away_team=away_team_str,
@@ -619,7 +619,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 home_odds,
                 away_odds,
             )
-            await self.update_odds(
+            await self._update_odds(
                 event_id=event_id,
                 home_odds=Decimal(str(home_odds)),
                 away_odds=Decimal(str(away_odds)),
@@ -635,7 +635,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 home_odds,
                 away_odds,
             )
-            await self.initialize_event(
+            await self._initialize_event(
                 event_id=event_id,
                 home_team=team_info["home_team"],
                 away_team=team_info["away_team"],
@@ -724,6 +724,37 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 game_time_dt,
             )
 
+    async def _handle_game_start(self, data_event: Any, event_id: str) -> None:
+        """Handle game start event.
+
+        If the event is registered, update its status to LIVE.
+        If not registered, log a warning as betting should have been set up before game start.
+        """
+        if event_id not in self._events:
+            logger.warning(
+                "Game started but event %s was not registered for betting",
+                event_id,
+            )
+            return
+
+        await self._update_event_status(event_id=event_id, status=EventStatus.LIVE)
+
+    async def _handle_game_result(self, data_event: Any, event_id: str) -> None:
+        """Handle game result event.
+
+        If the event is registered, close it and settle bets.
+        If not registered, raise an error as this indicates a logic issue.
+        """
+        if event_id not in self._events:
+            raise ValueError(f"Received game_result for unregistered event {event_id}")
+
+        await self._update_event_status(event_id=event_id, status=EventStatus.CLOSED)
+        await self._settle_event(
+            event_id=event_id,
+            winner=data_event.winner,
+            final_score=data_event.final_score,
+        )
+
     def _moneyline_to_decimal(self, moneyline: int) -> float:
         """Convert American moneyline odds to decimal odds.
 
@@ -738,7 +769,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         else:
             return (100 / abs(moneyline)) + 1
 
-    async def initialize_event(
+    async def _initialize_event(
         self,
         event_id: str,
         home_team: str,
@@ -748,6 +779,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         initial_away_odds: Optional[Decimal] = None,
     ) -> BettingEvent:
         """Initialize a new betting event.
+
+        This is an internal method. Events are initialized via GameInitializeEvent
+        through handle_stream_event.
 
         Args:
             event_id: Unique event identifier
@@ -798,10 +832,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             )
         return betting_event
 
-    async def update_odds(
+    async def _update_odds(
         self, event_id: str, home_odds: Decimal, away_odds: Decimal
     ) -> BettingEvent:
         """Update odds for an event and execute matching limit orders.
+
+        This is an internal method. Odds are updated via OddsUpdateEvent
+        through handle_stream_event.
 
         Can be called to set initial odds (if event was initialized without odds)
         or to update existing odds.
@@ -850,20 +887,27 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     execution_odds = away_odds
 
             if should_execute:
-                await self.match_bet(bet, execution_odds)
+                await self._match_bet(bet, execution_odds)
 
         return betting_event
 
-    async def update_event_status(self, event_id: str, status: EventStatus) -> None:
-        """Update event status and perform status-specific actions"""
+    async def _update_event_status(self, event_id: str, status: EventStatus) -> None:
+        """Update event status and perform status-specific actions.
+
+        This is an internal method. Use GameStartEvent/GameResultEvent handlers
+        for proper event lifecycle management.
+        """
         if event_id not in self._events:
             raise ValueError(f"Event {event_id} not found")
 
         betting_event = self._events[event_id]
 
         # Validate status transition
-        if betting_event.status == EventStatus.SETTLED:
-            raise ValueError("Cannot change status of settled event")
+        valid_transitions = VALID_STATUS_TRANSITIONS.get(betting_event.status, set())
+        if status not in valid_transitions:
+            raise ValueError(
+                f"Invalid status transition: {betting_event.status.value} → {status.value}"
+            )
 
         logger.info(
             "Event %s status changed: %s → %s",
@@ -884,10 +928,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             betting_event.betting_closed_at = datetime.now()
             await self._cancel_all_pending_orders(event_id)
 
-    async def settle_event(
+    async def _settle_event(
         self, event_id: str, winner: str, final_score: Dict[str, int]
     ) -> None:
-        """Settle all active bets for a completed event"""
+        """Settle all active bets for a completed event.
+
+        This is an internal method called by _handle_game_result.
+        """
         if event_id not in self._events:
             raise ValueError(f"Event {event_id} not found")
 
@@ -1229,7 +1276,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 # Process based on order type
                 if bet_request.order_type == OrderType.MARKET:
                     # Execute immediately
-                    await self.match_bet(bet, execution_odds)
+                    await self._match_bet(bet, execution_odds)
                 else:
                     # Add to pending orders (order book)
                     self._pending_orders[agent_id].append(bet_id)
@@ -1249,8 +1296,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             logger.error("Bet rejected for %s: %s", agent_id, e, exc_info=True)
             return "bet_invalid"
 
-    async def match_bet(self, bet: Bet, execution_odds: Decimal) -> None:
-        """Execute a bet at specified odds (asynchronous notification)"""
+    async def _match_bet(self, bet: Bet, execution_odds: Decimal) -> None:
+        """Execute a bet at specified odds (asynchronous notification).
+
+        This is an internal method called by update_odds and place_bet.
+        """
         # Update bet record
         bet.odds = execution_odds
         bet.execution_time = datetime.now()
