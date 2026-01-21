@@ -3,10 +3,16 @@
 
 Wrapper script that runs trials for games (agents analyze data and place bets).
 
+For SLS trace export and OSS backup, start a Dashboard Server first:
+    dojo0 serve --otlp-endpoint https://... --trace-backend sls --oss-backup
+
+Then run this script with --server flag:
+    python run_daily_trials.py configs/nba-pregame-betting.yaml --server http://localhost:8000
+
 Usage:
     python run_daily_trials.py configs/nba-pregame-betting.yaml
     python run_daily_trials.py configs/nfl-game.yaml --date 2025-01-20
-    python run_daily_trials.py configs/nfl-game.yaml --oss-upload
+    python run_daily_trials.py configs/nba-pregame-betting.yaml --server http://localhost:8000
 """
 
 import argparse
@@ -84,7 +90,7 @@ def main() -> None:
 Examples:
   %(prog)s configs/nba-pregame-betting.yaml
   %(prog)s configs/nfl-game.yaml --date 2025-01-20
-  %(prog)s configs/nba-pregame-betting.yaml --oss-upload
+  %(prog)s configs/nba-pregame-betting.yaml --server http://localhost:8000
         """,
     )
     parser.add_argument("config", type=Path, help="Path to trial config YAML file")
@@ -99,9 +105,12 @@ Examples:
         help="Override data directory (default: auto-detected from config)",
     )
     parser.add_argument(
-        "--oss-upload",
-        action="store_true",
-        help="Upload trial data to OSS after completion",
+        "--server",
+        type=str,
+        default=None,
+        help="Dashboard Server URL (e.g., http://localhost:8000). "
+        "When specified, trials are submitted to the server which handles "
+        "SLS trace export and OSS backup.",
     )
     parser.add_argument(
         "--log-level",
@@ -161,9 +170,9 @@ Examples:
         args.log_level,
     ]
 
-    if args.oss_upload:
-        cmd.append("--oss-upload")
-        print(f"[{timestamp}] OSS upload enabled")
+    if args.server:
+        cmd.extend(["--server", args.server])
+        print(f"[{timestamp}] Using Dashboard Server: {args.server}")
 
     # Run trials
     try:

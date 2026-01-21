@@ -12,16 +12,20 @@
 The script requires a config file and automatically detects trial type (NBA/NFL) from it:
 
 ```bash
-# NBA trials
+# NBA trials (local mode)
 python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml
 python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --date 2025-01-20
 
-# NFL trials
+# NFL trials (local mode)
 python deploy/run_daily_trials.py configs/nfl-game.yaml
 python deploy/run_daily_trials.py configs/nfl-game.yaml --date 2025-01-20
 
-# With OSS upload
-python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --oss-upload
+# With Dashboard Server (SLS + OSS integration)
+# Terminal 1: Start server
+dojo0 serve --otlp-endpoint https://... --trace-backend sls --oss-backup
+
+# Terminal 2: Run trials
+python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --server http://localhost:8000
 ```
 
 ## Automation
@@ -36,7 +40,7 @@ The setup script can configure cron for you:
 Or manually:
 ```bash
 crontab -e
-# NBA trials at 6 AM:
+# NBA trials at 6 AM (local mode):
 # 0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --data-dir data/nba-betting >> cron.log 2>&1
 
 # NFL trials at 10 AM:
@@ -75,7 +79,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now nba-trials.timer
 
 **CLI options:**
 - `--data-dir` - Output directory (auto-detected from config if not specified)
-- `--oss-upload` - Enable OSS upload
+- `--server` - Dashboard Server URL for SLS/OSS integration
 - `--log-level` - DEBUG, INFO, WARNING, ERROR (default: INFO)
 - `--timeout` - Timeout in seconds (default: 86400 = 24 hours)
 
@@ -115,71 +119,85 @@ find data/nba-betting/ -name "*.log" -mtime +30 -delete
 tar -czf nba-betting-backup-$(date +%Y%m%d).tar.gz data/nba-betting/
 ```
 
-## OSS Upload (Optional)
+## SLS + OSS Integration (Production)
 
-Upload trial data to Alibaba Cloud OSS for centralized storage.
+For production deployments with trace export and backup, use the Dashboard Server.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DASHBOARD SERVER                              │
+│                    (dojo0 serve)                                 │
+│                                                                  │
+│   --otlp-endpoint  →  SLS trace export                          │
+│   --trace-backend sls                                            │
+│   --oss-backup     →  OSS backup on trial stop                  │
+└─────────────────────────────────────────────────────────────────┘
+                              ▲
+                              │ --server http://localhost:8000
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                    TRIAL RUNNER                                  │
+│              (deploy/run_daily_trials.py)                        │
+│                                                                  │
+│   Submits trials to Dashboard Server                             │
+│   Local events JSONL still written to --data-dir                │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### Configuration
 
 Add to `.env`:
 ```bash
-# OSS credentials - handled by alibabacloud-credentials SDK
-# Option 1: Environment variables
+# SLS credentials - handled by alibabacloud-credentials SDK
 ALIBABA_CLOUD_ACCESS_KEY_ID=LTAI5t...
 ALIBABA_CLOUD_ACCESS_KEY_SECRET=abc123...
 
-# Option 2: Use ~/.alibabacloud/credentials file (see main README)
+# SLS configuration
+DOJOZERO_SLS_PROJECT=my-project
+DOJOZERO_SLS_ENDPOINT=cn-hangzhou.log.aliyuncs.com
+DOJOZERO_SLS_LOGSTORE=dojozero-traces
 
-# OSS bucket configuration (required)
+# OSS configuration (for backup)
 DOJOZERO_OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
 DOJOZERO_OSS_BUCKET=your-bucket-name
 DOJOZERO_OSS_PREFIX=prod/  # Optional prefix for all keys
 ```
 
-### Common Endpoints
-
-| Region | Endpoint |
-|--------|----------|
-| China (Hangzhou) | `oss-cn-hangzhou.aliyuncs.com` |
-| China (Shanghai) | `oss-cn-shanghai.aliyuncs.com` |
-| China (Beijing) | `oss-cn-beijing.aliyuncs.com` |
-| Singapore | `oss-ap-southeast-1.aliyuncs.com` |
-| US (Virginia) | `oss-us-east-1.aliyuncs.com` |
-
 ### Usage
 
-**Via daily runner:**
+**Start Dashboard Server (keep running):**
 ```bash
-python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --oss-upload
+dojo0 serve \
+  --otlp-endpoint https://my-project.cn-hangzhou.log.aliyuncs.com \
+  --trace-backend sls \
+  --oss-backup
 ```
 
-**Or directly with the trial runner:**
-```bash
-python tools/nba_trial_runner.py run --data-dir data/nba-betting --oss-upload
-```
-
-**Override bucket/prefix via CLI:**
-```bash
-python tools/nba_trial_runner.py run --data-dir data/nba-betting \
-    --oss-upload --oss-bucket staging-bucket --oss-prefix test/
-```
-
-### OSS Structure
-
-Files are uploaded mirroring the local structure:
-```
-{prefix}/nba/{date}/{game_id}.yaml
-{prefix}/nba/{date}/{game_id}.jsonl
-{prefix}/nba/{date}/{game_id}.log
-```
-
-### Cron with OSS
-
+**Run trials via cron:**
 ```bash
 crontab -e
 # Add:
-0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --data-dir data/nba-betting --oss-upload >> cron.log 2>&1
+0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --data-dir data/nba-betting --server http://localhost:8000 >> cron.log 2>&1
 ```
+
+### Common SLS/OSS Endpoints
+
+| Region | SLS Endpoint | OSS Endpoint |
+|--------|--------------|--------------|
+| China (Hangzhou) | `cn-hangzhou.log.aliyuncs.com` | `oss-cn-hangzhou.aliyuncs.com` |
+| China (Shanghai) | `cn-shanghai.log.aliyuncs.com` | `oss-cn-shanghai.aliyuncs.com` |
+| China (Beijing) | `cn-beijing.log.aliyuncs.com` | `oss-cn-beijing.aliyuncs.com` |
+| China (Wulanchabu) | `cn-wulanchabu.log.aliyuncs.com` | `oss-cn-wulanchabu.aliyuncs.com` |
+
+### Data Flow
+
+| Location | Description |
+|----------|-------------|
+| Local `{data-dir}/{date}/{game_id}.jsonl` | Always written |
+| SLS | Real-time trace spans (if server has `--otlp-endpoint`) |
+| OSS `trials/{trial_id}/events.jsonl` | Backup on trial stop (if server has `--oss-backup`) |
 
 ## Advanced
 
