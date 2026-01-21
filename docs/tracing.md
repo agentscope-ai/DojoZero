@@ -2,6 +2,30 @@
 
 DojoZero uses OpenTelemetry for distributed tracing, with support for Jaeger (local) and Alibaba Cloud SLS (production).
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         WRITE PATH                               │
+│                                                                  │
+│  ┌──────────────┐              ┌──────────────┐    OTLP     ┌─────────┐
+│  │ Trial Runner │ ──────────▶  │  Dashboard   │ ─────────▶  │ SLS/    │
+│  │ --server     │              │  Server      │   export    │ Jaeger  │
+│  └──────────────┘              └──────────────┘             └─────────┘
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                         READ PATH                                │
+│                                                                  │
+│  ┌──────────────┐    REST/WS    ┌──────────────┐   query     ┌─────────┐
+│  │  Frontend    │ ◀──────────▶  │   Arena      │ ◀─────────  │ SLS/    │
+│  │  (React)     │               │   Server     │             │ Jaeger  │
+│  └──────────────┘               └──────────────┘             └─────────┘
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
 ## Backends
 
 ### Jaeger (Local Development)
@@ -20,11 +44,11 @@ docker run -d --name jaeger \
   jaegertracing/all-in-one:latest
 ```
 
-Run trial with Jaeger:
+Run Dashboard Server with Jaeger:
 ```bash
-dojozero run --params config.yaml \
-  --trace-store-url http://localhost:4318 \
-  --trace-store-backend jaeger
+dojo0 serve \
+  --otlp-endpoint http://localhost:4318 \
+  --trace-backend jaeger
 ```
 
 - UI: http://localhost:16686
@@ -46,12 +70,50 @@ export ALIBABA_CLOUD_ACCESS_KEY_SECRET=xxx
 # Configure SLS
 export DOJOZERO_SLS_PROJECT=my-project
 export DOJOZERO_SLS_ENDPOINT=cn-hangzhou.log.aliyuncs.com
-export DOJOZERO_SLS_LOGSTORE=traces  # default
+export DOJOZERO_SLS_LOGSTORE=dojozero-traces
 
-# Run trial with SLS
-dojozero run --params config.yaml \
-  --trace-store-url https://my-project.cn-hangzhou.log.aliyuncs.com \
-  --trace-store-backend sls
+# Run Dashboard Server with SLS
+dojo0 serve \
+  --otlp-endpoint https://my-project.cn-hangzhou.log.aliyuncs.com \
+  --trace-backend sls
+```
+
+## Running Trials with Tracing
+
+**Option 1: Via Dashboard Server (recommended for production)**
+```bash
+# Terminal 1: Start Dashboard Server
+dojo0 serve \
+  --otlp-endpoint https://my-project.cn-hangzhou.log.aliyuncs.com \
+  --trace-backend sls \
+  --oss-backup
+
+# Terminal 2: Run trial
+dojo0 run --params config.yaml --server http://localhost:8000
+```
+
+**Option 2: Local mode (no trace export)**
+```bash
+dojo0 run --params config.yaml
+```
+
+## Arena (Frontend)
+
+Start Arena Server to view traces:
+```bash
+# With Jaeger
+dojo0 arena --trace-store http://localhost:16686 --trace-backend jaeger
+
+# With SLS
+dojo0 arena \
+  --trace-store https://my-project.cn-hangzhou.log.aliyuncs.com \
+  --trace-backend sls
+```
+
+Then run the frontend:
+```bash
+cd frontend && npm run dev
+# Open http://localhost:5173
 ```
 
 ## Components
@@ -69,7 +131,7 @@ dojozero run --params config.yaml \
 | `trial.started` / `trial.stopped` | Trial lifecycle |
 | `agent.registered` / `datastream.registered` | Actor metadata |
 | `agent.input` / `agent.response` / `agent.tool_result` | Agent conversation |
-| `game_update`, `odds_update`, etc. | DataStream events |
+| `game_update`, `odds_update`, `play_by_play`, etc. | DataStream events |
 
 ## Standard Tags
 
@@ -82,7 +144,7 @@ See `design/2026-01-09-trace-data-design.md` for full schema.
 
 ## Arena UI
 
-Arena reads traces via `/api/traces/{trial_id}` and derives:
+Arena reads traces via `/api/trials/{trial_id}` and derives:
 - Actor list (from `*.registered` spans)
 - Conversation history (from `agent.*` spans)
 - Event timeline (from all spans)
