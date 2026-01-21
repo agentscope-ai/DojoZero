@@ -99,8 +99,9 @@ DOJOZERO_OSS_BUCKET=
 DOJOZERO_OSS_PREFIX=
 
 # SLS (Simple Log Service) - for trace storage
-DOJOZERO_SLS_PROJECT=
-DOJOZERO_SLS_INSTANCE_ID=
+# Project and endpoint derived from --trace-store-url (e.g., https://myproject.cn-hangzhou.log.aliyuncs.com)
+# DOJOZERO_SLS_PROJECT=       # Optional override
+# DOJOZERO_SLS_INSTANCE_ID=   # Optional, defaults to project
 EOF
     echo "✓ Created .env.template - please copy to .env and fill in your API keys"
 else
