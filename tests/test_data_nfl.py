@@ -26,7 +26,7 @@ from dojozero.data.nfl import (
 
 
 # =============================================================================
-# Fixtures
+# Shared Fixtures and Test Data
 # =============================================================================
 
 
@@ -41,6 +41,75 @@ def nfl_store():
 def state_tracker():
     """Create a fresh NFLGameStateTracker instance."""
     return NFLGameStateTracker()
+
+
+@pytest.fixture
+def sample_scoreboard_data():
+    """Sample scoreboard data for testing."""
+    return {
+        "scoreboard": {
+            "events": [
+                {
+                    "id": "401671827",
+                    "date": "2024-02-11T23:30Z",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {
+                                    "homeAway": "home",
+                                    "team": {
+                                        "id": "12",
+                                        "displayName": "Kansas City Chiefs",
+                                        "abbreviation": "KC",
+                                    },
+                                },
+                                {
+                                    "homeAway": "away",
+                                    "team": {
+                                        "id": "25",
+                                        "displayName": "San Francisco 49ers",
+                                        "abbreviation": "SF",
+                                    },
+                                },
+                            ],
+                            "venue": {"fullName": "Allegiant Stadium"},
+                            "status": {"type": {"name": "STATUS_SCHEDULED"}},
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+
+
+@pytest.fixture
+def sample_plays_data():
+    """Sample plays data for testing."""
+    return {
+        "plays": {
+            "eventId": "401671827",
+            "items": [
+                {
+                    "id": "1",
+                    "sequenceNumber": 1,
+                    "type": {"text": "Kickoff"},
+                    "text": "Kickoff for 65 yards",
+                    "period": {"number": 1},
+                    "clock": {"displayValue": "15:00"},
+                },
+                {
+                    "id": "2",
+                    "sequenceNumber": 2,
+                    "type": {"text": "Rush"},
+                    "text": "I.Pacheco rush for 5 yards",
+                    "period": {"number": 1},
+                    "clock": {"displayValue": "14:45"},
+                    "start": {"down": 1, "distance": 10, "yardLine": 25},
+                    "statYardage": 5,
+                },
+            ],
+        }
+    }
 
 
 # =============================================================================
@@ -265,46 +334,12 @@ class TestNFLEvents:
 class TestNFLStoreParseScoreboard:
     """Tests for NFLStore scoreboard parsing."""
 
-    def test_parse_scoreboard_emits_game_initialize(self, nfl_store):
+    def test_parse_scoreboard_emits_game_initialize(
+        self, nfl_store, sample_scoreboard_data
+    ):
         """Test that scoreboard parsing emits GameInitializeEvent."""
-        scoreboard_data = {
-            "scoreboard": {
-                "events": [
-                    {
-                        "id": "401671827",
-                        "date": "2024-02-11T23:30Z",
-                        "competitions": [
-                            {
-                                "competitors": [
-                                    {
-                                        "homeAway": "home",
-                                        "team": {
-                                            "id": "12",
-                                            "displayName": "Kansas City Chiefs",
-                                            "abbreviation": "KC",
-                                        },
-                                    },
-                                    {
-                                        "homeAway": "away",
-                                        "team": {
-                                            "id": "25",
-                                            "displayName": "San Francisco 49ers",
-                                            "abbreviation": "SF",
-                                        },
-                                    },
-                                ],
-                                "venue": {"fullName": "Allegiant Stadium"},
-                                "status": {"type": {"name": "STATUS_SCHEDULED"}},
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
+        events = nfl_store._parse_api_response(sample_scoreboard_data)
 
-        events = nfl_store._parse_api_response(scoreboard_data)
-
-        # Should emit GameInitializeEvent
         init_events = [e for e in events if isinstance(e, NFLGameInitializeEvent)]
         assert len(init_events) == 1
         assert init_events[0].home_team == "Kansas City Chiefs"
@@ -399,88 +434,34 @@ class TestNFLStoreParseScoreboard:
 class TestNFLStoreParsePlayByPlay:
     """Tests for NFLStore play-by-play parsing."""
 
-    def test_parse_plays_emits_play_events(self, nfl_store):
+    def test_parse_plays_emits_play_events(self, nfl_store, sample_plays_data):
         """Test that plays parsing emits PlayEvents."""
-        plays_data = {
-            "plays": {
-                "eventId": "401671827",
-                "items": [
-                    {
-                        "id": "1",
-                        "sequenceNumber": 1,
-                        "type": {"text": "Kickoff"},
-                        "text": "Kickoff for 65 yards",
-                        "period": {"number": 1},
-                        "clock": {"displayValue": "15:00"},
-                    },
-                    {
-                        "id": "2",
-                        "sequenceNumber": 2,
-                        "type": {"text": "Rush"},
-                        "text": "I.Pacheco rush for 5 yards",
-                        "period": {"number": 1},
-                        "clock": {"displayValue": "14:45"},
-                        "start": {"down": 1, "distance": 10, "yardLine": 25},
-                        "statYardage": 5,
-                    },
-                ],
-            }
-        }
+        events = nfl_store._parse_api_response(sample_plays_data)
 
-        events = nfl_store._parse_api_response(plays_data)
-
-        # Should emit PlayEvents
         play_events = [e for e in events if isinstance(e, NFLPlayEvent)]
         assert len(play_events) == 2
         assert play_events[0].play_type == "Kickoff"
         assert play_events[1].play_type == "Rush"
         assert play_events[1].yards_gained == 5
 
-    def test_parse_plays_emits_game_start_on_first_play(self, nfl_store):
+    def test_parse_plays_emits_game_start_on_first_play(
+        self, nfl_store, sample_plays_data
+    ):
         """Test that first play triggers GameStartEvent."""
-        plays_data = {
-            "plays": {
-                "eventId": "401671827",
-                "items": [
-                    {
-                        "id": "1",
-                        "type": {"text": "Kickoff"},
-                        "text": "Opening kickoff",
-                        "period": {"number": 1},
-                        "clock": {"displayValue": "15:00"},
-                    }
-                ],
-            }
-        }
+        events = nfl_store._parse_api_response(sample_plays_data)
 
-        events = nfl_store._parse_api_response(plays_data)
-
-        # Should emit GameStartEvent
         start_events = [e for e in events if isinstance(e, NFLGameStartEvent)]
         assert len(start_events) == 1
 
-    def test_parse_plays_deduplication(self, nfl_store):
+    def test_parse_plays_deduplication(self, nfl_store, sample_plays_data):
         """Test that duplicate plays are not emitted."""
-        plays_data = {
-            "plays": {
-                "eventId": "401671827",
-                "items": [
-                    {
-                        "id": "1",
-                        "type": {"text": "Kickoff"},
-                        "text": "Opening kickoff",
-                    }
-                ],
-            }
-        }
-
         # First parse
-        events1 = nfl_store._parse_api_response(plays_data)
+        events1 = nfl_store._parse_api_response(sample_plays_data)
         play_events1 = [e for e in events1 if isinstance(e, NFLPlayEvent)]
-        assert len(play_events1) == 1
+        assert len(play_events1) == 2
 
         # Second parse with same data
-        events2 = nfl_store._parse_api_response(plays_data)
+        events2 = nfl_store._parse_api_response(sample_plays_data)
         play_events2 = [e for e in events2 if isinstance(e, NFLPlayEvent)]
         assert len(play_events2) == 0  # Deduplicated
 
@@ -493,71 +474,123 @@ class TestNFLStoreParsePlayByPlay:
 class TestNFLUtils:
     """Tests for NFL utility functions."""
 
-    def test_get_team_abbreviation(self):
+    @pytest.mark.parametrize(
+        "team_id,expected",
+        [
+            ("12", "KC"),
+            ("25", "SF"),
+            ("1", "ATL"),
+            ("2", "BUF"),
+            ("999", ""),
+        ],
+    )
+    def test_get_team_abbreviation(self, team_id, expected):
         """Test team ID to abbreviation conversion."""
-        assert get_team_abbreviation("12") == "KC"
-        assert get_team_abbreviation("25") == "SF"
-        assert get_team_abbreviation("999") == ""
+        assert get_team_abbreviation(team_id) == expected
 
-    def test_get_team_name(self):
+    @pytest.mark.parametrize(
+        "abbrev,expected",
+        [
+            ("KC", "Kansas City Chiefs"),
+            ("SF", "San Francisco 49ers"),
+            ("BUF", "Buffalo Bills"),
+            ("kc", "Kansas City Chiefs"),  # Case insensitive
+            ("XXX", ""),
+        ],
+    )
+    def test_get_team_name(self, abbrev, expected):
         """Test abbreviation to team name conversion."""
-        assert get_team_name("KC") == "Kansas City Chiefs"
-        assert get_team_name("SF") == "San Francisco 49ers"
-        assert get_team_name("XXX") == ""
+        assert get_team_name(abbrev) == expected
 
-    def test_get_team_division(self):
+    @pytest.mark.parametrize(
+        "abbrev,expected_division",
+        [
+            ("KC", "AFC West"),
+            ("SF", "NFC West"),
+            ("BUF", "AFC East"),
+            ("DAL", "NFC East"),
+            ("XXX", ""),
+        ],
+    )
+    def test_get_team_division(self, abbrev, expected_division):
         """Test team division lookup."""
-        assert get_team_division("KC") == "AFC West"
-        assert get_team_division("SF") == "NFC West"
-        assert get_team_division("XXX") == ""
+        assert get_team_division(abbrev) == expected_division
 
-    def test_parse_iso_datetime(self):
+    @pytest.mark.parametrize(
+        "date_str,expected_year,expected_month",
+        [
+            ("2024-02-11T23:30:00Z", 2024, 2),
+            ("2024-02-11T18:30:00-05:00", 2024, 2),
+            ("2025-12-25T19:00:00Z", 2025, 12),
+        ],
+    )
+    def test_parse_iso_datetime(self, date_str, expected_year, expected_month):
         """Test ISO datetime parsing."""
-        # With Z suffix
-        dt = parse_iso_datetime("2024-02-11T23:30:00Z")
+        dt = parse_iso_datetime(date_str)
         assert dt.tzinfo is not None
-        assert dt.year == 2024
+        assert dt.year == expected_year
+        assert dt.month == expected_month
 
-        # With offset
-        dt = parse_iso_datetime("2024-02-11T18:30:00-05:00")
-        assert dt.tzinfo is not None
-
-    def test_format_game_clock(self):
+    @pytest.mark.parametrize(
+        "seconds,expected",
+        [
+            (900, "15:00"),
+            (754, "12:34"),
+            (0, "0:00"),
+            (-10, "0:00"),
+            (60, "1:00"),
+            (125, "2:05"),
+        ],
+    )
+    def test_format_game_clock(self, seconds, expected):
         """Test game clock formatting."""
-        assert format_game_clock(900) == "15:00"
-        assert format_game_clock(754) == "12:34"
-        assert format_game_clock(0) == "0:00"
-        assert format_game_clock(-10) == "0:00"
+        assert format_game_clock(seconds) == expected
 
-    def test_american_odds_to_probability(self):
+    @pytest.mark.parametrize(
+        "odds,min_prob,max_prob",
+        [
+            (-110, 0.52, 0.53),
+            (200, 0.33, 0.34),
+            (-200, 0.66, 0.67),
+            (100, 0.49, 0.51),
+        ],
+    )
+    def test_american_odds_to_probability(self, odds, min_prob, max_prob):
         """Test American odds to probability conversion."""
-        # Favorites (negative odds)
-        prob = american_odds_to_probability(-110)
-        assert 0.52 < prob < 0.53
+        prob = american_odds_to_probability(odds)
+        assert min_prob < prob < max_prob
 
-        # Underdogs (positive odds)
-        prob = american_odds_to_probability(200)
-        assert 0.33 < prob < 0.34
-
-        # Even money
+    def test_american_odds_to_probability_even_money(self):
+        """Test even money odds."""
         prob = american_odds_to_probability(0)
         assert prob == 0.5
 
-    def test_probability_to_american_odds(self):
+    @pytest.mark.parametrize(
+        "prob,is_negative",
+        [
+            (0.6, True),  # Favorite -> negative
+            (0.4, False),  # Underdog -> positive
+            (0.7, True),  # Strong favorite
+            (0.3, False),  # Strong underdog
+        ],
+    )
+    def test_probability_to_american_odds(self, prob, is_negative):
         """Test probability to American odds conversion."""
-        # Favorite
-        odds = probability_to_american_odds(0.6)
-        assert odds < 0  # Negative for favorites
+        odds = probability_to_american_odds(prob)
+        assert (odds < 0) == is_negative
 
-        # Underdog
-        odds = probability_to_american_odds(0.4)
-        assert odds > 0  # Positive for underdogs
-
-    def test_spread_to_favorite(self):
+    @pytest.mark.parametrize(
+        "spread,home,away,expected",
+        [
+            (3.5, "KC", "SF", "KC"),
+            (-3.5, "KC", "SF", "SF"),
+            (0, "KC", "SF", "Pick"),
+            (7.0, "DAL", "NYG", "DAL"),
+        ],
+    )
+    def test_spread_to_favorite(self, spread, home, away, expected):
         """Test spread to favorite team determination."""
-        assert spread_to_favorite(3.5, "KC", "SF") == "KC"
-        assert spread_to_favorite(-3.5, "KC", "SF") == "SF"
-        assert spread_to_favorite(0, "KC", "SF") == "Pick"
+        assert spread_to_favorite(spread, home, away) == expected
 
 
 # =============================================================================

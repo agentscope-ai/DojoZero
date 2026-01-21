@@ -19,11 +19,17 @@ from dojozero.data.nba._events import (
     PlayByPlayEvent,
 )
 from dojozero.data.nba._store import NBAStore
-from dojozero.data.nba._utils import get_game_info_by_id, get_games_by_date_range
+from dojozero.data.nba._utils import (
+    extract_team_names_from_query,
+    get_game_info_by_id,
+    get_games_by_date_range,
+    normalize_team_name,
+    parse_iso_datetime,
+)
 
 
 # =============================================================================
-# Unit Tests for NBAStore (no network required)
+# Shared Fixtures and Test Data
 # =============================================================================
 
 
@@ -34,55 +40,73 @@ def nba_store():
     return NBAStore(store_id="test_nba_store", api=mock_api)
 
 
+@pytest.fixture
+def sample_boxscore_data():
+    """Sample boxscore data for testing."""
+    return {
+        "boxscore": {
+            "gameId": "0022400123",
+            "homeTeam": {
+                "teamId": 1610612747,
+                "teamName": "Lakers",
+                "teamCity": "Los Angeles",
+                "teamTricode": "LAL",
+                "statistics": {"points": 110},
+                "players": [
+                    {"personId": 123, "name": "Player A", "statistics": {"points": 25}}
+                ],
+            },
+            "awayTeam": {
+                "teamId": 1610612744,
+                "teamName": "Warriors",
+                "teamCity": "Golden State",
+                "teamTricode": "GSW",
+                "statistics": {"points": 105},
+                "players": [
+                    {"personId": 456, "name": "Player B", "statistics": {"points": 30}}
+                ],
+            },
+        }
+    }
+
+
+@pytest.fixture
+def sample_pbp_data():
+    """Sample play-by-play data for testing."""
+    return {
+        "play_by_play": {
+            "gameId": "0022400123",
+            "actions": [
+                {
+                    "actionNumber": 1,
+                    "actionType": "jumpball",
+                    "description": "Jump Ball",
+                    "period": 1,
+                    "clock": "PT12M00.00S",
+                    "scoreHome": "0",
+                    "scoreAway": "0",
+                }
+            ],
+        }
+    }
+
+
+# =============================================================================
+# Unit Tests for NBAStore (no network required)
+# =============================================================================
+
+
 class TestNBAStoreParseBoxscore:
     """Tests for _parse_api_response with boxscore data."""
 
-    def test_parse_boxscore_with_team_data(self, nba_store):
+    def test_parse_boxscore_with_team_data(self, nba_store, sample_boxscore_data):
         """Test parsing boxscore with full team data."""
-        boxscore_data = {
-            "boxscore": {
-                "gameId": "0022400123",
-                "homeTeam": {
-                    "teamId": 1610612747,
-                    "teamName": "Lakers",
-                    "teamCity": "Los Angeles",
-                    "teamTricode": "LAL",
-                    "statistics": {"points": 110},
-                    "players": [
-                        {
-                            "personId": 123,
-                            "name": "Player A",
-                            "statistics": {"points": 25},
-                        }
-                    ],
-                },
-                "awayTeam": {
-                    "teamId": 1610612744,
-                    "teamName": "Warriors",
-                    "teamCity": "Golden State",
-                    "teamTricode": "GSW",
-                    "statistics": {"points": 105},
-                    "players": [
-                        {
-                            "personId": 456,
-                            "name": "Player B",
-                            "statistics": {"points": 30},
-                        }
-                    ],
-                },
-            }
-        }
-
-        # Mock get_game_info_by_id to avoid real API calls
         with patch(
             "dojozero.data.nba._utils.get_game_info_by_id",
-            return_value={
-                "game_time_utc": "2024-01-15T03:00:00Z",
-            },
+            return_value={"game_time_utc": "2024-01-15T03:00:00Z"},
         ):
-            events = nba_store._parse_api_response(boxscore_data)
+            events = nba_store._parse_api_response(sample_boxscore_data)
 
-        # Should emit GameUpdateEvent and GameInitializeEvent
         update_events = [e for e in events if isinstance(e, GameUpdateEvent)]
         init_events = [e for e in events if isinstance(e, GameInitializeEvent)]
 
@@ -144,42 +168,19 @@ class TestNBAStoreParseBoxscore:
         events = nba_store._parse_api_response(boxscore_data)
         assert len(events) == 0
 
-    def test_game_initialize_emitted_once(self, nba_store):
+    def test_game_initialize_emitted_once(self, nba_store, sample_boxscore_data):
         """Test that GameInitializeEvent is emitted only once per game."""
-        boxscore_data = {
-            "boxscore": {
-                "gameId": "0022400123",
-                "homeTeam": {
-                    "teamId": 1,
-                    "teamName": "Lakers",
-                    "teamCity": "Los Angeles",
-                    "teamTricode": "LAL",
-                    "statistics": {"points": 50},
-                    "players": [],
-                },
-                "awayTeam": {
-                    "teamId": 2,
-                    "teamName": "Warriors",
-                    "teamCity": "Golden State",
-                    "teamTricode": "GSW",
-                    "statistics": {"points": 48},
-                    "players": [],
-                },
-            }
-        }
-
-        # Mock get_game_info_by_id to avoid real API calls
         with patch(
             "dojozero.data.nba._utils.get_game_info_by_id",
             return_value={"game_time_utc": "2024-01-15T03:00:00Z"},
         ):
             # First call should emit GameInitializeEvent
-            events1 = nba_store._parse_api_response(boxscore_data)
+            events1 = nba_store._parse_api_response(sample_boxscore_data)
             init_events1 = [e for e in events1 if isinstance(e, GameInitializeEvent)]
             assert len(init_events1) == 1
 
             # Second call should NOT emit GameInitializeEvent
-            events2 = nba_store._parse_api_response(boxscore_data)
+            events2 = nba_store._parse_api_response(sample_boxscore_data)
             init_events2 = [e for e in events2 if isinstance(e, GameInitializeEvent)]
             assert len(init_events2) == 0
 
@@ -187,34 +188,15 @@ class TestNBAStoreParseBoxscore:
 class TestNBAStoreParsePlayByPlay:
     """Tests for _parse_api_response with play-by-play data."""
 
-    def test_parse_pbp_game_start_detection(self, nba_store):
+    def test_parse_pbp_game_start_detection(self, nba_store, sample_pbp_data):
         """Test that first play-by-play actions trigger GameStartEvent."""
-        pbp_data = {
-            "play_by_play": {
-                "gameId": "0022400123",
-                "actions": [
-                    {
-                        "actionNumber": 1,
-                        "actionType": "jumpball",
-                        "description": "Jump Ball",
-                        "period": 1,
-                        "clock": "PT12M00.00S",
-                        "scoreHome": "0",
-                        "scoreAway": "0",
-                    }
-                ],
-            }
-        }
+        events = nba_store._parse_api_response(sample_pbp_data)
 
-        events = nba_store._parse_api_response(pbp_data)
-
-        # Should emit GameStartEvent and PlayByPlayEvent
         start_events = [e for e in events if isinstance(e, GameStartEvent)]
         pbp_events = [e for e in events if isinstance(e, PlayByPlayEvent)]
 
         assert len(start_events) == 1
         assert start_events[0].event_id == "0022400123"
-
         assert len(pbp_events) == 1
         assert pbp_events[0].action_type == "jumpball"
         assert pbp_events[0].action_number == 1
@@ -779,3 +761,136 @@ class TestGetGameInfoByIdIntegration:
         assert result1["away_team"] == result2["away_team"]
         assert result1["home_team_tricode"] == result2["home_team_tricode"]
         assert result1["away_team_tricode"] == result2["away_team_tricode"]
+
+
+# =============================================================================
+# Unit Tests for NBA Utils (no network required)
+# =============================================================================
+
+
+class TestNBAUtils:
+    """Tests for NBA utility functions."""
+
+    @pytest.mark.parametrize(
+        "time_str,expected_year,expected_month,expected_day",
+        [
+            ("2025-01-07T02:00:00Z", 2025, 1, 7),
+            ("2024-12-25T19:30:00Z", 2024, 12, 25),
+            ("2024-02-11T23:30:00+00:00", 2024, 2, 11),
+        ],
+    )
+    def test_parse_iso_datetime(
+        self, time_str, expected_year, expected_month, expected_day
+    ):
+        """Test ISO datetime parsing with various formats."""
+
+        result = parse_iso_datetime(time_str)
+        assert result.year == expected_year
+        assert result.month == expected_month
+        assert result.day == expected_day
+        assert result.tzinfo is not None
+
+    @pytest.mark.parametrize(
+        "query,expected_teams",
+        [
+            ("Lakers vs Warriors", {"LAL", "GSW"}),
+            ("miami heat game", {"MIA"}),
+            ("boston celtics play tonight", {"BOS"}),
+            ("what's the score for the 76ers", {"PHI"}),
+            ("cavs vs mavs", {"CLE", "DAL"}),
+            ("random query with no teams", set()),
+            ("", set()),
+        ],
+    )
+    def test_extract_team_names_from_query(self, query, expected_teams):
+        """Test team extraction from query strings."""
+        result = extract_team_names_from_query(query)
+        assert result == expected_teams
+
+    @pytest.mark.parametrize(
+        "team_name,expected_tricode",
+        [
+            ("Lakers", "LAL"),
+            ("LAL", "LAL"),
+            ("Los Angeles Lakers", "LAL"),
+            ("miami heat", "MIA"),
+            ("boston celtics", "BOS"),
+            ("Golden State Warriors", "GSW"),
+            ("warriors", "GSW"),
+            ("sixers", "PHI"),
+            ("76ers", "PHI"),
+            ("Invalid Team", None),
+        ],
+    )
+    def test_normalize_team_name(self, team_name, expected_tricode):
+        """Test team name normalization."""
+        result = normalize_team_name(team_name)
+        assert result == expected_tricode
+
+
+# =============================================================================
+# Unit Tests for NBA Events (no network required)
+# =============================================================================
+
+
+class TestNBAEvents:
+    """Tests for NBA event dataclasses."""
+
+    def test_play_by_play_event_creation(self):
+        """Test PlayByPlayEvent creation and properties."""
+        event = PlayByPlayEvent(
+            event_id="0022400123_pbp_10",
+            game_id="0022400123",
+            action_type="2pt",
+            action_number=10,
+            period=1,
+            clock="PT10M30.00S",
+            person_id=2544,
+            player_name="LeBron James",
+            team_tricode="LAL",
+            home_score=2,
+            away_score=0,
+            description="LeBron James makes layup",
+        )
+
+        assert event.event_id == "0022400123_pbp_10"
+        assert event.action_type == "2pt"
+        assert event.player_name == "LeBron James"
+        assert event.event_type == "play_by_play"
+
+    def test_game_initialize_event_creation(self):
+        """Test GameInitializeEvent creation and properties."""
+        from datetime import datetime, timezone
+
+        event = GameInitializeEvent(
+            event_id="0022400123",
+            game_id="0022400123",
+            home_team="Los Angeles Lakers",
+            away_team="Golden State Warriors",
+            game_time=datetime(2024, 1, 15, 3, 0, 0, tzinfo=timezone.utc),
+        )
+
+        assert event.event_id == "0022400123"
+        assert event.home_team == "Los Angeles Lakers"
+        assert event.away_team == "Golden State Warriors"
+        assert event.event_type == "game_initialize"
+
+    def test_game_start_event_creation(self):
+        """Test GameStartEvent creation and properties."""
+        event = GameStartEvent(event_id="0022400123")
+
+        assert event.event_id == "0022400123"
+        assert event.event_type == "game_start"
+
+    def test_game_result_event_creation(self):
+        """Test GameResultEvent creation and properties."""
+        event = GameResultEvent(
+            event_id="0022400123",
+            winner="home",
+            final_score={"home": 110, "away": 105},
+        )
+
+        assert event.event_id == "0022400123"
+        assert event.winner == "home"
+        assert event.final_score["home"] == 110
+        assert event.event_type == "game_result"
