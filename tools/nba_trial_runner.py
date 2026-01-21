@@ -8,6 +8,18 @@ Orchestrates betting trials for NBA games:
 - Runs agents that analyze data and place bets
 - Runs until game concludes
 - Persists all events to replay files
+
+When using --server flag, trials are submitted to a Dashboard Server which handles:
+- SLS trace export (via --otlp-endpoint on server)
+- OSS backup (via --oss-backup on server)
+
+Usage:
+    # Local mode (no SLS/OSS integration)
+    python nba_trial_runner.py run --data-dir outputs
+
+    # Server mode (with SLS/OSS via Dashboard Server)
+    # First start: dojo0 serve --otlp-endpoint https://... --trace-backend sls
+    python nba_trial_runner.py run --data-dir outputs --server http://localhost:8000
 """
 
 import argparse
@@ -29,7 +41,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from demos.nba_api_demo import get_games_for_date
 from dojozero.data.nba._utils import get_game_info_by_id
-from dojozero.utils.oss import OSSClient
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +57,7 @@ class GameTrialManager:
         data_dir: Path | None = None,
         game_date: str | None = None,
         log_level: str = "INFO",
-        oss_upload: bool = False,
-        oss_bucket: str | None = None,
-        oss_prefix: str | None = None,
+        server: str | None = None,
     ):
         """Initialize game trial manager.
 
@@ -61,9 +70,8 @@ class GameTrialManager:
                       If None, use defaults: configs/ and outputs/
             game_date: Date string (YYYY-MM-DD) for date-organized structure
             log_level: Logging level for subprocess (default: INFO)
-            oss_upload: Whether to upload files to OSS after trial completion
-            oss_bucket: Override OSS bucket name (default: from env)
-            oss_prefix: Override OSS prefix (default: from env)
+            server: Dashboard Server URL (e.g., http://localhost:8000). If provided,
+                    trials are submitted to the server which handles SLS/OSS.
         """
         self.game = game
         self.game_id = str(game.get("gameId", ""))
@@ -73,9 +81,7 @@ class GameTrialManager:
         self.data_dir = data_dir
         self.game_date = game_date
         self.log_level = log_level
-        self.oss_upload = oss_upload
-        self.oss_bucket = oss_bucket
-        self.oss_prefix = oss_prefix
+        self.server = server
 
         # Parse game time
         self.game_time_utc: datetime | None = None
@@ -286,6 +292,11 @@ class GameTrialManager:
             "--trial-id",
             self.trial_id,
         ]
+
+        # If server is specified, submit to Dashboard Server
+        # Server handles SLS trace export and OSS backup
+        if self.server:
+            cmd.extend(["--server", self.server])
 
         self.log(
             logging.INFO, "Starting trial for game %s: %s", self.game_id, " ".join(cmd)
@@ -512,67 +523,6 @@ class GameTrialManager:
         if self._logger:
             self._logger.info(status_msg)
 
-    def upload_to_oss(self) -> list[str]:
-        """Upload trial files to OSS.
-
-        Returns:
-            List of uploaded OSS keys
-        """
-        if not self.oss_upload:
-            return []
-
-        uploaded_keys: list[str] = []
-
-        try:
-            client = OSSClient.from_env(
-                bucket_name=self.oss_bucket,
-                prefix=self.oss_prefix,
-            )
-
-            # Determine OSS key prefix (mirror local structure)
-            if self.game_date:
-                oss_key_prefix = f"nba/{self.game_date}"
-            else:
-                oss_key_prefix = "nba"
-
-            # Upload config file
-            if self.config_file and self.config_file.exists():
-                oss_key = f"{oss_key_prefix}/{self.game_id}.yaml"
-                key = client.upload_file(self.config_file, oss_key)
-                uploaded_keys.append(key)
-                self.log(logging.INFO, "Uploaded config to OSS: %s", key)
-
-            # Upload replay file (JSONL)
-            if self.replay_file and self.replay_file.exists():
-                oss_key = f"{oss_key_prefix}/{self.game_id}.jsonl"
-                key = client.upload_file(self.replay_file, oss_key)
-                uploaded_keys.append(key)
-                self.log(logging.INFO, "Uploaded replay to OSS: %s", key)
-
-            # Upload log file
-            if self.log_file and self.log_file.exists():
-                oss_key = f"{oss_key_prefix}/{self.game_id}.log"
-                key = client.upload_file(self.log_file, oss_key)
-                uploaded_keys.append(key)
-                self.log(logging.INFO, "Uploaded log to OSS: %s", key)
-
-            self.log(
-                logging.INFO,
-                "Successfully uploaded %d files to OSS for game %s",
-                len(uploaded_keys),
-                self.game_id,
-            )
-
-        except Exception as e:
-            self.log(
-                logging.ERROR,
-                "Failed to upload files to OSS for game %s: %s",
-                self.game_id,
-                e,
-            )
-
-        return uploaded_keys
-
 
 async def run_trial_for_game(
     game_id: str,
@@ -581,9 +531,7 @@ async def run_trial_for_game(
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
     log_level: str = "INFO",
-    oss_upload: bool = False,
-    oss_bucket: str | None = None,
-    oss_prefix: str | None = None,
+    server: str | None = None,
 ) -> list[GameTrialManager]:
     """Run trial for a specific game by ID.
 
@@ -598,9 +546,7 @@ async def run_trial_for_game(
         data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
                   If None, use defaults: configs/ and outputs/
         log_level: Logging level for subprocess
-        oss_upload: Whether to upload files to OSS after trial completion
-        oss_bucket: Override OSS bucket name
-        oss_prefix: Override OSS prefix
+        server: Dashboard Server URL for SLS/OSS integration
 
     Returns:
         List with single GameTrialManager instance, or empty list if game not found
@@ -645,9 +591,7 @@ async def run_trial_for_game(
         data_dir=data_dir,
         game_date=game_date_str if data_dir else None,
         log_level=log_level,
-        oss_upload=oss_upload,
-        oss_bucket=oss_bucket,
-        oss_prefix=oss_prefix,
+        server=server,
     )
     manager.generate_config_file()
     manager.log_status()
@@ -662,9 +606,7 @@ async def run_trials_for_date(
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
     log_level: str = "INFO",
-    oss_upload: bool = False,
-    oss_bucket: str | None = None,
-    oss_prefix: str | None = None,
+    server: str | None = None,
 ) -> list[GameTrialManager]:
     """Run trials for all games on a given date.
 
@@ -676,9 +618,7 @@ async def run_trials_for_date(
         data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
                   If None, use defaults: configs/ and outputs/
         log_level: Logging level for subprocess
-        oss_upload: Whether to upload files to OSS after trial completion
-        oss_bucket: Override OSS bucket name
-        oss_prefix: Override OSS prefix
+        server: Dashboard Server URL for SLS/OSS integration
 
     Returns:
         List of GameTrialManager instances
@@ -715,9 +655,7 @@ async def run_trials_for_date(
                 date_str if data_dir else None
             ),  # Pass date_str when data_dir is set
             log_level=log_level,
-            oss_upload=oss_upload,
-            oss_bucket=oss_bucket,
-            oss_prefix=oss_prefix,
+            server=server,
         )
         managers.append(manager)
 
@@ -757,11 +695,8 @@ async def run_trials(
                 # Monitor until game concludes
                 await manager.monitor_trial()
 
-                # Upload to OSS if enabled
-                if manager.oss_upload:
-                    manager.upload_to_oss()
-
                 # Log final status
+                # Note: SLS trace export and OSS backup are handled by Dashboard Server
                 manager.log_status()
 
             except Exception as e:
@@ -944,21 +879,12 @@ def main() -> int:
         help="Logging level (default: INFO)",
     )
     run_parser.add_argument(
-        "--oss-upload",
-        action="store_true",
-        help="Upload files to OSS after trial completion",
-    )
-    run_parser.add_argument(
-        "--oss-bucket",
+        "--server",
         type=str,
         default=None,
-        help="Override OSS bucket name (default: from DOJOZERO_OSS_BUCKET env var)",
-    )
-    run_parser.add_argument(
-        "--oss-prefix",
-        type=str,
-        default=None,
-        help="Override OSS prefix (default: from DOJOZERO_OSS_PREFIX env var)",
+        help="Dashboard Server URL (e.g., http://localhost:8000). "
+        "When specified, trials are submitted to the server which handles "
+        "SLS trace export and OSS backup.",
     )
 
     args = parser.parse_args()
@@ -1002,9 +928,7 @@ def main() -> int:
                         check_interval_seconds=args.check_interval,
                         data_dir=args.data_dir,
                         log_level=args.log_level,
-                        oss_upload=args.oss_upload,
-                        oss_bucket=args.oss_bucket,
-                        oss_prefix=args.oss_prefix,
+                        server=args.server,
                     )
                 )
             else:
@@ -1022,9 +946,7 @@ def main() -> int:
                         check_interval_seconds=args.check_interval,
                         data_dir=args.data_dir,
                         log_level=args.log_level,
-                        oss_upload=args.oss_upload,
-                        oss_bucket=args.oss_bucket,
-                        oss_prefix=args.oss_prefix,
+                        server=args.server,
                     )
                 )
 

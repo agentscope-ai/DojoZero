@@ -224,6 +224,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Trace backend type (default: jaeger). "
         "Use 'sls' for Alibaba Cloud Simple Log Service.",
     )
+    serve_parser.add_argument(
+        "--oss-backup",
+        dest="oss_backup",
+        action="store_true",
+        help="Enable OSS backup for trial data (events JSONL). "
+        "Requires DOJOZERO_OSS_BUCKET and DOJOZERO_OSS_ENDPOINT env vars.",
+    )
 
     # Arena Server command
     arena_parser = subparsers.add_parser(
@@ -971,6 +978,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
     port = args.port
     otlp_endpoint = getattr(args, "otlp_endpoint", None)
     trace_backend = getattr(args, "trace_backend", "jaeger")
+    oss_backup = getattr(args, "oss_backup", False)
 
     LOGGER.info("Starting Dashboard Server at http://%s:%d", host, port)
     LOGGER.info("Trial API: http://%s:%d/api/trials", host, port)
@@ -982,6 +990,8 @@ async def _serve_command(args: argparse.Namespace) -> int:
         )
     else:
         LOGGER.info("Trials API: http://%s:%d/api/trials", host, port)
+    if oss_backup:
+        LOGGER.info("OSS backup enabled for trial data")
 
     await run_dashboard_server(
         dashboard=dashboard,
@@ -989,6 +999,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         port=port,
         otlp_endpoint=otlp_endpoint,
         trace_backend=trace_backend,
+        oss_backup=oss_backup,
     )
     return 0
 

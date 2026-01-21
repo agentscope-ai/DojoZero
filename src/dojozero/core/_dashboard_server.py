@@ -38,6 +38,49 @@ from ._tracing import (
 )
 from ._types import RuntimeContext
 
+# Lazy import for OSS to avoid import errors if oss2 not installed
+_oss_client = None
+
+
+def _upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
+    """Upload trial data to OSS.
+
+    Args:
+        trial_id: Trial identifier
+        persistence_file: Path to the persistence JSONL file
+
+    Returns:
+        True if upload succeeded, False otherwise
+    """
+    global _oss_client
+
+    if not persistence_file or not persistence_file.exists():
+        LOGGER.warning("No persistence file to upload for trial %s", trial_id)
+        return False
+
+    try:
+        from dojozero.utils.oss import OSSClient
+
+        if _oss_client is None:
+            _oss_client = OSSClient.from_env()
+
+        # Upload with key: trials/{trial_id}/events.jsonl
+        oss_key = f"trials/{trial_id}/events.jsonl"
+        full_key = _oss_client.upload_file(persistence_file, oss_key)
+        LOGGER.info("Uploaded trial data to OSS: %s", full_key)
+        return True
+
+    except ImportError:
+        LOGGER.warning("OSS backup requested but oss2 package not installed")
+        return False
+    except ValueError as e:
+        LOGGER.warning("OSS backup failed - configuration error: %s", e)
+        return False
+    except Exception as e:
+        LOGGER.error("OSS backup failed for trial %s: %s", trial_id, e)
+        return False
+
+
 LOGGER = logging.getLogger("dojozero.dashboard_server")
 
 
@@ -88,6 +131,7 @@ class DashboardServerState:
     dashboard: Dashboard
     otlp_endpoint: str | None = None
     trace_backend: str = "jaeger"
+    oss_backup: bool = False
     imported_modules: set[str] = field(default_factory=set)
     import_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -187,6 +231,7 @@ def create_dashboard_app(
     dashboard: Dashboard,
     otlp_endpoint: str | None = None,
     trace_backend: str = "jaeger",
+    oss_backup: bool = False,
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
@@ -195,6 +240,7 @@ def create_dashboard_app(
         otlp_endpoint: OTLP endpoint URL for external trace storage.
                       If None, uses built-in DashboardStore for traces.
         trace_backend: Trace backend type ("jaeger" or "sls")
+        oss_backup: Enable OSS backup for trial data when trials complete
     """
 
     @asynccontextmanager
@@ -204,6 +250,7 @@ def create_dashboard_app(
             dashboard=dashboard,
             otlp_endpoint=otlp_endpoint,
             trace_backend=trace_backend,
+            oss_backup=oss_backup,
         )
 
         # Initialize OTel exporter if endpoint is configured
@@ -531,10 +578,28 @@ def create_dashboard_app(
                 status_code=404,
             )
 
+        # OSS backup if enabled
+        oss_uploaded = False
+        if state.oss_backup:
+            # Get persistence_file from trial metadata
+            try:
+                trial_status = state.dashboard.get_trial_status(trial_id)
+                persistence_file_path = trial_status.metadata.get("persistence_file")
+                if persistence_file_path and isinstance(persistence_file_path, str):
+                    persistence_file = Path(persistence_file_path)
+                    oss_uploaded = _upload_trial_to_oss(trial_id, persistence_file)
+                else:
+                    LOGGER.warning(
+                        "OSS backup enabled but no persistence_file in trial metadata"
+                    )
+            except Exception as e:
+                LOGGER.error("Failed to upload trial %s to OSS: %s", trial_id, e)
+
         return JSONResponse(
             content={
                 "id": status.trial_id,
                 "phase": status.phase.value,
+                "oss_uploaded": oss_uploaded,
             }
         )
 
@@ -556,6 +621,7 @@ async def run_dashboard_server(
     port: int = 8000,
     otlp_endpoint: str | None = None,
     trace_backend: str = "jaeger",
+    oss_backup: bool = False,
 ) -> None:
     """Run the Dashboard Server.
 
@@ -565,11 +631,15 @@ async def run_dashboard_server(
         port: Port to listen on
         otlp_endpoint: OTLP endpoint for external trace storage (optional)
         trace_backend: Trace backend type ("jaeger" or "sls")
+        oss_backup: Enable OSS backup for trial data when trials complete
     """
     import uvicorn
 
     app = create_dashboard_app(
-        dashboard, otlp_endpoint=otlp_endpoint, trace_backend=trace_backend
+        dashboard,
+        otlp_endpoint=otlp_endpoint,
+        trace_backend=trace_backend,
+        oss_backup=oss_backup,
     )
 
     config = uvicorn.Config(
