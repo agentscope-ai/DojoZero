@@ -8,7 +8,7 @@ from decimal import Decimal
 from datetime import datetime
 from typing import Any
 
-from dojozero.nba_moneyline._broker import (
+from dojozero.betting import (
     BrokerOperator,
     BrokerOperatorConfig,
     BetRequest,

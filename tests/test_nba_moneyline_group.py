@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
-from dojozero.nba_moneyline import BettingAgent, BettingAgentGroup
+from dojozero.nba_moneyline._agent import BettingAgent
+from dojozero.nba_moneyline._group import BettingAgentGroup
+from dojozero.betting import BrokerOperator
 from dojozero.agents._config import load_agent_config, create_model, create_formatter
 from dojozero.core import RuntimeContext, StreamEvent
-from dojozero.nba_moneyline._broker import BrokerOperator
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
 from dojozero.data.polymarket._events import OddsUpdateEvent
 from datetime import datetime

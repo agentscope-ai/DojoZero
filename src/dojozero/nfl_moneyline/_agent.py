@@ -1,6 +1,6 @@
-"""Agent implementations for NBA moneyline betting.
+"""Agent implementations for NFL moneyline betting.
 
-This module provides the NBA-specific BettingAgent with NBA event formatting.
+This module provides NFL-specific BettingAgent with NFL event formatting.
 """
 
 import logging
@@ -12,20 +12,20 @@ from dojozero.betting import (
 )
 from dojozero.core import RuntimeContext
 
-from dojozero.nba_moneyline._formatters import format_event
+from dojozero.nfl_moneyline._formatters import format_event
 
 logger = logging.getLogger(__name__)
 
 
 class BettingAgent(BaseBettingAgent):
-    """NBA-specific BettingAgent with NBA event formatting.
+    """NFL-specific BettingAgent with NFL event formatting.
 
-    This class extends the shared BettingAgent to use NBA-specific
+    This class extends the shared BettingAgent to use NFL-specific
     event formatters by default.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        # If no event_formatter provided, use NBA-specific formatter
+        # If no event_formatter provided, use NFL-specific formatter
         if "event_formatter" not in kwargs:
             kwargs["event_formatter"] = format_event
         super().__init__(*args, **kwargs)
@@ -36,7 +36,7 @@ class BettingAgent(BaseBettingAgent):
         config: BettingAgentConfig,
         context: RuntimeContext,
     ) -> "BettingAgent":
-        """Create NBA BettingAgent from config dict with NBA formatter."""
+        """Create NFL BettingAgent from config dict with NFL formatter."""
         from dojozero.agents import (
             load_agent_config,
             create_model,
@@ -77,12 +77,12 @@ class BettingAgent(BaseBettingAgent):
     @classmethod
     def from_yaml(
         cls,
-        config_path: str | Any,  # Accept str or Path
+        config_path: str,
         actor_id: str,
         trial_id: str,
         toolkit: Any | None = None,
     ) -> "BettingAgent":
-        """Create NBA BettingAgent from YAML config file with NBA formatter.
+        """Create NFL BettingAgent from YAML config file with NFL formatter.
 
         Args:
             config_path: Path to YAML config file
@@ -115,4 +115,5 @@ class BettingAgent(BaseBettingAgent):
         )
 
 
+# Re-export BettingAgentConfig for convenience
 __all__ = ["BettingAgent", "BettingAgentConfig"]

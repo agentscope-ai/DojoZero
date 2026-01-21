@@ -1,0 +1,121 @@
+"""NFL pre-game betting DataStream with search initialization."""
+
+import logging
+from typing import Any, TypedDict
+
+from dojozero.core import RuntimeContext
+from dojozero.data import DataHub, WebSearchStore
+from dojozero.data._streams import DataHubDataStream as BaseDataHubDataStream
+from dojozero.nfl_moneyline._initializer import NFLStreamInitializer
+
+logger = logging.getLogger(__name__)
+
+
+class _ActorIdConfig(TypedDict):
+    actor_id: str
+
+
+class NFLPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
+    """Configuration for NFL pre-game betting DataHubDataStream."""
+
+    hub_id: str
+    persistence_file: str
+    enable_persistence: bool
+    event_type: str  # Which event_type to subscribe to in DataHub
+    event_types: list[
+        str
+    ]  # Which event_types to subscribe to (alternative to event_type)
+    websearch_store_id: (
+        str  # Store ID for triggering searches (only for raw_web_search stream)
+    )
+    home_team_abbreviation: str  # Team metadata for generating queries
+    away_team_abbreviation: str
+    home_team_name: str  # Full team name for search queries
+    away_team_name: str
+    game_date: str
+    search_queries: list[
+        dict[str, Any]
+    ]  # Custom search queries (only for raw_web_search stream)
+
+
+class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
+    """NFL pre-game betting DataStream that extends generic DataHubDataStream.
+
+    Adds NFL-specific initialization logic (triggering web searches) via
+    NFLStreamInitializer.
+    """
+
+    def __init__(
+        self,
+        *,
+        actor_id: str,
+        trial_id: str,
+        hub: DataHub | None = None,
+        event_type: str | None = None,
+        event_types: list[str] | None = None,
+        store: WebSearchStore | None = None,
+        home_team_abbreviation: str | None = None,
+        away_team_abbreviation: str | None = None,
+        home_team_name: str | None = None,
+        away_team_name: str | None = None,
+        game_date: str | None = None,
+        search_queries: list[dict[str, Any]] | None = None,
+    ) -> None:
+        # Create initializer if store is provided (team names or search_queries required)
+        initializer: NFLStreamInitializer | None = None
+        if store and (search_queries or (home_team_name and away_team_name)):
+            initializer = NFLStreamInitializer(
+                store=store,
+                home_team_name=home_team_name,
+                away_team_name=away_team_name,
+                game_date=game_date,
+                home_team_abbreviation=home_team_abbreviation,
+                away_team_abbreviation=away_team_abbreviation,
+                search_queries=search_queries,
+            )
+
+        super().__init__(
+            actor_id=actor_id,
+            trial_id=trial_id,
+            hub=hub,
+            event_type=event_type,
+            event_types=event_types,
+            initializer=initializer,
+        )
+
+    @classmethod
+    def from_dict(
+        cls,
+        config: NFLPreGameBettingDataHubDataStreamConfig,
+        context: RuntimeContext,
+    ) -> "NFLPreGameBettingDataHubDataStream":
+        # Get hub and store from context (provided by dashboard during materialization)
+        hub: DataHub | None = None
+        store: WebSearchStore | None = None
+
+        hub_id = config.get("hub_id", "default_hub")
+        hub = context.data_hubs.get(hub_id)
+
+        store_id = config.get("websearch_store_id")
+        if store_id:
+            store = context.stores.get(store_id)
+
+        if hub is None:
+            # Fallback: create new hub (shouldn't happen in normal flow)
+            persistence_file = config.get("persistence_file", "outputs/events.jsonl")
+            hub = DataHub(hub_id=hub_id, persistence_file=persistence_file)
+
+        return cls(
+            actor_id=config["actor_id"],
+            trial_id=context.trial_id,
+            hub=hub,
+            event_type=config.get("event_type"),
+            event_types=config.get("event_types", []),
+            store=store,
+            home_team_abbreviation=config.get("home_team_abbreviation"),
+            away_team_abbreviation=config.get("away_team_abbreviation"),
+            home_team_name=config.get("home_team_name"),
+            away_team_name=config.get("away_team_name"),
+            game_date=config.get("game_date"),
+            search_queries=config.get("search_queries"),
+        )

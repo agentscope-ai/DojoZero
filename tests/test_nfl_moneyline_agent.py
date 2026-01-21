@@ -1,5 +1,6 @@
 """
 Integration test: DataStream -> Agent (LLM) -> place_bet -> BrokerOperator
+for NFL moneyline betting.
 """
 
 import os
@@ -8,12 +9,15 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
-from dojozero.nba_moneyline._agent import BettingAgent
+from dojozero.nfl_moneyline._agent import BettingAgent
 from dojozero.betting import BrokerOperator
 from dojozero.agents import load_agent_config, create_model, create_formatter
 from dojozero.core import RuntimeContext, StreamEvent
-from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
-from dojozero.data.polymarket._events import OddsUpdateEvent
+from dojozero.data.nfl._events import (
+    NFLGameInitializeEvent,
+    NFLGameResultEvent,
+    NFLOddsUpdateEvent,
+)
 from datetime import datetime
 
 load_dotenv()
@@ -27,7 +31,7 @@ CONFIG_PATH = Path(__file__).parent.parent / "configs" / "agents" / "basic.yaml"
 
 
 def create_test_agent(config_path: Path, trial_id: str = "test-trial") -> BettingAgent:
-    """Create agent with test-specific env vars, overriding YAML config."""
+    """Create NFL agent with test-specific env vars, overriding YAML config."""
     config = load_agent_config(config_path)
     llm_config = config["llm"].copy()
     llm_config["api_key_env"] = TEST_API_KEY_ENV
@@ -54,7 +58,7 @@ def broker():
     )
     return BrokerOperator.from_dict(
         {
-            "actor_id": "nba-broker",
+            "actor_id": "nfl-broker",
             "initial_balance": "1000.00",
         },
         context,
@@ -63,7 +67,7 @@ def broker():
 
 @pytest.fixture
 def agent():
-    """Create BettingAgent with test-specific env vars."""
+    """Create NFL BettingAgent with test-specific env vars."""
     return create_test_agent(CONFIG_PATH)
 
 
@@ -71,9 +75,8 @@ def agent():
 @pytest.mark.skipif(
     not os.environ.get(TEST_API_KEY_ENV), reason=f"{TEST_API_KEY_ENV} not set"
 )
-async def test_agent_receives_event_and_places_bet(broker, agent):
-    """Test full flow: DataStream -> Agent -> place_bet -> Operator."""
-    # await broker.register_agents([agent])
+async def test_nfl_agent_receives_event_and_places_bet(broker, agent):
+    """Test full flow: DataStream -> Agent -> place_bet -> Operator for NFL."""
     await agent.register_operators([broker])
     broker.register_agents([agent])
     await broker.start()
@@ -85,45 +88,55 @@ async def test_agent_receives_event_and_places_bet(broker, agent):
     initial_balance = await broker.get_balance(AGENT_ID)
     print(f"\nInitial balance: ${initial_balance}")
 
-    # Initialize event in broker first
-    game_init_event = GameInitializeEvent(
-        event_id="lakers_vs_warriors_2024",
-        game_id="lakers_vs_warriors_2024",
-        home_team="Lakers",
-        away_team="Warriors",
+    # Initialize NFL game event in broker first
+    game_init_event = NFLGameInitializeEvent(
+        event_id="chiefs_vs_ravens_2024",
+        home_team="Baltimore Ravens",
+        away_team="Kansas City Chiefs",
+        home_team_abbreviation="BAL",
+        away_team_abbreviation="KC",
+        venue="M&T Bank Stadium",
         game_time=datetime.now(),
+        week=1,
     )
     await broker.handle_stream_event(
-        StreamEvent(stream_id="nba-stream", payload=game_init_event, sequence=-2)
+        StreamEvent(stream_id="nfl-stream", payload=game_init_event, sequence=-2)
     )
 
-    odds_update_event = OddsUpdateEvent(
-        event_id="lakers_vs_warriors_2024",
-        home_odds=1.85,
-        away_odds=2.10,
+    # NFL uses American moneyline odds (e.g., -150, +130)
+    odds_update_event = NFLOddsUpdateEvent(
+        event_id="chiefs_vs_ravens_2024",
+        provider="Draft Kings",
+        moneyline_home=-150,  # Ravens favored
+        moneyline_away=+130,  # Chiefs underdog
+        spread=-3.0,
+        over_under=47.5,
+        home_team="Baltimore Ravens",
+        away_team="Kansas City Chiefs",
     )
     await broker.handle_stream_event(
-        StreamEvent(stream_id="nba-stream", payload=odds_update_event, sequence=-1)
+        StreamEvent(stream_id="nfl-stream", payload=odds_update_event, sequence=-1)
     )
 
     # Simulate DataStream sending match data
     event_list = [
         StreamEvent(
-            stream_id="nba-stream",
+            stream_id="nfl-stream",
             payload={
-                "event_id": "lakers_vs_warriors_2024",
-                "home_team": "Lakers",
-                "away_team": "Warriors",
-                "home_odds": "1.85",
-                "away_odds": "2.10",
+                "event_id": "chiefs_vs_ravens_2024",
+                "home_team": "Baltimore Ravens",
+                "away_team": "Kansas City Chiefs",
+                "moneyline_home": "-150",
+                "moneyline_away": "+130",
+                "spread": "-3.0",
             },
             sequence=0,
         ),
         StreamEvent(
-            stream_id="nba-stream",
+            stream_id="nfl-stream",
             payload={
-                "event_id": "lakers_vs_warriors_2024",
-                "new market stats": "other Agent bet on away_odds. You MUST ADD more bets.",
+                "event_id": "chiefs_vs_ravens_2024",
+                "analysis": "Ravens have strong running game. Chiefs have Mahomes.",
             },
             sequence=1,
         ),
@@ -132,13 +145,16 @@ async def test_agent_receives_event_and_places_bet(broker, agent):
     for event in event_list:
         await agent.handle_stream_event(event)
 
-    game_result_event = GameResultEvent(
-        event_id="lakers_vs_warriors_2024",
+    # Simulate game result - Ravens win
+    game_result_event = NFLGameResultEvent(
+        event_id="chiefs_vs_ravens_2024",
         winner="home",
-        final_score={"home": 110, "away": 105},
+        final_score={"home": 28, "away": 24},
+        home_team="Baltimore Ravens",
+        away_team="Kansas City Chiefs",
     )
     final_event = StreamEvent(
-        stream_id="nba-stream",
+        stream_id="nfl-stream",
         payload=game_result_event,
         sequence=2,
     )
@@ -172,13 +188,13 @@ if __name__ == "__main__":
         )
         broker = BrokerOperator.from_dict(
             {
-                "actor_id": "nba-broker",
+                "actor_id": "nfl-broker",
                 "initial_balance": "1000.00",
             },
             context,
         )
         agent = create_test_agent(CONFIG_PATH)
 
-        await test_agent_receives_event_and_places_bet(broker, agent)
+        await test_nfl_agent_receives_event_and_places_bet(broker, agent)
 
     asyncio.run(main())

@@ -10,11 +10,11 @@ from dotenv import load_dotenv
 import ray
 
 
-from dojozero.nba_moneyline import BettingAgent, BettingAgentConfig
+from dojozero.nba_moneyline._agent import BettingAgent, BettingAgentConfig
+from dojozero.betting import BrokerOperator
 from dojozero.agents import load_agent_config
 from dojozero.core import RuntimeContext, AgentSpec, OperatorSpec, StreamEvent
 from dojozero.ray_runtime import RayActorRuntimeProvider
-from dojozero.nba_moneyline._broker import BrokerOperator
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
 from dojozero.data.polymarket._events import OddsUpdateEvent
 from datetime import datetime

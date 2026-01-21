@@ -210,7 +210,7 @@ async def test_polymarket_store_logic(market_url: str):
     print("-" * 80)
 
     try:
-        from dojozero.nba_moneyline._broker import BrokerOperator
+        from dojozero.betting import BrokerOperator
         from dojozero.core import StreamEvent
         from decimal import Decimal
 
