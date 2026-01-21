@@ -159,3 +159,6 @@ dojozero-store
 
 # Claude configs 
 /.claude/
+
+# Package lock files
+package-lock.json

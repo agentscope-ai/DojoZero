@@ -1,7 +1,10 @@
 """NBA ExternalAPI implementation."""
 
-from typing import Any
+import json
 import logging
+from typing import Any
+
+import requests
 
 from dojozero.data._stores import ExternalAPI
 from dojozero.data.nba._utils import get_proxy
@@ -95,16 +98,22 @@ class NBAExternalAPI(ExternalAPI):
                 }
             except ImportError as e:
                 raise RuntimeError(f"nba_api package not available: {e}") from e
-            except (ValueError, TypeError) as json_error:
-                # JSON parsing error - return empty result instead of crashing
+            except (ValueError, TypeError, json.JSONDecodeError) as json_error:
+                # JSON/data parsing error - return empty result instead of crashing
                 logger.debug(
                     f"JSON parsing error for game {game_id_param}: {json_error}"
                 )
                 return {"play_by_play": {"gameId": game_id_param, "actions": []}}
-            except Exception as e:
-                # Other errors - log but return empty result to avoid crashing the poll loop
+            except requests.exceptions.RequestException as e:
+                # Network errors - log but return empty result to avoid crashing the poll loop
                 logger.warning(
-                    f"Error fetching play-by-play data for game {game_id_param}: {e}"
+                    f"Network error fetching play-by-play data for game {game_id_param}: {e}"
+                )
+                return {"play_by_play": {"gameId": game_id_param, "actions": []}}
+            except KeyError as e:
+                # Missing expected keys in response
+                logger.warning(
+                    f"Missing data in play-by-play response for game {game_id_param}: {e}"
                 )
                 return {"play_by_play": {"gameId": game_id_param, "actions": []}}
         elif endpoint == "boxscore":
@@ -150,7 +159,12 @@ class NBAExternalAPI(ExternalAPI):
                 return {"boxscore": boxscore_data}
             except ImportError as e:
                 raise RuntimeError(f"nba_api package not available: {e}") from e
-            except (AttributeError, TypeError) as e:
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    f"JSON error fetching boxscore data for game {game_id_param}: {e}"
+                )
+                return {"boxscore": {"gameId": game_id_param}}
+            except (AttributeError, TypeError, KeyError, ValueError) as e:
                 # These errors often occur when boxscore data is None/empty before game starts
                 # This is expected behavior, so we suppress the warning and return gameId
                 # Only log at debug level to avoid noise in logs
@@ -160,9 +174,9 @@ class NBAExternalAPI(ExternalAPI):
                     e,
                 )
                 return {"boxscore": {"gameId": game_id_param}}
-            except Exception as e:
+            except requests.exceptions.RequestException as e:
                 logger.warning(
-                    f"Error fetching boxscore data for game {game_id_param}: {e}"
+                    f"Network error fetching boxscore data for game {game_id_param}: {e}"
                 )
                 return {"boxscore": {"gameId": game_id_param}}
         return {}

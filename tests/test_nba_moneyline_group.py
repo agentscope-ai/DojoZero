@@ -94,6 +94,7 @@ def agent_group():
     )
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get(TEST_API_KEY_ENV), reason=f"{TEST_API_KEY_ENV} not set"

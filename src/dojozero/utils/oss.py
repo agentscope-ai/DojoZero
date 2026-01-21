@@ -1,8 +1,12 @@
 """OSS (Object Storage Service) utilities for uploading data to Alibaba Cloud OSS.
 
-Environment variables:
-    DOJOZERO_OSS_ACCESS_KEY_ID: OSS access key ID
-    DOJOZERO_OSS_ACCESS_KEY_SECRET: OSS access key secret
+Credentials are handled by alibabacloud-credentials SDK:
+    - Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID, etc.)
+    - Credentials file (~/.alibabacloud/credentials)
+    - ECS RAM role (automatic on ECS instances)
+    - OIDC (K8s RRSA)
+
+Environment variables for OSS config:
     DOJOZERO_OSS_BUCKET: OSS bucket name
     DOJOZERO_OSS_ENDPOINT: OSS endpoint (e.g., oss-cn-hangzhou.aliyuncs.com)
     DOJOZERO_OSS_PREFIX: Optional prefix for all OSS keys (e.g., "prod/")
@@ -17,15 +21,46 @@ import oss2
 logger = logging.getLogger(__name__)
 
 
+class AlibabaCloudCredentialsProvider(oss2.credentials.CredentialsProvider):
+    """oss2 CredentialsProvider that uses alibabacloud-credentials SDK.
+
+    This provider automatically handles credential refresh for temporary
+    credentials (ECS RAM role, OIDC, STS AssumeRole).
+    """
+
+    def __init__(self) -> None:
+        from dojozero.core._credentials import get_credential_provider
+
+        self._provider = get_credential_provider()
+
+    def get_credentials(self) -> oss2.credentials.Credentials:
+        """Get current credentials, refreshing if necessary."""
+        creds = self._provider.get_credentials()
+
+        if not creds.is_valid():
+            raise ValueError(
+                "No valid credentials found. Configure via: "
+                "1) Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID), "
+                "2) ~/.alibabacloud/credentials file, or "
+                "3) ECS RAM role"
+            )
+
+        return oss2.credentials.Credentials(
+            access_key_id=creds.access_key_id,
+            access_key_secret=creds.access_key_secret,
+            security_token=creds.security_token or "",
+        )
+
+
 class OSSClient:
     """Client for interacting with Alibaba Cloud OSS.
 
     Usage:
-        # Using environment variables
+        # Using environment variables (recommended - handles credential refresh)
         client = OSSClient.from_env()
         client.upload_file("local/path/file.txt", "remote/path/file.txt")
 
-        # With explicit configuration
+        # With explicit configuration (static credentials)
         client = OSSClient(
             access_key_id="...",
             access_key_secret="...",
@@ -37,29 +72,49 @@ class OSSClient:
 
     def __init__(
         self,
-        access_key_id: str,
-        access_key_secret: str,
         bucket_name: str,
         endpoint: str,
         prefix: str = "",
+        *,
+        credentials_provider: oss2.credentials.CredentialsProvider | None = None,
+        access_key_id: str | None = None,
+        access_key_secret: str | None = None,
+        security_token: str | None = None,
     ):
         """Initialize OSS client.
 
         Args:
-            access_key_id: OSS access key ID
-            access_key_secret: OSS access key secret
             bucket_name: OSS bucket name
             endpoint: OSS endpoint (e.g., oss-cn-hangzhou.aliyuncs.com)
             prefix: Optional prefix for all OSS keys (e.g., "prod/")
+            credentials_provider: oss2 CredentialsProvider for automatic refresh
+            access_key_id: OSS access key ID (for static credentials)
+            access_key_secret: OSS access key secret (for static credentials)
+            security_token: Optional STS security token (for static STS credentials)
+
+        Either credentials_provider OR (access_key_id + access_key_secret) must be provided.
         """
-        self.access_key_id = access_key_id
-        self.access_key_secret = access_key_secret
         self.bucket_name = bucket_name
         self.endpoint = endpoint
         self.prefix = prefix.rstrip("/") + "/" if prefix else ""
 
-        # Initialize OSS auth and bucket
-        self._auth = oss2.Auth(access_key_id, access_key_secret)
+        # Initialize OSS auth
+        if credentials_provider is not None:
+            # Use ProviderAuthV4 for automatic credential refresh
+            self._auth = oss2.ProviderAuthV4(credentials_provider)
+        elif access_key_id and access_key_secret:
+            # Static credentials
+            if security_token:
+                self._auth = oss2.StsAuth(
+                    access_key_id, access_key_secret, security_token
+                )
+            else:
+                self._auth = oss2.Auth(access_key_id, access_key_secret)
+        else:
+            raise ValueError(
+                "Either credentials_provider or (access_key_id + access_key_secret) must be provided"
+            )
+
         self._bucket = oss2.Bucket(self._auth, endpoint, bucket_name)
 
     @classmethod
@@ -68,7 +123,16 @@ class OSSClient:
         bucket_name: str | None = None,
         prefix: str | None = None,
     ) -> "OSSClient":
-        """Create OSS client from environment variables.
+        """Create OSS client from environment/credentials.
+
+        Credentials are resolved by alibabacloud-credentials SDK and automatically
+        refreshed when they expire (for ECS RAM role, OIDC, STS AssumeRole).
+
+        Credential resolution order:
+        1. Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID, etc.)
+        2. Credentials file (~/.alibabacloud/credentials)
+        3. ECS RAM role (automatic on ECS instances)
+        4. OIDC (K8s RRSA)
 
         Args:
             bucket_name: Override bucket name (default: from DOJOZERO_OSS_BUCKET)
@@ -78,20 +142,12 @@ class OSSClient:
             OSSClient instance
 
         Raises:
-            ValueError: If required environment variables are not set
+            ValueError: If required configuration is not set
         """
-        access_key_id = os.getenv("DOJOZERO_OSS_ACCESS_KEY_ID")
-        access_key_secret = os.getenv("DOJOZERO_OSS_ACCESS_KEY_SECRET")
         env_bucket = os.getenv("DOJOZERO_OSS_BUCKET")
         endpoint = os.getenv("DOJOZERO_OSS_ENDPOINT")
         env_prefix = os.getenv("DOJOZERO_OSS_PREFIX", "")
 
-        if not access_key_id:
-            raise ValueError("DOJOZERO_OSS_ACCESS_KEY_ID environment variable not set")
-        if not access_key_secret:
-            raise ValueError(
-                "DOJOZERO_OSS_ACCESS_KEY_SECRET environment variable not set"
-            )
         if not endpoint:
             raise ValueError("DOJOZERO_OSS_ENDPOINT environment variable not set")
 
@@ -101,12 +157,17 @@ class OSSClient:
 
         final_prefix = prefix if prefix is not None else env_prefix
 
+        # Use AlibabaCloudCredentialsProvider for automatic credential refresh
+        credentials_provider = AlibabaCloudCredentialsProvider()
+
+        # Validate credentials are available (fail fast)
+        credentials_provider.get_credentials()
+
         return cls(
-            access_key_id=access_key_id,
-            access_key_secret=access_key_secret,
             bucket_name=final_bucket,
             endpoint=endpoint,
             prefix=final_prefix,
+            credentials_provider=credentials_provider,
         )
 
     def _make_key(self, key: str) -> str:

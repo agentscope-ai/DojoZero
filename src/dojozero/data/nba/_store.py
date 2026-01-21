@@ -134,7 +134,7 @@ class NBAStore(DataStore):
                                 )
                             )
                             self._state.mark_game_initialized(game_id)
-                except Exception as e:
+                except (KeyError, TypeError, ValueError, AttributeError) as e:
                     # If we can't get game info, skip GameInitializeEvent
                     # It will be emitted when boxscore data becomes available
                     import logging
@@ -231,7 +231,7 @@ class NBAStore(DataStore):
                                 game_time_dt = parse_iso_datetime(
                                     game_info["game_time_utc"]
                                 )
-                        except Exception:
+                        except (KeyError, TypeError, ValueError, AttributeError):
                             pass  # Use timestamp as fallback
 
                         events.append(

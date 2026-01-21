@@ -187,9 +187,47 @@ export default function Lobby() {
   };
 
   const isTrialLive = (trial) => {
-    // A trial is live if it's "running" or if phase is unknown but not explicitly stopped
+    // A trial is NOT live if:
+    // 1. Phase is explicitly stopped/completed/terminated
+    // 2. There's a final_score in metadata (indicates game is over)
     const phase = trial.phase?.toLowerCase() || "unknown";
-    return phase === "running" || (phase !== "stopped" && phase !== "completed" && phase !== "terminated");
+    const hasFinalScore = trial.metadata?.final_score != null;
+
+    if (hasFinalScore) {
+      return false; // Game has concluded
+    }
+
+    if (phase === "stopped" || phase === "completed" || phase === "terminated") {
+      return false;
+    }
+
+    return phase === "running";
+  };
+
+  // Format game date from various formats (YYYYMMDD, ISO, etc.)
+  const formatGameDate = (dateStr) => {
+    if (!dateStr) return "TBD";
+
+    // Handle YYYYMMDD format (e.g., "20250115")
+    if (/^\d{8}$/.test(dateStr)) {
+      const year = dateStr.slice(0, 4);
+      const month = dateStr.slice(4, 6);
+      const day = dateStr.slice(6, 8);
+      return `${month}/${day}/${year}`;
+    }
+
+    // Handle ISO date format or other parseable formats
+    const date = new Date(dateStr);
+    if (!isNaN(date.getTime())) {
+      return date.toLocaleDateString("en-US", {
+        month: "2-digit",
+        day: "2-digit",
+        year: "numeric",
+      });
+    }
+
+    // Return as-is if we can't parse it
+    return dateStr;
   };
 
   return (
@@ -393,7 +431,7 @@ export default function Lobby() {
                     <div style={styles.infoRow}>
                       <span style={styles.infoLabel}>DATE</span>
                       <span className="font-tech" style={styles.infoValue}>
-                        {trial.metadata?.game_date || "TBD"}
+                        {formatGameDate(trial.metadata?.game_date)}
                       </span>
                     </div>
                   </div>
