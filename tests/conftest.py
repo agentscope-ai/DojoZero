@@ -152,7 +152,8 @@ def create_nba_test_agent(config_path: Path, trial_id: str = "test-trial"):
     from dojozero.agents import load_agent_config, create_model, create_formatter
 
     config = load_agent_config(config_path)
-    llm_config = config["llm"].copy()
+    # llm is a list of configs - use the first one for tests
+    llm_config = config["llm"][0].copy()
     llm_config["api_key_env"] = TEST_API_KEY_ENV
     llm_config["base_url_env"] = TEST_BASE_URL_ENV
     model_type = llm_config.get("model_type", "openai")
@@ -172,7 +173,8 @@ def create_nfl_test_agent(config_path: Path, trial_id: str = "test-trial"):
     from dojozero.agents import load_agent_config, create_model, create_formatter
 
     config = load_agent_config(config_path)
-    llm_config = config["llm"].copy()
+    # llm is a list of configs - use the first one for tests
+    llm_config = config["llm"][0].copy()
     llm_config["api_key_env"] = TEST_API_KEY_ENV
     llm_config["base_url_env"] = TEST_BASE_URL_ENV
     model_type = llm_config.get("model_type", "openai")

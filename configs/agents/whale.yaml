@@ -21,7 +21,19 @@ sys_prompt: |
   ALWAYS check balance first, then carefully analyze before deciding.
   Report your confidence level (%) and reasoning for every decision.
 llm:
-  model_type: openai
-  model_name: qwen3-max
-  api_key_env: DOJOZERO_OPENAI_API_KEY
-  base_url_env: DOJOZERO_OPENAI_BASE_URL
+  - model_type: openai
+    model_name: gpt-5.1-2025-11-13
+    api_key_env: DOJOZERO_OPENAI_API_KEY
+    base_url_env: DOJOZERO_OPENAI_BASE_URL
+  - model_type: openai
+    model_name: claude-opus-4-5-20251101
+    api_key_env: DOJOZERO_OPENAI_API_KEY
+    base_url_env: DOJOZERO_OPENAI_BASE_URL
+  - model_type: openai
+    model_name: gemini-3-pro-preview
+    api_key_env: DOJOZERO_OPENAI_API_KEY
+    base_url_env: DOJOZERO_OPENAI_BASE_URL
+  - model_type: openai
+    model_name: qwen3-max
+    api_key_env: DOJOZERO_OPENAI_API_KEY
+    base_url_env: DOJOZERO_OPENAI_BASE_URL

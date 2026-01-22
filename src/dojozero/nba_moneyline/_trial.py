@@ -30,6 +30,7 @@ from dojozero.nba_moneyline._agent import (
     BettingAgent,
     BettingAgentConfig,
 )
+from dojozero.agents import load_agent_config, expand_agent_config
 from dojozero.nba_moneyline._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
@@ -393,6 +394,7 @@ def _build_trial_spec(
         )
 
     # Build operator_id -> agent_ids mapping from agent configs
+    # For agents with agent_config_path, expand to include all model-specific agent IDs
     operator_to_agents: dict[str, list[str]] = {}
     if params.agents:
         for agent_dict in params.agents:
@@ -400,10 +402,23 @@ def _build_trial_spec(
             if not agent_id:
                 continue
             operator_ids = agent_dict.get("operators", [])
+
+            # Get expanded agent IDs
+            agent_config_path = agent_dict.get("agent_config_path")
+            if agent_config_path:
+                # Load YAML and get all model names to create expanded IDs
+                yaml_config = load_agent_config(agent_config_path)
+                expanded_ids = []
+                for llm_config in yaml_config["llm"]:
+                    model_name = llm_config.get("model_name", "unknown")
+                    expanded_ids.append(f"{agent_id}-{model_name}")
+            else:
+                expanded_ids = [str(agent_id)]
+
             for op_id in operator_ids:
                 if op_id not in operator_to_agents:
                     operator_to_agents[op_id] = []
-                operator_to_agents[op_id].append(str(agent_id))
+                operator_to_agents[op_id].extend(expanded_ids)
 
     # Create operators - require explicit operator configuration
     if not params.operators:
@@ -452,6 +467,7 @@ def _build_trial_spec(
         )
 
     # Create agent specs from agents config
+    # Agents with agent_config_path are expanded into multiple agents (one per model)
     agent_specs = []
 
     if not params.agents:
@@ -474,35 +490,69 @@ def _build_trial_spec(
         operator_ids = agent_dict.get("operators", [])
         data_stream_ids = agent_dict.get("data_streams", [])
 
-        # Create agent config - pass through config fields from agent_dict
-        agent_config: BettingAgentConfig = {
-            "actor_id": agent_id,
-        }
-        # Copy optional config fields
-        if agent_dict.get("name"):
-            agent_config["name"] = agent_dict["name"]
-        if agent_dict.get("agent_config_path"):
-            agent_config["agent_config_path"] = agent_dict["agent_config_path"]
+        agent_config_path = agent_dict.get("agent_config_path")
 
-        # Build LLM config if model_type or model_name are specified
-        if agent_dict.get("model_type") or agent_dict.get("model_name"):
-            from dojozero.agents._config import LLMConfig
+        if agent_config_path:
+            # Load YAML and expand into multiple agents (one per model)
+            yaml_config = load_agent_config(agent_config_path)
+            expanded_configs = expand_agent_config(yaml_config)
 
-            llm_config: LLMConfig = {}
-            if agent_dict.get("model_type"):
-                llm_config["model_type"] = agent_dict["model_type"]
-            if agent_dict.get("model_name"):
-                llm_config["model_name"] = agent_dict["model_name"]
-            agent_config["llm"] = llm_config
+            for single_config in expanded_configs:
+                # Create unique actor_id using model name
+                model_name = single_config["llm"].get("model_name", "unknown")
+                expanded_actor_id = f"{agent_id}-{model_name}"
 
-        agent_spec = AgentSpec[BettingAgentConfig](
-            actor_id=agent_id,
-            actor_cls=BettingAgent,
-            config=agent_config,
-            operator_ids=tuple(operator_ids) if operator_ids else (),
-            data_stream_ids=tuple(data_stream_ids),
-        )
-        agent_specs.append(agent_spec)
+                agent_config: BettingAgentConfig = {
+                    "actor_id": expanded_actor_id,
+                    "name": single_config["name"],
+                    "sys_prompt": single_config["sys_prompt"],
+                    "llm": single_config["llm"],
+                }
+
+                agent_spec = AgentSpec[BettingAgentConfig](
+                    actor_id=expanded_actor_id,
+                    actor_cls=BettingAgent,
+                    config=agent_config,
+                    operator_ids=tuple(operator_ids) if operator_ids else (),
+                    data_stream_ids=tuple(data_stream_ids),
+                )
+                agent_specs.append(agent_spec)
+                logger.info(
+                    "Expanded agent '%s' with model '%s' -> '%s'",
+                    agent_id,
+                    model_name,
+                    expanded_actor_id,
+                )
+        else:
+            # Inline config mode (no expansion)
+            agent_config = {
+                "actor_id": agent_id,
+            }
+            # Copy optional config fields
+            if agent_dict.get("name"):
+                agent_config["name"] = agent_dict["name"]
+            if agent_dict.get("sys_prompt"):
+                agent_config["sys_prompt"] = agent_dict["sys_prompt"]
+
+            # Build LLM config if model_type or model_name are specified
+            if agent_dict.get("model_type") or agent_dict.get("model_name"):
+                from dojozero.agents._config import LLMConfig
+
+                llm_config: LLMConfig = {}
+                if agent_dict.get("model_type"):
+                    llm_config["model_type"] = agent_dict["model_type"]
+                if agent_dict.get("model_name"):
+                    llm_config["model_name"] = agent_dict["model_name"]
+                agent_config["llm"] = llm_config
+
+            agent_spec = AgentSpec[BettingAgentConfig](
+                actor_id=agent_id,
+                actor_cls=BettingAgent,
+                config=agent_config,
+                operator_ids=tuple(operator_ids) if operator_ids else (),
+                data_stream_ids=tuple(data_stream_ids),
+            )
+            agent_specs.append(agent_spec)
 
     # Build metadata with game information and hub config
     # This metadata is used by build_runtime_context and store factories

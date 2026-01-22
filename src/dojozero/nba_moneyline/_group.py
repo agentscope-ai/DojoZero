@@ -9,8 +9,10 @@ from agentscope.message import Msg
 from agentscope.pipeline import MsgHub
 
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
+from dojozero.agents import load_agent_config, create_model, create_formatter
 
 from ._agent import BettingAgent
+from ._formatters import format_event
 
 LOGGER = logging.getLogger(__name__)
 
@@ -84,8 +86,18 @@ class BettingAgentGroup(AgentBase, Agent[BettingAgentGroupConfig]):
         for path in config_paths:
             # Use config file stem as agent actor_id
             agent_actor_id = Path(path).stem
-            agent = BettingAgent.from_yaml(
-                path, actor_id=agent_actor_id, trial_id=context.trial_id
+            yaml_config = load_agent_config(path)
+            # Use first model from the list for group agents
+            llm_config = yaml_config["llm"][0]
+            model_type = llm_config.get("model_type", "openai")
+            agent = BettingAgent(
+                actor_id=agent_actor_id,
+                trial_id=context.trial_id,
+                name=yaml_config["name"],
+                sys_prompt=yaml_config["sys_prompt"],
+                model=create_model(llm_config),
+                formatter=create_formatter(model_type),
+                event_formatter=format_event,
             )
             agents.append(agent)
             LOGGER.info("[%s] added to group '%s'", agent.name, actor_id)
@@ -119,8 +131,18 @@ class BettingAgentGroup(AgentBase, Agent[BettingAgentGroupConfig]):
         for path in config_paths:
             # Use config file stem as agent actor_id
             agent_actor_id = Path(path).stem
-            agent = BettingAgent.from_yaml(
-                path, actor_id=agent_actor_id, trial_id=trial_id
+            yaml_config = load_agent_config(str(path))
+            # Use first model from the list for group agents
+            llm_config = yaml_config["llm"][0]
+            model_type = llm_config.get("model_type", "openai")
+            agent = BettingAgent(
+                actor_id=agent_actor_id,
+                trial_id=trial_id,
+                name=yaml_config["name"],
+                sys_prompt=yaml_config["sys_prompt"],
+                model=create_model(llm_config),
+                formatter=create_formatter(model_type),
+                event_formatter=format_event,
             )
             agents.append(agent)
             LOGGER.info("[%s] added to group '%s'", agent.name, actor_id)

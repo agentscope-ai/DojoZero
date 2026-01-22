@@ -10,7 +10,6 @@ import inspect
 import json
 import logging
 from collections import Counter, deque
-from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, TypedDict
 
 from agentscope.agent import ReActAgent
@@ -21,7 +20,6 @@ from agentscope.model import ChatModelBase
 from agentscope.tool import Toolkit
 
 from dojozero.agents import (
-    load_agent_config,
     LLMConfig,
     create_model,
     create_formatter,
@@ -188,28 +186,13 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
     ) -> "BettingAgent":
         """Create agent from config dict.
 
-        Supports two modes:
-        1. agent_config_path: Load config from YAML file
-        2. Inline config: Use config dict directly
+        Note: agent_config_path is no longer supported here - the trial builder
+        handles YAML loading and expansion. This method expects inline configs
+        with a single LLMConfig.
         """
         actor_id = config["actor_id"]
-        agent_config_path = config.get("agent_config_path")
 
-        if agent_config_path:
-            # Load from YAML file
-            yaml_config = load_agent_config(agent_config_path)
-            llm_config = yaml_config["llm"]
-            model_type = llm_config.get("model_type", "openai")
-            return cls(
-                actor_id=actor_id,
-                trial_id=context.trial_id,
-                name=yaml_config.get("name", actor_id),
-                sys_prompt=yaml_config.get("sys_prompt", ""),
-                model=create_model(llm_config),
-                formatter=create_formatter(model_type),
-            )
-
-        # Inline config mode
+        # Inline config mode (already expanded by trial builder)
         llm_config = config.get("llm", {})
         model_type = llm_config.get("model_type", "openai")
         return cls(
@@ -219,39 +202,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             sys_prompt=config.get("sys_prompt", ""),
             model=create_model(llm_config),
             formatter=create_formatter(model_type),
-        )
-
-    @classmethod
-    def from_yaml(
-        cls,
-        config_path: str | Path,
-        actor_id: str,
-        trial_id: str,
-        toolkit: Toolkit | None = None,
-        event_formatter: EventFormatter | None = None,
-    ) -> "BettingAgent":
-        """Create agent from YAML config file.
-
-        Args:
-            config_path: Path to YAML config file
-            actor_id: The actor ID for this agent
-            trial_id: The trial ID for this agent
-            toolkit: Optional toolkit to use
-            event_formatter: Optional custom event formatter
-        """
-        config = load_agent_config(config_path)
-        llm_config = config["llm"]
-        model_type = llm_config.get("model_type", "openai")
-
-        return cls(
-            actor_id=actor_id,
-            trial_id=trial_id,
-            name=config["name"],
-            sys_prompt=config["sys_prompt"],
-            model=create_model(llm_config),
-            formatter=create_formatter(model_type),
-            toolkit=toolkit or Toolkit(),
-            event_formatter=event_formatter,
         )
 
     async def register_operators(self, operators: Sequence[Operator]) -> None:
