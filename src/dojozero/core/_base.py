@@ -15,9 +15,10 @@ LOGGER = logging.getLogger("dojozero.base")
 class ActorBase(ABC):
     """Base class for all DojoZero actors that enforces common requirements."""
 
-    def __init__(self, actor_id: str, trial_id: str) -> None:
+    def __init__(self, actor_id: str, trial_id: str, *, sport_type: str = "") -> None:
         self._actor_id = actor_id
         self._trial_id = trial_id
+        self._sport_type = sport_type
 
     @property
     def actor_id(self) -> str:
@@ -28,12 +29,17 @@ class ActorBase(ABC):
         """Trial ID this actor belongs to."""
         return self._trial_id
 
+    @property
+    def sport_type(self) -> str:
+        """Sport type for this actor's trial (e.g., 'nba', 'nfl')."""
+        return self._sport_type
+
 
 class AgentBase(ActorBase, ABC):
     """Base helper for agents to expose and access reachable operators."""
 
-    def __init__(self, actor_id: str, trial_id: str) -> None:
-        super().__init__(actor_id, trial_id)
+    def __init__(self, actor_id: str, trial_id: str, *, sport_type: str = "") -> None:
+        super().__init__(actor_id, trial_id, sport_type=sport_type)
         self._operator_registry: Dict[str, Operator] = {}
 
     def register_operators(self, operators: Sequence[Operator]) -> None:
@@ -53,8 +59,8 @@ class AgentBase(ActorBase, ABC):
 class DataStreamBase(ActorBase, ABC):
     """Base helper for stream actors that manages consumer fan-out."""
 
-    def __init__(self, actor_id: str, trial_id: str) -> None:
-        super().__init__(actor_id, trial_id)
+    def __init__(self, actor_id: str, trial_id: str, *, sport_type: str = "") -> None:
+        super().__init__(actor_id, trial_id, sport_type=sport_type)
         self._consumer_registry: Dict[str, "Agent | Operator"] = {}
 
     def register_consumers(self, consumers: Sequence["Agent | Operator"]) -> None:
@@ -100,25 +106,11 @@ class DataStreamBase(ActorBase, ABC):
         elif isinstance(payload, dict) and "event_type" in payload:
             event_type = payload["event_type"]
 
-        # Determine sport type from event type prefix
-        sport_type = "unknown"
-        if event_type.startswith("nba_") or event_type in (
-            "game_start",
-            "game_result",
-            "game_update",
-            "game_status_change",
-            "odds_update",
-            "play_by_play",
-        ):
-            sport_type = "nba"
-        elif event_type.startswith("nfl_"):
-            sport_type = "nfl"
-
         # Build tags for the span
         tags: dict[str, Any] = {
             "dojozero.event.type": event_type,
             "dojozero.event.sequence": event.sequence,
-            "dojozero.sport.type": sport_type,
+            "dojozero.sport.type": self._sport_type,
         }
 
         # Add payload data as event.* tags
@@ -141,7 +133,7 @@ class DataStreamBase(ActorBase, ABC):
         game_id = payload_dict.get("game_id") or payload_dict.get("event_id", "")
         if game_id:
             # Handle event_id format like "0022400608_pbp_188" -> extract game_id
-            if "_" in str(game_id) and not str(game_id).startswith("00"):
+            if "_" in str(game_id) and str(game_id).startswith("00"):
                 game_id = str(game_id).split("_")[0]
             tags["dojozero.game.id"] = str(game_id)
 
@@ -158,8 +150,8 @@ class DataStreamBase(ActorBase, ABC):
 class OperatorBase(ActorBase, ABC):
     """Base helper for operator actors to handle stream events."""
 
-    def __init__(self, actor_id: str, trial_id: str) -> None:
-        super().__init__(actor_id, trial_id)
+    def __init__(self, actor_id: str, trial_id: str, *, sport_type: str = "") -> None:
+        super().__init__(actor_id, trial_id, sport_type=sport_type)
         self._agent_registry: Dict[str, Agent] = {}
 
     def register_agents(self, agents: Sequence[Agent]) -> None:

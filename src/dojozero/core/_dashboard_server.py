@@ -697,6 +697,7 @@ def create_dashboard_app(
                     endpoint=sls_endpoint,
                     logstore=sls_logstore,
                 )
+                sls_log_exporter.start()
                 set_sls_log_exporter(sls_log_exporter)
                 LOGGER.info(
                     "SLS Log exporter configured: %s/%s (flat fields)",

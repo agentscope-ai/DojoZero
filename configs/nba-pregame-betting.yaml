@@ -41,7 +41,7 @@ scenario:
       - game_status_change_stream
       - odds_update_stream
       - game_update_stream
-      
+
     agents:
     - id: basic_agent
       class: BettingAgent

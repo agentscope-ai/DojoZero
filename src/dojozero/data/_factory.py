@@ -127,6 +127,7 @@ def build_runtime_context(
     enable_persistence: bool,
     metadata: dict[str, Any],
     store_types: list[str],
+    sport_type: str = "",
 ) -> RuntimeContext:
     """Build RuntimeContext with DataHub and stores using registered factories.
 
@@ -201,6 +202,7 @@ def build_runtime_context(
 
     return RuntimeContext(
         trial_id=trial_id,
+        sport_type=sport_type,
         data_hubs=data_hubs,
         stores=stores,
         startup=start_data_stores,
