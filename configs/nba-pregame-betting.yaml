@@ -47,7 +47,6 @@ scenario:
       class: BettingAgent
       agent_config_path: configs/agents/basic.yaml
       operators:
-      - event_counter
       - betting_broker
       data_streams:
       - injury_summary_stream
