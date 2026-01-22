@@ -23,6 +23,7 @@ class DataHub:
     - Persist events to file (timestamped, typed)
     - Manage agent subscriptions
     - Dispatch events to subscribed agents
+    - Emit events to trace backend (OTel/SLS)
     - Support replay mode
     """
 
@@ -31,6 +32,7 @@ class DataHub:
         hub_id: str = "data_hub",
         persistence_file: Path | str | None = None,
         enable_persistence: bool = True,
+        trial_id: str | None = None,
     ):
         """Initialize DataHub.
 
@@ -38,9 +40,18 @@ class DataHub:
             hub_id: Unique identifier for this hub
             persistence_file: Path to file for event persistence
             enable_persistence: Whether to persist events to file
+            trial_id: Trial identifier for trace emission (optional)
         """
         self.hub_id = hub_id
         self.enable_persistence = enable_persistence
+        self.trial_id = trial_id
+
+        logger.info(
+            "DataHub initialized: hub_id=%s, trial_id=%s, persistence=%s",
+            hub_id,
+            trial_id,
+            enable_persistence,
+        )
 
         if persistence_file:
             self.persistence_file = Path(persistence_file)
@@ -66,6 +77,11 @@ class DataHub:
 
         # Track connected stores for lifecycle management
         self._connected_stores: list["DataStore"] = []
+
+        # Cache recent events for late-joining subscribers
+        # Key: event_type, Value: list of recent events (newest first)
+        self._recent_events: dict[str, list[DataEvent]] = defaultdict(list)
+        self._max_recent_events_per_type = 100  # Keep last 100 events per type
 
     def subscribe_agent(
         self,
@@ -106,12 +122,118 @@ class DataHub:
         Args:
             event: Event to receive
         """
+        # Cache event for late-joining subscribers
+        self._cache_event(event)
+
         # Persist event if enabled
         if self.enable_persistence and not self._replay_mode:
             await self._persist_event(event)
 
+        # Emit to trace backend if trial_id is set
+        if self.trial_id and not self._replay_mode:
+            self._emit_event_span(event)
+
         # Dispatch to subscribed agents
         await self._dispatch_event(event)
+
+    _sls_emit_count: int = 0
+    _sls_error_count: int = 0
+
+    def _emit_event_span(self, event: DataEvent) -> None:
+        """Emit an event as a span to the trace backend.
+
+        Args:
+            event: Event to emit
+        """
+        try:
+            from dojozero.core._tracing import (
+                convert_checkpoint_event_to_span,
+                emit_span,
+                get_sls_log_exporter,
+            )
+
+            # Check if SLS exporter is configured
+            sls_exporter = get_sls_log_exporter()
+            if sls_exporter is None:
+                logger.warning(
+                    "SLS exporter not configured, skipping event span emission "
+                    "for event_type=%s",
+                    event.event_type,
+                )
+                return
+
+            # Convert event to dict for span conversion
+            event_dict = event.to_dict()
+            span = convert_checkpoint_event_to_span(
+                trial_id=self.trial_id,  # type: ignore[arg-type]
+                event=event_dict,
+                sequence=0,
+                actor_id=getattr(event, "stream_id", self.hub_id),
+            )
+            emit_span(span)
+            DataHub._sls_emit_count += 1
+            if DataHub._sls_emit_count % 50 == 0:
+                logger.info(
+                    "SLS emit progress: %d events emitted (%d errors) "
+                    "[latest: event_type=%s, trial=%s]",
+                    DataHub._sls_emit_count,
+                    DataHub._sls_error_count,
+                    event.event_type,
+                    self.trial_id,
+                )
+        except Exception as e:
+            DataHub._sls_error_count += 1
+            # Don't let trace emission failures affect event processing
+            logger.warning(
+                "Failed to emit event span (#%d): %s: %s (event_type=%s)",
+                DataHub._sls_error_count,
+                type(e).__name__,
+                e,
+                event.event_type,
+            )
+
+    def _cache_event(self, event: DataEvent) -> None:
+        """Cache event for late-joining subscribers."""
+        event_type = event.event_type
+        events_list = self._recent_events[event_type]
+        events_list.insert(0, event)  # Newest first
+        # Trim to max size
+        if len(events_list) > self._max_recent_events_per_type:
+            self._recent_events[event_type] = events_list[
+                : self._max_recent_events_per_type
+            ]
+
+    def get_recent_events(
+        self,
+        event_types: list[str] | None = None,
+        limit: int = 10,
+    ) -> list[DataEvent]:
+        """Get recent events from the cache.
+
+        Args:
+            event_types: Filter by event types (None = all types)
+            limit: Maximum number of events to return
+
+        Returns:
+            List of recent events (newest first)
+        """
+        if event_types is None:
+            # Get all recent events across all types
+            all_events: list[DataEvent] = []
+            for events_list in self._recent_events.values():
+                all_events.extend(events_list)
+            # Sort by timestamp (newest first) and limit
+            all_events.sort(key=lambda e: e.timestamp, reverse=True)
+            return all_events[:limit]
+        else:
+            # Get events for specific types
+            result: list[DataEvent] = []
+            for event_type in event_types:
+                if event_type in self._recent_events:
+                    result.extend(self._recent_events[event_type])
+            # Sort by timestamp (newest first) and limit
+            result.sort(key=lambda e: e.timestamp, reverse=True)
+            return result[:limit]
 
     async def _persist_event(self, event: DataEvent) -> None:
         """Persist event to file.
@@ -126,6 +248,10 @@ class DataHub:
 
     def _write_to_file(self, line: str) -> None:
         """Write a line to the persistence file (sync, runs in thread pool)."""
+        from pathlib import Path
+
+        # Ensure parent directory exists
+        Path(self.persistence_file).parent.mkdir(parents=True, exist_ok=True)
         with open(self.persistence_file, "a") as f:
             f.write(line)
 

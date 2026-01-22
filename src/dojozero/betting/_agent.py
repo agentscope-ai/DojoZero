@@ -9,7 +9,7 @@ import asyncio
 import inspect
 import json
 import logging
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, TypedDict
 
@@ -378,13 +378,14 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Format events for LLM
         input_content = self._format_events_for_llm(events)
 
-        # Log event processing
-        stream_ids = [e.stream_id for e in events]
+        # Log event processing with stream count summary
+        stream_counts = Counter(e.stream_id for e in events)
+        stream_summary = ", ".join(f"{k}:{v}" for k, v in stream_counts.most_common())
         logger.info(
-            "agent '%s' processing %d event(s) from streams: %s",
+            "agent '%s' processing %d event(s) from streams: {%s}",
             self.actor_id,
             len(events),
-            stream_ids,
+            stream_summary,
         )
 
         msg = Msg(name="event_push", content=input_content, role="user")
@@ -477,7 +478,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         - agent.input: User input from stream event(s)
         - agent.response: Assistant response from LLM
         """
-        logger.info(
+        logger.debug(
             "agent '%s' received event seq=%s from stream '%s'",
             self.actor_id,
             event.sequence,
@@ -488,7 +489,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             if self._is_processing:
                 # Agent is busy, queue this event with retry_count=0
                 self._event_queue.append((event, 0))
-                logger.info(
+                logger.debug(
                     "agent '%s' queued event seq=%s (queue size: %d)",
                     self.actor_id,
                     event.sequence,

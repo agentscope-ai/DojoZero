@@ -417,10 +417,11 @@ class SLSTraceReader:
             start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
 
         # SLS query for trial.started spans
+        # Note: Field names use underscores in SLS (operation_name, dojozero_trial_id)
         query = (
             f'service:"{self._service_name}" AND '
-            f'operationName:"trial.started" | '
-            f'SELECT DISTINCT "dojozero.trial.id" as trial_id LIMIT {limit}'
+            f'operation_name:"trial.started" | '
+            f"SELECT DISTINCT dojozero_trial_id as trial_id LIMIT {limit}"
         )
 
         params = {
@@ -443,11 +444,14 @@ class SLSTraceReader:
             data = response.json()
 
             # Extract trial IDs from response
+            # SLS may return list directly or dict with "data" key
             trial_ids: list[str] = []
-            for row in data.get("data", []):
-                trial_id = row.get("trial_id")
-                if trial_id:
-                    trial_ids.append(trial_id)
+            rows = data if isinstance(data, list) else data.get("data", [])
+            for row in rows:
+                if isinstance(row, dict):
+                    trial_id = row.get("trial_id")
+                    if trial_id:
+                        trial_ids.append(trial_id)
 
             return trial_ids
         except httpx.HTTPStatusError as e:
@@ -456,7 +460,7 @@ class SLSTraceReader:
         except httpx.RequestError as e:
             LOGGER.error("SLS request error listing trials: %s", e)
             return []
-        except (KeyError, TypeError, ValueError) as e:
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
             LOGGER.error("Failed to parse SLS response for trials: %s", e)
             return []
 
@@ -483,17 +487,16 @@ class SLSTraceReader:
             from_time = start_time
 
         # SLS query for spans with specific trial_id
-        query = (
-            f'service:"{self._service_name}" AND '
-            f'"dojozero.trial.id":"{trial_id}" | '
-            f"SELECT * ORDER BY startTime ASC LIMIT 1000"
-        )
+        # Note: Field names use underscores in SLS (dojozero_trial_id not dojozero.trial.id)
+        # Simple search query without SQL - results are returned in time order by default
+        query = f'service:"{self._service_name}" AND dojozero_trial_id:"{trial_id}"'
 
         params = {
             "type": "log",
             "from": str(int(from_time.timestamp())),
             "to": str(int(now.timestamp())),
             "query": query,
+            "line": "1000",  # Limit number of results
         }
 
         resource = f"/logstores/{self._logstore}"
@@ -508,11 +511,14 @@ class SLSTraceReader:
             response.raise_for_status()
             data = response.json()
 
+            # SLS may return list directly or dict with "data" key
             spans: list[SpanData] = []
-            for row in data.get("data", []):
-                span = self._convert_sls_row_to_span(row)
-                if span:
-                    spans.append(span)
+            rows = data if isinstance(data, list) else data.get("data", [])
+            for row in rows:
+                if isinstance(row, dict):
+                    span = self._convert_sls_row_to_span(row)
+                    if span:
+                        spans.append(span)
 
             # Sort by start time
             spans.sort(key=lambda s: s.start_time)
@@ -525,27 +531,29 @@ class SLSTraceReader:
                 "SLS request error getting spans for trial '%s': %s", trial_id, e
             )
             return []
-        except (KeyError, TypeError, ValueError) as e:
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
             LOGGER.error("Failed to parse SLS response for trial '%s': %s", trial_id, e)
             return []
 
     def _convert_sls_row_to_span(self, row: dict[str, Any]) -> SpanData | None:
         """Convert an SLS log row to SpanData.
 
-        SLS stores OpenTelemetry spans with fields like:
-        - traceId, spanId, parentSpanId
-        - operationName (or name)
-        - startTime (microseconds or ISO string)
-        - duration (microseconds)
-        - tags/attributes as flattened fields
+        SLS stores spans with underscore-separated field names:
+        - trace_id, span_id, parent_span_id
+        - operation_name
+        - __time__ (Unix seconds), duration_us (microseconds)
+        - tags/attributes as flattened fields (dojozero_*, event_*)
         """
         try:
-            trace_id = row.get("traceId", row.get("traceID", ""))
-            span_id = row.get("spanId", row.get("spanID", ""))
-            operation_name = row.get("operationName", row.get("name", ""))
+            # Support both underscore (our format) and camelCase (OTLP format)
+            trace_id = row.get("trace_id", row.get("traceId", row.get("traceID", "")))
+            span_id = row.get("span_id", row.get("spanId", row.get("spanID", "")))
+            operation_name = row.get(
+                "operation_name", row.get("operationName", row.get("name", ""))
+            )
 
-            # Handle start time (could be microseconds or ISO string)
-            start_time_raw = row.get("startTime", 0)
+            # Handle start time: __time__ is Unix seconds, startTime may be microseconds
+            start_time_raw = row.get("__time__", row.get("startTime", 0))
             if isinstance(start_time_raw, str):
                 try:
                     dt = datetime.fromisoformat(start_time_raw.replace("Z", "+00:00"))
@@ -553,10 +561,14 @@ class SLSTraceReader:
                 except ValueError:
                     start_time = int(start_time_raw) if start_time_raw.isdigit() else 0
             else:
-                start_time = int(start_time_raw)
+                # __time__ is in seconds, convert to microseconds
+                start_time = int(start_time_raw) * 1_000_000
 
-            duration = int(row.get("duration", 0))
-            parent_span_id = row.get("parentSpanId", row.get("parentSpanID"))
+            # duration_us is already in microseconds
+            duration = int(row.get("duration_us", row.get("duration", 0)))
+            parent_span_id = row.get(
+                "parent_span_id", row.get("parentSpanId", row.get("parentSpanID"))
+            )
 
             # Extract tags from flattened fields or nested tags object
             tags: dict[str, Any] = {}
@@ -568,10 +580,21 @@ class SLSTraceReader:
                     if isinstance(tag, dict):
                         tags[tag.get("key", "")] = tag.get("value")
 
-            # Also check for dojozero.* fields directly in the row
+            # Also check for dojozero.* and event.* fields directly in the row
+            # SLS log exporter flattens dots to underscores, so check both formats
             for key, value in row.items():
-                if key.startswith("dojozero.") or key.startswith("event."):
+                if key.startswith("dojozero."):
                     tags[key] = value
+                elif key.startswith("dojozero_"):
+                    # Convert dojozero_x_y to dojozero.x.y
+                    normalized_key = "dojozero." + key[9:].replace("_", ".")
+                    tags[normalized_key] = value
+                elif key.startswith("event."):
+                    tags[key] = value
+                elif key.startswith("event_"):
+                    # Convert event_x to event.x (only first underscore)
+                    normalized_key = "event." + key[6:]
+                    tags[normalized_key] = value
 
             return SpanData(
                 trace_id=trace_id,
@@ -1130,12 +1153,27 @@ class OTelSpanExporter:
     This class wraps the OpenTelemetry SDK to export DojoZero spans to an OTLP
     endpoint (e.g., Jaeger, Alibaba Cloud SLS). It uses synchronous export
     (no batching) for real-time tracing.
+    endpoint (e.g., Jaeger, Alibaba Cloud SLS). It uses synchronous export
+    (no batching) for real-time tracing.
 
     Usage:
+        # Jaeger (no auth)
         # Jaeger (no auth)
         exporter = OTelSpanExporter(
             otlp_endpoint="http://localhost:4318",
             service_name="dojozero",
+        )
+
+        # SLS (with auth headers)
+        exporter = OTelSpanExporter(
+            otlp_endpoint="https://project.cn-hangzhou.log.aliyuncs.com",
+            service_name="dojozero",
+            headers={
+                "x-sls-otel-project": "my-project",
+                "x-sls-otel-instance-id": "my-instance",
+                "x-sls-otel-ak-id": "xxx",
+                "x-sls-otel-ak-secret": "xxx",
+            },
         )
 
         # SLS (with auth headers)
@@ -1165,9 +1203,11 @@ class OTelSpanExporter:
             otlp_endpoint: OTLP HTTP endpoint URL (e.g., http://localhost:4318)
             service_name: Service name for trace attribution
             headers: Optional headers for authentication (e.g., SLS auth headers)
+            headers: Optional headers for authentication (e.g., SLS auth headers)
         """
         self._endpoint = otlp_endpoint.rstrip("/")
         self._service_name = service_name
+        self._headers = headers
         self._headers = headers
         self._tracer = None
         self._provider = None
@@ -1194,6 +1234,20 @@ class OTelSpanExporter:
             self._provider = TracerProvider(resource=resource)
 
             # Create OTLP exporter - use /v1/traces endpoint
+            # For SLS, the endpoint format is:
+            #   https://{project}.{region}.log.aliyuncs.com/opentelemetry/v1/traces
+            # For Jaeger, it's: http://localhost:4318/v1/traces
+            if "log.aliyuncs.com" in self._endpoint:
+                # SLS uses /opentelemetry/v1/traces path
+                traces_endpoint = f"{self._endpoint}/opentelemetry/v1/traces"
+            else:
+                # Standard OTLP uses /v1/traces path
+                traces_endpoint = f"{self._endpoint}/v1/traces"
+
+            otlp_exporter = OTLPSpanExporter(
+                endpoint=traces_endpoint,
+                headers=self._headers,
+            )
             # For SLS, the endpoint format is:
             #   https://{project}.{region}.log.aliyuncs.com/opentelemetry/v1/traces
             # For Jaeger, it's: http://localhost:4318/v1/traces
@@ -1324,8 +1378,299 @@ class OTelSpanExporter:
                 LOGGER.warning("Error during OTel exporter shutdown: %s", e)
 
 
-# Global exporter instance (lazily initialized)
+class SLSLogExporter:
+    """SLS Log exporter with async producer pattern.
+
+    Sends spans as flat log entries to SLS. Uses a background thread with
+    batching for non-blocking, high-throughput ingestion:
+    - export_span() is non-blocking (puts on queue, returns immediately)
+    - Background worker drains queue, batches items, calls put_logs
+    - Configurable batch size and linger time
+
+    Uses the official aliyun-log-python-sdk for reliable authentication.
+
+    Usage:
+        exporter = SLSLogExporter(
+            project="my-project",
+            endpoint="cn-hangzhou.log.aliyuncs.com",
+            logstore="my-traces",
+        )
+        exporter.start()  # Start background flush worker
+        exporter.export_span(span_data)  # Non-blocking
+        exporter.shutdown()  # Flush remaining and stop
+    """
+
+    # Class-level counters for progress logging
+    _put_count: int = 0
+    _put_error_count: int = 0
+    _emit_count: int = 0
+    _drop_count: int = 0
+
+    def __init__(
+        self,
+        project: str,
+        endpoint: str,
+        logstore: str,
+        batch_size: int = 100,
+        linger_ms: int = 200,
+        queue_max_size: int = 10000,
+    ):
+        """Initialize SLS Log exporter.
+
+        Args:
+            project: SLS project name
+            endpoint: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+            logstore: SLS logstore name for flat logs
+            batch_size: Max items per put_logs call
+            linger_ms: Max wait time before flushing a partial batch
+            queue_max_size: Max queue depth (drops oldest on overflow)
+        """
+        import queue
+        import threading
+
+        from ._credentials import get_credential_provider
+
+        self._project = project
+        self._endpoint = endpoint
+        self._logstore = logstore
+        self._batch_size = batch_size
+        self._linger_s = linger_ms / 1000.0
+        self._credential_provider = get_credential_provider()
+        self._initialized = False
+        self._sls_client: Any = None
+
+        # Producer queue and worker
+        self._queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=queue_max_size)
+        self._stop_event = threading.Event()
+        self._worker_thread: threading.Thread | None = None
+
+    def _ensure_initialized(self) -> None:
+        """Ensure the SLS client is initialized."""
+        if self._initialized:
+            return
+
+        try:
+            from aliyun.log import LogClient
+
+            creds = self._credential_provider.get_credentials()
+            if not creds.is_valid():
+                LOGGER.warning("SLS credentials not valid, log export disabled")
+                self._initialized = True
+                return
+
+            if creds.security_token:
+                self._sls_client = LogClient(
+                    self._endpoint,
+                    creds.access_key_id,
+                    creds.access_key_secret,
+                    creds.security_token,
+                )
+            else:
+                self._sls_client = LogClient(
+                    self._endpoint,
+                    creds.access_key_id,
+                    creds.access_key_secret,
+                )
+
+            self._initialized = True
+            LOGGER.info(
+                "SLS Log exporter initialized: endpoint=%s project=%s logstore=%s",
+                self._endpoint,
+                self._project,
+                self._logstore,
+            )
+        except ImportError:
+            LOGGER.warning("aliyun-log-python-sdk not available, log export disabled")
+            self._initialized = True
+        except Exception as e:
+            LOGGER.warning("Failed to initialize SLS client: %s", e)
+            self._initialized = True
+
+    def start(self) -> None:
+        """Start the background flush worker thread."""
+        import threading
+
+        self._ensure_initialized()
+        if self._sls_client is None:
+            return
+        if self._worker_thread is not None and self._worker_thread.is_alive():
+            return
+
+        self._stop_event.clear()
+        self._worker_thread = threading.Thread(
+            target=self._flush_loop,
+            name="sls-log-producer",
+            daemon=True,
+        )
+        self._worker_thread.start()
+        LOGGER.info(
+            "SLS producer started: batch_size=%d linger_ms=%d queue_max=%d",
+            self._batch_size,
+            int(self._linger_s * 1000),
+            self._queue.maxsize,
+        )
+
+    def _flush_loop(self) -> None:
+        """Background worker: streaming flush with opportunistic batching.
+
+        Blocks until the first item arrives (no busy-waiting), then drains
+        any additional items that arrive within linger_ms. This gives:
+        - Near-zero latency for isolated items (sent within linger_ms)
+        - Automatic batching under load (concurrent items grouped together)
+        """
+        import queue
+        import time
+
+        while not self._stop_event.is_set():
+            # Block until first item arrives (or stop is requested)
+            try:
+                first = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+            batch: list[dict[str, Any]] = [first]
+            deadline = time.monotonic() + self._linger_s
+
+            # Drain any additional items within linger window
+            while len(batch) < self._batch_size:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    item = self._queue.get(timeout=remaining)
+                    batch.append(item)
+                except queue.Empty:
+                    break
+
+            self._send_batch(batch)
+
+        # Final drain on shutdown
+        self._flush_remaining()
+
+    def _flush_remaining(self) -> None:
+        """Flush any remaining items in the queue."""
+        batch: list[dict[str, Any]] = []
+        while not self._queue.empty():
+            try:
+                batch.append(self._queue.get_nowait())
+                if len(batch) >= self._batch_size:
+                    self._send_batch(batch)
+                    batch = []
+            except Exception:
+                break
+        if batch:
+            self._send_batch(batch)
+
+    def _send_batch(self, batch: list[dict[str, Any]]) -> None:
+        """Send a batch of log entries to SLS."""
+        if self._sls_client is None:
+            return
+
+        try:
+            from aliyun.log import LogItem, PutLogsRequest
+
+            log_items = []
+            for log_entry in batch:
+                timestamp = log_entry.pop("__time__", 0)
+                contents = [(k, str(v)) for k, v in log_entry.items()]
+                log_items.append(LogItem(timestamp=timestamp, contents=contents))
+
+            request = PutLogsRequest(
+                project=self._project,
+                logstore=self._logstore,
+                topic="",
+                source="dojozero",
+                logitems=log_items,
+            )
+            self._sls_client.put_logs(request)
+            SLSLogExporter._put_count += 1
+            if SLSLogExporter._put_count % 50 == 0:
+                LOGGER.info(
+                    "SLS put_logs progress: %d batches (%d items total, %d errors)",
+                    SLSLogExporter._put_count,
+                    SLSLogExporter._emit_count,
+                    SLSLogExporter._put_error_count,
+                )
+        except Exception as e:
+            SLSLogExporter._put_error_count += 1
+            if SLSLogExporter._put_error_count <= 5 or (
+                SLSLogExporter._put_error_count % 50 == 0
+            ):
+                LOGGER.warning(
+                    "SLS put_logs error (#%d, batch_size=%d): %s: %s",
+                    SLSLogExporter._put_error_count,
+                    len(batch),
+                    type(e).__name__,
+                    e,
+                )
+
+    def export_span(self, span_data: SpanData) -> None:
+        """Export a SpanData as a flat log entry (non-blocking).
+
+        Puts the log entry on the producer queue. The background worker
+        will batch and send to SLS.
+
+        Args:
+            span_data: The span to export
+        """
+        import queue
+        import time as _time
+
+        # Build flat log entry
+        log_entry: dict[str, Any] = {
+            "__time__": int(_time.time()),
+            "event_time": span_data.start_time // 1_000_000,
+            "trace_id": span_data.trace_id,
+            "span_id": span_data.span_id,
+            "operation_name": span_data.operation_name,
+            "duration_us": span_data.duration,
+            "service": "dojozero",
+        }
+
+        if span_data.parent_span_id:
+            log_entry["parent_span_id"] = span_data.parent_span_id
+
+        # Flatten tags to top-level fields
+        for key, value in span_data.tags.items():
+            flat_key = key.replace(".", "_")
+            if value is not None:
+                log_entry[flat_key] = value
+
+        # Non-blocking put on queue
+        try:
+            self._queue.put_nowait(log_entry)
+            SLSLogExporter._emit_count += 1
+        except queue.Full:
+            SLSLogExporter._drop_count += 1
+            if SLSLogExporter._drop_count <= 3 or (
+                SLSLogExporter._drop_count % 100 == 0
+            ):
+                LOGGER.warning(
+                    "SLS producer queue full, dropping span (%d dropped total)",
+                    SLSLogExporter._drop_count,
+                )
+
+    def shutdown(self) -> None:
+        """Stop the background worker and flush remaining items."""
+        self._stop_event.set()
+        if self._worker_thread is not None and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=5.0)
+            if self._worker_thread.is_alive():
+                LOGGER.warning("SLS producer thread did not stop within timeout")
+        self._sls_client = None
+        LOGGER.info(
+            "SLS Log exporter shutdown: %d batches sent, %d items emitted, "
+            "%d errors, %d dropped",
+            SLSLogExporter._put_count,
+            SLSLogExporter._emit_count,
+            SLSLogExporter._put_error_count,
+            SLSLogExporter._drop_count,
+        )
+
+
+# Global exporter instances (lazily initialized)
 _global_exporter: OTelSpanExporter | None = None
+_global_sls_log_exporter: SLSLogExporter | None = None
 
 
 def get_otel_exporter() -> OTelSpanExporter | None:
@@ -1339,19 +1684,37 @@ def set_otel_exporter(exporter: OTelSpanExporter | None) -> None:
     _global_exporter = exporter
 
 
+def get_sls_log_exporter() -> SLSLogExporter | None:
+    """Get the global SLS Log exporter instance."""
+    return _global_sls_log_exporter
+
+
+def set_sls_log_exporter(exporter: SLSLogExporter | None) -> None:
+    """Set the global SLS Log exporter instance."""
+    global _global_sls_log_exporter
+    _global_sls_log_exporter = exporter
+
+
 def emit_span(span_data: SpanData) -> None:
-    """Emit a span using the global exporter if configured.
+    """Emit a span using configured exporters.
 
     This is a convenience function for emitting spans from anywhere in the
     codebase without needing to pass around the exporter instance.
+
+    If both OTLP and SLS Log exporters are configured, the span is sent to both:
+    - OTLP: For trace correlation and Jaeger-style visualization
+    - SLS Log: For flat field indexing and direct queries
     """
     if _global_exporter is not None:
         _global_exporter.export_span(span_data)
+    if _global_sls_log_exporter is not None:
+        _global_sls_log_exporter.export_span(span_data)
 
 
 __all__ = [
     "JaegerTraceReader",
     "OTelSpanExporter",
+    "SLSLogExporter",
     "SLSTraceReader",
     "SpanData",
     "TraceReader",
@@ -1360,8 +1723,12 @@ __all__ = [
     "convert_checkpoint_event_to_span",
     "create_span_from_event",
     "create_trace_reader",
+    "create_trace_reader",
     "emit_span",
+    "get_sls_log_exporter",
+    "set_sls_log_exporter",
     "get_otel_exporter",
+    "get_sls_exporter_headers",
     "get_sls_exporter_headers",
     "load_spans_from_checkpoint",
     "set_otel_exporter",

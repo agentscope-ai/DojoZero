@@ -217,5 +217,19 @@ class PolymarketStore(DataStore):
                 "PolymarketStore subscribed to game status events for dynamic polling interval adjustment"
             )
 
+            # Check if game has already started by looking at hub's recent events
+            # This handles the case where game_start was emitted before we subscribed
+            recent_events = self._data_hub.get_recent_events(
+                event_types=["game_start", "nfl_game_start"], limit=10
+            )
+            if recent_events:
+                logger.info(
+                    "Game already started (found %d game_start events), "
+                    "switching to in-game polling (5s)",
+                    len(recent_events),
+                )
+                self.update_poll_interval("odds", 5.0)
+                self._game_started = True
+
         # Call parent start_polling
         await super().start_polling()

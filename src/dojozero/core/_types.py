@@ -34,6 +34,9 @@ class RuntimeContext:
     trial_id: str
     """The trial identifier this actor belongs to."""
 
+    sport_type: str = ""
+    """Sport type for this trial (e.g., 'nba', 'nfl'). Set by the trial builder."""
+
     data_hubs: dict[str, Any] = field(default_factory=dict)
     """Mapping of hub_id to DataHub instances for data infrastructure."""
 
