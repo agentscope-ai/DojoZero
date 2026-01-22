@@ -237,20 +237,27 @@ async def _extract_trial_info_from_traces(
 
 
 def create_arena_app(
-    trace_store_url: str,
+    trace_backend: str,
+    trace_query_endpoint: str | None = None,
     static_dir: Path | None = None,
     poll_interval: float = 1.0,
-    trace_backend: str = "jaeger",
 ) -> FastAPI:
     """Create the Arena Server FastAPI application.
 
     Args:
-        trace_store_url: URL to trace store (Jaeger or SLS)
+        trace_backend: Trace backend type ("jaeger" or "sls")
+        trace_query_endpoint: Jaeger Query API endpoint (only used when trace_backend="jaeger")
         static_dir: Path to static files (React build output)
         poll_interval: Interval for polling new spans
-        trace_backend: Trace backend type ("jaeger" or "sls")
+
+    For SLS backend, configuration comes from environment variables:
+        DOJOZERO_SLS_PROJECT: SLS project name
+        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+        DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
-    trace_reader = create_trace_reader(trace_store_url, backend=trace_backend)
+    trace_reader = create_trace_reader(
+        backend=trace_backend, trace_query_endpoint=trace_query_endpoint
+    )
     broadcaster = SpanBroadcaster()
 
     @asynccontextmanager
@@ -264,8 +271,7 @@ def create_arena_app(
             trace_backend=trace_backend,
         )
         LOGGER.info(
-            "Arena Server started (trace_store: %s, backend: %s, static_dir: %s)",
-            trace_store_url,
+            "Arena Server started (backend: %s, static_dir: %s)",
             trace_backend,
             static_dir,
         )
@@ -505,27 +511,32 @@ def create_arena_app(
 
 
 async def run_arena_server(
-    trace_store_url: str,
     host: str = "127.0.0.1",
     port: int = 3001,
-    static_dir: Path | None = None,
     trace_backend: str = "jaeger",
+    trace_query_endpoint: str | None = None,
+    static_dir: Path | None = None,
 ) -> None:
     """Run the Arena Server.
 
     Args:
-        trace_store_url: URL to trace store (Jaeger or SLS)
         host: Host to bind to
         port: Port to listen on
-        static_dir: Path to static files (React build output)
         trace_backend: Trace backend type ("jaeger" or "sls")
+        trace_query_endpoint: Jaeger Query API endpoint (only used when trace_backend="jaeger")
+        static_dir: Path to static files (React build output)
+
+    For SLS backend, configuration comes from environment variables:
+        DOJOZERO_SLS_PROJECT: SLS project name
+        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+        DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
     import uvicorn
 
     app = create_arena_app(
-        trace_store_url,
-        static_dir=static_dir,
         trace_backend=trace_backend,
+        trace_query_endpoint=trace_query_endpoint,
+        static_dir=static_dir,
     )
 
     config = uvicorn.Config(

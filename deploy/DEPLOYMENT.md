@@ -21,8 +21,8 @@ python deploy/run_daily_trials.py configs/nfl-game.yaml
 python deploy/run_daily_trials.py configs/nfl-game.yaml --date 2025-01-20
 
 # With Dashboard Server (SLS + OSS integration)
-# Terminal 1: Start server
-dojo0 serve --otlp-endpoint https://... --trace-backend sls --oss-backup
+# Terminal 1: Start server (SLS config from env vars)
+dojo0 serve --trace-backend sls --oss-backup
 
 # Terminal 2: Run trials
 python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --server http://localhost:8000
@@ -130,9 +130,8 @@ For production deployments with trace export and backup, use the Dashboard Serve
 │                    DASHBOARD SERVER                              │
 │                    (dojo0 serve)                                 │
 │                                                                  │
-│   --otlp-endpoint  →  SLS trace export                          │
-│   --trace-backend sls                                            │
-│   --oss-backup     →  OSS backup on trial stop                  │
+│   --trace-backend sls  →  SLS trace export (config from env)    │
+│   --oss-backup         →  OSS backup on trial stop              │
 └─────────────────────────────────────────────────────────────────┘
                               ▲
                               │ --server http://localhost:8000
@@ -169,10 +168,8 @@ DOJOZERO_OSS_PREFIX=prod/  # Optional prefix for all keys
 
 **Start Dashboard Server (keep running):**
 ```bash
-dojo0 serve \
-  --otlp-endpoint https://my-project.cn-hangzhou.log.aliyuncs.com \
-  --trace-backend sls \
-  --oss-backup
+# SLS configuration is read from environment variables
+dojo0 serve --trace-backend sls --oss-backup
 ```
 
 **Run trials via cron:**
@@ -196,7 +193,7 @@ crontab -e
 | Location | Description |
 |----------|-------------|
 | Local `{data-dir}/{date}/{game_id}.jsonl` | Always written |
-| SLS | Real-time trace spans (if server has `--otlp-endpoint`) |
+| SLS | Real-time trace spans (if server has `--trace-backend sls`) |
 | OSS `trials/{trial_id}/events.jsonl` | Backup on trial stop (if server has `--oss-backup`) |
 
 ## Advanced

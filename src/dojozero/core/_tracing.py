@@ -593,54 +593,52 @@ class SLSTraceReader:
 
 
 def create_trace_reader(
-    trace_store_url: str,
-    backend: str = "jaeger",
+    backend: str,
+    trace_query_endpoint: str | None = None,
     service_name: str = "dojozero",
 ) -> TraceReader:
     """Factory function to create a TraceReader based on backend type.
 
     Args:
-        trace_store_url: URL to trace store
         backend: Backend type ("jaeger" or "sls")
+        trace_query_endpoint: Jaeger Query API endpoint (only for jaeger backend)
         service_name: Service name for filtering
 
     Returns:
         TraceReader instance (JaegerTraceReader or SLSTraceReader)
 
-    For SLS backend, credentials are handled by alibabacloud-credentials SDK:
+    For SLS backend, configuration comes from environment variables:
+        DOJOZERO_SLS_PROJECT: SLS project name
+        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+        DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
+
+    Credentials are handled by alibabacloud-credentials SDK:
         - Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID, etc.)
         - Credentials file (~/.alibabacloud/credentials)
         - ECS RAM role (automatic on ECS instances)
         - OIDC (K8s RRSA)
 
-    Environment variables for SLS config:
-        DOJOZERO_SLS_PROJECT: SLS project name
-        DOJOZERO_SLS_LOGSTORE: Logstore name (default: "traces")
+    For Jaeger backend, use trace_query_endpoint (default: http://localhost:16686).
     """
     import os
 
     if backend == "sls":
-        # For SLS, extract endpoint from URL or use environment variables
-        # URL format: https://{project}.{region}.log.aliyuncs.com
+        # For SLS, all config comes from environment variables
         project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
-        logstore = os.environ.get("DOJOZERO_SLS_LOGSTORE", "traces")
-
-        # Try to parse endpoint from URL
-        endpoint = trace_store_url
-        if "://" in endpoint:
-            endpoint = endpoint.split("://", 1)[1]
-        # Remove project prefix if present (e.g., "myproject.cn-hangzhou.log.aliyuncs.com")
-        parts = endpoint.split(".")
-        if len(parts) >= 4 and parts[-2] == "log" and parts[-1] == "aliyuncs.com":
-            # First part is project, rest is region.log.aliyuncs.com
-            if not project:
-                project = parts[0]
-            endpoint = ".".join(parts[1:])
+        endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
+        logstore = os.environ.get("DOJOZERO_SLS_LOGSTORE", "")
 
         if not project:
-            LOGGER.error(
-                "SLS project not configured. Set DOJOZERO_SLS_PROJECT or use URL format: "
-                "https://{project}.{region}.log.aliyuncs.com"
+            raise ValueError(
+                "SLS backend requires DOJOZERO_SLS_PROJECT environment variable"
+            )
+        if not endpoint:
+            raise ValueError(
+                "SLS backend requires DOJOZERO_SLS_ENDPOINT environment variable"
+            )
+        if not logstore:
+            raise ValueError(
+                "SLS backend requires DOJOZERO_SLS_LOGSTORE environment variable"
             )
 
         LOGGER.info(
@@ -656,10 +654,11 @@ def create_trace_reader(
             service_name=service_name,
         )
     else:
-        # Default to Jaeger
-        LOGGER.info("Creating Jaeger trace reader: %s", trace_store_url)
+        # Jaeger backend
+        jaeger_url = trace_query_endpoint or "http://localhost:16686"
+        LOGGER.info("Creating Jaeger trace reader: %s", jaeger_url)
         return JaegerTraceReader(
-            jaeger_url=trace_store_url,
+            jaeger_url=jaeger_url,
             service_name=service_name,
         )
 
@@ -675,7 +674,10 @@ def get_sls_exporter_headers() -> dict[str, str] | None:
 
     Environment variables for SLS config:
         DOJOZERO_SLS_PROJECT: SLS project name
-        DOJOZERO_SLS_INSTANCE_ID: SLS instance ID (optional, defaults to project)
+        DOJOZERO_SLS_LOGSTORE: SLS logstore name (e.g., "dojozero-traces")
+
+    The instance-id for OTLP is derived from logstore by removing "-traces" suffix.
+    For example, logstore "dojozero-traces" -> instance-id "dojozero".
 
     Returns:
         Dict of headers for SLS authentication, or None if not configured.
@@ -685,11 +687,20 @@ def get_sls_exporter_headers() -> dict[str, str] | None:
     from ._credentials import get_credential_provider
 
     project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
-    instance_id = os.environ.get("DOJOZERO_SLS_INSTANCE_ID", project)
+    logstore = os.environ.get("DOJOZERO_SLS_LOGSTORE", "")
 
     if not project:
         LOGGER.warning("DOJOZERO_SLS_PROJECT not set")
         return None
+
+    if not logstore:
+        LOGGER.warning("DOJOZERO_SLS_LOGSTORE not set")
+        return None
+
+    # Derive instance_id from logstore (strip "-traces" suffix if present)
+    instance_id = (
+        logstore.removesuffix("-traces") if logstore.endswith("-traces") else logstore
+    )
 
     # Get credentials from provider (handles all auth methods)
     provider = get_credential_provider()

@@ -211,18 +211,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Port to listen on (default: 8000).",
     )
     serve_parser.add_argument(
-        "--otlp-endpoint",
-        dest="otlp_endpoint",
-        help="OTLP endpoint URL for external trace storage. "
-        "If not provided, enables built-in Trace Query API.",
-    )
-    serve_parser.add_argument(
         "--trace-backend",
         dest="trace_backend",
         choices=["jaeger", "sls"],
-        default="jaeger",
-        help="Trace backend type (default: jaeger). "
-        "Use 'sls' for Alibaba Cloud Simple Log Service.",
+        help="Trace backend type. Use 'jaeger' for local development, "
+        "'sls' for Alibaba Cloud Simple Log Service (uses env vars).",
+    )
+    serve_parser.add_argument(
+        "--trace-ingest-endpoint",
+        dest="trace_ingest_endpoint",
+        default="http://localhost:4318",
+        help="OTLP endpoint for Jaeger trace ingestion (default: http://localhost:4318). "
+        "Only used when --trace-backend=jaeger.",
     )
     serve_parser.add_argument(
         "--oss-backup",
@@ -250,25 +250,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Port to listen on (default: 3001).",
     )
     arena_parser.add_argument(
-        "--trace-store",
-        dest="trace_store",
+        "--trace-backend",
+        dest="trace_backend",
+        choices=["jaeger", "sls"],
         required=True,
-        help="URL to Trace Store (Dashboard or Jaeger). "
-        "Example: http://localhost:8000 (Dashboard) or http://localhost:16686 (Jaeger).",
+        help="Trace backend type. Use 'jaeger' for local development, "
+        "'sls' for Alibaba Cloud Simple Log Service (uses env vars).",
+    )
+    arena_parser.add_argument(
+        "--trace-query-endpoint",
+        dest="trace_query_endpoint",
+        default="http://localhost:16686",
+        help="Jaeger Query API endpoint (default: http://localhost:16686). "
+        "Only used when --trace-backend=jaeger.",
     )
     arena_parser.add_argument(
         "--static-dir",
         dest="static_dir",
         type=Path,
         help="Path to built static assets to serve (optional).",
-    )
-    arena_parser.add_argument(
-        "--trace-backend",
-        dest="trace_backend",
-        choices=["jaeger", "sls"],
-        default="jaeger",
-        help="Trace backend type (default: jaeger). "
-        "Use 'sls' for Alibaba Cloud Simple Log Service.",
     )
     return parser
 
@@ -976,29 +976,28 @@ async def _serve_command(args: argparse.Namespace) -> int:
 
     host = args.host
     port = args.port
-    otlp_endpoint = getattr(args, "otlp_endpoint", None)
-    trace_backend = getattr(args, "trace_backend", "jaeger")
+    trace_backend = getattr(args, "trace_backend", None)
+    trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
     oss_backup = getattr(args, "oss_backup", False)
 
     LOGGER.info("Starting Dashboard Server at http://%s:%d", host, port)
     LOGGER.info("Trial API: http://%s:%d/api/trials", host, port)
-    if otlp_endpoint:
-        LOGGER.info(
-            "Traces will be sent to OTLP endpoint: %s (backend: %s)",
-            otlp_endpoint,
-            trace_backend,
-        )
+
+    if trace_backend == "sls":
+        LOGGER.info("Trace backend: SLS (using env vars for configuration)")
+        if oss_backup:
+            LOGGER.info("OSS backup enabled for trial data")
+    elif trace_backend == "jaeger":
+        LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_ingest_endpoint)
     else:
-        LOGGER.info("Trials API: http://%s:%d/api/trials", host, port)
-    if oss_backup:
-        LOGGER.info("OSS backup enabled for trial data")
+        LOGGER.info("No trace backend configured - traces will not be exported")
 
     await run_dashboard_server(
         dashboard=dashboard,
         host=host,
         port=port,
-        otlp_endpoint=otlp_endpoint,
         trace_backend=trace_backend,
+        trace_ingest_endpoint=trace_ingest_endpoint,
         oss_backup=oss_backup,
     )
     return 0
@@ -1010,22 +1009,25 @@ async def _arena_command(args: argparse.Namespace) -> int:
 
     host = args.host
     port = args.port
-    trace_store = args.trace_store
+    trace_backend = args.trace_backend
+    trace_query_endpoint = getattr(args, "trace_query_endpoint", None)
     static_dir = getattr(args, "static_dir", None)
-    trace_backend = getattr(args, "trace_backend", "jaeger")
 
     LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
-    LOGGER.info("Trace Store: %s (backend: %s)", trace_store, trace_backend)
+    if trace_backend == "sls":
+        LOGGER.info("Trace backend: SLS (using env vars for configuration)")
+    else:
+        LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_query_endpoint)
     LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
     if static_dir:
         LOGGER.info("Static files: %s", static_dir)
 
     await run_arena_server(
-        trace_store_url=trace_store,
         host=host,
         port=port,
-        static_dir=static_dir,
         trace_backend=trace_backend,
+        trace_query_endpoint=trace_query_endpoint,
+        static_dir=static_dir,
     )
     return 0
 

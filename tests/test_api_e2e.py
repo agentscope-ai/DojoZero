@@ -101,7 +101,11 @@ def dashboard():
 @pytest.fixture
 def dashboard_app(dashboard, otel_exporter):
     """Create Dashboard Server FastAPI app with OTel configured."""
-    app = create_dashboard_app(dashboard, otlp_endpoint=JAEGER_OTLP_URL)
+    app = create_dashboard_app(
+        dashboard,
+        trace_backend="jaeger",
+        trace_ingest_endpoint=JAEGER_OTLP_URL,
+    )
     return app
 
 
@@ -109,7 +113,8 @@ def dashboard_app(dashboard, otel_exporter):
 def arena_app():
     """Create Arena Server FastAPI app pointing to Jaeger."""
     app = create_arena_app(
-        trace_store_url=JAEGER_UI_URL,
+        trace_backend="jaeger",
+        trace_query_endpoint=JAEGER_UI_URL,
         poll_interval=0.5,
     )
     return app
