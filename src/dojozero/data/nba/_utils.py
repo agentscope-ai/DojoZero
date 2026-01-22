@@ -399,8 +399,10 @@ def get_game_info_by_id(
     except json.JSONDecodeError as e:
         # BoxScore returned invalid JSON, will try Scoreboard fallback
         logger.debug(f"BoxScore JSON error for game_id={game_id}: {e}")
-    except (KeyError, TypeError, ValueError) as e:
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
         # BoxScore data parsing failed, will try Scoreboard fallback
+        # AttributeError occurs when nba_api tries to parse empty team stats
+        # for games that haven't started yet
         logger.debug(f"BoxScore data error for game_id={game_id}: {e}")
 
     # Strategy 2: Fallback to Scoreboard search for future/upcoming games
