@@ -1275,10 +1275,8 @@ class OTelSpanExporter:
 
             LOGGER.info(
                 "OTel exporter initialized: endpoint=%s service=%s headers=%s",
-                "OTel exporter initialized: endpoint=%s service=%s headers=%s",
                 traces_endpoint,
                 self._service_name,
-                "present" if self._headers else "none",
                 "present" if self._headers else "none",
             )
         except ImportError as e:
@@ -1381,11 +1379,13 @@ class OTelSpanExporter:
 
 
 class SLSLogExporter:
-    """SLS Log exporter that sends spans as logs with flat fields.
+    """SLS Log exporter with async producer pattern.
 
-    Unlike OTLP traces where attributes are nested in a JSON string,
-    this exporter sends logs with top-level fields that can be directly
-    indexed and queried in SLS.
+    Sends spans as flat log entries to SLS. Uses a background thread with
+    batching for non-blocking, high-throughput ingestion:
+    - export_span() is non-blocking (puts on queue, returns immediately)
+    - Background worker drains queue, batches items, calls put_logs
+    - Configurable batch size and linger time
 
     Uses the official aliyun-log-python-sdk for reliable authentication.
 
@@ -1395,14 +1395,25 @@ class SLSLogExporter:
             endpoint="cn-hangzhou.log.aliyuncs.com",
             logstore="my-traces",
         )
-        exporter.export_span(span_data)
+        exporter.start()  # Start background flush worker
+        exporter.export_span(span_data)  # Non-blocking
+        exporter.shutdown()  # Flush remaining and stop
     """
+
+    # Class-level counters for progress logging
+    _put_count: int = 0
+    _put_error_count: int = 0
+    _emit_count: int = 0
+    _drop_count: int = 0
 
     def __init__(
         self,
         project: str,
         endpoint: str,
         logstore: str,
+        batch_size: int = 100,
+        linger_ms: int = 200,
+        queue_max_size: int = 10000,
     ):
         """Initialize SLS Log exporter.
 
@@ -1410,15 +1421,28 @@ class SLSLogExporter:
             project: SLS project name
             endpoint: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
             logstore: SLS logstore name for flat logs
+            batch_size: Max items per put_logs call
+            linger_ms: Max wait time before flushing a partial batch
+            queue_max_size: Max queue depth (drops oldest on overflow)
         """
+        import queue
+        import threading
+
         from ._credentials import get_credential_provider
 
         self._project = project
         self._endpoint = endpoint
         self._logstore = logstore
+        self._batch_size = batch_size
+        self._linger_s = linger_ms / 1000.0
         self._credential_provider = get_credential_provider()
         self._initialized = False
         self._sls_client: Any = None
+
+        # Producer queue and worker
+        self._queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=queue_max_size)
+        self._stop_event = threading.Event()
+        self._worker_thread: threading.Thread | None = None
 
     def _ensure_initialized(self) -> None:
         """Ensure the SLS client is initialized."""
@@ -1434,8 +1458,6 @@ class SLSLogExporter:
                 self._initialized = True
                 return
 
-            # Create SLS client with credentials
-            # For STS credentials, we need to pass security_token
             if creds.security_token:
                 self._sls_client = LogClient(
                     self._endpoint,
@@ -1464,8 +1486,83 @@ class SLSLogExporter:
             LOGGER.warning("Failed to initialize SLS client: %s", e)
             self._initialized = True
 
-    def _send_logs(self, logs: list[dict[str, Any]]) -> None:
-        """Send logs to SLS using the SDK."""
+    def start(self) -> None:
+        """Start the background flush worker thread."""
+        import threading
+
+        self._ensure_initialized()
+        if self._sls_client is None:
+            return
+        if self._worker_thread is not None and self._worker_thread.is_alive():
+            return
+
+        self._stop_event.clear()
+        self._worker_thread = threading.Thread(
+            target=self._flush_loop,
+            name="sls-log-producer",
+            daemon=True,
+        )
+        self._worker_thread.start()
+        LOGGER.info(
+            "SLS producer started: batch_size=%d linger_ms=%d queue_max=%d",
+            self._batch_size,
+            int(self._linger_s * 1000),
+            self._queue.maxsize,
+        )
+
+    def _flush_loop(self) -> None:
+        """Background worker: streaming flush with opportunistic batching.
+
+        Blocks until the first item arrives (no busy-waiting), then drains
+        any additional items that arrive within linger_ms. This gives:
+        - Near-zero latency for isolated items (sent within linger_ms)
+        - Automatic batching under load (concurrent items grouped together)
+        """
+        import queue
+        import time
+
+        while not self._stop_event.is_set():
+            # Block until first item arrives (or stop is requested)
+            try:
+                first = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+            batch: list[dict[str, Any]] = [first]
+            deadline = time.monotonic() + self._linger_s
+
+            # Drain any additional items within linger window
+            while len(batch) < self._batch_size:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    item = self._queue.get(timeout=remaining)
+                    batch.append(item)
+                except queue.Empty:
+                    break
+
+            self._send_batch(batch)
+
+        # Final drain on shutdown
+        self._flush_remaining()
+
+    def _flush_remaining(self) -> None:
+        """Flush any remaining items in the queue."""
+        batch: list[dict[str, Any]] = []
+        while not self._queue.empty():
+            try:
+                batch.append(self._queue.get_nowait())
+                if len(batch) >= self._batch_size:
+                    self._send_batch(batch)
+                    batch = []
+            except Exception:
+                break
+        if batch:
+            self._send_batch(batch)
+
+    def _send_batch(self, batch: list[dict[str, Any]]) -> None:
+        """Send a batch of log entries to SLS."""
         if self._sls_client is None:
             return
 
@@ -1473,8 +1570,7 @@ class SLSLogExporter:
             from aliyun.log import LogItem, PutLogsRequest
 
             log_items = []
-            for log_entry in logs:
-                # Extract __time__ (integer timestamp) and convert rest to LogItem
+            for log_entry in batch:
                 timestamp = log_entry.pop("__time__", 0)
                 contents = [(k, str(v)) for k, v in log_entry.items()]
                 log_items.append(LogItem(timestamp=timestamp, contents=contents))
@@ -1487,20 +1583,43 @@ class SLSLogExporter:
                 logitems=log_items,
             )
             self._sls_client.put_logs(request)
+            SLSLogExporter._put_count += 1
+            if SLSLogExporter._put_count % 50 == 0:
+                LOGGER.info(
+                    "SLS put_logs progress: %d batches (%d items total, %d errors)",
+                    SLSLogExporter._put_count,
+                    SLSLogExporter._emit_count,
+                    SLSLogExporter._put_error_count,
+                )
         except Exception as e:
-            LOGGER.warning("SLS log export error: %s", e)
+            SLSLogExporter._put_error_count += 1
+            if SLSLogExporter._put_error_count <= 5 or (
+                SLSLogExporter._put_error_count % 50 == 0
+            ):
+                LOGGER.warning(
+                    "SLS put_logs error (#%d, batch_size=%d): %s: %s",
+                    SLSLogExporter._put_error_count,
+                    len(batch),
+                    type(e).__name__,
+                    e,
+                )
 
     def export_span(self, span_data: SpanData) -> None:
-        """Export a SpanData as a flat log entry.
+        """Export a SpanData as a flat log entry (non-blocking).
+
+        Puts the log entry on the producer queue. The background worker
+        will batch and send to SLS.
 
         Args:
             span_data: The span to export
         """
-        self._ensure_initialized()
+        import queue
+        import time as _time
 
-        # Build flat log entry with top-level fields
+        # Build flat log entry
         log_entry: dict[str, Any] = {
-            "__time__": span_data.start_time // 1_000_000,  # Unix seconds (integer)
+            "__time__": int(_time.time()),
+            "event_time": span_data.start_time // 1_000_000,
             "trace_id": span_data.trace_id,
             "span_id": span_data.span_id,
             "operation_name": span_data.operation_name,
@@ -1513,17 +1632,40 @@ class SLSLogExporter:
 
         # Flatten tags to top-level fields
         for key, value in span_data.tags.items():
-            # Convert dotted keys to underscores for easier querying
             flat_key = key.replace(".", "_")
             if value is not None:
                 log_entry[flat_key] = value
 
-        self._send_logs([log_entry])
+        # Non-blocking put on queue
+        try:
+            self._queue.put_nowait(log_entry)
+            SLSLogExporter._emit_count += 1
+        except queue.Full:
+            SLSLogExporter._drop_count += 1
+            if SLSLogExporter._drop_count <= 3 or (
+                SLSLogExporter._drop_count % 100 == 0
+            ):
+                LOGGER.warning(
+                    "SLS producer queue full, dropping span (%d dropped total)",
+                    SLSLogExporter._drop_count,
+                )
 
     def shutdown(self) -> None:
-        """Shutdown the exporter."""
+        """Stop the background worker and flush remaining items."""
+        self._stop_event.set()
+        if self._worker_thread is not None and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=5.0)
+            if self._worker_thread.is_alive():
+                LOGGER.warning("SLS producer thread did not stop within timeout")
         self._sls_client = None
-        LOGGER.info("SLS Log exporter shutdown complete")
+        LOGGER.info(
+            "SLS Log exporter shutdown: %d batches sent, %d items emitted, "
+            "%d errors, %d dropped",
+            SLSLogExporter._put_count,
+            SLSLogExporter._emit_count,
+            SLSLogExporter._put_error_count,
+            SLSLogExporter._drop_count,
+        )
 
 
 # Global exporter instances (lazily initialized)

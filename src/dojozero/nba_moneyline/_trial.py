@@ -578,6 +578,7 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
         enable_persistence=enable_persistence,
         metadata=metadata,
         store_types=store_types,
+        sport_type="nba",
     )
 
 

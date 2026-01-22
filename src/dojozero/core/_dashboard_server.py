@@ -697,6 +697,7 @@ def create_dashboard_app(
                     endpoint=sls_endpoint,
                     logstore=sls_logstore,
                 )
+                sls_log_exporter.start()
                 set_sls_log_exporter(sls_log_exporter)
                 LOGGER.info(
                     "SLS Log exporter configured: %s/%s (flat fields)",
@@ -1073,23 +1074,6 @@ def create_dashboard_app(
                 content={"error": f"Trial '{trial_id}' not found"},
                 status_code=404,
             )
-
-        # OSS backup if enabled
-        oss_uploaded = False
-        if state.oss_backup:
-            # Get persistence_file from trial metadata
-            try:
-                trial_status = state.dashboard.get_trial_status(trial_id)
-                persistence_file_path = trial_status.metadata.get("persistence_file")
-                if persistence_file_path and isinstance(persistence_file_path, str):
-                    persistence_file = Path(persistence_file_path)
-                    oss_uploaded = _upload_trial_to_oss(trial_id, persistence_file)
-                else:
-                    LOGGER.warning(
-                        "OSS backup enabled but no persistence_file in trial metadata"
-                    )
-            except Exception as e:
-                LOGGER.error("Failed to upload trial %s to OSS: %s", trial_id, e)
 
         # OSS backup if enabled
         oss_uploaded = False
