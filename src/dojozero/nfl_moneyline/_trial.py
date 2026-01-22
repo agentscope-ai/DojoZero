@@ -1,4 +1,4 @@
-"""Trial builder for NBA pre-game betting scenario."""
+"""Trial builder for NFL pre-game betting scenario."""
 
 import logging
 import re
@@ -17,24 +17,21 @@ from dojozero.core import (
 from dojozero.data._factory import build_runtime_context
 
 # Import factories to ensure they are registered
-import dojozero.data.nba._factory  # noqa: F401
+import dojozero.data.nfl._factory  # noqa: F401
 import dojozero.data.websearch._factory  # noqa: F401
-import dojozero.data.polymarket._factory  # noqa: F401
-from dojozero.data.nba._utils import get_game_info_by_id
 from dojozero.data.websearch._processors import (
     ExpertPredictionProcessor,
     InjurySummaryProcessor,
     PowerRankingProcessor,
 )
-from dojozero.nba_moneyline._agent import (
+from dojozero.nfl_moneyline._agent import (
     BettingAgent,
     BettingAgentConfig,
 )
-from dojozero.nba_moneyline._datastream import (
-    NBAPreGameBettingDataHubDataStream,
-    NBAPreGameBettingDataHubDataStreamConfig,
+from dojozero.nfl_moneyline._datastream import (
+    NFLPreGameBettingDataHubDataStream,
+    NFLPreGameBettingDataHubDataStreamConfig,
 )
-from dojozero.data._models import EventTypes
 
 # Import shared operators from betting module
 from dojozero.betting import (
@@ -59,19 +56,19 @@ EVENT_TYPE_PROCESSOR_MAP: dict[str, tuple[type[Any] | None, list[str]]] = {
 # Mapping from synthetic event types to actual event types
 # Used when a stream subscribes to multiple event types
 SYNTHETIC_EVENT_TYPE_MAP: dict[str, list[str]] = {
-    "game_status_change": [
-        EventTypes.GAME_START.value,
-        EventTypes.GAME_RESULT.value,
-        EventTypes.GAME_INITIALIZE.value,
+    "nfl_game_status_change": [
+        "nfl_game_start",
+        "nfl_game_result",
+        "nfl_game_initialize",
     ],
-    # Other event types (game_update, odds_update) are direct mappings
+    # Other event types (nfl_game_update, nfl_odds_update) are direct mappings
 }
 
 
 class HubConfig(BaseModel):
     """Hub configuration."""
 
-    persistence_file: str = Field(default="outputs/nba_pregame_events.jsonl")
+    persistence_file: str = Field(default="outputs/nfl_pregame_events.jsonl")
     enable_persistence: bool = Field(default=True)
 
 
@@ -98,23 +95,15 @@ class OperatorConfig(BaseModel):
     )
 
 
-class NBAPreGameBettingTrialParams(BaseModel):
-    """Trial parameters for NBA pre-game betting scenario."""
+class NFLPreGameBettingTrialParams(BaseModel):
+    """Trial parameters for NFL pre-game betting scenario."""
 
-    # NBA game configuration
-    game_id: str = Field(..., description="NBA.com game ID (e.g., '0022500290')")
-    game_date: str | None = Field(
-        default=None,
-        description=(
-            "Game date in YYYY-MM-DD format. If not provided, will try to:\n"
-            "1. Fetch from NBA API\n"
-            "2. Extract from persistence_file path (e.g., 'data/nba-betting/2026-01-15/...')"
-        ),
-    )
+    # NFL game configuration
+    event_id: str = Field(..., description="ESPN event ID (e.g., '401671827')")
 
     # Hub configuration (optional, can be nested or flat)
     hub: HubConfig | None = Field(default=None)
-    hub_id: str = Field(default="nba_pregame_hub")
+    hub_id: str = Field(default="nfl_pregame_hub")
     persistence_file: str | None = Field(default=None)
     enable_persistence: bool | None = Field(default=None)
 
@@ -147,18 +136,9 @@ class NBAPreGameBettingTrialParams(BaseModel):
         ),
     )
 
-    # Polymarket configuration
-    market_url: str | None = Field(
-        default=None,
-        description=(
-            "Optional Polymarket market URL (e.g., 'https://polymarket.com/sports/nba/games/week/3/nba-sas-lal-2025-12-10'). "
-            "If not provided, will auto-construct slug from game info (away_tricode, home_tricode, game_date)."
-        ),
-    )
-
     # Search queries (optional, for triggering searches)
-    # If not provided, will be auto-generated based on game_id
-    # Supports query templates with placeholders: {teams}, {home_team}, {away_team}, {date}, {home_tricode}, {away_tricode}
+    # If not provided, will be auto-generated based on event_id
+    # Supports query templates with placeholders: {teams}, {home_team}, {away_team}, {date}, {home_abbrev}, {away_abbrev}, {week}
     # Use "template" field for templates or "query" field for literal queries
     search_queries: list[dict[str, Any]] = Field(
         default_factory=list,
@@ -172,48 +152,35 @@ class NBAPreGameBettingTrialParams(BaseModel):
             "  - {home_team} - Home team full name\n"
             "  - {away_team} - Away team full name\n"
             "  - {date} - Game date\n"
-            "  - {home_tricode} - Home team tricode (e.g., 'LAL')\n"
-            "  - {away_tricode} - Away team tricode (e.g., 'SAS')"
+            "  - {home_abbrev} - Home team abbreviation (e.g., 'KC')\n"
+            "  - {away_abbrev} - Away team abbreviation (e.g., 'SF')\n"
+            "  - {week} - NFL week number"
         ),
     )
 
 
 def _build_trial_spec(
     trial_id: str,
-    params: NBAPreGameBettingTrialParams,
+    params: NFLPreGameBettingTrialParams,
 ) -> TrialSpec:
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
 
-    # Get game information from game_id to extract team tricodes and names
-    game_info = get_game_info_by_id(params.game_id)
-    home_team_tricode: str | None = None
-    away_team_tricode: str | None = None
+    # For NFL, we'll use the event_id directly since NFL data comes from ESPN
+    # Team info will be filled in from the store when the game initializes
+    event_id = params.event_id
+    home_team_abbreviation: str | None = None
+    away_team_abbreviation: str | None = None
     home_team_name: str | None = None
     away_team_name: str | None = None
-    game_date: str | None = params.game_date  # Use provided game_date if available
+    game_date: str | None = None
 
-    if game_info:
-        home_team_tricode = game_info.get("home_team_tricode")
-        away_team_tricode = game_info.get("away_team_tricode")
-        home_team_name = game_info.get("home_team")
-        away_team_name = game_info.get("away_team")
-        # Only use game_info date if not already provided in params
-        if not game_date:
-            game_date = game_info.get("game_date")
-        logger.info(
-            "Found game info: %s on %s",
-            f"{away_team_tricode} @ {home_team_tricode}",
-            game_date,
-        )
-    else:
-        logger.error(
-            "Could not find game info for game_id=%s. Exiting.",
-            params.game_id,
-        )
-        raise ValueError(f"Could not find game info for game_id={params.game_id}.")
+    logger.info(
+        "Building NFL trial for event_id=%s (team info will be populated from store)",
+        event_id,
+    )
 
-    # Fallback: extract game_date from persistence_file path if still not available
-    # Path format: data/nba-betting/YYYY-MM-DD/game_id.jsonl
+    # Fallback: extract game_date from persistence_file path if not available
+    # Path format: data/nfl-betting/YYYY-MM-DD/event_id.jsonl
     if not game_date:
         persistence_path = (
             params.hub.persistence_file if params.hub else params.persistence_file
@@ -234,7 +201,7 @@ def _build_trial_spec(
         enable_persistence = params.hub.enable_persistence
     else:
         hub_id = params.hub_id
-        persistence_file = params.persistence_file or "outputs/nba_pregame_events.jsonl"
+        persistence_file = params.persistence_file or "outputs/nfl_pregame_events.jsonl"
         enable_persistence = (
             params.enable_persistence if params.enable_persistence is not None else True
         )
@@ -253,7 +220,7 @@ def _build_trial_spec(
             event_types_list,
         )
     else:
-        # Default event types
+        # Default event types for NFL
         event_types_list = [
             "raw_web_search",
             "injury_summary",
@@ -280,7 +247,7 @@ def _build_trial_spec(
             else:
                 actual_event_types = [ds_config.event_type]
 
-            ds_stream_config: NBAPreGameBettingDataHubDataStreamConfig = {
+            ds_stream_config: NFLPreGameBettingDataHubDataStreamConfig = {
                 "actor_id": ds_config.id,
                 "hub_id": hub_id,
                 "persistence_file": persistence_file,
@@ -290,18 +257,18 @@ def _build_trial_spec(
             }
 
             # Add optional fields
-            if home_team_tricode:
-                ds_stream_config["home_team_tricode"] = home_team_tricode
-            if away_team_tricode:
-                ds_stream_config["away_team_tricode"] = away_team_tricode
+            if home_team_abbreviation:
+                ds_stream_config["home_team_abbreviation"] = home_team_abbreviation
+            if away_team_abbreviation:
+                ds_stream_config["away_team_abbreviation"] = away_team_abbreviation
 
             # Handle initializer config for raw_web_search stream
             if ds_config.event_type == "raw_web_search":
                 ds_stream_config["websearch_store_id"] = params.websearch_store_id
-                if home_team_tricode:
-                    ds_stream_config["home_team_tricode"] = home_team_tricode
-                if away_team_tricode:
-                    ds_stream_config["away_team_tricode"] = away_team_tricode
+                if home_team_abbreviation:
+                    ds_stream_config["home_team_abbreviation"] = home_team_abbreviation
+                if away_team_abbreviation:
+                    ds_stream_config["away_team_abbreviation"] = away_team_abbreviation
                 if home_team_name:
                     ds_stream_config["home_team_name"] = home_team_name
                 if away_team_name:
@@ -316,14 +283,14 @@ def _build_trial_spec(
 
             stream_spec = DataStreamSpec(
                 actor_id=ds_config.id,
-                actor_cls=NBAPreGameBettingDataHubDataStream,
+                actor_cls=NFLPreGameBettingDataHubDataStream,
                 config=ds_stream_config,
             )
             stream_specs.append(stream_spec)
     else:
         # Fallback to flat event_types structure - create one stream per event type
         for event_type in event_types_list:
-            flat_stream_config: NBAPreGameBettingDataHubDataStreamConfig = {
+            flat_stream_config: NFLPreGameBettingDataHubDataStreamConfig = {
                 "actor_id": f"{event_type}_stream",
                 "hub_id": hub_id,
                 "persistence_file": persistence_file,
@@ -333,18 +300,22 @@ def _build_trial_spec(
             }
 
             # Add optional fields
-            if home_team_tricode:
-                flat_stream_config["home_team_tricode"] = home_team_tricode
-            if away_team_tricode:
-                flat_stream_config["away_team_tricode"] = away_team_tricode
+            if home_team_abbreviation:
+                flat_stream_config["home_team_abbreviation"] = home_team_abbreviation
+            if away_team_abbreviation:
+                flat_stream_config["away_team_abbreviation"] = away_team_abbreviation
 
             # Handle initializer config for raw_web_search stream
             if event_type == "raw_web_search":
                 flat_stream_config["websearch_store_id"] = params.websearch_store_id
-                if home_team_tricode:
-                    flat_stream_config["home_team_tricode"] = home_team_tricode
-                if away_team_tricode:
-                    flat_stream_config["away_team_tricode"] = away_team_tricode
+                if home_team_abbreviation:
+                    flat_stream_config["home_team_abbreviation"] = (
+                        home_team_abbreviation
+                    )
+                if away_team_abbreviation:
+                    flat_stream_config["away_team_abbreviation"] = (
+                        away_team_abbreviation
+                    )
                 if home_team_name:
                     flat_stream_config["home_team_name"] = home_team_name
                 if away_team_name:
@@ -357,7 +328,7 @@ def _build_trial_spec(
 
             stream_spec = DataStreamSpec(
                 actor_id=f"{event_type}_stream",
-                actor_cls=NBAPreGameBettingDataHubDataStream,
+                actor_cls=NFLPreGameBettingDataHubDataStream,
                 config=flat_stream_config,
             )
             stream_specs.append(stream_spec)
@@ -507,24 +478,20 @@ def _build_trial_spec(
     # Build metadata with game information and hub config
     # This metadata is used by build_runtime_context and store factories
     metadata: dict[str, Any] = {
-        "sample": "nba-pregame-betting",
-        "game_id": params.game_id,
+        "sample": "nfl-pregame-betting",
+        "event_id": params.event_id,
         "hub_id": hub_id,
         "persistence_file": persistence_file,
         "enable_persistence": enable_persistence,
         "event_types": params.event_types,
         # Store types to create (used by build_runtime_context)
-        "store_types": ["nba", "websearch", "polymarket"],
+        "store_types": ["nfl", "websearch"],
     }
 
-    # Add market_url if provided
-    if params.market_url:
-        metadata["market_url"] = params.market_url
-
-    # Add team information if available (used by polymarket factory)
-    if home_team_tricode and away_team_tricode:
-        metadata["home_team_tricode"] = home_team_tricode
-        metadata["away_team_tricode"] = away_team_tricode
+    # Add team information if available
+    if home_team_abbreviation and away_team_abbreviation:
+        metadata["home_team_abbreviation"] = home_team_abbreviation
+        metadata["away_team_abbreviation"] = away_team_abbreviation
         if game_date:
             metadata["game_date"] = game_date
 
@@ -537,8 +504,8 @@ def _build_trial_spec(
     )
 
 
-def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
-    """Build runtime context for NBA pre-game betting trial.
+def _build_nfl_runtime_context(spec: TrialSpec) -> RuntimeContext:
+    """Build runtime context for NFL pre-game betting trial.
 
     Uses the generic build_runtime_context with registered store factories
     to create DataHub and store instances.
@@ -552,8 +519,8 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
     metadata = dict(spec.metadata)  # Convert to regular dict for type compatibility
 
     # Get hub configuration from metadata
-    hub_id_raw = metadata.get("hub_id", "nba_pregame_hub")
-    hub_id = str(hub_id_raw) if hub_id_raw else "nba_pregame_hub"
+    hub_id_raw = metadata.get("hub_id", "nfl_pregame_hub")
+    hub_id = str(hub_id_raw) if hub_id_raw else "nfl_pregame_hub"
 
     persistence_file_raw = metadata.get("persistence_file")
     persistence_file = str(persistence_file_raw) if persistence_file_raw else None
@@ -563,12 +530,12 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
         bool(enable_persistence_raw) if enable_persistence_raw is not None else True
     )
 
-    # Get store types from metadata (defaults to NBA + websearch + polymarket)
-    store_types_raw = metadata.get("store_types", ["nba", "websearch", "polymarket"])
+    # Get store types from metadata (defaults to NFL + websearch)
+    store_types_raw = metadata.get("store_types", ["nfl", "websearch"])
     if isinstance(store_types_raw, list):
         store_types = [str(s) for s in store_types_raw]
     else:
-        store_types = ["nba", "websearch", "polymarket"]
+        store_types = ["nfl", "websearch"]
 
     # Build and return RuntimeContext directly
     return build_runtime_context(
@@ -582,16 +549,15 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
 
 
 register_trial_builder(
-    "nba-pregame-betting",
-    NBAPreGameBettingTrialParams,
+    "nfl-pregame-betting",
+    NFLPreGameBettingTrialParams,
     _build_trial_spec,
-    description="NBA pre-game betting scenario with relevant data inputs",
-    context_builder=_build_nba_runtime_context,
-    # Use dict format to match the hierarchical YAML structure in nba-pregame-betting_example_1.yaml
+    description="NFL pre-game betting scenario with relevant data inputs",
+    context_builder=_build_nfl_runtime_context,
     example_params={
-        "game_id": "0022501215",
+        "event_id": "401671827",
         "hub": {
-            "persistence_file": "outputs/nba_pregame_events.jsonl",
+            "persistence_file": "outputs/nfl_pregame_events.jsonl",
             "enable_persistence": True,
         },
         "data_streams": [
@@ -601,12 +567,15 @@ register_trial_builder(
                 "initializer": {
                     "search_queries": [
                         {
-                            "template": "NBA injury updates for {teams} on {date}",
+                            "template": "NFL injury updates for {teams} on {date}",
                             "intent": "injury_summary",
                         },
-                        {"template": "NBA power rankings", "intent": "power_ranking"},
                         {
-                            "template": "NBA expert predictions for {teams}",
+                            "template": "NFL power rankings Week {week}",
+                            "intent": "power_ranking",
+                        },
+                        {
+                            "template": "NFL expert predictions for {teams}",
                             "intent": "expert_prediction",
                         },
                     ]
@@ -625,20 +594,20 @@ register_trial_builder(
                 "event_type": "expert_prediction",
             },
             {
-                "id": "game_status_change_stream",
-                "event_type": "game_status_change",
+                "id": "nfl_game_status_change_stream",
+                "event_type": "nfl_game_status_change",
             },
             {
-                "id": "game_update_stream",
-                "event_type": "game_update",
+                "id": "nfl_game_update_stream",
+                "event_type": "nfl_game_update",
             },
             {
-                "id": "odds_update_stream",
-                "event_type": "odds_update",
+                "id": "nfl_odds_update_stream",
+                "event_type": "nfl_odds_update",
             },
             {
-                "id": "play_by_play_stream",
-                "event_type": "play_by_play",
+                "id": "nfl_play_stream",
+                "event_type": "nfl_play",
             },
         ],
         "operators": [
@@ -647,8 +616,8 @@ register_trial_builder(
                 "class": "BrokerOperator",
                 "initial_balance": "1000.00",
                 "data_streams": [
-                    "game_status_change_stream",
-                    "odds_update_stream",
+                    "nfl_game_status_change_stream",
+                    "nfl_odds_update_stream",
                 ],
             },
         ],
@@ -661,10 +630,10 @@ register_trial_builder(
                     "injury_summary_stream",
                     "power_ranking_stream",
                     "expert_prediction_stream",
-                    "game_update_stream",
-                    "odds_update_stream",
-                    "game_status_change_stream",
-                    "play_by_play_stream",
+                    "nfl_game_update_stream",
+                    "nfl_odds_update_stream",
+                    "nfl_game_status_change_stream",
+                    "nfl_play_stream",
                 ],
             }
         ],

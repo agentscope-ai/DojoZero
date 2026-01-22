@@ -6,46 +6,27 @@ import os
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
 
-from dojozero.nba_moneyline import BettingAgent, BettingAgentGroup
-from dojozero.agents._config import load_agent_config, create_model, create_formatter
-from dojozero.core import RuntimeContext, StreamEvent
-from dojozero.nba_moneyline._broker import BrokerOperator
+from dojozero.nba_moneyline._group import BettingAgentGroup
+from dojozero.core import StreamEvent
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
 from dojozero.data.polymarket._events import OddsUpdateEvent
-from datetime import datetime
 
-load_dotenv()
+# Import shared fixtures - conftest.py is auto-loaded by pytest
+import sys
 
-# Test-specific environment variable names to avoid conflicts with other apps
-TEST_API_KEY_ENV = "DOJOZERO_OPENAI_API_KEY"
-TEST_BASE_URL_ENV = "DOJOZERO_OPENAI_BASE_URL"
-
-CONFIG_DIR = Path(__file__).parent.parent / "configs" / "agents"
-WHALE_CONFIG = CONFIG_DIR / "whale.yaml"
-SHEEP_CONFIG = CONFIG_DIR / "sheep.yaml"
-SHARK_CONFIG = CONFIG_DIR / "shark.yaml"
-
-
-def create_test_agent(config_path: Path, trial_id: str) -> BettingAgent:
-    """Create agent with test-specific env vars, overriding YAML config."""
-    config = load_agent_config(config_path)
-    llm_config = config["llm"].copy()
-    llm_config["api_key_env"] = TEST_API_KEY_ENV
-    llm_config["base_url_env"] = TEST_BASE_URL_ENV
-    model_type = llm_config.get("model_type", "openai")
-    return BettingAgent(
-        actor_id=config["name"],
-        trial_id=trial_id,
-        name=config["name"],
-        sys_prompt=config["sys_prompt"],
-        model=create_model(llm_config),
-        formatter=create_formatter(model_type),
-    )
+sys.path.insert(0, str(Path(__file__).parent))
+from conftest import (
+    TEST_API_KEY_ENV,
+    WHALE_CONFIG_PATH,
+    SHEEP_CONFIG_PATH,
+    SHARK_CONFIG_PATH,
+    create_broker_fixture,
+    create_nba_test_agent,
+)
 
 
-class TestBettingAgentGroup(BettingAgentGroup):
+class _BettingAgentGroupForTest(BettingAgentGroup):
     """Test-specific group that creates agents with test env vars."""
 
     def __init__(
@@ -56,7 +37,7 @@ class TestBettingAgentGroup(BettingAgentGroup):
         max_rounds: int = 1,
     ) -> None:
         # Create agents with test env vars directly
-        agents = [create_test_agent(path, trial_id) for path in config_paths]
+        agents = [create_nba_test_agent(path, trial_id) for path in config_paths]
         # Initialize parent with actor_id, trial_id, and agents
         super().__init__(
             actor_id=actor_id,
@@ -69,38 +50,27 @@ class TestBettingAgentGroup(BettingAgentGroup):
 @pytest.fixture
 def broker():
     """Create BrokerOperator with initial balance for all agents."""
-    context = RuntimeContext(
-        trial_id="test-trial",
-        data_hubs={},
-        stores={},
-        startup=None,
-    )
-    return BrokerOperator.from_dict(
-        {
-            "actor_id": "nba-broker",
-            "initial_balance": "1000.00",
-        },
-        context,
-    )
+    return create_broker_fixture("nba-broker")
 
 
 @pytest.fixture
 def agent_group():
     """Create BettingAgentGroup with whale, sheep, shark agents using test env vars."""
-    return TestBettingAgentGroup(
-        config_paths=[WHALE_CONFIG, SHEEP_CONFIG, SHARK_CONFIG],
+    return _BettingAgentGroupForTest(
+        config_paths=[WHALE_CONFIG_PATH, SHEEP_CONFIG_PATH, SHARK_CONFIG_PATH],
         max_rounds=2,
     )
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get(TEST_API_KEY_ENV), reason=f"{TEST_API_KEY_ENV} not set"
 )
-async def test_group_receives_event_and_discusses(broker, agent_group):
+async def test_group_receives_event_and_discusses(
+    broker, agent_group, nba_game_init_data, nba_odds_data
+):
     """Test group communication: all agents discuss a market event."""
-
-    # TBD: broker.register_agents(group.agents)
     await agent_group.register_operators([broker])
     broker.register_agents(agent_group.agents)
 
@@ -111,31 +81,22 @@ async def test_group_receives_event_and_discusses(broker, agent_group):
     assert set(agent_group.agent_ids) == {"whale", "sheep", "shark"}
 
     # Initialize event in broker first
-    game_init_event = GameInitializeEvent(
-        event_id="lakers_vs_warriors_2024",
-        game_id="lakers_vs_warriors_2024",
-        home_team="Lakers",
-        away_team="Warriors",
-        game_time=datetime.now(),
-    )
+    game_init_event = GameInitializeEvent(**nba_game_init_data)
     await broker.handle_stream_event(
         StreamEvent(stream_id="nba-stream", payload=game_init_event, sequence=-2)
     )
 
-    odds_update_event = OddsUpdateEvent(
-        event_id="lakers_vs_warriors_2024",
-        home_odds=1.85,
-        away_odds=2.10,
-    )
+    odds_update_event = OddsUpdateEvent(**nba_odds_data)
     await broker.handle_stream_event(
         StreamEvent(stream_id="nba-stream", payload=odds_update_event, sequence=-1)
     )
 
     # Simulate DataStream sending match data
+    event_id = nba_game_init_data["event_id"]
     event = StreamEvent(
         stream_id="nba-stream",
         payload={
-            "event_id": "lakers_vs_warriors_2024",
+            "event_id": event_id,
             "home_team": "Lakers",
             "away_team": "Warriors",
             "home_odds": "1.85",
@@ -147,7 +108,6 @@ async def test_group_receives_event_and_discusses(broker, agent_group):
     print(f"\nSending event to group: {event.payload}")
 
     # Group handles event - agents discuss via MsgHub
-    # Use internal method to get messages back for testing
     messages = await agent_group._handle_stream_event_with_rounds(event, max_rounds=2)
 
     print(f"\nGroup discussion produced {len(messages)} messages")
@@ -156,7 +116,7 @@ async def test_group_receives_event_and_discusses(broker, agent_group):
         print(f"  [{msg.name}]: {content}...")
 
     game_result_event = GameResultEvent(
-        event_id="lakers_vs_warriors_2024",
+        event_id=event_id,
         winner="home",
         final_score={"home": 110, "away": 105},
     )
@@ -172,50 +132,15 @@ async def test_group_receives_event_and_discusses(broker, agent_group):
         assert agent.event_count >= 1, f"Agent {agent.name} didn't process event"
 
     # Check results
-    for AGENT_ID in agent_group.agent_ids:
-        final_balance = await broker.get_balance(AGENT_ID)
-        active_bets = await broker.get_active_bets(AGENT_ID)
-        stats = await broker.get_statistics(AGENT_ID)
+    for agent_id in agent_group.agent_ids:
+        final_balance = await broker.get_balance(agent_id)
+        active_bets = await broker.get_active_bets(agent_id)
+        stats = await broker.get_statistics(agent_id)
 
-        print(f"\n[{AGENT_ID}]Results:")
-        print(f"  Events processed: {agent.event_count}")
+        print(f"\n[{agent_id}] Results:")
         print(f"  Final balance: ${final_balance}")
         print(f"  Active bets: {len(active_bets)}")
         print(f"  Stats: {stats}")
 
     await agent_group.stop()
     await broker.stop()
-
-
-if __name__ == "__main__":
-    import asyncio
-    import logging
-
-    # Enable logging to see agent colors
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-
-    async def main():
-        context = RuntimeContext(
-            trial_id="test-trial",
-            data_hubs={},
-            stores={},
-            startup=None,
-        )
-        broker = BrokerOperator.from_dict(
-            {
-                "actor_id": "nba-broker",
-                "initial_balance": "1000.00",
-            },
-            context,
-        )
-
-        group = TestBettingAgentGroup(
-            config_paths=[WHALE_CONFIG, SHEEP_CONFIG, SHARK_CONFIG],
-        )
-
-        await test_group_receives_event_and_discusses(broker, group)
-
-    asyncio.run(main())

@@ -8,13 +8,12 @@ from decimal import Decimal
 from datetime import datetime
 from typing import Any
 
-from dojozero.nba_moneyline._broker import (
+from dojozero.betting import (
     BrokerOperator,
     BrokerOperatorConfig,
     BetRequest,
     OrderType,
     BettingPhase,
-    EventStatus,
     BetStatus,
     BetOutcome,
     BetExecutedPayload,
@@ -211,26 +210,44 @@ class TestEventManagement:
     """Test event lifecycle management"""
 
     async def test_initialize_event(self, broker):
-        """Test creating a new betting event"""
-        event = await broker.initialize_event(
-            event_id="game1",
-            home_team="Lakers",
-            away_team="Warriors",
-            game_time=datetime.now(),
-            initial_home_odds=Decimal("1.95"),
-            initial_away_odds=Decimal("2.10"),
+        """Test creating a new betting event via events"""
+        # Initialize via GameInitializeEvent
+        game_init = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="game1",
+                game_id="game1",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.now(),
+            ),
+            emitted_at=datetime.now(),
         )
+        await broker.handle_stream_event(game_init)
 
-        assert event.event_id == "game1"
-        assert event.home_team == "Lakers"
-        assert event.away_team == "Warriors"
-        assert event.status == EventStatus.SCHEDULED
-        assert event.home_odds == Decimal("1.95")
-        assert event.away_odds == Decimal("2.10")
+        # Set odds via OddsUpdateEvent
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=OddsUpdateEvent(
+                event_id="game1",
+                home_odds=1.95,
+                away_odds=2.10,
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        quote = await broker.get_quote("game1")
+        assert quote["event_id"] == "game1"
+        assert quote["home_team"] == "Lakers"
+        assert quote["away_team"] == "Warriors"
+        assert quote["status"] == "SCHEDULED"
+        assert Decimal(quote["home_odds"]) == Decimal("1.95")
+        assert Decimal(quote["away_odds"]) == Decimal("2.10")
 
     async def test_initialize_duplicate_event_raises_error(self, broker):
         """Test that creating duplicate event raises error"""
-        await broker.initialize_event(
+        await broker._initialize_event(
             event_id="game1",
             home_team="Lakers",
             away_team="Warriors",
@@ -240,7 +257,7 @@ class TestEventManagement:
         )
 
         with pytest.raises(ValueError, match="already exists"):
-            await broker.initialize_event(
+            await broker._initialize_event(
                 event_id="game1",
                 home_team="Lakers",
                 away_team="Warriors",
@@ -252,7 +269,7 @@ class TestEventManagement:
     async def test_initialize_event_invalid_odds_raises_error(self, broker):
         """Test that odds <= 1.0 raises error"""
         with pytest.raises(ValueError, match="greater than 1.0"):
-            await broker.initialize_event(
+            await broker._initialize_event(
                 event_id="game1",
                 home_team="Lakers",
                 away_team="Warriors",
@@ -280,69 +297,148 @@ class TestEventManagement:
             await broker.get_quote("nonexistent_event")
 
     async def test_update_odds(self, initialized_event):
-        """Test updating event odds"""
+        """Test updating event odds via OddsUpdateEvent"""
         broker, event_id = initialized_event
 
-        event = await broker.update_odds(
-            event_id=event_id,
-            home_odds=Decimal("2.00"),
-            away_odds=Decimal("2.20"),
+        # Update odds via event
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=OddsUpdateEvent(
+                event_id=event_id,
+                home_odds=2.00,
+                away_odds=2.20,
+            ),
+            emitted_at=datetime.now(),
         )
+        await broker.handle_stream_event(odds_event)
 
-        assert event.home_odds == Decimal("2.00")
-        assert event.away_odds == Decimal("2.20")
+        quote = await broker.get_quote(event_id)
+        assert Decimal(quote["home_odds"]) == Decimal("2.00")
+        assert Decimal(quote["away_odds"]) == Decimal("2.20")
 
     async def test_update_odds_invalid_values_raises_error(self, initialized_event):
         """Test that invalid odds update raises error"""
         broker, event_id = initialized_event
 
         with pytest.raises(ValueError, match="greater than 1.0"):
-            await broker.update_odds(
+            await broker._update_odds(
                 event_id=event_id,
                 home_odds=Decimal("0.50"),
                 away_odds=Decimal("2.20"),
             )
 
     async def test_update_event_status_to_live(self, initialized_event):
-        """Test transitioning event to LIVE status"""
+        """Test transitioning event to LIVE status via GameStartEvent"""
         broker, event_id = initialized_event
 
-        await broker.update_event_status(event_id, EventStatus.LIVE)
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id=event_id),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
 
         quote = await broker.get_quote(event_id)
         assert quote["status"] == "LIVE"
 
     async def test_update_event_status_to_closed(self, initialized_event):
-        """Test transitioning event to CLOSED status"""
+        """Test transitioning event to CLOSED status via GameResultEvent"""
         broker, event_id = initialized_event
 
-        await broker.update_event_status(event_id, EventStatus.CLOSED)
+        # First transition to LIVE
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id=event_id),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
+
+        # Then transition to CLOSED via game result
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                event_id=event_id,
+                winner="home",
+                final_score={"home": 110, "away": 105},
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
 
         quote = await broker.get_quote(event_id)
-        assert quote["status"] == "CLOSED"
+        # After settlement, status is SETTLED not CLOSED
+        assert quote["status"] == "SETTLED"
 
     async def test_get_available_events(self, broker):
         """Test getting list of events accepting bets"""
-        # Create multiple events
-        await broker.initialize_event(
-            event_id="game1",
-            home_team="Lakers",
-            away_team="Warriors",
-            game_time=datetime.now(),
-            initial_home_odds=Decimal("1.95"),
-            initial_away_odds=Decimal("2.10"),
+        # Create first event
+        game1_init = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="game1",
+                game_id="game1",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.now(),
+            ),
+            emitted_at=datetime.now(),
         )
-        await broker.initialize_event(
-            event_id="game2",
-            home_team="Celtics",
-            away_team="Heat",
-            game_time=datetime.now(),
-            initial_home_odds=Decimal("1.85"),
-            initial_away_odds=Decimal("2.00"),
-        )
+        await broker.handle_stream_event(game1_init)
 
-        # Close one event
-        await broker.update_event_status("game2", EventStatus.CLOSED)
+        odds1 = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=OddsUpdateEvent(
+                event_id="game1",
+                home_odds=1.95,
+                away_odds=2.10,
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds1)
+
+        # Create second event
+        game2_init = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="game2",
+                game_id="game2",
+                home_team="Celtics",
+                away_team="Heat",
+                game_time=datetime.now(),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game2_init)
+
+        odds2 = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=OddsUpdateEvent(
+                event_id="game2",
+                home_odds=1.85,
+                away_odds=2.00,
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds2)
+
+        # Close one event via game start + result
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id="game2"),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
+
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                event_id="game2",
+                winner="home",
+                final_score={"home": 100, "away": 95},
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
 
         available = await broker.get_available_events()
 
@@ -630,7 +726,25 @@ class TestBetPlacement:
         )
 
         await broker.handle_stream_event(odds_event)
-        await broker.update_event_status("test_event", EventStatus.CLOSED)
+
+        # Close event via game start + result
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id="test_event"),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
+
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                event_id="test_event",
+                winner="home",
+                final_score={"home": 110, "away": 105},
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
 
         result = await broker.place_bet(
             agent.actor_id,
@@ -820,11 +934,15 @@ class TestBetSettlement:
             ),
         )
 
-        # Start and close game
-        await broker.update_event_status("test_event", EventStatus.LIVE)
-        await broker.update_event_status("test_event", EventStatus.CLOSED)
+        # Start game
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id="test_event"),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
 
-        # Settle with home team winning
+        # Game result (this also closes the event)
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
@@ -894,11 +1012,15 @@ class TestBetSettlement:
             ),
         )
 
-        # Start and close game
-        await broker.update_event_status("test_event", EventStatus.LIVE)
-        await broker.update_event_status("test_event", EventStatus.CLOSED)
+        # Start game
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id="test_event"),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
 
-        # Settle with away team winning
+        # Game result (this also closes the event)
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
@@ -1050,9 +1172,13 @@ class TestStatistics:
             ),
         )
 
-        # Settle with home team winning
-        await broker.update_event_status("test_event", EventStatus.LIVE)
-        await broker.update_event_status("test_event", EventStatus.CLOSED)
+        # Start game and settle with home team winning
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id="test_event"),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
 
         game_result = StreamEvent(
             stream_id="nba_results_stream",

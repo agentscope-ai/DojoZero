@@ -32,9 +32,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ._tracing import (
-    JaegerTraceReader,
     SpanData,
     TraceReader,
+    create_trace_reader,
 )
 
 LOGGER = logging.getLogger("dojozero.arena_server")
@@ -152,6 +152,7 @@ class ArenaServerState:
     broadcaster: SpanBroadcaster = field(default_factory=SpanBroadcaster)
     static_dir: Path | None = None
     poll_interval: float = 1.0  # Seconds between trace polls
+    trace_backend: str = "jaeger"
 
     # Tracking last poll time per trial for incremental updates
     _last_poll: dict[str, datetime] = field(default_factory=dict)
@@ -165,16 +166,6 @@ def get_server_state() -> ArenaServerState:
     if _server_state is None:
         raise RuntimeError("Server not initialized")
     return _server_state
-
-
-def create_trace_reader(trace_store_url: str) -> TraceReader:
-    """Create a JaegerTraceReader for the given URL.
-
-    Args:
-        trace_store_url: URL to Jaeger trace store (e.g., http://localhost:16686)
-    """
-    LOGGER.info("Using Jaeger trace reader for %s", trace_store_url)
-    return JaegerTraceReader(trace_store_url)
 
 
 async def _extract_trial_info_from_traces(
@@ -194,6 +185,7 @@ async def _extract_trial_info_from_traces(
 
     has_started = False
     has_stopped = False
+    has_game_result = False  # Indicates game has completed
     latest_start_time = 0
     latest_stop_time = 0
 
@@ -222,9 +214,16 @@ async def _extract_trial_info_from_traces(
             if span.start_time > latest_stop_time:
                 latest_stop_time = span.start_time
 
+        # Check for game completion spans (NBA/NFL game results)
+        elif op_name in ("game_result", "nfl_game_result") or "game_result" in op_name:
+            has_game_result = True
+
     # Determine phase
     if has_stopped and latest_stop_time >= latest_start_time:
         phase = "stopped"
+    elif has_game_result:
+        # Game has concluded (game_result span found)
+        phase = "completed"
     elif has_started and not has_stopped:
         phase = "running"
     elif has_stopped:
@@ -238,18 +237,27 @@ async def _extract_trial_info_from_traces(
 
 
 def create_arena_app(
-    trace_store_url: str,
+    trace_backend: str,
+    trace_query_endpoint: str | None = None,
     static_dir: Path | None = None,
     poll_interval: float = 1.0,
 ) -> FastAPI:
     """Create the Arena Server FastAPI application.
 
     Args:
-        trace_store_url: URL to trace store (Jaeger)
+        trace_backend: Trace backend type ("jaeger" or "sls")
+        trace_query_endpoint: Jaeger Query API endpoint (only used when trace_backend="jaeger")
         static_dir: Path to static files (React build output)
         poll_interval: Interval for polling new spans
+
+    For SLS backend, configuration comes from environment variables:
+        DOJOZERO_SLS_PROJECT: SLS project name
+        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+        DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
-    trace_reader = create_trace_reader(trace_store_url)
+    trace_reader = create_trace_reader(
+        backend=trace_backend, trace_query_endpoint=trace_query_endpoint
+    )
     broadcaster = SpanBroadcaster()
 
     @asynccontextmanager
@@ -260,10 +268,11 @@ def create_arena_app(
             broadcaster=broadcaster,
             static_dir=static_dir,
             poll_interval=poll_interval,
+            trace_backend=trace_backend,
         )
         LOGGER.info(
-            "Arena Server started (trace_store: %s, static_dir: %s)",
-            trace_store_url,
+            "Arena Server started (backend: %s, static_dir: %s)",
+            trace_backend,
             static_dir,
         )
         yield
@@ -502,23 +511,31 @@ def create_arena_app(
 
 
 async def run_arena_server(
-    trace_store_url: str,
     host: str = "127.0.0.1",
     port: int = 3001,
+    trace_backend: str = "jaeger",
+    trace_query_endpoint: str | None = None,
     static_dir: Path | None = None,
 ) -> None:
     """Run the Arena Server.
 
     Args:
-        trace_store_url: URL to trace store (Jaeger)
         host: Host to bind to
         port: Port to listen on
+        trace_backend: Trace backend type ("jaeger" or "sls")
+        trace_query_endpoint: Jaeger Query API endpoint (only used when trace_backend="jaeger")
         static_dir: Path to static files (React build output)
+
+    For SLS backend, configuration comes from environment variables:
+        DOJOZERO_SLS_PROJECT: SLS project name
+        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+        DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
     import uvicorn
 
     app = create_arena_app(
-        trace_store_url,
+        trace_backend=trace_backend,
+        trace_query_endpoint=trace_query_endpoint,
         static_dir=static_dir,
     )
 

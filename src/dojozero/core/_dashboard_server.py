@@ -33,9 +33,53 @@ from ._registry import (
 )
 from ._tracing import (
     OTelSpanExporter,
+    get_sls_exporter_headers,
     set_otel_exporter,
 )
 from ._types import RuntimeContext
+
+# Lazy import for OSS to avoid import errors if oss2 not installed
+_oss_client = None
+
+
+def _upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
+    """Upload trial data to OSS.
+
+    Args:
+        trial_id: Trial identifier
+        persistence_file: Path to the persistence JSONL file
+
+    Returns:
+        True if upload succeeded, False otherwise
+    """
+    global _oss_client
+
+    if not persistence_file or not persistence_file.exists():
+        LOGGER.warning("No persistence file to upload for trial %s", trial_id)
+        return False
+
+    try:
+        from dojozero.utils.oss import OSSClient
+
+        if _oss_client is None:
+            _oss_client = OSSClient.from_env()
+
+        # Upload with key: trials/{trial_id}/events.jsonl
+        oss_key = f"trials/{trial_id}/events.jsonl"
+        full_key = _oss_client.upload_file(persistence_file, oss_key)
+        LOGGER.info("Uploaded trial data to OSS: %s", full_key)
+        return True
+
+    except ImportError:
+        LOGGER.warning("OSS backup requested but oss2 package not installed")
+        return False
+    except ValueError as e:
+        LOGGER.warning("OSS backup failed - configuration error: %s", e)
+        return False
+    except Exception as e:
+        LOGGER.error("OSS backup failed for trial %s: %s", trial_id, e)
+        return False
+
 
 LOGGER = logging.getLogger("dojozero.dashboard_server")
 
@@ -85,7 +129,8 @@ class DashboardServerState:
     """Shared state for the Dashboard Server."""
 
     dashboard: Dashboard
-    otlp_endpoint: str | None = None
+    trace_backend: str | None = None
+    oss_backup: bool = False
     imported_modules: set[str] = field(default_factory=set)
     import_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -181,16 +226,43 @@ async def _launch_replay_trial(
         raise
 
 
+def _get_sls_otlp_endpoint() -> str:
+    """Construct SLS OTLP endpoint from environment variables."""
+    import os
+
+    project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
+    endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
+
+    if not project:
+        raise ValueError(
+            "SLS backend requires DOJOZERO_SLS_PROJECT environment variable"
+        )
+    if not endpoint:
+        raise ValueError(
+            "SLS backend requires DOJOZERO_SLS_ENDPOINT environment variable"
+        )
+
+    return f"https://{project}.{endpoint}"
+
+
 def create_dashboard_app(
     dashboard: Dashboard,
-    otlp_endpoint: str | None = None,
+    trace_backend: str | None = None,
+    trace_ingest_endpoint: str | None = None,
+    oss_backup: bool = False,
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
     Args:
         dashboard: Dashboard instance for trial management
-        otlp_endpoint: OTLP endpoint URL for external trace storage.
-                      If None, uses built-in DashboardStore for traces.
+        trace_backend: Trace backend type ("jaeger" or "sls"), or None to disable tracing
+        trace_ingest_endpoint: OTLP endpoint for Jaeger (only used when trace_backend="jaeger")
+        oss_backup: Enable OSS backup for trial data when trials complete
+
+    For SLS backend, configuration comes from environment variables:
+        DOJOZERO_SLS_PROJECT: SLS project name
+        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+        DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
 
     @asynccontextmanager
@@ -198,15 +270,35 @@ def create_dashboard_app(
         # Store state on app.state instead of global variable
         app.state.server_state = DashboardServerState(
             dashboard=dashboard,
-            otlp_endpoint=otlp_endpoint,
+            trace_backend=trace_backend,
+            oss_backup=oss_backup,
         )
 
-        # Initialize OTel exporter if endpoint is configured
+        # Initialize OTel exporter based on backend
         otel_exporter = None
-        if otlp_endpoint:
-            otel_exporter = OTelSpanExporter(otlp_endpoint)
+        if trace_backend == "sls":
+            # SLS backend: construct endpoint from env vars
+            otlp_endpoint = _get_sls_otlp_endpoint()
+            headers = get_sls_exporter_headers()
+            if headers:
+                LOGGER.info("SLS authentication headers configured")
+            else:
+                LOGGER.warning(
+                    "SLS backend selected but credentials not configured. "
+                    "Configure via: 1) Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID), "
+                    "2) ~/.alibabacloud/credentials file, or 3) ECS RAM role."
+                )
+
+            otel_exporter = OTelSpanExporter(otlp_endpoint, headers=headers)
             set_otel_exporter(otel_exporter)
-            LOGGER.info("OTel exporter configured: %s", otlp_endpoint)
+            LOGGER.info("OTel exporter configured: %s (backend: sls)", otlp_endpoint)
+
+        elif trace_backend == "jaeger":
+            # Jaeger backend: use provided endpoint or default
+            otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
+            otel_exporter = OTelSpanExporter(otlp_endpoint, headers=None)
+            set_otel_exporter(otel_exporter)
+            LOGGER.info("OTel exporter configured: %s (backend: jaeger)", otlp_endpoint)
 
         LOGGER.info("Dashboard Server started")
         yield
@@ -508,10 +600,28 @@ def create_dashboard_app(
                 status_code=404,
             )
 
+        # OSS backup if enabled
+        oss_uploaded = False
+        if state.oss_backup:
+            # Get persistence_file from trial metadata
+            try:
+                trial_status = state.dashboard.get_trial_status(trial_id)
+                persistence_file_path = trial_status.metadata.get("persistence_file")
+                if persistence_file_path and isinstance(persistence_file_path, str):
+                    persistence_file = Path(persistence_file_path)
+                    oss_uploaded = _upload_trial_to_oss(trial_id, persistence_file)
+                else:
+                    LOGGER.warning(
+                        "OSS backup enabled but no persistence_file in trial metadata"
+                    )
+            except Exception as e:
+                LOGGER.error("Failed to upload trial %s to OSS: %s", trial_id, e)
+
         return JSONResponse(
             content={
                 "id": status.trial_id,
                 "phase": status.phase.value,
+                "oss_uploaded": oss_uploaded,
             }
         )
 
@@ -531,7 +641,9 @@ async def run_dashboard_server(
     dashboard: Dashboard,
     host: str = "127.0.0.1",
     port: int = 8000,
-    otlp_endpoint: str | None = None,
+    trace_backend: str | None = None,
+    trace_ingest_endpoint: str | None = None,
+    oss_backup: bool = False,
 ) -> None:
     """Run the Dashboard Server.
 
@@ -539,11 +651,18 @@ async def run_dashboard_server(
         dashboard: Dashboard instance
         host: Host to bind to
         port: Port to listen on
-        otlp_endpoint: OTLP endpoint for external trace storage (optional)
+        trace_backend: Trace backend type ("jaeger" or "sls"), or None to disable tracing
+        trace_ingest_endpoint: OTLP endpoint for Jaeger (only used when trace_backend="jaeger")
+        oss_backup: Enable OSS backup for trial data when trials complete
     """
     import uvicorn
 
-    app = create_dashboard_app(dashboard, otlp_endpoint=otlp_endpoint)
+    app = create_dashboard_app(
+        dashboard,
+        trace_backend=trace_backend,
+        trace_ingest_endpoint=trace_ingest_endpoint,
+        oss_backup=oss_backup,
+    )
 
     config = uvicorn.Config(
         app,

@@ -258,6 +258,472 @@ class JaegerTraceReader:
         await self._client.aclose()
 
 
+class SLSTraceReader:
+    """TraceReader that reads from Alibaba Cloud Simple Log Service (SLS).
+
+    SLS provides OpenTelemetry trace storage with a REST API for querying.
+    Authentication is handled by alibabacloud-credentials SDK.
+
+    Credentials (automatic via SDK):
+        - Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID, etc.)
+        - Credentials file (~/.alibabacloud/credentials)
+        - ECS RAM role (automatic on ECS instances)
+        - OIDC (K8s RRSA)
+
+    Environment variables for SLS config:
+        DOJOZERO_SLS_PROJECT: SLS project name
+        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+        DOJOZERO_SLS_LOGSTORE: Logstore name for traces (default: "traces")
+    """
+
+    DEFAULT_LOOKBACK_DAYS = 7
+
+    def __init__(
+        self,
+        endpoint: str,
+        project: str,
+        logstore: str = "traces",
+        service_name: str = "dojozero",
+    ) -> None:
+        """Initialize the SLS trace reader.
+
+        Args:
+            endpoint: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+            project: SLS project name
+            logstore: Logstore name for traces
+            service_name: Service name to filter by
+        """
+        from ._credentials import get_credential_provider
+
+        self._endpoint = endpoint.rstrip("/")
+        self._project = project
+        self._logstore = logstore
+        self._service_name = service_name
+        self._credential_provider = get_credential_provider()
+        self._client = httpx.AsyncClient(timeout=30.0)
+
+        # Validate credentials are available
+        creds = self._credential_provider.get_credentials()
+        if not creds.is_valid():
+            LOGGER.warning(
+                "SLS credentials not configured. Configure via: "
+                "1) Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID), "
+                "2) ~/.alibabacloud/credentials file, or "
+                "3) ECS RAM role"
+            )
+
+    def _get_base_url(self) -> str:
+        """Get the base URL for SLS API requests."""
+        return f"https://{self._project}.{self._endpoint}"
+
+    def _sign_request(
+        self,
+        method: str,
+        resource: str,
+        params: dict[str, Any],
+    ) -> dict[str, str]:
+        """Generate authentication headers for SLS API request.
+
+        SLS uses a signature-based authentication mechanism.
+        Credentials are fetched fresh to support auto-refresh for STS tokens.
+        """
+        import base64
+        import hashlib
+        import hmac
+        import time
+
+        # Get current credentials (may be refreshed for STS)
+        creds = self._credential_provider.get_credentials()
+
+        # GMT timestamp
+        gmt_time = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+
+        # Build string to sign
+        content_md5 = ""
+        content_type = "application/json"
+
+        # Canonicalized headers (x-log-* and x-acs-*)
+        headers_to_sign = {
+            "x-log-apiversion": "0.6.0",
+            "x-log-signaturemethod": "hmac-sha1",
+            "x-log-bodyrawsize": "0",
+        }
+
+        # Add security token header for STS credentials
+        if creds.security_token:
+            headers_to_sign["x-acs-security-token"] = creds.security_token
+
+        canonicalized_headers = "\n".join(
+            f"{k}:{v}" for k, v in sorted(headers_to_sign.items())
+        )
+
+        # Canonicalized resource
+        canonicalized_resource = resource
+        if params:
+            query_string = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+            canonicalized_resource = f"{resource}?{query_string}"
+
+        # String to sign
+        string_to_sign = (
+            f"{method}\n{content_md5}\n{content_type}\n{gmt_time}\n"
+            f"{canonicalized_headers}\n{canonicalized_resource}"
+        )
+
+        # Generate signature
+        signature = base64.b64encode(
+            hmac.new(
+                creds.access_key_secret.encode("utf-8"),
+                string_to_sign.encode("utf-8"),
+                hashlib.sha1,
+            ).digest()
+        ).decode("utf-8")
+
+        headers = {
+            "Authorization": f"LOG {creds.access_key_id}:{signature}",
+            "Content-Type": content_type,
+            "Date": gmt_time,
+            "x-log-apiversion": "0.6.0",
+            "x-log-signaturemethod": "hmac-sha1",
+            "x-log-bodyrawsize": "0",
+        }
+
+        # Add security token for STS credentials (ECS RAM role, OIDC)
+        if creds.security_token:
+            headers["x-acs-security-token"] = creds.security_token
+
+        return headers
+
+    async def list_trials(
+        self,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int = 500,
+    ) -> list[str]:
+        """List trial IDs from SLS by querying for trial.started spans.
+
+        Args:
+            start_time: Start of time range. Defaults to 7 days ago.
+            end_time: End of time range. Defaults to now.
+            limit: Maximum number of trials to return.
+
+        Returns:
+            List of unique trial IDs.
+        """
+        now = datetime.now(timezone.utc)
+
+        if end_time is None:
+            end_time = now
+        if start_time is None:
+            start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
+
+        # SLS query for trial.started spans
+        query = (
+            f'service:"{self._service_name}" AND '
+            f'operationName:"trial.started" | '
+            f'SELECT DISTINCT "dojozero.trial.id" as trial_id LIMIT {limit}'
+        )
+
+        params = {
+            "type": "log",
+            "from": str(int(start_time.timestamp())),
+            "to": str(int(end_time.timestamp())),
+            "query": query,
+        }
+
+        resource = f"/logstores/{self._logstore}"
+        headers = self._sign_request("GET", resource, params)
+
+        try:
+            response = await self._client.get(
+                f"{self._get_base_url()}{resource}",
+                params=params,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Extract trial IDs from response
+            trial_ids: list[str] = []
+            for row in data.get("data", []):
+                trial_id = row.get("trial_id")
+                if trial_id:
+                    trial_ids.append(trial_id)
+
+            return trial_ids
+        except httpx.HTTPStatusError as e:
+            LOGGER.error("SLS HTTP error listing trials: %s", e)
+            return []
+        except httpx.RequestError as e:
+            LOGGER.error("SLS request error listing trials: %s", e)
+            return []
+        except (KeyError, TypeError, ValueError) as e:
+            LOGGER.error("Failed to parse SLS response for trials: %s", e)
+            return []
+
+    async def get_spans(
+        self,
+        trial_id: str,
+        start_time: datetime | None = None,
+    ) -> list[SpanData]:
+        """Get spans for a trial from SLS.
+
+        Args:
+            trial_id: The trial ID to get spans for.
+            start_time: If provided, only return spans after this time.
+
+        Returns:
+            List of SpanData sorted by start time.
+        """
+        now = datetime.now(timezone.utc)
+
+        # Default time range: 7 days ago to now
+        if start_time is None:
+            from_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
+        else:
+            from_time = start_time
+
+        # SLS query for spans with specific trial_id
+        query = (
+            f'service:"{self._service_name}" AND '
+            f'"dojozero.trial.id":"{trial_id}" | '
+            f"SELECT * ORDER BY startTime ASC LIMIT 1000"
+        )
+
+        params = {
+            "type": "log",
+            "from": str(int(from_time.timestamp())),
+            "to": str(int(now.timestamp())),
+            "query": query,
+        }
+
+        resource = f"/logstores/{self._logstore}"
+        headers = self._sign_request("GET", resource, params)
+
+        try:
+            response = await self._client.get(
+                f"{self._get_base_url()}{resource}",
+                params=params,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            spans: list[SpanData] = []
+            for row in data.get("data", []):
+                span = self._convert_sls_row_to_span(row)
+                if span:
+                    spans.append(span)
+
+            # Sort by start time
+            spans.sort(key=lambda s: s.start_time)
+            return spans
+        except httpx.HTTPStatusError as e:
+            LOGGER.error("SLS HTTP error getting spans for trial '%s': %s", trial_id, e)
+            return []
+        except httpx.RequestError as e:
+            LOGGER.error(
+                "SLS request error getting spans for trial '%s': %s", trial_id, e
+            )
+            return []
+        except (KeyError, TypeError, ValueError) as e:
+            LOGGER.error("Failed to parse SLS response for trial '%s': %s", trial_id, e)
+            return []
+
+    def _convert_sls_row_to_span(self, row: dict[str, Any]) -> SpanData | None:
+        """Convert an SLS log row to SpanData.
+
+        SLS stores OpenTelemetry spans with fields like:
+        - traceId, spanId, parentSpanId
+        - operationName (or name)
+        - startTime (microseconds or ISO string)
+        - duration (microseconds)
+        - tags/attributes as flattened fields
+        """
+        try:
+            trace_id = row.get("traceId", row.get("traceID", ""))
+            span_id = row.get("spanId", row.get("spanID", ""))
+            operation_name = row.get("operationName", row.get("name", ""))
+
+            # Handle start time (could be microseconds or ISO string)
+            start_time_raw = row.get("startTime", 0)
+            if isinstance(start_time_raw, str):
+                try:
+                    dt = datetime.fromisoformat(start_time_raw.replace("Z", "+00:00"))
+                    start_time = int(dt.timestamp() * 1_000_000)
+                except ValueError:
+                    start_time = int(start_time_raw) if start_time_raw.isdigit() else 0
+            else:
+                start_time = int(start_time_raw)
+
+            duration = int(row.get("duration", 0))
+            parent_span_id = row.get("parentSpanId", row.get("parentSpanID"))
+
+            # Extract tags from flattened fields or nested tags object
+            tags: dict[str, Any] = {}
+            tags_data = row.get("tags", row.get("attributes", {}))
+            if isinstance(tags_data, dict):
+                tags = tags_data
+            elif isinstance(tags_data, list):
+                for tag in tags_data:
+                    if isinstance(tag, dict):
+                        tags[tag.get("key", "")] = tag.get("value")
+
+            # Also check for dojozero.* fields directly in the row
+            for key, value in row.items():
+                if key.startswith("dojozero.") or key.startswith("event."):
+                    tags[key] = value
+
+            return SpanData(
+                trace_id=trace_id,
+                span_id=span_id,
+                operation_name=operation_name,
+                start_time=start_time,
+                duration=duration,
+                parent_span_id=parent_span_id,
+                tags=tags,
+                logs=row.get("logs", []),
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            LOGGER.warning("Failed to convert SLS row to span: %s", e)
+            return None
+
+    async def close(self) -> None:
+        """Close the HTTP client."""
+        await self._client.aclose()
+
+
+def create_trace_reader(
+    backend: str,
+    trace_query_endpoint: str | None = None,
+    service_name: str = "dojozero",
+) -> TraceReader:
+    """Factory function to create a TraceReader based on backend type.
+
+    Args:
+        backend: Backend type ("jaeger" or "sls")
+        trace_query_endpoint: Jaeger Query API endpoint (only for jaeger backend)
+        service_name: Service name for filtering
+
+    Returns:
+        TraceReader instance (JaegerTraceReader or SLSTraceReader)
+
+    For SLS backend, configuration comes from environment variables:
+        DOJOZERO_SLS_PROJECT: SLS project name
+        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+        DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
+
+    Credentials are handled by alibabacloud-credentials SDK:
+        - Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID, etc.)
+        - Credentials file (~/.alibabacloud/credentials)
+        - ECS RAM role (automatic on ECS instances)
+        - OIDC (K8s RRSA)
+
+    For Jaeger backend, use trace_query_endpoint (default: http://localhost:16686).
+    """
+    import os
+
+    if backend == "sls":
+        # For SLS, all config comes from environment variables
+        project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
+        endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
+        logstore = os.environ.get("DOJOZERO_SLS_LOGSTORE", "")
+
+        if not project:
+            raise ValueError(
+                "SLS backend requires DOJOZERO_SLS_PROJECT environment variable"
+            )
+        if not endpoint:
+            raise ValueError(
+                "SLS backend requires DOJOZERO_SLS_ENDPOINT environment variable"
+            )
+        if not logstore:
+            raise ValueError(
+                "SLS backend requires DOJOZERO_SLS_LOGSTORE environment variable"
+            )
+
+        LOGGER.info(
+            "Creating SLS trace reader: endpoint=%s project=%s logstore=%s",
+            endpoint,
+            project,
+            logstore,
+        )
+        return SLSTraceReader(
+            endpoint=endpoint,
+            project=project,
+            logstore=logstore,
+            service_name=service_name,
+        )
+    else:
+        # Jaeger backend
+        jaeger_url = trace_query_endpoint or "http://localhost:16686"
+        LOGGER.info("Creating Jaeger trace reader: %s", jaeger_url)
+        return JaegerTraceReader(
+            jaeger_url=jaeger_url,
+            service_name=service_name,
+        )
+
+
+def get_sls_exporter_headers() -> dict[str, str] | None:
+    """Get SLS authentication headers using credential provider.
+
+    Uses alibabacloud-credentials SDK for automatic credential discovery:
+    - Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID, etc.)
+    - Credentials file (~/.alibabacloud/credentials)
+    - ECS RAM role (automatic on ECS instances)
+    - OIDC (K8s RRSA)
+
+    Environment variables for SLS config:
+        DOJOZERO_SLS_PROJECT: SLS project name
+        DOJOZERO_SLS_LOGSTORE: SLS logstore name (e.g., "dojozero-traces")
+
+    The instance-id for OTLP is derived from logstore by removing "-traces" suffix.
+    For example, logstore "dojozero-traces" -> instance-id "dojozero".
+
+    Returns:
+        Dict of headers for SLS authentication, or None if not configured.
+    """
+    import os
+
+    from ._credentials import get_credential_provider
+
+    project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
+    logstore = os.environ.get("DOJOZERO_SLS_LOGSTORE", "")
+
+    if not project:
+        LOGGER.warning("DOJOZERO_SLS_PROJECT not set")
+        return None
+
+    if not logstore:
+        LOGGER.warning("DOJOZERO_SLS_LOGSTORE not set")
+        return None
+
+    # Derive instance_id from logstore (strip "-traces" suffix if present)
+    instance_id = (
+        logstore.removesuffix("-traces") if logstore.endswith("-traces") else logstore
+    )
+
+    # Get credentials from provider (handles all auth methods)
+    provider = get_credential_provider()
+    creds = provider.get_credentials()
+
+    if not creds.is_valid():
+        LOGGER.warning("No valid Alibaba Cloud credentials found")
+        return None
+
+    headers = {
+        "x-sls-otel-project": project,
+        "x-sls-otel-instance-id": instance_id,
+        "x-sls-otel-ak-id": creds.access_key_id,
+        "x-sls-otel-ak-secret": creds.access_key_secret,
+    }
+
+    # Add security token for STS credentials (ECS RAM role, OIDC)
+    if creds.security_token:
+        headers["x-sls-otel-security-token"] = creds.security_token
+
+    return headers
+
+
 def create_span_from_event(
     trial_id: str,
     actor_id: str,
@@ -662,13 +1128,26 @@ class OTelSpanExporter:
     """OpenTelemetry span exporter for real-time trace export to OTLP endpoints.
 
     This class wraps the OpenTelemetry SDK to export DojoZero spans to an OTLP
-    endpoint (e.g., Jaeger). It uses synchronous export (no batching) for
-    real-time tracing.
+    endpoint (e.g., Jaeger, Alibaba Cloud SLS). It uses synchronous export
+    (no batching) for real-time tracing.
 
     Usage:
+        # Jaeger (no auth)
         exporter = OTelSpanExporter(
             otlp_endpoint="http://localhost:4318",
             service_name="dojozero",
+        )
+
+        # SLS (with auth headers)
+        exporter = OTelSpanExporter(
+            otlp_endpoint="https://project.cn-hangzhou.log.aliyuncs.com",
+            service_name="dojozero",
+            headers={
+                "x-sls-otel-project": "my-project",
+                "x-sls-otel-instance-id": "my-instance",
+                "x-sls-otel-ak-id": "xxx",
+                "x-sls-otel-ak-secret": "xxx",
+            },
         )
         exporter.export_span(span_data)
         exporter.shutdown()
@@ -678,15 +1157,18 @@ class OTelSpanExporter:
         self,
         otlp_endpoint: str,
         service_name: str = "dojozero",
+        headers: dict[str, str] | None = None,
     ) -> None:
         """Initialize the OTLP exporter.
 
         Args:
             otlp_endpoint: OTLP HTTP endpoint URL (e.g., http://localhost:4318)
             service_name: Service name for trace attribution
+            headers: Optional headers for authentication (e.g., SLS auth headers)
         """
         self._endpoint = otlp_endpoint.rstrip("/")
         self._service_name = service_name
+        self._headers = headers
         self._tracer = None
         self._provider = None
         self._initialized = False
@@ -712,8 +1194,20 @@ class OTelSpanExporter:
             self._provider = TracerProvider(resource=resource)
 
             # Create OTLP exporter - use /v1/traces endpoint
-            traces_endpoint = f"{self._endpoint}/v1/traces"
-            otlp_exporter = OTLPSpanExporter(endpoint=traces_endpoint)
+            # For SLS, the endpoint format is:
+            #   https://{project}.{region}.log.aliyuncs.com/opentelemetry/v1/traces
+            # For Jaeger, it's: http://localhost:4318/v1/traces
+            if "log.aliyuncs.com" in self._endpoint:
+                # SLS uses /opentelemetry/v1/traces path
+                traces_endpoint = f"{self._endpoint}/opentelemetry/v1/traces"
+            else:
+                # Standard OTLP uses /v1/traces path
+                traces_endpoint = f"{self._endpoint}/v1/traces"
+
+            otlp_exporter = OTLPSpanExporter(
+                endpoint=traces_endpoint,
+                headers=self._headers,
+            )
 
             # Use SimpleSpanProcessor for real-time export (no batching)
             self._provider.add_span_processor(SimpleSpanProcessor(otlp_exporter))
@@ -726,9 +1220,10 @@ class OTelSpanExporter:
             self._initialized = True
 
             LOGGER.info(
-                "OTel exporter initialized: endpoint=%s service=%s",
+                "OTel exporter initialized: endpoint=%s service=%s headers=%s",
                 traces_endpoint,
                 self._service_name,
+                "present" if self._headers else "none",
             )
         except ImportError as e:
             LOGGER.warning(
@@ -766,7 +1261,13 @@ class OTelSpanExporter:
                 # Set span status to OK
                 span.set_status(Status(StatusCode.OK))
 
-        except Exception as e:
+        except ImportError as e:
+            LOGGER.warning(
+                "OpenTelemetry import error exporting span '%s': %s",
+                span_data.span_id,
+                e,
+            )
+        except (ValueError, TypeError, AttributeError) as e:
             LOGGER.warning("Failed to export span '%s': %s", span_data.span_id, e)
 
     def export_registration_span(
@@ -819,7 +1320,7 @@ class OTelSpanExporter:
             try:
                 self._provider.shutdown()
                 LOGGER.info("OTel exporter shutdown complete")
-            except Exception as e:
+            except (RuntimeError, OSError, TimeoutError) as e:
                 LOGGER.warning("Error during OTel exporter shutdown: %s", e)
 
 
@@ -851,14 +1352,17 @@ def emit_span(span_data: SpanData) -> None:
 __all__ = [
     "JaegerTraceReader",
     "OTelSpanExporter",
+    "SLSTraceReader",
     "SpanData",
     "TraceReader",
     "convert_actor_registration_to_span",
     "convert_agent_message_to_span",
     "convert_checkpoint_event_to_span",
     "create_span_from_event",
+    "create_trace_reader",
     "emit_span",
     "get_otel_exporter",
+    "get_sls_exporter_headers",
     "load_spans_from_checkpoint",
     "set_otel_exporter",
 ]

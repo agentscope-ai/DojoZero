@@ -1,9 +1,12 @@
 """NBA-specific utility functions."""
 
+import json
 import os
 from datetime import date, datetime, timedelta
 from functools import wraps
 from typing import Any, Callable, TypeVar, cast
+
+import requests
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -267,8 +270,12 @@ def get_games_by_date_range(
                     )
 
                 logger.debug(f"Found {len(games_list)} games on {date_str}")
-        except Exception as e:
-            logger.debug(f"Error fetching games for date={date_str}: {e}")
+        except requests.exceptions.RequestException as e:
+            logger.debug(f"Network error fetching games for date={date_str}: {e}")
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON parsing error fetching games for date={date_str}: {e}")
+        except (KeyError, TypeError, ValueError) as e:
+            logger.debug(f"Data parsing error fetching games for date={date_str}: {e}")
 
         current_date += timedelta(days=1)
 
@@ -340,13 +347,42 @@ def get_game_info_by_id(
                     logger.debug(
                         f"Found game via BoxScore: {away_team.get('teamTricode')} @ {home_team.get('teamTricode')}"
                     )
+
+                    # BoxScore doesn't include date, use LeagueGameFinder to get it
+                    game_date = ""
+                    home_team_id = home_team.get("teamId")
+                    if home_team_id:
+                        try:
+                            from nba_api.stats.endpoints import leaguegamefinder
+
+                            # Get games for the home team to find the date
+                            if proxy:
+                                gamefinder = leaguegamefinder.LeagueGameFinder(
+                                    team_id_nullable=home_team_id, proxy=proxy
+                                )
+                            else:
+                                gamefinder = leaguegamefinder.LeagueGameFinder(
+                                    team_id_nullable=home_team_id
+                                )
+                            games_df = gamefinder.get_data_frames()[0]
+                            matching_game = games_df[games_df["GAME_ID"] == game_id]
+                            if not matching_game.empty:
+                                game_date = matching_game.iloc[0]["GAME_DATE"]
+                                logger.debug(
+                                    f"Found game date via LeagueGameFinder: {game_date}"
+                                )
+                        except requests.exceptions.RequestException as e:
+                            logger.debug(f"LeagueGameFinder network error: {e}")
+                        except (KeyError, IndexError, TypeError, ValueError) as e:
+                            logger.debug(f"LeagueGameFinder data error: {e}")
+
                     return {
                         "game_id": game_id,
                         "home_team": home_team_name,
                         "away_team": away_team_name,
                         "home_team_tricode": home_team.get("teamTricode", ""),
                         "away_team_tricode": away_team.get("teamTricode", ""),
-                        "game_date": "",  # BoxScore doesn't always include date
+                        "game_date": game_date,
                         "game_time_utc": "",
                     }
                 else:
@@ -357,19 +393,38 @@ def get_game_info_by_id(
             logger.debug(
                 f"BoxScore returned no data or missing 'boxScoreTraditional' for game_id={game_id}"
             )
-    except Exception as e:
-        # BoxScore failed, will try Scoreboard fallback
-        logger.debug(f"BoxScore lookup failed for game_id={game_id}: {e}")
+    except requests.exceptions.RequestException as e:
+        # BoxScore failed due to network error, will try Scoreboard fallback
+        logger.debug(f"BoxScore network error for game_id={game_id}: {e}")
+    except json.JSONDecodeError as e:
+        # BoxScore returned invalid JSON, will try Scoreboard fallback
+        logger.debug(f"BoxScore JSON error for game_id={game_id}: {e}")
+    except (KeyError, TypeError, ValueError) as e:
+        # BoxScore data parsing failed, will try Scoreboard fallback
+        logger.debug(f"BoxScore data error for game_id={game_id}: {e}")
 
     # Strategy 2: Fallback to Scoreboard search for future/upcoming games
-    # Search next 14 days for scheduled games
+    # Search 7 days back and 14 days forward for scheduled/recent games
     logger.debug(
-        f"BoxScore lookup unsuccessful, searching Scoreboard for next 14 days for game_id={game_id}"
+        f"BoxScore lookup unsuccessful, searching Scoreboard for game_id={game_id}"
     )
     today = datetime.now().date()
+
+    # Build list of dates to search: 7 days back, then 14 days forward
+    dates_to_search = []
+    # Past dates (7 days back, most recent first)
+    for i in range(1, 8):
+        dates_to_search.append(today - timedelta(days=i))
+    # Today and future dates (14 days forward)
     for i in range(14):
-        date = today + timedelta(days=i)
-        date_str = date.strftime("%Y-%m-%d")
+        dates_to_search.append(today + timedelta(days=i))
+
+    # Prioritize: today first, then nearby dates
+    # Sort by distance from today
+    dates_to_search.sort(key=lambda d: abs((d - today).days))
+
+    for search_date in dates_to_search:
+        date_str = search_date.strftime("%Y-%m-%d")
 
         logger.debug(f"Searching scoreboard for date={date_str}")
 
@@ -415,13 +470,21 @@ def get_game_info_by_id(
                         "game_date": date_str,
                         "game_time_utc": game_time_utc,
                     }
-        except Exception as e:
-            # Continue to next date if this one fails
-            logger.debug(f"Error searching scoreboard for date={date_str}: {e}")
+        except requests.exceptions.RequestException as e:
+            # Continue to next date if this one fails due to network error
+            logger.debug(f"Network error searching scoreboard for date={date_str}: {e}")
+            continue
+        except json.JSONDecodeError as e:
+            # Continue to next date if JSON parsing fails
+            logger.debug(f"JSON error searching scoreboard for date={date_str}: {e}")
+            continue
+        except (KeyError, TypeError, ValueError) as e:
+            # Continue to next date if data parsing fails
+            logger.debug(f"Data error searching scoreboard for date={date_str}: {e}")
             continue
 
-    # Game not found in both BoxScore and upcoming Scoreboards
+    # Game not found in both BoxScore and Scoreboards
     logger.debug(
-        f"Game not found in both BoxScore and Scoreboard (searched 14 days) for game_id={game_id}"
+        f"Game not found in both BoxScore and Scoreboard (searched 7 days back, 14 days forward) for game_id={game_id}"
     )
     return None

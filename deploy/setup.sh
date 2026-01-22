@@ -1,5 +1,5 @@
 #!/bin/bash
-# Setup script for deploying DojoZero NBA Game Collector to a Unix machine
+# Setup script for deploying DojoZero Trial Runner to a Unix machine
 # This script sets up the Python environment, installs dependencies, and prepares the system
 
 set -e  # Exit on error
@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "=========================================="
-echo "DojoZero NBA Game Collector - Setup"
+echo "DojoZero Trial Runner - Setup"
 echo "=========================================="
 echo ""
 
@@ -55,7 +55,7 @@ echo "Installing DojoZero package and dependencies..."
 uv pip install .
 
 # Install dev dependencies (includes nba_api, tavily-python, etc.)
-echo "Installing additional dependencies for NBA collector..."
+echo "Installing additional dependencies for NBA trial runner..."
 uv pip install "nba_api" "python-dotenv" "tavily-python" "dashscope" "py-clob-client"
 
 echo "✓ Dependencies installed"
@@ -87,13 +87,21 @@ DOJOZERO_PROXY_URL=http://proxy.example.com:8080
 # Polymarket private key for CLOB authentication
 DOJOZERO_POLY_PRIVATE_KEY=0x...
 
-# OSS (Alibaba Cloud Object Storage) - for uploading collected data
-# Leave empty to disable OSS upload
-DOJOZERO_OSS_ACCESS_KEY_ID=
-DOJOZERO_OSS_ACCESS_KEY_SECRET=
-DOJOZERO_OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
-DOJOZERO_OSS_BUCKET=
-DOJOZERO_OSS_PREFIX=
+# Alibaba Cloud credentials - handled by alibabacloud-credentials SDK
+# Option 1: Environment variables
+ALIBABA_CLOUD_ACCESS_KEY_ID=
+ALIBABA_CLOUD_ACCESS_KEY_SECRET=
+# Option 2: Use ~/.alibabacloud/credentials file (recommended)
+
+# OSS (Alibaba Cloud Object Storage) - for uploading trial data
+DOJOZERO_OSS_ENDPOINT=oss-cn-wulanchabu.aliyuncs.com
+DOJOZERO_OSS_BUCKET=dojozero-store
+DOJOZERO_OSS_PREFIX=data/
+
+# SLS (Simple Log Service) - for trace storage
+DOJOZERO_SLS_ENDPOINT=cn-wulanchabu.log.aliyuncs.com
+DOJOZERO_SLS_PROJECT=log-service-1228139055781573-cn-wulanchabu
+DOJOZERO_SLS_LOGSTORE=dojozero-traces
 EOF
     echo "✓ Created .env.template - please copy to .env and fill in your API keys"
 else
@@ -103,8 +111,9 @@ fi
 # Make scripts executable
 echo ""
 echo "Making scripts executable..."
-chmod +x "$PROJECT_ROOT/deploy/run_daily.sh"
-chmod +x "$PROJECT_ROOT/tools/nba_game_collector.py"
+chmod +x "$PROJECT_ROOT/deploy/run_daily_trials.py"
+chmod +x "$PROJECT_ROOT/tools/nba_trial_runner.py"
+chmod +x "$PROJECT_ROOT/tools/nfl_trial_runner.py"
 echo "✓ Scripts are executable"
 
 # Cron job setup (interactive)
@@ -118,8 +127,9 @@ read -p "Would you like to set up a daily cron job? [y/N] " SETUP_CRON
 if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
     # Get cron time
     echo ""
-    echo "What time should the collector run daily?"
+    echo "What time should the trials run daily?"
     echo "  - NBA games typically start between 7 PM - 10 PM ET"
+    echo "  - NFL games typically on Sundays, with some Thursday/Monday games"
     echo "  - Recommended: Run early morning to catch all games for the day"
     read -p "Enter hour (0-23) [default: 6]: " CRON_HOUR
     CRON_HOUR="${CRON_HOUR:-6}"
@@ -128,7 +138,7 @@ if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
 
     # Ask about OSS upload
     echo ""
-    read -p "Enable OSS upload for collected data? [y/N] " ENABLE_OSS
+    read -p "Enable OSS upload for trial data? [y/N] " ENABLE_OSS
     if [[ "$ENABLE_OSS" =~ ^[Yy]$ ]]; then
         OSS_ENV="OSS_UPLOAD=true "
         echo "  OSS upload will be enabled. Make sure OSS credentials are configured in .env"
@@ -136,9 +146,29 @@ if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
         OSS_ENV=""
     fi
 
+    # Ask which trial type
+    echo ""
+    echo "Which trial type would you like to run?"
+    echo "  1) NBA (nba-pregame-betting)"
+    echo "  2) NFL (nfl-pregame-betting)"
+    read -p "Enter choice [1]: " TRIAL_CHOICE
+    TRIAL_CHOICE="${TRIAL_CHOICE:-1}"
+
+    if [ "$TRIAL_CHOICE" = "2" ]; then
+        TRIAL_CONFIG_PATH="configs/nfl-pregame-betting.yaml"
+    else
+        TRIAL_CONFIG_PATH="configs/nba-pregame-betting.yaml"
+    fi
+
+    # Build OSS flag
+    OSS_FLAG=""
+    if [ -n "$OSS_ENV" ]; then
+        OSS_FLAG="--oss-upload"
+    fi
+
     # Build cron entry
     LOG_FILE="$PROJECT_ROOT/cron.log"
-    CRON_ENTRY="$CRON_MINUTE $CRON_HOUR * * * ${OSS_ENV}$PROJECT_ROOT/deploy/run_daily.sh >> $LOG_FILE 2>&1"
+    CRON_ENTRY="$CRON_MINUTE $CRON_HOUR * * * cd $PROJECT_ROOT && python3 deploy/run_daily_trials.py $TRIAL_CONFIG_PATH $OSS_FLAG >> $LOG_FILE 2>&1"
 
     echo ""
     echo "The following cron entry will be added:"
@@ -149,15 +179,15 @@ if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
     if [[ "$CONFIRM_CRON" =~ ^[Yy]$ ]]; then
         # Check if entry already exists
         EXISTING_CRON=$(crontab -l 2>/dev/null || true)
-        if echo "$EXISTING_CRON" | grep -q "run_daily.sh"; then
+        if echo "$EXISTING_CRON" | grep -q "run_daily_trials.py"; then
             echo ""
-            echo "WARNING: A cron entry for run_daily.sh already exists:"
-            echo "$EXISTING_CRON" | grep "run_daily.sh"
+            echo "WARNING: A cron entry for run_daily_trials.py already exists:"
+            echo "$EXISTING_CRON" | grep "run_daily_trials.py"
             echo ""
             read -p "Replace existing entry? [y/N] " REPLACE_CRON
             if [[ "$REPLACE_CRON" =~ ^[Yy]$ ]]; then
                 # Remove existing entry and add new one
-                (echo "$EXISTING_CRON" | grep -v "run_daily.sh"; echo "$CRON_ENTRY") | crontab -
+                (echo "$EXISTING_CRON" | grep -v "run_daily_trials.py"; echo "$CRON_ENTRY") | crontab -
                 echo "✓ Cron job updated"
             else
                 echo "Skipping cron setup (existing entry preserved)"
@@ -170,7 +200,7 @@ if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
 
         echo ""
         echo "Current crontab:"
-        crontab -l | grep "run_daily.sh" || echo "  (no matching entries)"
+        crontab -l | grep "run_daily_trials.py" || echo "  (no matching entries)"
     else
         echo "Skipping cron setup"
     fi
@@ -189,14 +219,12 @@ if [ ! -f "$PROJECT_ROOT/.env" ]; then
     echo "   cp $PROJECT_ROOT/.env.template $PROJECT_ROOT/.env"
     echo "   # Edit .env with your API keys"
     echo ""
-    echo "2. Test the collector manually:"
-    echo "   $PROJECT_ROOT/deploy/run_daily.sh"
+    echo "2. Test the trial runner manually:"
+    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml"
 else
-    echo "1. Test the collector manually:"
-    echo "   $PROJECT_ROOT/deploy/run_daily.sh"
+    echo "1. Test the trial runner manually:"
+    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml"
 fi
 echo ""
 echo "For more options, see deploy/DEPLOYMENT.md"
 echo ""
-
-
