@@ -33,11 +33,8 @@ python tools/nba_trial_runner.py run --data-dir data/nba-betting --game-id 00625
 
 **Server mode (with SLS trace export and OSS backup):**
 ```bash
-# Terminal 1: Start Dashboard Server with SLS + OSS
-dojo0 serve \
-  --otlp-endpoint https://my-project.cn-hangzhou.log.aliyuncs.com \
-  --trace-backend sls \
-  --oss-backup
+# Terminal 1: Start Dashboard Server with SLS + OSS (config from env vars)
+dojo0 serve --trace-backend sls --oss-backup
 
 # Terminal 2: Run trials
 python tools/nba_trial_runner.py run \

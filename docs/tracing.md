@@ -46,9 +46,20 @@ docker run -d --name jaeger \
 
 Run Dashboard Server with Jaeger:
 ```bash
-dojo0 serve \
-  --otlp-endpoint http://localhost:4318 \
-  --trace-backend jaeger
+# With default endpoints (localhost:4318)
+dojo0 serve --trace-backend jaeger
+
+# With custom endpoint
+dojo0 serve --trace-backend jaeger --trace-ingest-endpoint http://localhost:4318
+```
+
+Run Arena Server with Jaeger:
+```bash
+# With default endpoint (localhost:16686)
+dojo0 arena --trace-backend jaeger
+
+# With custom endpoint
+dojo0 arena --trace-backend jaeger --trace-query-endpoint http://localhost:16686
 ```
 
 - UI: http://localhost:16686
@@ -57,8 +68,14 @@ dojo0 serve \
 
 ### SLS (Production)
 
+**Prerequisites:**
+1. Create an SLS Project in Alibaba Cloud console
+2. Create a Trace Instance (this creates the logstore automatically)
+
+**Configuration via environment variables:**
+
 ```bash
-# Configure credentials (one of these methods):
+# Credentials (one of these methods):
 # 1. Environment variables
 export ALIBABA_CLOUD_ACCESS_KEY_ID=xxx
 export ALIBABA_CLOUD_ACCESS_KEY_SECRET=xxx
@@ -67,32 +84,46 @@ export ALIBABA_CLOUD_ACCESS_KEY_SECRET=xxx
 # 3. ECS RAM role (automatic on ECS instances)
 # 4. OIDC (K8s RRSA)
 
-# Configure SLS
+# SLS configuration
 export DOJOZERO_SLS_PROJECT=my-project
 export DOJOZERO_SLS_ENDPOINT=cn-hangzhou.log.aliyuncs.com
 export DOJOZERO_SLS_LOGSTORE=dojozero-traces
+```
 
-# Run Dashboard Server with SLS
-dojo0 serve \
-  --otlp-endpoint https://my-project.cn-hangzhou.log.aliyuncs.com \
-  --trace-backend sls
+Run Dashboard Server with SLS:
+```bash
+dojo0 serve --trace-backend sls --oss-backup
+```
+
+Run Arena Server with SLS:
+```bash
+dojo0 arena --trace-backend sls
 ```
 
 ## Running Trials with Tracing
 
 **Option 1: Via Dashboard Server (recommended for production)**
 ```bash
-# Terminal 1: Start Dashboard Server
-dojo0 serve \
-  --otlp-endpoint https://my-project.cn-hangzhou.log.aliyuncs.com \
-  --trace-backend sls \
-  --oss-backup
+# Terminal 1: Start Dashboard Server with SLS
+dojo0 serve --trace-backend sls --oss-backup
 
 # Terminal 2: Run trial
 dojo0 run --params config.yaml --server http://localhost:8000
 ```
 
-**Option 2: Local mode (no trace export)**
+**Option 2: Local mode with Jaeger**
+```bash
+# Terminal 1: Start Jaeger
+jaeger-all-in-one
+
+# Terminal 2: Start Dashboard Server
+dojo0 serve --trace-backend jaeger
+
+# Terminal 3: Run trial
+dojo0 run --params config.yaml --server http://localhost:8000
+```
+
+**Option 3: Local mode (no trace export)**
 ```bash
 dojo0 run --params config.yaml
 ```
@@ -101,13 +132,11 @@ dojo0 run --params config.yaml
 
 Start Arena Server to view traces:
 ```bash
-# With Jaeger
-dojo0 arena --trace-store http://localhost:16686 --trace-backend jaeger
+# With Jaeger (local dev)
+dojo0 arena --trace-backend jaeger
 
-# With SLS
-dojo0 arena \
-  --trace-store https://my-project.cn-hangzhou.log.aliyuncs.com \
-  --trace-backend sls
+# With SLS (production)
+dojo0 arena --trace-backend sls
 ```
 
 Then run the frontend:
@@ -115,6 +144,34 @@ Then run the frontend:
 cd frontend && npm run dev
 # Open http://localhost:5173
 ```
+
+## CLI Reference
+
+### `dojo0 serve`
+
+| Flag | Description |
+|------|-------------|
+| `--trace-backend` | `jaeger` or `sls` (required for tracing) |
+| `--trace-ingest-endpoint` | OTLP endpoint for Jaeger (default: http://localhost:4318) |
+| `--oss-backup` | Enable OSS backup for trial data |
+
+### `dojo0 arena`
+
+| Flag | Description |
+|------|-------------|
+| `--trace-backend` | `jaeger` or `sls` (required) |
+| `--trace-query-endpoint` | Jaeger Query API (default: http://localhost:16686) |
+| `--static-dir` | Path to frontend build output |
+
+### Environment Variables (SLS)
+
+| Variable | Description |
+|----------|-------------|
+| `DOJOZERO_SLS_PROJECT` | SLS project name |
+| `DOJOZERO_SLS_ENDPOINT` | SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com) |
+| `DOJOZERO_SLS_LOGSTORE` | Logstore name (e.g., dojozero-traces) |
+| `ALIBABA_CLOUD_ACCESS_KEY_ID` | Access key ID |
+| `ALIBABA_CLOUD_ACCESS_KEY_SECRET` | Access key secret |
 
 ## Components
 
@@ -159,11 +216,17 @@ from dojozero.core import (
     get_sls_exporter_headers,
 )
 
-# Initialize exporter
+# Initialize exporter for Jaeger
 exporter = OTelSpanExporter(
     otlp_endpoint="http://localhost:4318",
     service_name="dojozero",
-    headers=get_sls_exporter_headers(),  # For SLS
+)
+
+# Initialize exporter for SLS
+exporter = OTelSpanExporter(
+    otlp_endpoint="https://project.cn-hangzhou.log.aliyuncs.com",
+    service_name="dojozero",
+    headers=get_sls_exporter_headers(),
 )
 
 # Export span
