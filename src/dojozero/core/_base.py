@@ -100,10 +100,25 @@ class DataStreamBase(ActorBase, ABC):
         elif isinstance(payload, dict) and "event_type" in payload:
             event_type = payload["event_type"]
 
+        # Determine sport type from event type prefix
+        sport_type = "unknown"
+        if event_type.startswith("nba_") or event_type in (
+            "game_start",
+            "game_result",
+            "game_update",
+            "game_status_change",
+            "odds_update",
+            "play_by_play",
+        ):
+            sport_type = "nba"
+        elif event_type.startswith("nfl_"):
+            sport_type = "nfl"
+
         # Build tags for the span
         tags: dict[str, Any] = {
             "dojozero.event.type": event_type,
             "dojozero.event.sequence": event.sequence,
+            "dojozero.sport.type": sport_type,
         }
 
         # Add payload data as event.* tags
@@ -121,6 +136,14 @@ class DataStreamBase(ActorBase, ABC):
                 tags[f"event.{key}"] = json.dumps(value, default=str)
             else:
                 tags[f"event.{key}"] = value
+
+        # Extract game_id as top-level tag for easier querying
+        game_id = payload_dict.get("game_id") or payload_dict.get("event_id", "")
+        if game_id:
+            # Handle event_id format like "0022400608_pbp_188" -> extract game_id
+            if "_" in str(game_id) and not str(game_id).startswith("00"):
+                game_id = str(game_id).split("_")[0]
+            tags["dojozero.game.id"] = str(game_id)
 
         span = create_span_from_event(
             trial_id=self._trial_id,

@@ -67,6 +67,11 @@ class DataHub:
         # Track connected stores for lifecycle management
         self._connected_stores: list["DataStore"] = []
 
+        # Cache recent events for late-joining subscribers
+        # Key: event_type, Value: list of recent events (newest first)
+        self._recent_events: dict[str, list[DataEvent]] = defaultdict(list)
+        self._max_recent_events_per_type = 100  # Keep last 100 events per type
+
     def subscribe_agent(
         self,
         agent_id: str,
@@ -106,12 +111,58 @@ class DataHub:
         Args:
             event: Event to receive
         """
+        # Cache event for late-joining subscribers
+        self._cache_event(event)
+
         # Persist event if enabled
         if self.enable_persistence and not self._replay_mode:
             await self._persist_event(event)
 
         # Dispatch to subscribed agents
         await self._dispatch_event(event)
+
+    def _cache_event(self, event: DataEvent) -> None:
+        """Cache event for late-joining subscribers."""
+        event_type = event.event_type
+        events_list = self._recent_events[event_type]
+        events_list.insert(0, event)  # Newest first
+        # Trim to max size
+        if len(events_list) > self._max_recent_events_per_type:
+            self._recent_events[event_type] = events_list[
+                : self._max_recent_events_per_type
+            ]
+
+    def get_recent_events(
+        self,
+        event_types: list[str] | None = None,
+        limit: int = 10,
+    ) -> list[DataEvent]:
+        """Get recent events from the cache.
+
+        Args:
+            event_types: Filter by event types (None = all types)
+            limit: Maximum number of events to return
+
+        Returns:
+            List of recent events (newest first)
+        """
+        if event_types is None:
+            # Get all recent events across all types
+            all_events: list[DataEvent] = []
+            for events_list in self._recent_events.values():
+                all_events.extend(events_list)
+            # Sort by timestamp (newest first) and limit
+            all_events.sort(key=lambda e: e.timestamp, reverse=True)
+            return all_events[:limit]
+        else:
+            # Get events for specific types
+            result: list[DataEvent] = []
+            for event_type in event_types:
+                if event_type in self._recent_events:
+                    result.extend(self._recent_events[event_type])
+            # Sort by timestamp (newest first) and limit
+            result.sort(key=lambda e: e.timestamp, reverse=True)
+            return result[:limit]
 
     async def _persist_event(self, event: DataEvent) -> None:
         """Persist event to file.
@@ -126,6 +177,10 @@ class DataHub:
 
     def _write_to_file(self, line: str) -> None:
         """Write a line to the persistence file (sync, runs in thread pool)."""
+        from pathlib import Path
+
+        # Ensure parent directory exists
+        Path(self.persistence_file).parent.mkdir(parents=True, exist_ok=True)
         with open(self.persistence_file, "a") as f:
             f.write(line)
 

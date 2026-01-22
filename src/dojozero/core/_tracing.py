@@ -1324,8 +1324,155 @@ class OTelSpanExporter:
                 LOGGER.warning("Error during OTel exporter shutdown: %s", e)
 
 
-# Global exporter instance (lazily initialized)
+class SLSLogExporter:
+    """SLS Log exporter that sends spans as logs with flat fields.
+
+    Unlike OTLP traces where attributes are nested in a JSON string,
+    this exporter sends logs with top-level fields that can be directly
+    indexed and queried in SLS.
+
+    Uses the official aliyun-log-python-sdk for reliable authentication.
+
+    Usage:
+        exporter = SLSLogExporter(
+            project="my-project",
+            endpoint="cn-hangzhou.log.aliyuncs.com",
+            logstore="my-traces",
+        )
+        exporter.export_span(span_data)
+    """
+
+    def __init__(
+        self,
+        project: str,
+        endpoint: str,
+        logstore: str,
+    ):
+        """Initialize SLS Log exporter.
+
+        Args:
+            project: SLS project name
+            endpoint: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
+            logstore: SLS logstore name for flat logs
+        """
+        from ._credentials import get_credential_provider
+
+        self._project = project
+        self._endpoint = endpoint
+        self._logstore = logstore
+        self._credential_provider = get_credential_provider()
+        self._initialized = False
+        self._sls_client: Any = None
+
+    def _ensure_initialized(self) -> None:
+        """Ensure the SLS client is initialized."""
+        if self._initialized:
+            return
+
+        try:
+            from aliyun.log import LogClient
+
+            creds = self._credential_provider.get_credentials()
+            if not creds.is_valid():
+                LOGGER.warning("SLS credentials not valid, log export disabled")
+                self._initialized = True
+                return
+
+            # Create SLS client with credentials
+            # For STS credentials, we need to pass security_token
+            if creds.security_token:
+                self._sls_client = LogClient(
+                    self._endpoint,
+                    creds.access_key_id,
+                    creds.access_key_secret,
+                    creds.security_token,
+                )
+            else:
+                self._sls_client = LogClient(
+                    self._endpoint,
+                    creds.access_key_id,
+                    creds.access_key_secret,
+                )
+
+            self._initialized = True
+            LOGGER.info(
+                "SLS Log exporter initialized: endpoint=%s project=%s logstore=%s",
+                self._endpoint,
+                self._project,
+                self._logstore,
+            )
+        except ImportError:
+            LOGGER.warning("aliyun-log-python-sdk not available, log export disabled")
+            self._initialized = True
+        except Exception as e:
+            LOGGER.warning("Failed to initialize SLS client: %s", e)
+            self._initialized = True
+
+    def _send_logs(self, logs: list[dict[str, Any]]) -> None:
+        """Send logs to SLS using the SDK."""
+        if self._sls_client is None:
+            return
+
+        try:
+            from aliyun.log import LogItem, PutLogsRequest
+
+            log_items = []
+            for log_entry in logs:
+                # Extract __time__ (integer timestamp) and convert rest to LogItem
+                timestamp = log_entry.pop("__time__", 0)
+                contents = [(k, str(v)) for k, v in log_entry.items()]
+                log_items.append(LogItem(timestamp=timestamp, contents=contents))
+
+            request = PutLogsRequest(
+                project=self._project,
+                logstore=self._logstore,
+                topic="",
+                source="dojozero",
+                logitems=log_items,
+            )
+            self._sls_client.put_logs(request)
+        except Exception as e:
+            LOGGER.warning("SLS log export error: %s", e)
+
+    def export_span(self, span_data: SpanData) -> None:
+        """Export a SpanData as a flat log entry.
+
+        Args:
+            span_data: The span to export
+        """
+        self._ensure_initialized()
+
+        # Build flat log entry with top-level fields
+        log_entry: dict[str, Any] = {
+            "__time__": span_data.start_time // 1_000_000,  # Unix seconds (integer)
+            "trace_id": span_data.trace_id,
+            "span_id": span_data.span_id,
+            "operation_name": span_data.operation_name,
+            "duration_us": span_data.duration,
+            "service": "dojozero",
+        }
+
+        if span_data.parent_span_id:
+            log_entry["parent_span_id"] = span_data.parent_span_id
+
+        # Flatten tags to top-level fields
+        for key, value in span_data.tags.items():
+            # Convert dotted keys to underscores for easier querying
+            flat_key = key.replace(".", "_")
+            if value is not None:
+                log_entry[flat_key] = value
+
+        self._send_logs([log_entry])
+
+    def shutdown(self) -> None:
+        """Shutdown the exporter."""
+        self._sls_client = None
+        LOGGER.info("SLS Log exporter shutdown complete")
+
+
+# Global exporter instances (lazily initialized)
 _global_exporter: OTelSpanExporter | None = None
+_global_sls_log_exporter: SLSLogExporter | None = None
 
 
 def get_otel_exporter() -> OTelSpanExporter | None:
@@ -1339,19 +1486,37 @@ def set_otel_exporter(exporter: OTelSpanExporter | None) -> None:
     _global_exporter = exporter
 
 
+def get_sls_log_exporter() -> SLSLogExporter | None:
+    """Get the global SLS Log exporter instance."""
+    return _global_sls_log_exporter
+
+
+def set_sls_log_exporter(exporter: SLSLogExporter | None) -> None:
+    """Set the global SLS Log exporter instance."""
+    global _global_sls_log_exporter
+    _global_sls_log_exporter = exporter
+
+
 def emit_span(span_data: SpanData) -> None:
-    """Emit a span using the global exporter if configured.
+    """Emit a span using configured exporters.
 
     This is a convenience function for emitting spans from anywhere in the
     codebase without needing to pass around the exporter instance.
+
+    If both OTLP and SLS Log exporters are configured, the span is sent to both:
+    - OTLP: For trace correlation and Jaeger-style visualization
+    - SLS Log: For flat field indexing and direct queries
     """
     if _global_exporter is not None:
         _global_exporter.export_span(span_data)
+    if _global_sls_log_exporter is not None:
+        _global_sls_log_exporter.export_span(span_data)
 
 
 __all__ = [
     "JaegerTraceReader",
     "OTelSpanExporter",
+    "SLSLogExporter",
     "SLSTraceReader",
     "SpanData",
     "TraceReader",
@@ -1361,6 +1526,8 @@ __all__ = [
     "create_span_from_event",
     "create_trace_reader",
     "emit_span",
+    "get_sls_log_exporter",
+    "set_sls_log_exporter",
     "get_otel_exporter",
     "get_sls_exporter_headers",
     "load_spans_from_checkpoint",

@@ -162,7 +162,8 @@ class TrialManager:
     async def submit(
         self,
         spec: TrialSpec,
-        launch_coro_factory: Callable[[], Coroutine[Any, Any, TrialStatus]] | None = None,
+        launch_coro_factory: Callable[[], Coroutine[Any, Any, TrialStatus]]
+        | None = None,
     ) -> str:
         """Submit a trial for execution.
 
@@ -278,9 +279,7 @@ class TrialManager:
 
                 # Get next trial from queue (with timeout to check shutdown)
                 try:
-                    queued = await asyncio.wait_for(
-                        self._pending.get(), timeout=1.0
-                    )
+                    queued = await asyncio.wait_for(self._pending.get(), timeout=1.0)
                 except asyncio.TimeoutError:
                     continue
 
@@ -302,9 +301,7 @@ class TrialManager:
     def _cleanup_completed_tasks(self) -> None:
         """Remove completed tasks from running dict."""
         completed = [
-            trial_id
-            for trial_id, task in self._running_tasks.items()
-            if task.done()
+            trial_id for trial_id, task in self._running_tasks.items() if task.done()
         ]
         for trial_id in completed:
             del self._running_tasks[trial_id]
@@ -370,6 +367,7 @@ class TrialManager:
         if persistence_file_path and isinstance(persistence_file_path, str):
             persistence_file = Path(persistence_file_path)
             _upload_trial_to_oss(trial_id, persistence_file)
+
 
 # Lazy import for OSS to avoid import errors if oss2 not installed
 _oss_client = None

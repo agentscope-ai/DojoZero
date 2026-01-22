@@ -103,6 +103,34 @@ class GameTrialManager:
         self.started = False
         self.completed = False
         self._logger: logging.Logger | None = None
+        self._server_confirmed_running = (
+            False  # Track if server confirmed trial is running
+        )
+        self._subprocess_handled = False  # Track if subprocess exit was already handled
+
+    async def check_server_trial_status(self) -> str | None:
+        """Check if trial is running on the server.
+
+        Returns:
+            Trial phase ('running', 'stopped', etc.) or None if not found/error
+        """
+        if not self.server or not self.trial_id:
+            return None
+
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{self.server.rstrip('/')}/api/trials/{self.trial_id}/status"
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("phase")
+                return None
+        except Exception as e:
+            self.log(logging.DEBUG, "Failed to check server status: %s", e)
+            return None
 
     def generate_config_file(self) -> Path:
         """Generate config file for this game.
@@ -381,33 +409,98 @@ class GameTrialManager:
         await asyncio.sleep(initial_wait_seconds)
 
         while True:
-            # Check if process is still running
-            if self.process.poll() is not None:
-                # Process ended
+            # Check if process is still running (only handle exit once)
+            if self.process.poll() is not None and not self._subprocess_handled:
+                # Process ended - mark as handled
+                self._subprocess_handled = True
                 return_code = self.process.returncode
                 stdout, stderr = self.process.communicate()
 
                 if return_code == 0:
-                    self.log(
-                        logging.INFO,
-                        "✓ Trial process completed for game %s (trial_id: %s)",
-                        self.game_id,
-                        self.trial_id,
-                    )
-                else:
-                    self.log(
-                        logging.ERROR,
-                        "✗ Trial process failed for game %s (trial_id: %s, return_code: %d)",
-                        self.game_id,
-                        self.trial_id,
-                        return_code,
-                    )
-                    if stderr:
+                    # In server mode, CLI exits after submission - trial runs on server
+                    # Continue monitoring game status until game concludes
+                    if self.server:
+                        if not self._server_confirmed_running:
+                            server_phase = await self.check_server_trial_status()
+                            if server_phase == "running":
+                                self._server_confirmed_running = True
+                                self.log(
+                                    logging.INFO,
+                                    "✓ Trial submitted and running on server for game %s",
+                                    self.game_id,
+                                )
+                                # Continue monitoring game status - don't break
+                            elif server_phase in ("stopped", "failed"):
+                                self.log(
+                                    logging.INFO,
+                                    "Trial completed on server for game %s (phase: %s)",
+                                    self.game_id,
+                                    server_phase,
+                                )
+                                self.completed = True
+                                break
+                            else:
+                                # Unknown state, continue monitoring
+                                self.log(
+                                    logging.WARNING,
+                                    "Trial status unknown for game %s (phase: %s), "
+                                    "continuing to monitor",
+                                    self.game_id,
+                                    server_phase,
+                                )
+                        # If already confirmed running, continue monitoring
+                    else:
+                        # Local mode - process completed means trial completed
                         self.log(
-                            logging.ERROR, "Stderr: %s", stderr[:500]
-                        )  # First 500 chars
-
-                break
+                            logging.INFO,
+                            "✓ Trial process completed for game %s (trial_id: %s)",
+                            self.game_id,
+                            self.trial_id,
+                        )
+                        break
+                else:
+                    # Subprocess failed - but check if trial is running on server
+                    # This can happen when the CLI times out waiting for server response
+                    # but the server actually launched the trial successfully
+                    if self.server and not self._server_confirmed_running:
+                        server_phase = await self.check_server_trial_status()
+                        if server_phase == "running":
+                            self._server_confirmed_running = True
+                            self.log(
+                                logging.INFO,
+                                "✓ Trial is running on server for game %s "
+                                "(CLI subprocess timed out but server launched trial)",
+                                self.game_id,
+                            )
+                            # Continue monitoring - don't break
+                        else:
+                            self.log(
+                                logging.ERROR,
+                                "✗ Trial process failed for game %s "
+                                "(trial_id: %s, return_code: %d, server_phase: %s)",
+                                self.game_id,
+                                self.trial_id,
+                                return_code,
+                                server_phase,
+                            )
+                            if stderr:
+                                self.log(
+                                    logging.ERROR, "Stderr: %s", stderr[:500]
+                                )  # First 500 chars
+                            break
+                    else:
+                        self.log(
+                            logging.ERROR,
+                            "✗ Trial process failed for game %s (trial_id: %s, return_code: %d)",
+                            self.game_id,
+                            self.trial_id,
+                            return_code,
+                        )
+                        if stderr:
+                            self.log(
+                                logging.ERROR, "Stderr: %s", stderr[:500]
+                            )  # First 500 chars
+                        break
 
             # Check game status
             # Use the game's actual date, not today's date
@@ -668,13 +761,19 @@ async def run_trials_for_date(
 
 async def run_trials(
     managers: list[GameTrialManager],
+    max_concurrent_starts: int = 2,
 ) -> None:
     """Run trials for all game managers.
 
     Args:
         managers: List of GameTrialManager instances
+        max_concurrent_starts: Maximum number of trials to start concurrently.
+            This prevents overwhelming the server when multiple games have
+            similar start times.
     """
     tasks = []
+    # Semaphore to limit concurrent trial starts
+    start_semaphore = asyncio.Semaphore(max_concurrent_starts)
 
     for manager in managers:
         # Create task for each game
@@ -686,11 +785,17 @@ async def run_trials(
                     logger.warning("Skipping start for game %s", manager.game_id)
                     return
 
-                # Start trial
-                started = await manager.start_trial()
-                if not started:
-                    logger.error("Failed to start trial for game %s", manager.game_id)
-                    return
+                # Use semaphore to limit concurrent trial starts
+                async with start_semaphore:
+                    # Add small delay to stagger starts
+                    await asyncio.sleep(1.0)
+                    # Start trial
+                    started = await manager.start_trial()
+                    if not started:
+                        logger.error(
+                            "Failed to start trial for game %s", manager.game_id
+                        )
+                        return
 
                 # Monitor until game concludes
                 await manager.monitor_trial()

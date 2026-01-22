@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - ray is optional
 DEFAULT_IMPORTS: tuple[str, ...] = (
     "dojozero.samples",
     "dojozero.nba_moneyline",
-    "dojozero.nfl_game",
+    "dojozero.nfl_moneyline",
 )
 DEFAULT_CLI_CONFIG: Mapping[str, Any] = {
     "store": {
@@ -48,7 +48,7 @@ DEFAULT_CLI_CONFIG: Mapping[str, Any] = {
     "runtime": {
         "kind": "local",
     },
-    "imports": ["dojozero.samples", "dojozero.nba_moneyline", "dojozero.nfl_game"],
+    "imports": ["dojozero.samples", "dojozero.nba_moneyline", "dojozero.nfl_moneyline"],
 }
 
 RUN_USAGE_EXAMPLES = dedent(
@@ -619,7 +619,7 @@ async def _submit_to_server(
             "latest": resume_latest,
         }
 
-    # Submit to server
+    # Submit to server - server returns immediately (trial is queued)
     base_url = server_url.rstrip("/")
     async with httpx.AsyncClient(timeout=30.0) as client:
         LOGGER.info("Submitting trial to server: %s", base_url)
@@ -628,17 +628,32 @@ async def _submit_to_server(
             json=request_payload,
         )
 
-        if response.status_code == 201:
+        # 201 Created (old behavior) or 202 Accepted (new queued behavior)
+        if response.status_code in (201, 202):
             result = response.json()
+            trial_id = result.get("id")
+            phase = result.get("phase")
+            message = result.get("message", "")
+            queue_info = ""
+            if "queue_position" in result:
+                queue_info = f" (queue: {result['queue_position']}, running: {result['running_count']})"
             LOGGER.info(
-                "Trial '%s' submitted successfully (phase: %s)",
-                result.get("id"),
-                result.get("phase"),
+                "Trial '%s' submitted successfully (phase: %s)%s %s",
+                trial_id,
+                phase,
+                queue_info,
+                message,
             )
             return 0
         else:
-            error = response.json().get("error", response.text)
-            raise DojoZeroCLIError(f"Failed to submit trial: {error}")
+            # Try to parse JSON error, fall back to text
+            try:
+                error = response.json().get("error", response.text)
+            except Exception:
+                error = response.text or f"HTTP {response.status_code}"
+            raise DojoZeroCLIError(
+                f"Failed to submit trial (HTTP {response.status_code}): {error}"
+            )
 
 
 async def _run_command(args: argparse.Namespace) -> int:
@@ -745,14 +760,21 @@ async def _submit_replay_to_server(
 
         if response.status_code in (200, 201, 202):
             result = response.json()
+            queue_info = ""
+            if "queue_position" in result:
+                queue_info = f" (queue: {result['queue_position']}, running: {result['running_count']})"
             LOGGER.info(
-                "Replay trial '%s' submitted successfully (phase: %s)",
+                "Replay trial '%s' submitted successfully (phase: %s)%s",
                 result.get("id"),
                 result.get("phase"),
+                queue_info,
             )
             return 0
         else:
-            error = response.json().get("error", response.text)
+            try:
+                error = response.json().get("error", response.text)
+            except Exception:
+                error = response.text or f"HTTP {response.status_code}"
             raise DojoZeroCLIError(f"Failed to submit replay trial: {error}")
 
 
