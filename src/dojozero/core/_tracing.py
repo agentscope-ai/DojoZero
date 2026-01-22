@@ -417,10 +417,11 @@ class SLSTraceReader:
             start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
 
         # SLS query for trial.started spans
+        # Note: Field names use underscores in SLS (operation_name, dojozero_trial_id)
         query = (
             f'service:"{self._service_name}" AND '
-            f'operationName:"trial.started" | '
-            f'SELECT DISTINCT "dojozero.trial.id" as trial_id LIMIT {limit}'
+            f'operation_name:"trial.started" | '
+            f"SELECT DISTINCT dojozero_trial_id as trial_id LIMIT {limit}"
         )
 
         params = {
@@ -443,11 +444,14 @@ class SLSTraceReader:
             data = response.json()
 
             # Extract trial IDs from response
+            # SLS may return list directly or dict with "data" key
             trial_ids: list[str] = []
-            for row in data.get("data", []):
-                trial_id = row.get("trial_id")
-                if trial_id:
-                    trial_ids.append(trial_id)
+            rows = data if isinstance(data, list) else data.get("data", [])
+            for row in rows:
+                if isinstance(row, dict):
+                    trial_id = row.get("trial_id")
+                    if trial_id:
+                        trial_ids.append(trial_id)
 
             return trial_ids
         except httpx.HTTPStatusError as e:
@@ -456,7 +460,7 @@ class SLSTraceReader:
         except httpx.RequestError as e:
             LOGGER.error("SLS request error listing trials: %s", e)
             return []
-        except (KeyError, TypeError, ValueError) as e:
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
             LOGGER.error("Failed to parse SLS response for trials: %s", e)
             return []
 
@@ -483,17 +487,16 @@ class SLSTraceReader:
             from_time = start_time
 
         # SLS query for spans with specific trial_id
-        query = (
-            f'service:"{self._service_name}" AND '
-            f'"dojozero.trial.id":"{trial_id}" | '
-            f"SELECT * ORDER BY startTime ASC LIMIT 1000"
-        )
+        # Note: Field names use underscores in SLS (dojozero_trial_id not dojozero.trial.id)
+        # Simple search query without SQL - results are returned in time order by default
+        query = f'service:"{self._service_name}" AND dojozero_trial_id:"{trial_id}"'
 
         params = {
             "type": "log",
             "from": str(int(from_time.timestamp())),
             "to": str(int(now.timestamp())),
             "query": query,
+            "line": "1000",  # Limit number of results
         }
 
         resource = f"/logstores/{self._logstore}"
@@ -508,11 +511,14 @@ class SLSTraceReader:
             response.raise_for_status()
             data = response.json()
 
+            # SLS may return list directly or dict with "data" key
             spans: list[SpanData] = []
-            for row in data.get("data", []):
-                span = self._convert_sls_row_to_span(row)
-                if span:
-                    spans.append(span)
+            rows = data if isinstance(data, list) else data.get("data", [])
+            for row in rows:
+                if isinstance(row, dict):
+                    span = self._convert_sls_row_to_span(row)
+                    if span:
+                        spans.append(span)
 
             # Sort by start time
             spans.sort(key=lambda s: s.start_time)
@@ -525,27 +531,29 @@ class SLSTraceReader:
                 "SLS request error getting spans for trial '%s': %s", trial_id, e
             )
             return []
-        except (KeyError, TypeError, ValueError) as e:
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
             LOGGER.error("Failed to parse SLS response for trial '%s': %s", trial_id, e)
             return []
 
     def _convert_sls_row_to_span(self, row: dict[str, Any]) -> SpanData | None:
         """Convert an SLS log row to SpanData.
 
-        SLS stores OpenTelemetry spans with fields like:
-        - traceId, spanId, parentSpanId
-        - operationName (or name)
-        - startTime (microseconds or ISO string)
-        - duration (microseconds)
-        - tags/attributes as flattened fields
+        SLS stores spans with underscore-separated field names:
+        - trace_id, span_id, parent_span_id
+        - operation_name
+        - __time__ (Unix seconds), duration_us (microseconds)
+        - tags/attributes as flattened fields (dojozero_*, event_*)
         """
         try:
-            trace_id = row.get("traceId", row.get("traceID", ""))
-            span_id = row.get("spanId", row.get("spanID", ""))
-            operation_name = row.get("operationName", row.get("name", ""))
+            # Support both underscore (our format) and camelCase (OTLP format)
+            trace_id = row.get("trace_id", row.get("traceId", row.get("traceID", "")))
+            span_id = row.get("span_id", row.get("spanId", row.get("spanID", "")))
+            operation_name = row.get(
+                "operation_name", row.get("operationName", row.get("name", ""))
+            )
 
-            # Handle start time (could be microseconds or ISO string)
-            start_time_raw = row.get("startTime", 0)
+            # Handle start time: __time__ is Unix seconds, startTime may be microseconds
+            start_time_raw = row.get("__time__", row.get("startTime", 0))
             if isinstance(start_time_raw, str):
                 try:
                     dt = datetime.fromisoformat(start_time_raw.replace("Z", "+00:00"))
@@ -553,10 +561,14 @@ class SLSTraceReader:
                 except ValueError:
                     start_time = int(start_time_raw) if start_time_raw.isdigit() else 0
             else:
-                start_time = int(start_time_raw)
+                # __time__ is in seconds, convert to microseconds
+                start_time = int(start_time_raw) * 1_000_000
 
-            duration = int(row.get("duration", 0))
-            parent_span_id = row.get("parentSpanId", row.get("parentSpanID"))
+            # duration_us is already in microseconds
+            duration = int(row.get("duration_us", row.get("duration", 0)))
+            parent_span_id = row.get(
+                "parent_span_id", row.get("parentSpanId", row.get("parentSpanID"))
+            )
 
             # Extract tags from flattened fields or nested tags object
             tags: dict[str, Any] = {}
@@ -568,10 +580,21 @@ class SLSTraceReader:
                     if isinstance(tag, dict):
                         tags[tag.get("key", "")] = tag.get("value")
 
-            # Also check for dojozero.* fields directly in the row
+            # Also check for dojozero.* and event.* fields directly in the row
+            # SLS log exporter flattens dots to underscores, so check both formats
             for key, value in row.items():
-                if key.startswith("dojozero.") or key.startswith("event."):
+                if key.startswith("dojozero."):
                     tags[key] = value
+                elif key.startswith("dojozero_"):
+                    # Convert dojozero_x_y to dojozero.x.y
+                    normalized_key = "dojozero." + key[9:].replace("_", ".")
+                    tags[normalized_key] = value
+                elif key.startswith("event."):
+                    tags[key] = value
+                elif key.startswith("event_"):
+                    # Convert event_x to event.x (only first underscore)
+                    normalized_key = "event." + key[6:]
+                    tags[normalized_key] = value
 
             return SpanData(
                 trace_id=trace_id,

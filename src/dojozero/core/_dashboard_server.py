@@ -119,6 +119,7 @@ class TrialManager:
 
         # Background worker task
         self._worker_task: asyncio.Task[None] | None = None
+        self._status_task: asyncio.Task[None] | None = None
         self._shutdown_event = asyncio.Event()
 
         self._logger = logging.getLogger("dojozero.trial_manager")
@@ -129,9 +130,35 @@ class TrialManager:
             return
         self._shutdown_event.clear()
         self._worker_task = asyncio.create_task(self._worker_loop())
+        self._status_task = asyncio.create_task(self._status_loop())
         self._logger.info(
             "TrialManager started (max_concurrent=%d)", self._max_concurrent
         )
+
+    async def _status_loop(self) -> None:
+        """Periodic status logging loop."""
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.sleep(30.0)  # Log every 30 seconds
+                self._log_status()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self._logger.error("Status loop error: %s", e)
+
+    def _log_status(self) -> None:
+        """Log current trial manager status."""
+        running_ids = list(self._running_tasks.keys())
+        pending_count = self._pending.qsize()
+
+        if running_ids or pending_count > 0:
+            self._logger.info(
+                "TrialManager status: running=%d/%d, pending=%d, running_ids=%s",
+                len(running_ids),
+                self._max_concurrent,
+                pending_count,
+                running_ids,
+            )
 
     async def stop(self) -> None:
         """Stop the manager and cancel all running trials."""
@@ -147,6 +174,15 @@ class TrialManager:
                     await task
                 except asyncio.CancelledError:
                     pass
+
+        # Cancel status task
+        if self._status_task is not None:
+            self._status_task.cancel()
+            try:
+                await self._status_task
+            except asyncio.CancelledError:
+                pass
+            self._status_task = None
 
         # Cancel worker
         if self._worker_task is not None:
@@ -291,6 +327,13 @@ class TrialManager:
                 # Launch trial in background task
                 task = asyncio.create_task(self._run_trial(queued))
                 self._running_tasks[queued.trial_id] = task
+                self._logger.info(
+                    "Launched trial '%s' (running=%d/%d, pending=%d)",
+                    queued.trial_id,
+                    len(self._running_tasks),
+                    self._max_concurrent,
+                    self._pending.qsize(),
+                )
 
             except asyncio.CancelledError:
                 break
@@ -305,6 +348,12 @@ class TrialManager:
         ]
         for trial_id in completed:
             del self._running_tasks[trial_id]
+            self._logger.info(
+                "Trial '%s' task completed (running=%d/%d)",
+                trial_id,
+                len(self._running_tasks),
+                self._max_concurrent,
+            )
 
     async def _run_trial(self, queued: QueuedTrial) -> None:
         """Run a single trial."""

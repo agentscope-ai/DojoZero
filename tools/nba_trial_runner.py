@@ -107,6 +107,12 @@ class GameTrialManager:
             False  # Track if server confirmed trial is running
         )
         self._subprocess_handled = False  # Track if subprocess exit was already handled
+        self._initial_game_status: int | None = (
+            None  # Track game status at monitoring start
+        )
+        self._grace_period_seconds: float = (
+            300.0  # 5 min grace period for already-finished games
+        )
 
     async def check_server_trial_status(self) -> str | None:
         """Check if trial is running on the server.
@@ -384,6 +390,30 @@ class GameTrialManager:
             )
             return False
 
+    async def _get_current_game_status(self) -> int | None:
+        """Get current game status from NBA API.
+
+        Returns:
+            Game status (1=scheduled, 2=in progress, 3=finished) or None if error
+        """
+        try:
+            check_date = self.game_date or datetime.now().strftime("%Y-%m-%d")
+            games = get_games_for_date(check_date, print_games=False)
+            current_game = next(
+                (g for g in games if str(g.get("gameId")) == self.game_id), None
+            )
+            if current_game:
+                return current_game.get("gameStatus")
+            return None
+        except Exception as e:
+            self.log(
+                logging.WARNING,
+                "Error getting game status for %s: %s",
+                self.game_id,
+                e,
+            )
+            return None
+
     async def monitor_trial(self) -> None:
         """Monitor trial process and game status until game concludes."""
         if not self.started or not self.process:
@@ -407,6 +437,18 @@ class GameTrialManager:
             initial_wait_seconds,
         )
         await asyncio.sleep(initial_wait_seconds)
+
+        # Record initial game status to detect already-finished games
+        monitoring_start_time = datetime.now(timezone.utc)
+        self._initial_game_status = await self._get_current_game_status()
+        if self._initial_game_status == 3:
+            self.log(
+                logging.INFO,
+                "Game %s was already finished at monitoring start. "
+                "Will allow %.0f second grace period for data processing.",
+                self.game_id,
+                self._grace_period_seconds,
+            )
 
         while True:
             # Check if process is still running (only handle exit once)
@@ -504,84 +546,161 @@ class GameTrialManager:
 
             # Check game status
             # Use the game's actual date, not today's date
-            try:
-                check_date = self.game_date or datetime.now().strftime("%Y-%m-%d")
-                games = get_games_for_date(check_date, print_games=False)
-                current_game = next(
-                    (g for g in games if str(g.get("gameId")) == self.game_id), None
-                )
-
-                if current_game:
-                    game_status = current_game.get("gameStatus", 0)
-                    # Status 3 = Finished
-                    if game_status == 3:
+            game_status = await self._get_current_game_status()
+            if game_status == 3:
+                # Game is finished - check if we should stop
+                if self._initial_game_status == 3:
+                    # Game was already finished at monitoring start
+                    # Apply grace period before stopping
+                    elapsed = (
+                        datetime.now(timezone.utc) - monitoring_start_time
+                    ).total_seconds()
+                    if elapsed >= self._grace_period_seconds:
                         self.log(
                             logging.INFO,
-                            "Game %s has finished, stopping trial (trial_id: %s)",
+                            "Game %s was already finished; grace period (%.0fs) elapsed. "
+                            "Stopping trial (trial_id: %s)",
                             self.game_id,
+                            self._grace_period_seconds,
                             self.trial_id,
                         )
-                        self.stop_trial()
+                        await self.stop_trial()
                         self.completed = True
                         break
-            except Exception as e:
-                self.log(
-                    logging.WARNING,
-                    "Error checking game status for %s: %s",
-                    self.game_id,
-                    e,
-                )
+                    else:
+                        remaining = self._grace_period_seconds - elapsed
+                        self.log(
+                            logging.DEBUG,
+                            "Game %s already finished; %.0fs remaining in grace period",
+                            self.game_id,
+                            remaining,
+                        )
+                else:
+                    # Game transitioned to finished during monitoring - stop immediately
+                    self.log(
+                        logging.INFO,
+                        "Game %s has finished, stopping trial (trial_id: %s)",
+                        self.game_id,
+                        self.trial_id,
+                    )
+                    await self.stop_trial()
+                    self.completed = True
+                    break
 
             # Wait before next check
             await asyncio.sleep(self.check_interval_seconds)
 
-    def stop_trial(self) -> None:
-        """Stop the trial process."""
-        if not self.process:
-            return
+    async def stop_trial(self) -> None:
+        """Stop the trial process.
 
-        self.log(
-            logging.INFO,
-            "Stopping trial for game %s (PID: %d)",
-            self.game_id,
-            self.process.pid,
-        )
+        In server mode, calls the server's stop endpoint to stop the trial.
+        In local mode, terminates the subprocess.
+        """
+        # In server mode, call the server's stop endpoint
+        if self.server and self.trial_id:
+            await self._stop_server_trial()
+
+        # Also handle local subprocess if it exists
+        if self.process:
+            self.log(
+                logging.INFO,
+                "Stopping local process for game %s (PID: %d)",
+                self.game_id,
+                self.process.pid,
+            )
+
+            try:
+                # Send SIGTERM
+                self.process.terminate()
+
+                # Wait up to 10 seconds for graceful shutdown
+                try:
+                    self.process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    # Force kill if not responding
+                    self.log(
+                        logging.WARNING, "Trial process did not terminate, forcing kill"
+                    )
+                    self.process.kill()
+                    self.process.wait()
+            except Exception as e:
+                self.log(
+                    logging.WARNING,
+                    "Error stopping local process for game %s: %s",
+                    self.game_id,
+                    e,
+                )
+
+        # Close log file handle if it exists
+        if self._log_file_handle:
+            try:
+                self._log_file_handle.flush()  # Ensure all data is written
+                self._log_file_handle.close()
+            except Exception as e:
+                self.log(
+                    logging.WARNING,
+                    "Error closing log file for game %s: %s",
+                    self.game_id,
+                    e,
+                )
+            finally:
+                self._log_file_handle = None
+
+        self.log(logging.INFO, "✓ Trial stopped for game %s", self.game_id)
+
+    async def _stop_server_trial(self) -> bool:
+        """Stop the trial on the server.
+
+        Returns:
+            True if stopped successfully, False otherwise
+        """
+        if not self.server or not self.trial_id:
+            return False
 
         try:
-            # Send SIGTERM
-            self.process.terminate()
+            import httpx
 
-            # Wait up to 10 seconds for graceful shutdown
-            try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                # Force kill if not responding
-                self.log(
-                    logging.WARNING, "Trial process did not terminate, forcing kill"
+            self.log(
+                logging.INFO,
+                "Sending stop request to server for trial %s",
+                self.trial_id,
+            )
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.server.rstrip('/')}/api/trials/{self.trial_id}/stop"
                 )
-                self.process.kill()
-                self.process.wait()
-
-            # Close log file handle if it exists
-            if self._log_file_handle:
-                try:
-                    self._log_file_handle.flush()  # Ensure all data is written
-                    self._log_file_handle.close()
-                except Exception as e:
+                if response.status_code == 200:
+                    data = response.json()
+                    self.log(
+                        logging.INFO,
+                        "✓ Server trial stopped: %s (phase: %s)",
+                        self.trial_id,
+                        data.get("phase"),
+                    )
+                    return True
+                elif response.status_code == 404:
                     self.log(
                         logging.WARNING,
-                        "Error closing log file for game %s: %s",
-                        self.game_id,
-                        e,
+                        "Trial %s not found on server (may have already completed)",
+                        self.trial_id,
                     )
-                finally:
-                    self._log_file_handle = None
-
-            self.log(logging.INFO, "✓ Trial stopped for game %s", self.game_id)
+                    return False
+                else:
+                    self.log(
+                        logging.WARNING,
+                        "Failed to stop server trial %s: %s",
+                        self.trial_id,
+                        response.text,
+                    )
+                    return False
         except Exception as e:
             self.log(
-                logging.ERROR, "Error stopping trial for game %s: %s", self.game_id, e
+                logging.ERROR,
+                "Error stopping server trial %s: %s",
+                self.trial_id,
+                e,
             )
+            return False
 
     def log_status(self) -> None:
         """Log crucial status information."""
@@ -761,13 +880,13 @@ async def run_trials_for_date(
 
 async def run_trials(
     managers: list[GameTrialManager],
-    max_concurrent_starts: int = 2,
+    max_concurrent_starts: int = 10,
 ) -> None:
     """Run trials for all game managers.
 
     Args:
         managers: List of GameTrialManager instances
-        max_concurrent_starts: Maximum number of trials to start concurrently.
+        max_concurrent_starts: Maximum number of trials to start concurrently (default: 10).
             This prevents overwhelming the server when multiple games have
             similar start times.
     """
@@ -991,6 +1110,13 @@ def main() -> int:
         "When specified, trials are submitted to the server which handles "
         "SLS trace export and OSS backup.",
     )
+    run_parser.add_argument(
+        "--max-concurrent-starts",
+        type=int,
+        default=10,
+        help="Maximum number of trials to start concurrently (default: 10). "
+        "This prevents overwhelming the server with simultaneous submissions.",
+    )
 
     args = parser.parse_args()
 
@@ -1059,7 +1185,9 @@ def main() -> int:
                 logger.info("No games found for trials")
                 return 0
 
-            asyncio.run(run_trials(managers))
+            asyncio.run(
+                run_trials(managers, max_concurrent_starts=args.max_concurrent_starts)
+            )
             return 0
 
         except KeyboardInterrupt:

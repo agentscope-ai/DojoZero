@@ -151,11 +151,12 @@ def build_runtime_context(
     data_hubs: dict[str, DataHub] = {}
     stores: dict[str, DataStore] = {}
 
-    # Create DataHub
+    # Create DataHub with trial_id for trace emission
     hub = DataHub(
         hub_id=hub_id,
         persistence_file=persistence_file,
         enable_persistence=enable_persistence,
+        trial_id=trial_id,
     )
     data_hubs[hub_id] = hub
 

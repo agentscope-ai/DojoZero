@@ -23,6 +23,7 @@ class DataHub:
     - Persist events to file (timestamped, typed)
     - Manage agent subscriptions
     - Dispatch events to subscribed agents
+    - Emit events to trace backend (OTel/SLS)
     - Support replay mode
     """
 
@@ -31,6 +32,7 @@ class DataHub:
         hub_id: str = "data_hub",
         persistence_file: Path | str | None = None,
         enable_persistence: bool = True,
+        trial_id: str | None = None,
     ):
         """Initialize DataHub.
 
@@ -38,9 +40,11 @@ class DataHub:
             hub_id: Unique identifier for this hub
             persistence_file: Path to file for event persistence
             enable_persistence: Whether to persist events to file
+            trial_id: Trial identifier for trace emission (optional)
         """
         self.hub_id = hub_id
         self.enable_persistence = enable_persistence
+        self.trial_id = trial_id
 
         if persistence_file:
             self.persistence_file = Path(persistence_file)
@@ -118,8 +122,37 @@ class DataHub:
         if self.enable_persistence and not self._replay_mode:
             await self._persist_event(event)
 
+        # Emit to trace backend if trial_id is set
+        if self.trial_id and not self._replay_mode:
+            self._emit_event_span(event)
+
         # Dispatch to subscribed agents
         await self._dispatch_event(event)
+
+    def _emit_event_span(self, event: DataEvent) -> None:
+        """Emit an event as a span to the trace backend.
+
+        Args:
+            event: Event to emit
+        """
+        try:
+            from dojozero.core._tracing import (
+                convert_checkpoint_event_to_span,
+                emit_span,
+            )
+
+            # Convert event to dict for span conversion
+            event_dict = event.to_dict()
+            span = convert_checkpoint_event_to_span(
+                trial_id=self.trial_id,  # type: ignore[arg-type]
+                event=event_dict,
+                sequence=0,
+                actor_id=getattr(event, "stream_id", self.hub_id),
+            )
+            emit_span(span)
+        except Exception as e:
+            # Don't let trace emission failures affect event processing
+            logger.debug("Failed to emit event span: %s", e)
 
     def _cache_event(self, event: DataEvent) -> None:
         """Cache event for late-joining subscribers."""
