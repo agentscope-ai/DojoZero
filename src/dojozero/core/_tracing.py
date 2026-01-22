@@ -1153,12 +1153,27 @@ class OTelSpanExporter:
     This class wraps the OpenTelemetry SDK to export DojoZero spans to an OTLP
     endpoint (e.g., Jaeger, Alibaba Cloud SLS). It uses synchronous export
     (no batching) for real-time tracing.
+    endpoint (e.g., Jaeger, Alibaba Cloud SLS). It uses synchronous export
+    (no batching) for real-time tracing.
 
     Usage:
+        # Jaeger (no auth)
         # Jaeger (no auth)
         exporter = OTelSpanExporter(
             otlp_endpoint="http://localhost:4318",
             service_name="dojozero",
+        )
+
+        # SLS (with auth headers)
+        exporter = OTelSpanExporter(
+            otlp_endpoint="https://project.cn-hangzhou.log.aliyuncs.com",
+            service_name="dojozero",
+            headers={
+                "x-sls-otel-project": "my-project",
+                "x-sls-otel-instance-id": "my-instance",
+                "x-sls-otel-ak-id": "xxx",
+                "x-sls-otel-ak-secret": "xxx",
+            },
         )
 
         # SLS (with auth headers)
@@ -1188,9 +1203,11 @@ class OTelSpanExporter:
             otlp_endpoint: OTLP HTTP endpoint URL (e.g., http://localhost:4318)
             service_name: Service name for trace attribution
             headers: Optional headers for authentication (e.g., SLS auth headers)
+            headers: Optional headers for authentication (e.g., SLS auth headers)
         """
         self._endpoint = otlp_endpoint.rstrip("/")
         self._service_name = service_name
+        self._headers = headers
         self._headers = headers
         self._tracer = None
         self._provider = None
@@ -1231,6 +1248,20 @@ class OTelSpanExporter:
                 endpoint=traces_endpoint,
                 headers=self._headers,
             )
+            # For SLS, the endpoint format is:
+            #   https://{project}.{region}.log.aliyuncs.com/opentelemetry/v1/traces
+            # For Jaeger, it's: http://localhost:4318/v1/traces
+            if "log.aliyuncs.com" in self._endpoint:
+                # SLS uses /opentelemetry/v1/traces path
+                traces_endpoint = f"{self._endpoint}/opentelemetry/v1/traces"
+            else:
+                # Standard OTLP uses /v1/traces path
+                traces_endpoint = f"{self._endpoint}/v1/traces"
+
+            otlp_exporter = OTLPSpanExporter(
+                endpoint=traces_endpoint,
+                headers=self._headers,
+            )
 
             # Use SimpleSpanProcessor for real-time export (no batching)
             self._provider.add_span_processor(SimpleSpanProcessor(otlp_exporter))
@@ -1244,8 +1275,10 @@ class OTelSpanExporter:
 
             LOGGER.info(
                 "OTel exporter initialized: endpoint=%s service=%s headers=%s",
+                "OTel exporter initialized: endpoint=%s service=%s headers=%s",
                 traces_endpoint,
                 self._service_name,
+                "present" if self._headers else "none",
                 "present" if self._headers else "none",
             )
         except ImportError as e:
@@ -1548,10 +1581,12 @@ __all__ = [
     "convert_checkpoint_event_to_span",
     "create_span_from_event",
     "create_trace_reader",
+    "create_trace_reader",
     "emit_span",
     "get_sls_log_exporter",
     "set_sls_log_exporter",
     "get_otel_exporter",
+    "get_sls_exporter_headers",
     "get_sls_exporter_headers",
     "load_spans_from_checkpoint",
     "set_otel_exporter",
