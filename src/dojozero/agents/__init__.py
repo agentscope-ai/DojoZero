@@ -10,6 +10,11 @@ from ._config import (
     expand_agent_config,
 )
 from ._toolkit import create_toolkit, tool
+from ._trial_utils import (
+    get_expanded_agent_ids,
+    build_operator_to_agents_map,
+    build_agent_specs,
+)
 
 __all__ = [
     "load_agent_config",
@@ -21,4 +26,8 @@ __all__ = [
     "create_formatter",
     "expand_agent_config",
     "tool",
+    # Trial utilities
+    "get_expanded_agent_ids",
+    "build_operator_to_agents_map",
+    "build_agent_specs",
 ]
