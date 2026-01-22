@@ -11,7 +11,7 @@ Then run this script with --server flag:
 
 Usage:
     python run_daily_trials.py configs/nba-pregame-betting.yaml
-    python run_daily_trials.py configs/nfl-game.yaml --date 2025-01-20
+    python run_daily_trials.py configs/nfl-pregame-betting.yaml --date 2025-01-20
     python run_daily_trials.py configs/nba-pregame-betting.yaml --server http://localhost:8000
 """
 
@@ -89,7 +89,7 @@ def main() -> None:
         epilog="""
 Examples:
   %(prog)s configs/nba-pregame-betting.yaml
-  %(prog)s configs/nfl-game.yaml --date 2025-01-20
+  %(prog)s configs/nfl-pregame-betting.yaml --date 2025-01-20
   %(prog)s configs/nba-pregame-betting.yaml --server http://localhost:8000
         """,
     )

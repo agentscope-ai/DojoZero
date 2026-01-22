@@ -17,8 +17,8 @@ python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml
 python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --date 2025-01-20
 
 # NFL trials (local mode)
-python deploy/run_daily_trials.py configs/nfl-game.yaml
-python deploy/run_daily_trials.py configs/nfl-game.yaml --date 2025-01-20
+python deploy/run_daily_trials.py configs/nfl-pregame-betting.yaml
+python deploy/run_daily_trials.py configs/nfl-pregame-betting.yaml --date 2025-01-20
 
 # With Dashboard Server (SLS + OSS integration)
 # Terminal 1: Start server (SLS config from env vars)
@@ -44,7 +44,7 @@ crontab -e
 # 0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml --data-dir data/nba-betting >> cron.log 2>&1
 
 # NFL trials at 10 AM:
-# 0 10 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nfl-game.yaml --data-dir data/nfl >> cron_nfl.log 2>&1
+# 0 10 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nfl-pregame-betting.yaml --data-dir data/nfl >> cron_nfl.log 2>&1
 ```
 
 **Systemd (Linux):**
@@ -85,7 +85,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now nba-trials.timer
 
 **Example with custom data directory:**
 ```bash
-python deploy/run_daily_trials.py configs/nfl-game.yaml --data-dir /custom/path --date 2025-01-20
+python deploy/run_daily_trials.py configs/nfl-pregame-betting.yaml --data-dir /custom/path --date 2025-01-20
 ```
 
 ## Monitoring

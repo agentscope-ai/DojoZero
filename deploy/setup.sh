@@ -150,12 +150,12 @@ if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
     echo ""
     echo "Which trial type would you like to run?"
     echo "  1) NBA (nba-pregame-betting)"
-    echo "  2) NFL (nfl-game)"
+    echo "  2) NFL (nfl-pregame-betting)"
     read -p "Enter choice [1]: " TRIAL_CHOICE
     TRIAL_CHOICE="${TRIAL_CHOICE:-1}"
 
     if [ "$TRIAL_CHOICE" = "2" ]; then
-        TRIAL_CONFIG_PATH="configs/nfl-game.yaml"
+        TRIAL_CONFIG_PATH="configs/nfl-pregame-betting.yaml"
     else
         TRIAL_CONFIG_PATH="configs/nba-pregame-betting.yaml"
     fi
