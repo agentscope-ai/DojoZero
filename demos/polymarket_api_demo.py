@@ -11,6 +11,7 @@ from py_clob_client.exceptions import PolyApiException
 from dojozero.data.polymarket._store import PolymarketStore
 from dojozero.data.polymarket._api import PolymarketAPI
 from dojozero.data.polymarket._events import OddsUpdateEvent
+from dojozero.data.nba._events import GameInitializeEvent
 
 
 market_url = "https://polymarket.com/event/nba-lac-okc-2025-12-17"
@@ -210,9 +211,8 @@ async def test_polymarket_store_logic(market_url: str):
     print("-" * 80)
 
     try:
-        from dojozero.nba_moneyline._broker import BrokerOperator
+        from dojozero.betting import BrokerOperator
         from dojozero.core import StreamEvent
-        from decimal import Decimal
 
         # Create a test broker
         broker = BrokerOperator(
@@ -231,25 +231,25 @@ async def test_polymarket_store_logic(market_url: str):
                     break
 
             if odds_event:
-                # Initialize event in broker first
+                # Initialize event in broker via GameInitializeEvent
                 test_event_id = odds_event.event_id or "test_event"  # type: ignore[attr-defined]
-                try:
-                    await broker.initialize_event(
+
+                # Create and send GameInitializeEvent
+                game_init_event = StreamEvent(
+                    stream_id=f"game_init_{test_event_id}",
+                    payload=GameInitializeEvent(
                         event_id=test_event_id,
+                        game_id=test_event_id,
                         home_team="Test Home",
                         away_team="Test Away",
                         game_time=datetime.now(),
-                        initial_home_odds=Decimal(str(odds_event.home_odds)),  # type: ignore[attr-defined]
-                        initial_away_odds=Decimal(str(odds_event.away_odds)),  # type: ignore[attr-defined]
-                    )
-                    print(f"✓ Initialized event {test_event_id} in broker")
-                except ValueError as e:
-                    if "already exists" in str(e):
-                        print(
-                            f"  Event {test_event_id} already exists, updating odds instead"
-                        )
-                    else:
-                        raise
+                    ),
+                    emitted_at=datetime.now(),
+                )
+                await broker.handle_stream_event(game_init_event)
+                print(
+                    f"✓ Initialized event {test_event_id} in broker via GameInitializeEvent"
+                )
 
                 # Create StreamEvent and test broker handling
                 stream_event = StreamEvent(

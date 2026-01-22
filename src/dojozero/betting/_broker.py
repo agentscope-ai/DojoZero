@@ -1,10 +1,12 @@
-"""NBA_moneyline Betting Broker
+"""Sports Betting Broker Operator
 
-This module implements the betting broker operator that manages:
+This module implements a generic betting broker operator that manages:
 - Account balances
 - Event lifecycle (pregame, odds updates, game start/end, settlement)
 - Bet placement and execution (market and limit orders)
 - Bet settlement
+
+This broker is sport-agnostic and can be used for NBA, NFL, or any other sports betting.
 """
 
 from dataclasses import dataclass
@@ -27,8 +29,6 @@ from dojozero.core import (
     StreamEvent,
 )
 
-from dojozero.data._models import EventTypes
-
 # Logger for broker operations
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,15 @@ class EventStatus(Enum):
     LIVE = "LIVE"  # In-game, accepting live bets only
     CLOSED = "CLOSED"  # Game ended, no more bets
     SETTLED = "SETTLED"  # All bets settled
+
+
+# Valid status transitions for betting events
+VALID_STATUS_TRANSITIONS = {
+    EventStatus.SCHEDULED: {EventStatus.LIVE, EventStatus.CLOSED},
+    EventStatus.LIVE: {EventStatus.CLOSED},
+    EventStatus.CLOSED: {EventStatus.SETTLED},
+    EventStatus.SETTLED: set(),
+}
 
 
 class OrderType(Enum):
@@ -114,7 +123,7 @@ class Account:
 
 
 @dataclass
-class Event:
+class BettingEvent:
     """Betting event (e.g., a sports game)"""
 
     event_id: str
@@ -149,19 +158,23 @@ class Event:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Event":
+    def from_dict(cls, data: Dict[str, Any]) -> "BettingEvent":
         return cls(
             event_id=data["event_id"],
             home_team=data["home_team"],
             away_team=data["away_team"],
             game_time=datetime.fromisoformat(data["game_time"]),
             status=EventStatus(data["status"]),
-            home_odds=Decimal(data["home_odds"]),
-            away_odds=Decimal(data["away_odds"]),
-            last_odds_update=datetime.fromisoformat(data["last_odds_update"]),
+            home_odds=Decimal(val) if (val := data.get("home_odds")) else None,
+            away_odds=Decimal(val) if (val := data.get("away_odds")) else None,
+            last_odds_update=(
+                datetime.fromisoformat(val)
+                if (val := data.get("last_odds_update"))
+                else None
+            ),
             betting_closed_at=(
-                datetime.fromisoformat(data["betting_closed_at"])
-                if data["betting_closed_at"]
+                datetime.fromisoformat(val)
+                if (val := data.get("betting_closed_at"))
                 else None
             ),
         )
@@ -361,7 +374,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     - Bet placement (market and limit orders)
     - Order matching and execution
     - Bet settlement based on event results
+
+    This is a sport-agnostic broker that works with any sport by handling
+    generic game lifecycle events (initialize, start, result) and odds updates.
     """
+
+    # Event types that the broker listens to (can be overridden by subclasses)
+    EVENT_TYPE_GAME_INITIALIZE = "game_initialize"
+    EVENT_TYPE_GAME_UPDATE = "game_update"
+    EVENT_TYPE_ODDS_UPDATE = "odds_update"
+    EVENT_TYPE_GAME_START = "game_start"
+    EVENT_TYPE_GAME_RESULT = "game_result"
 
     def __init__(self, config: BrokerOperatorConfig, trial_id: str):
         super().__init__(config["actor_id"], trial_id)
@@ -371,7 +394,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._agent_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
         # Event management
-        self._events: Dict[str, Event] = {}
+        self._events: Dict[str, BettingEvent] = {}
         self._event_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
         # Pending team info from GameUpdateEvent (waiting for OddsUpdateEvent)
@@ -435,6 +458,23 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # Event Stream Processing
     # =========================================================================
 
+    def _get_event_type(self, data_event: Any) -> str | None:
+        """Get event type from data event, handling sport-specific prefixes.
+
+        Override this method in subclasses to handle sport-specific event types.
+        """
+        event_type = getattr(data_event, "event_type", None)
+        if not event_type:
+            return None
+
+        # Handle sport-specific prefixes (e.g., "nfl_game_initialize" -> "game_initialize")
+        # This allows the broker to work with any sport's events
+        for prefix in ["nba_", "nfl_", "mlb_", "nhl_"]:
+            if event_type.startswith(prefix):
+                return event_type[len(prefix) :]
+
+        return event_type
+
     async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
         """Process incoming stream events and delegate to appropriate handlers.
 
@@ -460,8 +500,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             async with self._event_locks[
                 event_id
             ]:  # avoid multiple streamEvent change the same event
-                # Use event_type property to determine event type (DataEvents have this)
-                event_type = getattr(data_event, "event_type", None)
+                # Get event type (handles sport-specific prefixes)
+                event_type = self._get_event_type(data_event)
                 if not event_type:
                     logger.warning(
                         "Event missing event_type property: type=%s, event_id=%s",
@@ -479,195 +519,257 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     getattr(data_event, "timestamp", None),
                 )
 
-                if event_type == EventTypes.GAME_INITIALIZE.value:
-                    # GameInitializeEvent: Initialize event with team info (no odds yet)
-                    home_team_str = getattr(data_event, "home_team", "")
-                    away_team_str = getattr(data_event, "away_team", "")
-                    game_time_dt = getattr(data_event, "game_time", None)
+                if event_type == self.EVENT_TYPE_GAME_INITIALIZE:
+                    await self._handle_game_initialize(data_event, event_id)
 
-                    if not home_team_str or not away_team_str:
-                        logger.warning(
-                            "GameInitializeEvent missing team info: event_id=%s",
-                            event_id,
-                        )
-                        return
+                elif event_type == self.EVENT_TYPE_ODDS_UPDATE:
+                    await self._handle_odds_update(data_event, event_id)
 
-                    if not isinstance(game_time_dt, datetime):
-                        game_time_dt = datetime.now()
+                elif event_type == self.EVENT_TYPE_GAME_UPDATE:
+                    await self._handle_game_update(data_event, event_id)
 
-                    if event_id in self._events:
-                        # Event already exists - update team info if needed
-                        broker_event = self._events[event_id]
-                        broker_event.home_team = home_team_str
-                        broker_event.away_team = away_team_str
-                        broker_event.game_time = game_time_dt
-                        logger.info(
-                            "Updated event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s",
-                            event_id,
-                            home_team_str,
-                            away_team_str,
-                            game_time_dt,
-                        )
-                    else:
-                        # Initialize new event without odds (will be filled in when OddsUpdateEvent arrives)
-                        logger.info(
-                            "Initializing event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s (odds pending)",
-                            event_id,
-                            home_team_str,
-                            away_team_str,
-                            game_time_dt,
-                        )
-                        await self.initialize_event(
-                            event_id=event_id,
-                            home_team=home_team_str,
-                            away_team=away_team_str,
-                            game_time=game_time_dt,
-                            initial_home_odds=None,  # Will be updated when OddsUpdateEvent arrives
-                            initial_away_odds=None,  # Will be updated when OddsUpdateEvent arrives
-                        )
+                elif event_type == self.EVENT_TYPE_GAME_START:
+                    await self._handle_game_start(data_event, event_id)
 
-                elif event_type == EventTypes.ODDS_UPDATE.value:
-                    # Only process odds if we have team info (either from existing event or pending GameUpdateEvent)
-                    if event_id in self._events:
-                        # Event exists - update odds
-                        logger.info(
-                            "Updating odds: event_id=%s, home_odds=%s, away_odds=%s",
-                            event_id,
-                            getattr(data_event, "home_odds", None),
-                            getattr(data_event, "away_odds", None),
-                        )
-                        await self.update_odds(
-                            event_id=data_event.event_id,
-                            home_odds=Decimal(str(data_event.home_odds)),
-                            away_odds=Decimal(str(data_event.away_odds)),
-                        )
-                    elif event_id in self._pending_team_info:
-                        # We have team info from GameUpdateEvent - initialize event with odds
-                        team_info = self._pending_team_info[event_id]
-                        logger.info(
-                            "Initializing event from OddsUpdateEvent (team info already available): event_id=%s, home_team=%s, away_team=%s, home_odds=%s, away_odds=%s",
-                            event_id,
-                            team_info.get("home_team"),
-                            team_info.get("away_team"),
-                            getattr(data_event, "home_odds", None),
-                            getattr(data_event, "away_odds", None),
-                        )
-                        await self.initialize_event(
-                            event_id=event_id,
-                            home_team=team_info["home_team"],
-                            away_team=team_info["away_team"],
-                            game_time=team_info["game_time"],
-                            initial_home_odds=Decimal(str(data_event.home_odds)),
-                            initial_away_odds=Decimal(str(data_event.away_odds)),
-                        )
-                        # Clear pending team info
-                        del self._pending_team_info[event_id]
-                    else:
-                        # No team info yet - ignore this odds update
-                        logger.debug(
-                            "Ignoring OddsUpdateEvent (no team info available yet): event_id=%s, home_odds=%s, away_odds=%s",
-                            event_id,
-                            getattr(data_event, "home_odds", None),
-                            getattr(data_event, "away_odds", None),
-                        )
-
-                elif event_type == EventTypes.GAME_UPDATE.value:
-                    # Extract team names and game time from GameUpdateEvent
-                    home_team_str = None
-                    away_team_str = None
-                    game_time_dt = None
-
-                    if hasattr(data_event, "home_team") and isinstance(
-                        data_event.home_team, dict
-                    ):
-                        home_city = data_event.home_team.get("teamCity", "")
-                        home_name = data_event.home_team.get("teamName", "")
-                        if home_city or home_name:
-                            home_team_str = f"{home_city} {home_name}".strip()
-
-                    if hasattr(data_event, "away_team") and isinstance(
-                        data_event.away_team, dict
-                    ):
-                        away_city = data_event.away_team.get("teamCity", "")
-                        away_name = data_event.away_team.get("teamName", "")
-                        if away_city or away_name:
-                            away_team_str = f"{away_city} {away_name}".strip()
-
-                    # Extract game_time_utc if available
-                    if (
-                        hasattr(data_event, "game_time_utc")
-                        and data_event.game_time_utc
-                    ):
-                        try:
-                            game_time_dt = datetime.fromisoformat(
-                                data_event.game_time_utc.replace("Z", "+00:00")
-                            )
-                        except (ValueError, AttributeError):
-                            pass
-
-                    # Only process if we have both team names
-                    if not home_team_str or not away_team_str:
-                        logger.debug(
-                            "GameUpdateEvent missing team info: event_id=%s, home_team=%s, away_team=%s",
-                            event_id,
-                            home_team_str,
-                            away_team_str,
-                        )
-                        return
-
-                    # Use current time as fallback if game_time_utc not available
-                    if not game_time_dt:
-                        game_time_dt = datetime.now()
-
-                    if event_id in self._events:
-                        # Event exists - update team names and game_time
-                        broker_event = self._events[event_id]
-                        broker_event.home_team = home_team_str
-                        broker_event.away_team = away_team_str
-                        broker_event.game_time = game_time_dt
-                        logger.info(
-                            "Updated event from GameUpdateEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s",
-                            event_id,
-                            home_team_str,
-                            away_team_str,
-                            game_time_dt,
-                        )
-                    else:
-                        # Event doesn't exist yet - store team info for when OddsUpdateEvent arrives
-                        self._pending_team_info[event_id] = {
-                            "home_team": home_team_str,
-                            "away_team": away_team_str,
-                            "game_time": game_time_dt,
-                        }
-                        logger.info(
-                            "Stored team info from GameUpdateEvent (waiting for OddsUpdateEvent): event_id=%s, home_team=%s, away_team=%s, game_time=%s",
-                            event_id,
-                            home_team_str,
-                            away_team_str,
-                            game_time_dt,
-                        )
-
-                elif event_type == EventTypes.GAME_START.value:
-                    await self.update_event_status(
-                        event_id=data_event.event_id, status=EventStatus.LIVE
-                    )
-
-                elif event_type == EventTypes.GAME_RESULT.value:
-                    await self.update_event_status(
-                        event_id=data_event.event_id, status=EventStatus.CLOSED
-                    )
-                    await self.settle_event(
-                        event_id=data_event.event_id,
-                        winner=data_event.winner,
-                        final_score=data_event.final_score,
-                    )
+                elif event_type == self.EVENT_TYPE_GAME_RESULT:
+                    await self._handle_game_result(data_event, event_id)
                 else:
-                    logger.warning("Unknown event type: %s", event_type)
+                    logger.debug("Unhandled event type: %s", event_type)
 
         except Exception as e:
             logger.error("Failed to handle stream event: %s", e, exc_info=True)
 
-    async def initialize_event(
+    async def _handle_game_initialize(self, data_event: Any, event_id: str) -> None:
+        """Handle game initialization event."""
+        home_team_str = getattr(data_event, "home_team", "")
+        away_team_str = getattr(data_event, "away_team", "")
+        game_time_dt = getattr(data_event, "game_time", None)
+
+        if not home_team_str or not away_team_str:
+            logger.warning(
+                "GameInitializeEvent missing team info: event_id=%s",
+                event_id,
+            )
+            return
+
+        if not isinstance(game_time_dt, datetime):
+            game_time_dt = datetime.now()
+
+        if event_id in self._events:
+            # Event already exists - update team info if needed
+            broker_event = self._events[event_id]
+            broker_event.home_team = home_team_str
+            broker_event.away_team = away_team_str
+            broker_event.game_time = game_time_dt
+            logger.info(
+                "Updated event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s",
+                event_id,
+                home_team_str,
+                away_team_str,
+                game_time_dt,
+            )
+        else:
+            # Initialize new event without odds (will be filled in when OddsUpdateEvent arrives)
+            logger.info(
+                "Initializing event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s (odds pending)",
+                event_id,
+                home_team_str,
+                away_team_str,
+                game_time_dt,
+            )
+            await self._initialize_event(
+                event_id=event_id,
+                home_team=home_team_str,
+                away_team=away_team_str,
+                game_time=game_time_dt,
+                initial_home_odds=None,
+                initial_away_odds=None,
+            )
+
+    async def _handle_odds_update(self, data_event: Any, event_id: str) -> None:
+        """Handle odds update event."""
+        # Get odds from event - handle both NBA and NFL odds formats
+        home_odds = getattr(data_event, "home_odds", None)
+        away_odds = getattr(data_event, "away_odds", None)
+
+        # NFL uses moneyline format, convert to decimal odds if needed
+        if home_odds is None:
+            moneyline_home = getattr(data_event, "moneyline_home", None)
+            if moneyline_home is not None and moneyline_home != 0:
+                home_odds = self._moneyline_to_decimal(moneyline_home)
+
+        if away_odds is None:
+            moneyline_away = getattr(data_event, "moneyline_away", None)
+            if moneyline_away is not None and moneyline_away != 0:
+                away_odds = self._moneyline_to_decimal(moneyline_away)
+
+        if home_odds is None or away_odds is None:
+            logger.debug(
+                "OddsUpdateEvent missing valid odds: event_id=%s",
+                event_id,
+            )
+            return
+
+        # Only process odds if we have team info (either from existing event or pending GameUpdateEvent)
+        if event_id in self._events:
+            # Event exists - update odds
+            logger.info(
+                "Updating odds: event_id=%s, home_odds=%s, away_odds=%s",
+                event_id,
+                home_odds,
+                away_odds,
+            )
+            await self._update_odds(
+                event_id=event_id,
+                home_odds=Decimal(str(home_odds)),
+                away_odds=Decimal(str(away_odds)),
+            )
+        elif event_id in self._pending_team_info:
+            # We have team info from GameUpdateEvent - initialize event with odds
+            team_info = self._pending_team_info[event_id]
+            logger.info(
+                "Initializing event from OddsUpdateEvent (team info already available): event_id=%s, home_team=%s, away_team=%s, home_odds=%s, away_odds=%s",
+                event_id,
+                team_info.get("home_team"),
+                team_info.get("away_team"),
+                home_odds,
+                away_odds,
+            )
+            await self._initialize_event(
+                event_id=event_id,
+                home_team=team_info["home_team"],
+                away_team=team_info["away_team"],
+                game_time=team_info["game_time"],
+                initial_home_odds=Decimal(str(home_odds)),
+                initial_away_odds=Decimal(str(away_odds)),
+            )
+            # Clear pending team info
+            del self._pending_team_info[event_id]
+        else:
+            # No team info yet - ignore this odds update
+            logger.debug(
+                "Ignoring OddsUpdateEvent (no team info available yet): event_id=%s, home_odds=%s, away_odds=%s",
+                event_id,
+                home_odds,
+                away_odds,
+            )
+
+    async def _handle_game_update(self, data_event: Any, event_id: str) -> None:
+        """Handle game update event."""
+        # Extract team names and game time from GameUpdateEvent
+        home_team_str = None
+        away_team_str = None
+        game_time_dt = None
+
+        if hasattr(data_event, "home_team") and isinstance(data_event.home_team, dict):
+            home_city = data_event.home_team.get("teamCity", "")
+            home_name = data_event.home_team.get("teamName", "")
+            if home_city or home_name:
+                home_team_str = f"{home_city} {home_name}".strip()
+
+        if hasattr(data_event, "away_team") and isinstance(data_event.away_team, dict):
+            away_city = data_event.away_team.get("teamCity", "")
+            away_name = data_event.away_team.get("teamName", "")
+            if away_city or away_name:
+                away_team_str = f"{away_city} {away_name}".strip()
+
+        # Extract game_time_utc if available
+        if hasattr(data_event, "game_time_utc") and data_event.game_time_utc:
+            try:
+                game_time_dt = datetime.fromisoformat(
+                    data_event.game_time_utc.replace("Z", "+00:00")
+                )
+            except (ValueError, AttributeError):
+                pass
+
+        # Only process if we have both team names
+        if not home_team_str or not away_team_str:
+            logger.debug(
+                "GameUpdateEvent missing team info: event_id=%s, home_team=%s, away_team=%s",
+                event_id,
+                home_team_str,
+                away_team_str,
+            )
+            return
+
+        # Use current time as fallback if game_time_utc not available
+        if not game_time_dt:
+            game_time_dt = datetime.now()
+
+        if event_id in self._events:
+            # Event exists - update team names and game_time
+            broker_event = self._events[event_id]
+            broker_event.home_team = home_team_str
+            broker_event.away_team = away_team_str
+            broker_event.game_time = game_time_dt
+            logger.info(
+                "Updated event from GameUpdateEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s",
+                event_id,
+                home_team_str,
+                away_team_str,
+                game_time_dt,
+            )
+        else:
+            # Event doesn't exist yet - store team info for when OddsUpdateEvent arrives
+            self._pending_team_info[event_id] = {
+                "home_team": home_team_str,
+                "away_team": away_team_str,
+                "game_time": game_time_dt,
+            }
+            logger.info(
+                "Stored team info from GameUpdateEvent (waiting for OddsUpdateEvent): event_id=%s, home_team=%s, away_team=%s, game_time=%s",
+                event_id,
+                home_team_str,
+                away_team_str,
+                game_time_dt,
+            )
+
+    async def _handle_game_start(self, data_event: Any, event_id: str) -> None:
+        """Handle game start event.
+
+        If the event is registered, update its status to LIVE.
+        If not registered, log a warning as betting should have been set up before game start.
+        """
+        if event_id not in self._events:
+            logger.warning(
+                "Game started but event %s was not registered for betting",
+                event_id,
+            )
+            return
+
+        await self._update_event_status(event_id=event_id, status=EventStatus.LIVE)
+
+    async def _handle_game_result(self, data_event: Any, event_id: str) -> None:
+        """Handle game result event.
+
+        If the event is registered, close it and settle bets.
+        If not registered, raise an error as this indicates a logic issue.
+        """
+        if event_id not in self._events:
+            raise ValueError(f"Received game_result for unregistered event {event_id}")
+
+        await self._update_event_status(event_id=event_id, status=EventStatus.CLOSED)
+        await self._settle_event(
+            event_id=event_id,
+            winner=data_event.winner,
+            final_score=data_event.final_score,
+        )
+
+    def _moneyline_to_decimal(self, moneyline: int) -> float:
+        """Convert American moneyline odds to decimal odds.
+
+        Args:
+            moneyline: American odds (e.g., -150, +200)
+
+        Returns:
+            Decimal odds (e.g., 1.67, 3.00)
+        """
+        if moneyline > 0:
+            return (moneyline / 100) + 1
+        else:
+            return (100 / abs(moneyline)) + 1
+
+    async def _initialize_event(
         self,
         event_id: str,
         home_team: str,
@@ -675,8 +777,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         game_time: datetime,
         initial_home_odds: Optional[Decimal] = None,
         initial_away_odds: Optional[Decimal] = None,
-    ) -> Event:
+    ) -> BettingEvent:
         """Initialize a new betting event.
+
+        This is an internal method. Events are initialized via GameInitializeEvent
+        through handle_stream_event.
 
         Args:
             event_id: Unique event identifier
@@ -697,7 +802,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             raise ValueError("Odds must be greater than 1.0")
 
         now = datetime.now()
-        event = Event(
+        betting_event = BettingEvent(
             event_id=event_id,
             home_team=home_team,
             away_team=away_team,
@@ -708,7 +813,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             last_odds_update=now if (initial_home_odds and initial_away_odds) else None,
         )
 
-        self._events[event_id] = event
+        self._events[event_id] = betting_event
         if initial_home_odds and initial_away_odds:
             logger.info(
                 "Created event %s: %s vs %s (Odds: %s/%s)",
@@ -725,12 +830,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 home_team,
                 away_team,
             )
-        return event
+        return betting_event
 
-    async def update_odds(
+    async def _update_odds(
         self, event_id: str, home_odds: Decimal, away_odds: Decimal
-    ) -> Event:
+    ) -> BettingEvent:
         """Update odds for an event and execute matching limit orders.
+
+        This is an internal method. Odds are updated via OddsUpdateEvent
+        through handle_stream_event.
 
         Can be called to set initial odds (if event was initialized without odds)
         or to update existing odds.
@@ -738,25 +846,27 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         if event_id not in self._events:
             raise ValueError(f"Event {event_id} not found")
 
-        event = self._events[event_id]
+        betting_event = self._events[event_id]
 
-        if event.status not in [EventStatus.SCHEDULED, EventStatus.LIVE]:
-            raise ValueError(f"Cannot update odds for {event.status.value} event")
+        if betting_event.status not in [EventStatus.SCHEDULED, EventStatus.LIVE]:
+            raise ValueError(
+                f"Cannot update odds for {betting_event.status.value} event"
+            )
 
         if home_odds <= 1.0 or away_odds <= 1.0:
             raise ValueError("Odds must be greater than 1.0")
 
         # Update event odds
-        event.home_odds = home_odds
-        event.away_odds = away_odds
-        event.last_odds_update = datetime.now()
+        betting_event.home_odds = home_odds
+        betting_event.away_odds = away_odds
+        betting_event.last_odds_update = datetime.now()
 
         logger.info(
             "Updated odds for event %s: home=%s, away=%s (status=%s)",
             event_id,
             home_odds,
             away_odds,
-            event.status.value,
+            betting_event.status.value,
         )
 
         # Check and execute matching limit orders
@@ -777,52 +887,62 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     execution_odds = away_odds
 
             if should_execute:
-                await self.match_bet(bet, execution_odds)
+                await self._match_bet(bet, execution_odds)
 
-        return event
+        return betting_event
 
-    async def update_event_status(self, event_id: str, status: EventStatus) -> None:
-        """Update event status and perform status-specific actions"""
+    async def _update_event_status(self, event_id: str, status: EventStatus) -> None:
+        """Update event status and perform status-specific actions.
+
+        This is an internal method. Use GameStartEvent/GameResultEvent handlers
+        for proper event lifecycle management.
+        """
         if event_id not in self._events:
             raise ValueError(f"Event {event_id} not found")
 
-        event = self._events[event_id]
+        betting_event = self._events[event_id]
 
         # Validate status transition
-        if event.status == EventStatus.SETTLED:
-            raise ValueError("Cannot change status of settled event")
+        valid_transitions = VALID_STATUS_TRANSITIONS.get(betting_event.status, set())
+        if status not in valid_transitions:
+            raise ValueError(
+                f"Invalid status transition: {betting_event.status.value} → {status.value}"
+            )
 
         logger.info(
             "Event %s status changed: %s → %s",
             event_id,
-            event.status.value,
+            betting_event.status.value,
             status.value,
         )
 
-        event.status = status
+        betting_event.status = status
 
         if status == EventStatus.LIVE:
             # Game started - reject pre-game bets and cancel unfilled pre-game orders
-            event.betting_closed_at = datetime.now()
+            betting_event.betting_closed_at = datetime.now()
             await self._cancel_pregame_orders(event_id)
 
         elif status == EventStatus.CLOSED:
             # Game ended - reject all bets and cancel all pending orders
-            event.betting_closed_at = datetime.now()
+            betting_event.betting_closed_at = datetime.now()
             await self._cancel_all_pending_orders(event_id)
 
-    async def settle_event(
+    async def _settle_event(
         self, event_id: str, winner: str, final_score: Dict[str, int]
     ) -> None:
-        """Settle all active bets for a completed event"""
+        """Settle all active bets for a completed event.
+
+        This is an internal method called by _handle_game_result.
+        """
         if event_id not in self._events:
             raise ValueError(f"Event {event_id} not found")
 
-        event = self._events[event_id]
+        betting_event = self._events[event_id]
 
-        if event.status != EventStatus.CLOSED:
+        if betting_event.status != EventStatus.CLOSED:
             raise ValueError(
-                f"Cannot settle event with status {event.status.value}, must be CLOSED"
+                f"Cannot settle event with status {betting_event.status.value}, must be CLOSED"
             )
 
         if winner not in ["home", "away"]:
@@ -847,7 +967,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 settled_count += 1
 
         # Update event status
-        event.status = EventStatus.SETTLED
+        betting_event.status = EventStatus.SETTLED
 
         logger.info(
             "Completed settlement for event %s - Settled %d bets",
@@ -1078,16 +1198,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 if bet_request.event_id not in self._events:
                     raise ValueError(f"Event {bet_request.event_id} not found")
 
-                event = self._events[bet_request.event_id]
+                betting_event = self._events[bet_request.event_id]
 
                 # Check event is accepting bets
-                if event.status == EventStatus.CLOSED:
+                if betting_event.status == EventStatus.CLOSED:
                     raise ValueError("Event is closed for betting")
-                if event.status == EventStatus.SETTLED:
+                if betting_event.status == EventStatus.SETTLED:
                     raise ValueError("Event has been settled")
 
                 # Check odds are available (event must be initialized with odds)
-                if event.home_odds is None or event.away_odds is None:
+                if betting_event.home_odds is None or betting_event.away_odds is None:
                     raise ValueError(
                         f"Odds not yet available for event {bet_request.event_id}. "
                         "Please wait for odds to be updated."
@@ -1095,12 +1215,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
                 # Validate betting phase matches event status
                 if bet_request.betting_phase == BettingPhase.PRE_GAME:
-                    if event.status != EventStatus.SCHEDULED:
+                    if betting_event.status != EventStatus.SCHEDULED:
                         raise ValueError(
                             "Pre-game betting only allowed for scheduled events"
                         )
                 elif bet_request.betting_phase == BettingPhase.IN_GAME:
-                    if event.status != EventStatus.LIVE:
+                    if betting_event.status != EventStatus.LIVE:
                         raise ValueError("In-game betting only allowed for live events")
 
                 # Check account exists and has sufficient balance
@@ -1124,9 +1244,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 # Determine execution odds for market orders
                 # Odds should already be validated above, but add safety check
                 if bet_request.selection == "home":
-                    execution_odds = event.home_odds
+                    execution_odds = betting_event.home_odds
                 else:
-                    execution_odds = event.away_odds
+                    execution_odds = betting_event.away_odds
 
                 if execution_odds is None:
                     raise ValueError(
@@ -1156,7 +1276,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 # Process based on order type
                 if bet_request.order_type == OrderType.MARKET:
                     # Execute immediately
-                    await self.match_bet(bet, execution_odds)
+                    await self._match_bet(bet, execution_odds)
                 else:
                     # Add to pending orders (order book)
                     self._pending_orders[agent_id].append(bet_id)
@@ -1176,8 +1296,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             logger.error("Bet rejected for %s: %s", agent_id, e, exc_info=True)
             return "bet_invalid"
 
-    async def match_bet(self, bet: Bet, execution_odds: Decimal) -> None:
-        """Execute a bet at specified odds (asynchronous notification)"""
+    async def _match_bet(self, bet: Bet, execution_odds: Decimal) -> None:
+        """Execute a bet at specified odds (asynchronous notification).
+
+        This is an internal method called by update_odds and place_bet.
+        """
         # Update bet record
         bet.odds = execution_odds
         bet.execution_time = datetime.now()
@@ -1315,13 +1438,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             roi=roi,
         )
 
-    async def get_available_events(self) -> List[Event]:
+    async def get_available_events(self) -> List[BettingEvent]:
         """Get all events currently accepting bets"""
         return [
             event
             for event in self._events.values()
-            if event.status
-            in [EventStatus.SCHEDULED, EventStatus.LIVE]  # Both accept bets
+            if event.status in [EventStatus.SCHEDULED, EventStatus.LIVE]
         ]
 
     async def get_account(self, agent_id: str) -> Account:
@@ -1389,7 +1511,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         # Load events
         self._events = {
-            event_id: Event.from_dict(event_data)
+            event_id: BettingEvent.from_dict(event_data)
             for event_id, event_data in state["events"].items()
         }
 

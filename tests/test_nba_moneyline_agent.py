@@ -1,79 +1,58 @@
 """
 Integration test: DataStream -> Agent (LLM) -> place_bet -> BrokerOperator
+Tests both local and Ray runtime.
 """
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
+import ray
 
-from dojozero.nba_moneyline import BettingAgent
-from dojozero.agents import load_agent_config, create_model, create_formatter
-from dojozero.core import RuntimeContext, StreamEvent
-from dojozero.nba_moneyline._broker import BrokerOperator
+from dojozero.agents import load_agent_config
+from dojozero.betting import BrokerOperator
+from dojozero.core import RuntimeContext, AgentSpec, OperatorSpec, StreamEvent
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
 from dojozero.data.polymarket._events import OddsUpdateEvent
-from datetime import datetime
+from dojozero.nba_moneyline._agent import BettingAgent, BettingAgentConfig
+from dojozero.ray_runtime import RayActorRuntimeProvider
 
-load_dotenv()
-
-# Test-specific environment variable names to avoid conflicts with other apps
-TEST_API_KEY_ENV = "DOJOZERO_OPENAI_API_KEY"
-TEST_BASE_URL_ENV = "DOJOZERO_OPENAI_BASE_URL"
+# Import shared fixtures - conftest.py is auto-loaded by pytest
+sys.path.insert(0, str(Path(__file__).parent))
+from conftest import (
+    BASIC_CONFIG_PATH,
+    TEST_API_KEY_ENV,
+    TEST_BASE_URL_ENV,
+    create_broker_fixture,
+    create_nba_test_agent,
+)
 
 AGENT_ID = "basic"
-CONFIG_PATH = Path(__file__).parent.parent / "configs" / "agents" / "basic.yaml"
-
-
-def create_test_agent(config_path: Path, trial_id: str = "test-trial") -> BettingAgent:
-    """Create agent with test-specific env vars, overriding YAML config."""
-    config = load_agent_config(config_path)
-    llm_config = config["llm"].copy()
-    llm_config["api_key_env"] = TEST_API_KEY_ENV
-    llm_config["base_url_env"] = TEST_BASE_URL_ENV
-    model_type = llm_config.get("model_type", "openai")
-    return BettingAgent(
-        actor_id=config["name"],
-        trial_id=trial_id,
-        name=config["name"],
-        sys_prompt=config["sys_prompt"],
-        model=create_model(llm_config),
-        formatter=create_formatter(model_type),
-    )
+BROKER_ID = "nba-broker"
 
 
 @pytest.fixture
 def broker():
     """Create BrokerOperator with initial balance for test agent."""
-    context = RuntimeContext(
-        trial_id="test-trial",
-        data_hubs={},
-        stores={},
-        startup=None,
-    )
-    return BrokerOperator.from_dict(
-        {
-            "actor_id": "nba-broker",
-            "initial_balance": "1000.00",
-        },
-        context,
-    )
+    return create_broker_fixture("nba-broker")
 
 
 @pytest.fixture
 def agent():
     """Create BettingAgent with test-specific env vars."""
-    return create_test_agent(CONFIG_PATH)
+    return create_nba_test_agent(BASIC_CONFIG_PATH)
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 @pytest.mark.skipif(
     not os.environ.get(TEST_API_KEY_ENV), reason=f"{TEST_API_KEY_ENV} not set"
 )
-async def test_agent_receives_event_and_places_bet(broker, agent):
+async def test_agent_receives_event_and_places_bet(
+    broker, agent, nba_game_init_data, nba_odds_data
+):
     """Test full flow: DataStream -> Agent -> place_bet -> Operator."""
-    # await broker.register_agents([agent])
     await agent.register_operators([broker])
     broker.register_agents([agent])
     await broker.start()
@@ -86,32 +65,23 @@ async def test_agent_receives_event_and_places_bet(broker, agent):
     print(f"\nInitial balance: ${initial_balance}")
 
     # Initialize event in broker first
-    game_init_event = GameInitializeEvent(
-        event_id="lakers_vs_warriors_2024",
-        game_id="lakers_vs_warriors_2024",
-        home_team="Lakers",
-        away_team="Warriors",
-        game_time=datetime.now(),
-    )
+    game_init_event = GameInitializeEvent(**nba_game_init_data)
     await broker.handle_stream_event(
         StreamEvent(stream_id="nba-stream", payload=game_init_event, sequence=-2)
     )
 
-    odds_update_event = OddsUpdateEvent(
-        event_id="lakers_vs_warriors_2024",
-        home_odds=1.85,
-        away_odds=2.10,
-    )
+    odds_update_event = OddsUpdateEvent(**nba_odds_data)
     await broker.handle_stream_event(
         StreamEvent(stream_id="nba-stream", payload=odds_update_event, sequence=-1)
     )
 
     # Simulate DataStream sending match data
+    event_id = nba_game_init_data["event_id"]
     event_list = [
         StreamEvent(
             stream_id="nba-stream",
             payload={
-                "event_id": "lakers_vs_warriors_2024",
+                "event_id": event_id,
                 "home_team": "Lakers",
                 "away_team": "Warriors",
                 "home_odds": "1.85",
@@ -122,7 +92,7 @@ async def test_agent_receives_event_and_places_bet(broker, agent):
         StreamEvent(
             stream_id="nba-stream",
             payload={
-                "event_id": "lakers_vs_warriors_2024",
+                "event_id": event_id,
                 "new market stats": "other Agent bet on away_odds. You MUST ADD more bets.",
             },
             sequence=1,
@@ -133,7 +103,7 @@ async def test_agent_receives_event_and_places_bet(broker, agent):
         await agent.handle_stream_event(event)
 
     game_result_event = GameResultEvent(
-        event_id="lakers_vs_warriors_2024",
+        event_id=event_id,
         winner="home",
         final_score={"home": 110, "away": 105},
     )
@@ -160,25 +130,169 @@ async def test_agent_receives_event_and_places_bet(broker, agent):
     await broker.stop()
 
 
-if __name__ == "__main__":
-    import asyncio
+# --- Ray Runtime Tests ---
 
-    async def main():
-        context = RuntimeContext(
-            trial_id="test-trial",
-            data_hubs={},
-            stores={},
-            startup=None,
-        )
-        broker = BrokerOperator.from_dict(
-            {
-                "actor_id": "nba-broker",
-                "initial_balance": "1000.00",
+
+@pytest.fixture(scope="module")
+def ray_env():
+    """Initialize Ray for the test module."""
+    if ray.is_initialized():
+        ray.shutdown()
+    # Exclude pyproject.toml/uv.lock to prevent Ray workers from creating
+    # a new venv with wrong Python version when packaging local modules
+    ray.init(
+        include_dashboard=False,
+        runtime_env={"excludes": ["pyproject.toml", "uv.lock"]},
+    )
+    yield
+    ray.shutdown()
+
+
+@pytest.fixture
+def broker_spec() -> OperatorSpec:
+    """Create OperatorSpec for broker as Ray actor."""
+    return OperatorSpec(
+        actor_id=BROKER_ID,
+        actor_cls=BrokerOperator,
+        config={
+            "actor_id": BROKER_ID,
+            "initial_balance": "1000.00",
+        },
+        agent_ids=(AGENT_ID,),
+    )
+
+
+def _create_ray_agent_config() -> BettingAgentConfig:
+    """Create agent config with test-specific env vars for Ray."""
+    config = load_agent_config(BASIC_CONFIG_PATH)
+    llm_config = config.get("llm", {})
+    return BettingAgentConfig(
+        actor_id=config["name"],
+        name=config.get("name", ""),
+        sys_prompt=config.get("sys_prompt", ""),
+        model_type=llm_config.get("model_type", "openai"),  # type: ignore[typeddict-item]
+        model_name=llm_config.get("model_name", "qwen3-max"),
+        api_key_env=TEST_API_KEY_ENV,
+        base_url_env=TEST_BASE_URL_ENV,
+    )
+
+
+@pytest.fixture
+def agent_spec() -> AgentSpec:
+    """Create AgentSpec for Ray runtime with test-specific env vars."""
+    agent_config = _create_ray_agent_config()
+    return AgentSpec(
+        actor_id=agent_config.get("actor_id", AGENT_ID),
+        actor_cls=BettingAgent,
+        config=agent_config,
+        operator_ids=(BROKER_ID,),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.environ.get(TEST_API_KEY_ENV), reason=f"{TEST_API_KEY_ENV} not set"
+)
+async def test_agent_with_ray_runtime(
+    ray_env, broker_spec, agent_spec, nba_game_init_data, nba_odds_data
+):
+    """Test full flow with Ray runtime: DataStream -> Ray Agent -> place_bet -> Ray Operator."""
+    provider = RayActorRuntimeProvider(auto_init=False)
+    context = RuntimeContext(
+        trial_id="test-trial",
+        data_hubs={},
+        stores={},
+        startup=None,
+    )
+
+    # Create broker as Ray actor
+    broker_handler = await provider.create_handler(broker_spec, context)
+    print(f"\nCreated Ray broker: {broker_handler.actor_id}")
+    await broker_handler.start()
+    print("Broker started in Ray")
+
+    # Create agent as Ray actor
+    agent_handler = await provider.create_handler(agent_spec, context)
+    print(f"Created Ray agent: {agent_handler.actor_id}")
+
+    # Register broker as operator for the agent
+    await agent_handler.instance.register_operators([broker_handler.instance])  # type: ignore[attr-defined]
+    await broker_handler.instance.register_agents([agent_handler.instance])  # type: ignore[attr-defined]
+
+    await agent_handler.start()
+    print("Agent started in Ray")
+
+    # Initial state (via Ray proxy)
+    initial_balance = await broker_handler.instance.get_balance(AGENT_ID)  # type: ignore[attr-defined]
+    print(f"\nInitial balance: ${initial_balance}")
+
+    # Initialize event in broker first
+    game_init_event = GameInitializeEvent(**nba_game_init_data)
+    await broker_handler.instance.handle_stream_event(  # type: ignore[attr-defined]
+        StreamEvent(stream_id="nba-stream", payload=game_init_event, sequence=-2)
+    )
+
+    odds_update_event = OddsUpdateEvent(**nba_odds_data)
+    await broker_handler.instance.handle_stream_event(  # type: ignore[attr-defined]
+        StreamEvent(stream_id="nba-stream", payload=odds_update_event, sequence=-1)
+    )
+
+    # Simulate DataStream sending match data
+    event_id = nba_game_init_data["event_id"]
+    event_list = [
+        StreamEvent(
+            stream_id="nba-stream",
+            payload={
+                "event_id": event_id,
+                "home_team": "Lakers",
+                "away_team": "Warriors",
+                "home_odds": "1.85",
+                "away_odds": "2.10",
             },
-            context,
-        )
-        agent = create_test_agent(CONFIG_PATH)
+            sequence=0,
+        ),
+        StreamEvent(
+            stream_id="nba-stream",
+            payload={
+                "event_id": event_id,
+                "new market stats": "other Agent bet on away_odds. You MUST ADD more bets.",
+            },
+            sequence=1,
+        ),
+    ]
 
-        await test_agent_receives_event_and_places_bet(broker, agent)
+    for event in event_list:
+        print(f"Sending event: {event.payload}")
+        await agent_handler.instance.handle_stream_event(event)  # type: ignore[attr-defined]
 
-    asyncio.run(main())
+    game_result_event = GameResultEvent(
+        event_id=event_id,
+        winner="home",
+        final_score={"home": 110, "away": 105},
+    )
+    final_event = StreamEvent(
+        stream_id="nba-stream",
+        payload=game_result_event,
+        sequence=2,
+    )
+
+    await broker_handler.instance.handle_stream_event(final_event)  # type: ignore[attr-defined]
+
+    # Check results (via Ray proxy)
+    final_balance = await broker_handler.instance.get_balance(AGENT_ID)  # type: ignore[attr-defined]
+    active_bets = await broker_handler.instance.get_active_bets(AGENT_ID)  # type: ignore[attr-defined]
+    stats = await broker_handler.instance.get_statistics(AGENT_ID)  # type: ignore[attr-defined]
+
+    # Get events_processed from Ray agent
+    state = await agent_handler.save_state()
+
+    print("\nResults:")
+    print(f"  Events processed: {state['events']}")
+    print(f"  Final balance: ${final_balance}")
+    print(f"  Active bets: {len(active_bets)}")
+    print(f"  Stats: {stats}")
+
+    await agent_handler.stop()
+    await broker_handler.stop()
+    print("Agent and broker stopped")

@@ -1,6 +1,27 @@
 """Pytest configuration and shared fixtures."""
 
+import os
+from pathlib import Path
+
 import pytest
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# =============================================================================
+# Test Environment Configuration
+# =============================================================================
+
+# Test-specific environment variable names to avoid conflicts with other apps
+TEST_API_KEY_ENV = "DOJOZERO_OPENAI_API_KEY"
+TEST_BASE_URL_ENV = "DOJOZERO_OPENAI_BASE_URL"
+
+# Common paths
+CONFIG_DIR = Path(__file__).parent.parent / "configs" / "agents"
+BASIC_CONFIG_PATH = CONFIG_DIR / "basic.yaml"
+WHALE_CONFIG_PATH = CONFIG_DIR / "whale.yaml"
+SHEEP_CONFIG_PATH = CONFIG_DIR / "sheep.yaml"
+SHARK_CONFIG_PATH = CONFIG_DIR / "shark.yaml"
 
 
 def pytest_addoption(parser):
@@ -30,3 +51,144 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "integration" in item.keywords:
             item.add_marker(skip_integration)
+
+
+# =============================================================================
+# Shared Fixtures for Moneyline Agent Tests
+# =============================================================================
+
+
+@pytest.fixture
+def trial_id() -> str:
+    """Default trial ID for tests."""
+    return "test-trial"
+
+
+@pytest.fixture
+def test_event_id() -> str:
+    """Default event ID for tests."""
+    return "test_game_2024"
+
+
+@pytest.fixture
+def nba_game_init_data(test_event_id):
+    """NBA game initialization data."""
+    from datetime import datetime
+
+    return {
+        "event_id": test_event_id,
+        "game_id": test_event_id,
+        "home_team": "Lakers",
+        "away_team": "Warriors",
+        "game_time": datetime.now(),
+    }
+
+
+@pytest.fixture
+def nba_odds_data(test_event_id):
+    """NBA odds update data."""
+    return {
+        "event_id": test_event_id,
+        "home_odds": 1.85,
+        "away_odds": 2.10,
+    }
+
+
+@pytest.fixture
+def nfl_game_init_data(test_event_id):
+    """NFL game initialization data."""
+    from datetime import datetime
+
+    return {
+        "event_id": test_event_id,
+        "home_team": "Baltimore Ravens",
+        "away_team": "Kansas City Chiefs",
+        "home_team_abbreviation": "BAL",
+        "away_team_abbreviation": "KC",
+        "venue": "M&T Bank Stadium",
+        "game_time": datetime.now(),
+        "week": 1,
+    }
+
+
+@pytest.fixture
+def nfl_odds_data(test_event_id):
+    """NFL odds update data."""
+    return {
+        "event_id": test_event_id,
+        "provider": "Draft Kings",
+        "moneyline_home": -150,
+        "moneyline_away": 130,
+        "spread": -3.0,
+        "over_under": 47.5,
+        "home_team": "Baltimore Ravens",
+        "away_team": "Kansas City Chiefs",
+    }
+
+
+def create_broker_fixture(actor_id: str, trial_id: str = "test-trial"):
+    """Factory function to create broker fixtures."""
+    from dojozero.betting import BrokerOperator
+    from dojozero.core import RuntimeContext
+
+    context = RuntimeContext(
+        trial_id=trial_id,
+        data_hubs={},
+        stores={},
+        startup=None,
+    )
+    return BrokerOperator.from_dict(
+        {
+            "actor_id": actor_id,
+            "initial_balance": "1000.00",
+        },
+        context,
+    )
+
+
+def create_nba_test_agent(config_path: Path, trial_id: str = "test-trial"):
+    """Create NBA BettingAgent with test-specific env vars."""
+    from dojozero.nba_moneyline._agent import BettingAgent
+    from dojozero.agents import load_agent_config, create_model, create_formatter
+
+    config = load_agent_config(config_path)
+    llm_config = config["llm"].copy()
+    llm_config["api_key_env"] = TEST_API_KEY_ENV
+    llm_config["base_url_env"] = TEST_BASE_URL_ENV
+    model_type = llm_config.get("model_type", "openai")
+    return BettingAgent(
+        actor_id=config["name"],
+        trial_id=trial_id,
+        name=config["name"],
+        sys_prompt=config["sys_prompt"],
+        model=create_model(llm_config),
+        formatter=create_formatter(model_type),
+    )
+
+
+def create_nfl_test_agent(config_path: Path, trial_id: str = "test-trial"):
+    """Create NFL BettingAgent with test-specific env vars."""
+    from dojozero.nfl_moneyline._agent import BettingAgent
+    from dojozero.agents import load_agent_config, create_model, create_formatter
+
+    config = load_agent_config(config_path)
+    llm_config = config["llm"].copy()
+    llm_config["api_key_env"] = TEST_API_KEY_ENV
+    llm_config["base_url_env"] = TEST_BASE_URL_ENV
+    model_type = llm_config.get("model_type", "openai")
+    return BettingAgent(
+        actor_id=config["name"],
+        trial_id=trial_id,
+        name=config["name"],
+        sys_prompt=config["sys_prompt"],
+        model=create_model(llm_config),
+        formatter=create_formatter(model_type),
+    )
+
+
+# Helper to check if integration tests should run
+def requires_api_key():
+    """Pytest marker for tests requiring API key."""
+    return pytest.mark.skipif(
+        not os.environ.get(TEST_API_KEY_ENV), reason=f"{TEST_API_KEY_ENV} not set"
+    )

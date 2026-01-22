@@ -1,6 +1,6 @@
-"""Agent implementations for NBA moneyline betting.
+"""Agent implementations for NFL moneyline betting.
 
-This module provides the NBA-specific BettingAgent with NBA event formatting.
+This module provides NFL-specific BettingAgent with NFL event formatting.
 """
 
 import logging
@@ -14,7 +14,7 @@ from dojozero.betting import (
 )
 from dojozero.core import RuntimeContext
 
-from dojozero.nba_moneyline._formatters import format_event
+from dojozero.nfl_moneyline._formatters import format_event
 
 if TYPE_CHECKING:
     from agentscope.tool import Toolkit
@@ -23,14 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 class BettingAgent(BaseBettingAgent):
-    """NBA-specific BettingAgent with NBA event formatting.
+    """NFL-specific BettingAgent with NFL event formatting.
 
-    This class extends the shared BettingAgent to use NBA-specific
+    This class extends the shared BettingAgent to use NFL-specific
     event formatters by default.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        # If no event_formatter provided, use NBA-specific formatter
+        # If no event_formatter provided, use NFL-specific formatter
         if kwargs.get("event_formatter") is None:
             kwargs["event_formatter"] = format_event
         super().__init__(*args, **kwargs)
@@ -41,7 +41,7 @@ class BettingAgent(BaseBettingAgent):
         config: BettingAgentConfig,
         context: RuntimeContext,
     ) -> "BettingAgent":
-        """Create NBA BettingAgent from config dict with NBA formatter."""
+        """Create NFL BettingAgent from config dict with NFL formatter."""
         from dojozero.agents import (
             load_agent_config,
             create_model,
@@ -88,14 +88,14 @@ class BettingAgent(BaseBettingAgent):
         toolkit: "Toolkit | None" = None,
         event_formatter: "EventFormatter | None" = None,
     ) -> "BettingAgent":
-        """Create NBA BettingAgent from YAML config file with NBA formatter.
+        """Create NFL BettingAgent from YAML config file with NFL formatter.
 
         Args:
             config_path: Path to YAML config file
             actor_id: The actor ID for this agent
             trial_id: The trial ID for this agent
             toolkit: Optional toolkit to use
-            event_formatter: Optional custom event formatter. Defaults to NBA-specific one.
+            event_formatter: Optional custom event formatter. Defaults to NFL-specific one.
         """
         from pathlib import Path
 
@@ -122,4 +122,5 @@ class BettingAgent(BaseBettingAgent):
         )
 
 
+# Re-export BettingAgentConfig for convenience
 __all__ = ["BettingAgent", "BettingAgentConfig"]
