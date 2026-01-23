@@ -30,8 +30,8 @@ uv run dojozero list-builders
 # Generate example config for a builder
 uv run dojozero get-builder nba-moneyline --example
 
-# Replay from event files (backtesting)
-uv run dojozero replay --events events.jsonl
+# Backtest from event files
+uv run dojozero backtest --events events.jsonl --params configs/nba-moneyline.yaml
 
 # Run tests
 uv run pytest
@@ -104,7 +104,7 @@ The `Dashboard` orchestrates actor wiring and lifecycle.
 ## Key Patterns
 
 1. **Registry Pattern**: Trial builders registered for CLI discovery
-2. **Event Sourcing**: DataHub persists all events to JSONL for replay
+2. **Event Sourcing**: DataHub persists all events to JSONL for backtesting
 3. **Checkpoint/Resume**: Actors serialize state for pause/resume
 4. **Composition**: Agents register operators, streams register consumers
 

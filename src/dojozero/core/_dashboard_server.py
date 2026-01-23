@@ -67,7 +67,7 @@ class QueuedTrial:
     spec: TrialSpec
     phase: QueuedTrialPhase = QueuedTrialPhase.PENDING
     error: str | None = None
-    # Coroutine factory for launching (supports replay mode)
+    # Coroutine factory for launching (supports backtest mode)
     launch_coro_factory: Callable[[], Coroutine[Any, Any, TrialStatus]] | None = None
 
 
@@ -479,12 +479,16 @@ class ResumeConfig(BaseModel):
     latest: bool = False
 
 
-class ReplayConfig(BaseModel):
-    """Replay configuration for trial submission."""
+class BacktestConfig(BaseModel):
+    """Backtest configuration for trial submission."""
 
-    file: str  # Path to replay file (must be accessible on server)
-    speed_up: float = 1.0
+    file: str  # Path to event file (must be accessible on server)
+    speed: float = 1.0
     max_sleep: float = 20.0
+
+
+# Backward compatibility alias (deprecated)
+ReplayConfig = BacktestConfig
 
 
 class TrialSubmitRequest(BaseModel):
@@ -501,7 +505,7 @@ class TrialSubmitRequest(BaseModel):
     params: dict[str, Any] | None = None  # Alternative: raw params payload
     metadata: dict[str, Any] | None = None
     resume: ResumeConfig | None = None
-    replay: ReplayConfig | None = None
+    backtest: BacktestConfig | None = None
 
 
 @dataclass
@@ -524,24 +528,24 @@ def get_server_state(request: Request) -> DashboardServerState:
     return state
 
 
-async def _launch_replay_trial(
+async def _launch_backtest_trial(
     dashboard: Dashboard,
     spec: TrialSpec,
-    replay_file: Path,
-    speed_up: float,
+    event_file: Path,
+    speed: float,
     max_sleep: float,
 ) -> TrialStatus:
-    """Launch a trial in replay mode.
+    """Launch a trial in backtest mode.
 
-    This sets up the replay infrastructure and launches the trial with
-    events replayed from the specified file.
+    This sets up the backtest infrastructure and launches the trial with
+    events from the specified file.
     """
 
-    from dojozero.data import DataHub, ReplayCoordinator
+    from dojozero.data import DataHub, BacktestCoordinator
 
     builder_name = spec.metadata.get("builder_name")
     if not builder_name:
-        raise DashboardError("builder_name is required in metadata for replay")
+        raise DashboardError("builder_name is required in metadata for backtest")
     builder_name = str(builder_name)
 
     # Extract hub_id from spec (from stream configs)
@@ -555,52 +559,52 @@ async def _launch_replay_trial(
     if not hub_id:
         hub_id = str(spec.metadata.get("hub_id", "data_hub"))
 
-    # Create DataHub in replay mode
+    # Create DataHub in backtest mode
     hub = DataHub(
         hub_id=hub_id,
         persistence_file=None,
         enable_persistence=False,
     )
 
-    # Create ReplayCoordinator
-    coordinator = ReplayCoordinator(data_hub=hub, replay_file=replay_file)
-    coordinator.set_speed(speed_up=speed_up, max_sleep=max_sleep)
+    # Create BacktestCoordinator
+    coordinator = BacktestCoordinator(data_hub=hub, backtest_file=event_file)
+    coordinator.set_speed(speed_up=speed, max_sleep=max_sleep)
 
     # Load events
-    LOGGER.info("Loading events from replay file: %s", replay_file)
-    await coordinator.start_replay()
+    LOGGER.info("Loading events from file: %s", event_file)
+    await coordinator.start()
 
     # Override context builder
     builder_def = get_trial_builder_definition(builder_name)
     original_context_builder = builder_def.context_builder
 
-    def replay_context_builder(spec: TrialSpec) -> RuntimeContext:
+    def backtest_context_builder(spec: TrialSpec) -> RuntimeContext:
         return RuntimeContext(
             trial_id=spec.trial_id,
             data_hubs={hub_id: hub},
             stores={},
         )
 
-    builder_def.context_builder = replay_context_builder
+    builder_def.context_builder = backtest_context_builder
 
     try:
         # Launch trial
         status = await dashboard.launch_trial(spec)
 
-        # Start replay in background
+        # Start backtest in background
         import asyncio
 
-        async def run_replay():
+        async def run_backtest():
             try:
-                await coordinator.replay_all()
-                LOGGER.info("Replay completed for trial '%s'", spec.trial_id)
+                await coordinator.run_all()
+                LOGGER.info("Backtest completed for trial '%s'", spec.trial_id)
             except Exception as e:
-                LOGGER.error("Replay failed: %s", e)
+                LOGGER.error("Backtest failed: %s", e)
             finally:
-                coordinator.stop_replay()
+                coordinator.stop()
                 builder_def.context_builder = original_context_builder
 
-        asyncio.create_task(run_replay())
+        asyncio.create_task(run_backtest())
         return status
     except Exception:
         builder_def.context_builder = original_context_builder
@@ -862,7 +866,7 @@ def create_dashboard_app(
             },
             "metadata": {...},
             "resume": {"checkpoint_id": "...", "latest": false},
-            "replay": {"file": "/path/to/events.jsonl", "speed_up": 1.0, "max_sleep": 20.0}
+            "backtest": {"file": "/path/to/events.jsonl", "speed": 1.0, "max_sleep": 20.0}
         }
 
         Request body (option 2 - params):
@@ -870,7 +874,7 @@ def create_dashboard_app(
             "trial_id": "optional-trial-id",
             "params": {"scenario": {"name": "..."}, ...},
             "resume": {...},
-            "replay": {...}
+            "backtest": {...}
         }
         """
         import importlib
@@ -957,37 +961,37 @@ def create_dashboard_app(
             elif request.resume.latest:
                 spec.resume_from_latest = True
 
-        # Handle replay configuration
+        # Handle backtest configuration
         launch_coro_factory = None
-        if request.replay:
-            replay_file = Path(request.replay.file)
-            if not replay_file.exists():
+        if request.backtest:
+            event_file = Path(request.backtest.file)
+            if not event_file.exists():
                 return JSONResponse(
-                    content={"error": f"Replay file not found: {replay_file}"},
+                    content={"error": f"Event file not found: {event_file}"},
                     status_code=400,
                 )
-            # Capture replay settings (for closure below)
-            replay_speed_up = request.replay.speed_up
-            replay_max_sleep = request.replay.max_sleep
+            # Capture backtest settings (for closure below)
+            backtest_speed = request.backtest.speed
+            backtest_max_sleep = request.backtest.max_sleep
 
-            # Add replay metadata
-            spec.metadata["replay_file"] = str(replay_file)
-            spec.metadata["replay_mode"] = True
-            spec.metadata["replay_speed_up"] = replay_speed_up
-            spec.metadata["replay_max_sleep"] = replay_max_sleep
+            # Add backtest metadata
+            spec.metadata["backtest_file"] = str(event_file)
+            spec.metadata["backtest_mode"] = True
+            spec.metadata["backtest_speed"] = backtest_speed
+            spec.metadata["backtest_max_sleep"] = backtest_max_sleep
             spec.metadata["builder_name"] = scenario.name
 
-            # Create factory for replay launch
-            def make_replay_coro() -> Coroutine[Any, Any, TrialStatus]:
-                return _launch_replay_trial(
+            # Create factory for backtest launch
+            def make_backtest_coro() -> Coroutine[Any, Any, TrialStatus]:
+                return _launch_backtest_trial(
                     dashboard=state.dashboard,
                     spec=spec,
-                    replay_file=replay_file,
-                    speed_up=replay_speed_up,
-                    max_sleep=replay_max_sleep,
+                    event_file=event_file,
+                    speed=backtest_speed,
+                    max_sleep=backtest_max_sleep,
                 )
 
-            launch_coro_factory = make_replay_coro
+            launch_coro_factory = make_backtest_coro
 
         # Queue the trial for execution (returns immediately)
         try:

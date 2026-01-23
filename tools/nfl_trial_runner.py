@@ -7,7 +7,7 @@ Orchestrates betting trials for NFL games:
 - Starts trial before game kickoff time
 - Runs agents that analyze data and place bets
 - Runs until game concludes
-- Persists all events to replay files
+- Persists all events to event files (for backtesting)
 """
 
 import argparse
@@ -383,7 +383,7 @@ class NFLGameTrialManager:
         # Trial state
         self.trial_id: str | None = None
         self.config_file: Path | None = None
-        self.replay_file: Path | None = None
+        self.events_file: Path | None = None
         self.log_file: Path | None = None
         self.process: subprocess.Popen | None = None
         self._log_file_handle = None
@@ -410,25 +410,25 @@ class NFLGameTrialManager:
                 self.game_date = datetime.now().strftime("%Y-%m-%d")
             date_dir = self.data_dir / self.game_date
             config_file = date_dir / f"{self.event_id}.yaml"
-            replay_file = date_dir / f"{self.event_id}.jsonl"
+            events_file = date_dir / f"{self.event_id}.jsonl"
             log_file = date_dir / f"{self.event_id}.log"
         else:
             project_root = Path(__file__).parent.parent
             configs_dir = project_root / "configs"
             outputs_dir = project_root / "outputs"
             config_file = configs_dir / f"nfl-game_{self.event_id}.yaml"
-            replay_file = outputs_dir / f"nfl_events_{self.event_id}.jsonl"
+            events_file = outputs_dir / f"nfl_events_{self.event_id}.jsonl"
             log_file = outputs_dir / f"nfl_{self.event_id}.log"
 
         # Update persistence file in config
         if "hub" not in config["scenario"]["config"]:
             config["scenario"]["config"]["hub"] = {}
-        config["scenario"]["config"]["hub"]["persistence_file"] = str(replay_file)
+        config["scenario"]["config"]["hub"]["persistence_file"] = str(events_file)
         config["scenario"]["config"]["hub"]["enable_persistence"] = True
 
         # Create directory structure
         config_file.parent.mkdir(parents=True, exist_ok=True)
-        replay_file.parent.mkdir(parents=True, exist_ok=True)
+        events_file.parent.mkdir(parents=True, exist_ok=True)
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Save config file
@@ -436,7 +436,7 @@ class NFLGameTrialManager:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
         self.config_file = config_file
-        self.replay_file = replay_file
+        self.events_file = events_file
         self.log_file = log_file
 
         # Generate unique trial ID
@@ -449,10 +449,10 @@ class NFLGameTrialManager:
         self._setup_file_logger()
 
         logger.info(
-            "Generated config for game %s: %s (replay: %s, log: %s)",
+            "Generated config for game %s: %s (events: %s, log: %s)",
             self.event_id,
             config_file,
-            replay_file,
+            events_file,
             log_file,
         )
 
@@ -744,11 +744,11 @@ class NFLGameTrialManager:
 
         if self.config_file:
             status_parts.append(f"Config: {self.config_file}")
-        if self.replay_file:
-            status_parts.append(f"Replay: {self.replay_file}")
-            if self.replay_file.exists():
-                size_kb = self.replay_file.stat().st_size / 1024
-                status_parts.append(f"Replay size: {size_kb:.1f} KB")
+        if self.events_file:
+            status_parts.append(f"Events: {self.events_file}")
+            if self.events_file.exists():
+                size_kb = self.events_file.stat().st_size / 1024
+                status_parts.append(f"Events size: {size_kb:.1f} KB")
 
         if self.log_file:
             status_parts.append(f"Log: {self.log_file}")
@@ -794,12 +794,12 @@ class NFLGameTrialManager:
                 uploaded_keys.append(key)
                 self.log(logging.INFO, "Uploaded config to OSS: %s", key)
 
-            # Upload replay file (JSONL)
-            if self.replay_file and self.replay_file.exists():
+            # Upload events file (JSONL)
+            if self.events_file and self.events_file.exists():
                 oss_key = f"{oss_key_prefix}/{self.event_id}.jsonl"
-                key = client.upload_file(self.replay_file, oss_key)
+                key = client.upload_file(self.events_file, oss_key)
                 uploaded_keys.append(key)
-                self.log(logging.INFO, "Uploaded replay to OSS: %s", key)
+                self.log(logging.INFO, "Uploaded events to OSS: %s", key)
 
             # Upload log file
             if self.log_file and self.log_file.exists():

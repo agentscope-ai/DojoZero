@@ -24,7 +24,7 @@ class DataHub:
     - Manage agent subscriptions
     - Dispatch events to subscribed agents
     - Emit events to trace backend (OTel/SLS)
-    - Support replay mode
+    - Support backtest mode
     """
 
     def __init__(
@@ -70,10 +70,10 @@ class DataHub:
             defaultdict(list)
         )
 
-        # Replay mode
-        self._replay_mode = False
-        self._replay_events: list[DataEvent] = []
-        self._replay_index = 0
+        # Backtest mode
+        self._backtest_mode = False
+        self._backtest_events: list[DataEvent] = []
+        self._backtest_index = 0
 
         # Track connected stores for lifecycle management
         self._connected_stores: list["DataStore"] = []
@@ -126,11 +126,11 @@ class DataHub:
         self._cache_event(event)
 
         # Persist event if enabled
-        if self.enable_persistence and not self._replay_mode:
+        if self.enable_persistence and not self._backtest_mode:
             await self._persist_event(event)
 
         # Emit to trace backend if trial_id is set
-        if self.trial_id and not self._replay_mode:
+        if self.trial_id and not self._backtest_mode:
             self._emit_event_span(event)
 
         # Dispatch to subscribed agents
@@ -317,32 +317,37 @@ class DataHub:
                 exc_info=(type(exc), exc, exc.__traceback__),
             )
 
-    async def start_replay(self, replay_file: Path | str) -> None:
-        """Start replay mode from a file.
+    async def start_backtest(self, backtest_file: Path | str) -> None:
+        """Start backtest mode from a file.
 
         Args:
-            replay_file: Path to replay file
+            backtest_file: Path to backtest file
         """
-        self._replay_mode = True
-        self._replay_events = []
-        self._replay_index = 0
+        self._backtest_mode = True
+        self._backtest_events = []
+        self._backtest_index = 0
 
-        replay_path = Path(replay_file)
-        if not replay_path.exists():
-            raise FileNotFoundError(f"Replay file not found: {replay_path}")
+        backtest_path = Path(backtest_file)
+        if not backtest_path.exists():
+            raise FileNotFoundError(f"Backtest file not found: {backtest_path}")
 
         # Load events from file
-        with open(replay_path, "r") as f:
+        with open(backtest_path, "r") as f:
             for line in f:
                 if line.strip():
                     event_dict = json.loads(line)
                     # Reconstruct event from dict
                     event = self._reconstruct_event(event_dict)
                     if event:
-                        self._replay_events.append(event)
+                        self._backtest_events.append(event)
 
         # Sort events by timestamp
-        self._replay_events.sort(key=lambda e: e.timestamp)
+        self._backtest_events.sort(key=lambda e: e.timestamp)
+
+    # Backward compatibility alias (deprecated)
+    async def start_replay(self, replay_file: Path | str) -> None:
+        """Deprecated: Use start_backtest instead."""
+        await self.start_backtest(replay_file)
 
     def _reconstruct_event(self, event_dict: dict[str, Any]) -> DataEvent | None:
         """Reconstruct event from dictionary.
@@ -366,33 +371,48 @@ class DataHub:
             logger.warning("Error reconstructing event: %s", e)
             return None
 
-    async def replay_next(self) -> DataEvent | None:
-        """Replay next event.
+    async def backtest_next(self) -> DataEvent | None:
+        """Process next event in backtest.
 
         Returns:
-            Next event or None if replay is complete
+            Next event or None if backtest is complete
         """
-        if self._replay_index >= len(self._replay_events):
+        if self._backtest_index >= len(self._backtest_events):
             return None
 
-        event = self._replay_events[self._replay_index]
-        self._replay_index += 1
+        event = self._backtest_events[self._backtest_index]
+        self._backtest_index += 1
 
         # Dispatch event as if it just arrived
         await self._dispatch_event(event)
 
         return event
 
-    async def replay_all(self) -> None:
-        """Replay all events in order."""
-        for event in self._replay_events:
+    # Backward compatibility alias (deprecated)
+    async def replay_next(self) -> DataEvent | None:
+        """Deprecated: Use backtest_next instead."""
+        return await self.backtest_next()
+
+    async def backtest_all(self) -> None:
+        """Run backtest for all events in order."""
+        for event in self._backtest_events:
             await self._dispatch_event(event)
 
+    # Backward compatibility alias (deprecated)
+    async def replay_all(self) -> None:
+        """Deprecated: Use backtest_all instead."""
+        await self.backtest_all()
+
+    def stop_backtest(self) -> None:
+        """Stop backtest mode."""
+        self._backtest_mode = False
+        self._backtest_events = []
+        self._backtest_index = 0
+
+    # Backward compatibility alias (deprecated)
     def stop_replay(self) -> None:
-        """Stop replay mode."""
-        self._replay_mode = False
-        self._replay_events = []
-        self._replay_index = 0
+        """Deprecated: Use stop_backtest instead."""
+        self.stop_backtest()
 
     async def start(self) -> None:
         """Start all connected stores (begin polling).
