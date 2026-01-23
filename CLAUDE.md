@@ -2,37 +2,35 @@
 
 AI agent system for real-time data reasoning and automated betting/trading. Agents run continuously on live data streams to analyze outcomes and take actions.
 
+See [README.md](./README.md) for installation and CLI usage.
+
 ## Project Structure
 
 ```
 src/dojozero/
-├── core/           # Actor framework, runtime, trial orchestration
-├── agents/         # AI agent implementations (BettingAgent, AgentGroup)
-├── data/           # Data infrastructure (stores, events, processors, hub)
-│   ├── nba/        # NBA game data (play-by-play, boxscores)
-│   ├── polymarket/ # Prediction market odds
-│   └── websearch/  # Web search with LLM processing
-├── nba_moneyline/  # NBA betting scenario implementation
-├── samples/        # Reference implementations (bounded_random)
-├── ray_runtime/    # Distributed execution via Ray
-└── cli.py          # CLI entry point
+├── core/              # Actor framework, runtime, trial orchestration
+├── agents/            # AI agent implementations (BettingAgent, AgentGroup)
+├── data/              # Data infrastructure (stores, events, processors, hub)
+│   ├── nba/           # NBA game data (play-by-play, boxscores)
+│   ├── nfl/           # NFL game data
+│   ├── espn/          # ESPN data integration
+│   ├── polymarket/    # Prediction market odds
+│   └── websearch/     # Web search with LLM processing
+├── betting/           # Shared betting utilities
+├── nba_moneyline/     # NBA moneyline betting scenario
+├── nfl_moneyline/     # NFL moneyline betting scenario
+├── nfl_game/          # NFL game data support
+├── samples/           # Reference implementations (bounded_random)
+├── dashboard_server/  # Trial orchestration server
+├── arena_server/      # Web UI server
+├── ray_runtime/       # Distributed execution via Ray
+├── utils/             # Shared utilities
+└── cli.py             # CLI entry point
 ```
 
-## Commands
+## Development Commands
 
 ```bash
-# Run a trial
-uv run dojozero run --params configs/nba-moneyline.yaml
-
-# List available trial builders
-uv run dojozero list-builders
-
-# Generate example config for a builder
-uv run dojozero get-builder nba-moneyline --example
-
-# Backtest from event files
-uv run dojozero backtest --events events.jsonl --params configs/nba-moneyline.yaml
-
 # Run tests
 uv run pytest
 
@@ -57,24 +55,19 @@ Three actor types:
 - **Operator**: Handles synchronous queries, stateful operations
 - **Agent**: Consumes streams, makes decisions, calls operators
 
-### Trial System
-
-Scenarios are registered as trial builders:
-
-```python
-@register_trial_builder("my-scenario", MyParamsModel)
-def build_trial(trial_id: str, params: MyParamsModel) -> TrialSpec:
-    ...
-```
-
-The `TrialOrchestrator` orchestrates actor wiring and lifecycle.
-
 ### Data Infrastructure
 
 - **DataStore**: Query interface for domain data
 - **DataEvent**: Typed events with `@register_event` decorator
 - **DataProcessor**: Transforms raw events (e.g., LLM summarization)
 - **DataHub**: Central event bus with persistence and subscriptions
+
+## Key Patterns
+
+1. **Registry Pattern**: Trial builders registered for CLI discovery
+2. **Event Sourcing**: DataHub persists all events to JSONL for backtesting
+3. **Checkpoint/Resume**: Actors serialize state for pause/resume
+4. **Composition**: Agents register operators, streams register consumers
 
 ## Code Conventions
 
@@ -101,41 +94,6 @@ The `TrialOrchestrator` orchestrates actor wiring and lifecycle.
 - Environment variables use `DOJOZERO_` prefix
 - YAML configs in `configs/` directory
 
-## Key Patterns
-
-1. **Registry Pattern**: Trial builders registered for CLI discovery
-2. **Event Sourcing**: DataHub persists all events to JSONL for backtesting
-3. **Checkpoint/Resume**: Actors serialize state for pause/resume
-4. **Composition**: Agents register operators, streams register consumers
-
-## Testing
-
-Tests in `tests/` - use pytest with async support:
-
-```bash
-uv run pytest tests/test_specific.py -v
-uv run pytest -k "test_name"
-```
-
-## Dependencies
-
-- `agentscope`: AI agent framework
-- `pydantic`: Configuration validation
-- `nba_api`: NBA data
-- `ray` (optional): Distributed runtime
-
-## Additional Tips
-
-### Pre-commit Hooks
-
-Pre-commit runs automatically on commit:
-- `ruff` - Linting with auto-fix
-- `ruff-format` - Code formatting
-- `pyright` - Type checking
-- `pytest` - All tests must pass
-
-Run manually: `uv run pre-commit run --all-files`
-
 ### Module Naming
 
 - Private modules use underscore prefix: `_store.py`, `_events.py`, `_api.py`
@@ -155,22 +113,27 @@ logger = logging.getLogger(__name__)
 - Data fetching uses `aiohttp` for async HTTP
 - Tests use `pytest-asyncio` with `@pytest.mark.asyncio`
 
-### Integration Tests
+## Testing
 
-Mark with `@pytest.mark.integration`:
 ```bash
+uv run pytest tests/test_specific.py -v
+uv run pytest -k "test_name"
 uv run pytest -m "not integration"  # Skip integration tests
 uv run pytest -m integration         # Only integration tests
 ```
 
-### Design Docs
+Mark integration tests with `@pytest.mark.integration`
 
-Architecture decisions documented in `design/` with format `YYYY-MM-DD-title.md`. Once decided, docs are immutable - create revision docs for changes.
+## Pre-commit Hooks
 
-### Adding New Scenarios
+Pre-commit runs automatically on commit:
+- `ruff` - Linting with auto-fix
+- `ruff-format` - Code formatting
+- `pyright` - Type checking
+- `pytest` - All tests must pass
 
-1. Create package under `src/dojozero/`
-2. Define Pydantic params model
-3. Implement actors (DataStream, Operator, Agent)
-4. Register trial builder with `@register_trial_builder`
-5. Add YAML config in `configs/`
+Run manually: `uv run pre-commit run --all-files`
+
+## Design Docs
+
+Architecture decisions documented in `design/` with format `YYYY-MM-DD-title.md`
