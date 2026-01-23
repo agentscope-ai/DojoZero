@@ -1411,6 +1411,7 @@ class SLSLogExporter:
         project: str,
         endpoint: str,
         logstore: str,
+        service_name: str = "dojozero",
         batch_size: int = 100,
         linger_ms: int = 200,
         queue_max_size: int = 10000,
@@ -1433,6 +1434,7 @@ class SLSLogExporter:
         self._project = project
         self._endpoint = endpoint
         self._logstore = logstore
+        self._service_name = service_name
         self._batch_size = batch_size
         self._linger_s = linger_ms / 1000.0
         self._credential_provider = get_credential_provider()
@@ -1624,7 +1626,7 @@ class SLSLogExporter:
             "span_id": span_data.span_id,
             "operation_name": span_data.operation_name,
             "duration_us": span_data.duration,
-            "service": "dojozero",
+            "service": self._service_name,
         }
 
         if span_data.parent_span_id:

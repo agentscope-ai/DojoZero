@@ -632,6 +632,7 @@ def create_dashboard_app(
     trace_ingest_endpoint: str | None = None,
     oss_backup: bool = False,
     max_concurrent_trials: int = 20,
+    service_name: str = "dojozero",
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
@@ -696,6 +697,7 @@ def create_dashboard_app(
                     project=sls_project,
                     endpoint=sls_endpoint,
                     logstore=sls_logstore,
+                    service_name=service_name,
                 )
                 sls_log_exporter.start()
                 set_sls_log_exporter(sls_log_exporter)
@@ -706,11 +708,17 @@ def create_dashboard_app(
                 )
 
         elif trace_backend == "jaeger":
-            # Jaeger backend: use provided endpoint or default
+            # Jaeger or SLS backend: use provided endpoint or default
             otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
-            otel_exporter = OTelSpanExporter(otlp_endpoint, headers=None)
+            otel_exporter = OTelSpanExporter(
+                otlp_endpoint, service_name=service_name, headers=None
+            )
             set_otel_exporter(otel_exporter)
-            LOGGER.info("OTel exporter configured: %s (backend: jaeger)", otlp_endpoint)
+            LOGGER.info(
+                "OTel exporter configured: %s (backend: jaeger or sls, service_name: %s)",
+                otlp_endpoint,
+                service_name,
+            )
 
         LOGGER.info(
             "Dashboard Server started (max_concurrent_trials=%d)",
@@ -1157,6 +1165,7 @@ async def run_dashboard_server(
     trace_ingest_endpoint: str | None = None,
     oss_backup: bool = False,
     max_concurrent_trials: int = 20,
+    service_name: str = "dojozero",
 ) -> None:
     """Run the Dashboard Server.
 
@@ -1177,6 +1186,7 @@ async def run_dashboard_server(
         trace_ingest_endpoint=trace_ingest_endpoint,
         oss_backup=oss_backup,
         max_concurrent_trials=max_concurrent_trials,
+        service_name=service_name,
     )
 
     config = uvicorn.Config(

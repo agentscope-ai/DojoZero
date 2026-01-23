@@ -85,8 +85,9 @@ docker run -d --name jaeger \
   -p 16686:16686 -p 4317:4317 -p 4318:4318 \
   jaegertracing/all-in-one:latest
 
+
 # 2. Start Dashboard Server (manages trials, exports traces)
-dojo0 serve --host 0.0.0.0 --port 8000 --otlp-endpoint http://localhost:4318
+dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger
 
 # 3. Submit a trial (in another terminal)
 dojo0 run --params configs/nba-pregame-betting.yaml --trial-id test --server http://localhost:8000
@@ -95,7 +96,7 @@ dojo0 run --params configs/nba-pregame-betting.yaml --trial-id test --server htt
 dojo0 replay --params configs/nba-pregame-betting.yaml --replay-file outputs/nba_betting_events.jsonl --trial-id replay-test --replay-speed-up 1.0 --replay-max-sleep 20 --server http://localhost:8000
 
 # 4. Start Arena Server (serves WebSocket to browser)
-dojo0 arena --host 0.0.0.0 --port 3001 --trace-store http://localhost:16686
+dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger
 
 # 5. Start React UI (in another terminal)
 cd frontend && npm install && npm run dev
@@ -113,12 +114,28 @@ The `dojo0 serve` command starts a FastAPI dashboard server that provides REST A
 ### Dashboard Server
 
 ```bash
-# Start with OTLP export to Jaeger
-dojo0 serve --host 0.0.0.0 --port 8000 --otlp-endpoint http://localhost:4318
+# Start with Jaeger trace backend (development)
+dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger
+
+# With SLS trace backend (production - Alibaba Cloud)
+# Set env vars: DOJOZERO_SLS_PROJECT, DOJOZERO_SLS_ENDPOINT, DOJOZERO_SLS_LOGSTORE
+dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend sls
+
+# With OSS backup for event data
+dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend sls --oss-backup
 
 # With settings file
-dojo0 --setting dojozero.yaml serve --host 0.0.0.0 --port 8000 --otlp-endpoint http://localhost:4318
+dojo0 --setting dojozero.yaml serve --host 0.0.0.0 --port 8000 --trace-backend jaeger
 ```
+
+
+CLI options:
+- `--host` - Host address to bind to (default: 127.0.0.1)
+- `--port` - Port to listen on (default: 8000)
+- `--trace-backend {jaeger,sls}` - Trace backend type
+- `--trace-ingest-endpoint` - OTLP endpoint for Jaeger trace ingestion (default: http://localhost:4318)
+- `--service-name` - Service name for trace export (default: dojozero)
+- `--oss-backup` - Enable OSS backup for trial data (requires env vars)
 
 API endpoints:
 - `GET /api/trials` - List all trials with status
@@ -129,17 +146,50 @@ API endpoints:
 ### Arena Server
 
 ```bash
-# Start with Jaeger as trace source
-dojo0 arena --host 0.0.0.0 --port 3001 --trace-store http://localhost:16686
 
-# Serve React static files (production)
-dojo0 arena --trace-store http://localhost:16686 --static-dir ./frontend/dist
+# Start with Jaeger as trace source (development)
+dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger
+
+# Start with SLS as trace source (production)
+# Set env vars: DOJOZERO_SLS_PROJECT, DOJOZERO_SLS_ENDPOINT, DOJOZERO_SLS_LOGSTORE
+dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend sls
+```
+
+
+CLI options:
+- `--host` - Host address to bind to (default: 127.0.0.1)
+- `--port` - Port to listen on (default: 3001)
+- `--trace-backend {jaeger,sls}` - Trace backend type (required)
+- `--trace-query-endpoint` - Jaeger Query API endpoint (default: http://localhost:16686)
+- `--service-name` - Service name for trace queries (default: dojozero)
+- `--static-dir` - Path to built static assets to serve (optional, for production)
+
+**Production deployment** (single server serves both API and frontend):
+
+```bash
+# Build the React frontend first
+cd frontend && npm run build
+
+# Production with Jaeger
+dojo0 arena --trace-backend jaeger --static-dir ./frontend/dist
+
+# Production with SLS (recommended for cloud deployment)
+# Credentials via env vars or ~/.alibabacloud/credentials or ECS RAM role
+export DOJOZERO_SLS_PROJECT="your-project"
+export DOJOZERO_SLS_ENDPOINT="cn-hangzhou.log.aliyuncs.com"
+export DOJOZERO_SLS_LOGSTORE="dojozero-traces"
+dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend sls --static-dir ./frontend/dist
 ```
 
 API endpoints:
-GET  /api/trials                    - List trials with phase/metadata
-GET  /api/trials/{trial_id}         - Get trial info
-WS   /ws/trials/{trial_id}/stream   - Real-time span streaming
+- `GET /api/trials` - List trials with phase/metadata
+- `GET /api/trials/{trial_id}` - Get trial info and spans
+- `GET /api/landing` - Aggregated landing page data (cached)
+- `GET /api/stats` - Real-time stats (games, wagered, etc.)
+- `GET /api/games` - All games with filters (live, upcoming, completed)
+- `GET /api/leaderboard` - Agent rankings by winnings
+- `GET /api/agent-actions` - Recent agent actions for live ticker
+- `WS /ws/trials/{trial_id}/stream` - Real-time span streaming
 
 ## Arena UI Development
 
