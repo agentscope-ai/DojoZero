@@ -68,7 +68,8 @@ class TrialBuilderDefinition(Generic[ParamModelT]):
         Works with both sync and async build functions.
         Sync functions are run in a thread pool to avoid blocking.
         """
-        config = self.param_model.model_validate(payload)
+        # Run validation in thread pool to avoid blocking on complex models
+        config = await asyncio.to_thread(self.param_model.model_validate, payload)
         if self.is_async:
             spec = await cast(AsyncTrialBuilderFn, self.build_fn)(trial_id, config)
         else:
