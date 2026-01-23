@@ -218,6 +218,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "'sls' for Alibaba Cloud Simple Log Service (uses env vars).",
     )
     serve_parser.add_argument(
+        "--service-name",
+        dest="service_name",
+        default="dojozero",
+        help="Service name for trace export (default: dojozero). Use to isolate multiple dashboard or arena servers.",
+    )
+    serve_parser.add_argument(
         "--trace-ingest-endpoint",
         dest="trace_ingest_endpoint",
         default="http://localhost:4318",
@@ -256,6 +262,12 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Trace backend type. Use 'jaeger' for local development, "
         "'sls' for Alibaba Cloud Simple Log Service (uses env vars).",
+    )
+    arena_parser.add_argument(
+        "--service-name",
+        dest="service_name",
+        default="dojozero",
+        help="Service name for trace queries (default: dojozero). Use to isolate multiple arena servers.",
     )
     arena_parser.add_argument(
         "--trace-query-endpoint",
@@ -1001,6 +1013,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
     trace_backend = getattr(args, "trace_backend", None)
     trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
     oss_backup = getattr(args, "oss_backup", False)
+    service_name = getattr(args, "service_name", "dojozero")
 
     LOGGER.info("Starting Dashboard Server at http://%s:%d", host, port)
     LOGGER.info("Trial API: http://%s:%d/api/trials", host, port)
@@ -1021,6 +1034,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         trace_backend=trace_backend,
         trace_ingest_endpoint=trace_ingest_endpoint,
         oss_backup=oss_backup,
+        service_name=service_name,
     )
     return 0
 
@@ -1034,6 +1048,7 @@ async def _arena_command(args: argparse.Namespace) -> int:
     trace_backend = args.trace_backend
     trace_query_endpoint = getattr(args, "trace_query_endpoint", None)
     static_dir = getattr(args, "static_dir", None)
+    service_name = getattr(args, "service_name", "dojozero")
 
     LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
     if trace_backend == "sls":
@@ -1050,6 +1065,7 @@ async def _arena_command(args: argparse.Namespace) -> int:
         trace_backend=trace_backend,
         trace_query_endpoint=trace_query_endpoint,
         static_dir=static_dir,
+        service_name=service_name,
     )
     return 0
 

@@ -85,8 +85,13 @@ docker run -d --name jaeger \
   -p 16686:16686 -p 4317:4317 -p 4318:4318 \
   jaegertracing/all-in-one:latest
 
+
 # 2. Start Dashboard Server (manages trials, exports traces)
 dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger
+
+# With custom trace service name
+dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger --service-name my-service
+dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend sls --service-name my-service
 
 # 3. Submit a trial (in another terminal)
 dojo0 run --params configs/nba-pregame-betting.yaml --trial-id test --server http://localhost:8000
@@ -130,11 +135,13 @@ dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend sls --oss-backup
 dojo0 --setting dojozero.yaml serve --host 0.0.0.0 --port 8000 --trace-backend jaeger
 ```
 
+
 CLI options:
 - `--host` - Host address to bind to (default: 127.0.0.1)
 - `--port` - Port to listen on (default: 8000)
 - `--trace-backend {jaeger,sls}` - Trace backend type
 - `--trace-ingest-endpoint` - OTLP endpoint for Jaeger trace ingestion (default: http://localhost:4318)
+- `--service-name` - Service name for trace export (default: dojozero)
 - `--oss-backup` - Enable OSS backup for trial data (requires env vars)
 
 API endpoints:
@@ -146,22 +153,29 @@ API endpoints:
 ### Arena Server
 
 ```bash
+
 # Start with Jaeger as trace source (development)
 dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger
 
 # With custom Jaeger Query endpoint
 dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger --trace-query-endpoint http://localhost:16686
 
+# With custom trace service name
+dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger --service-name my-service
+dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend sls --service-name my-service
+
 # Start with SLS as trace source (production)
 # Set env vars: DOJOZERO_SLS_PROJECT, DOJOZERO_SLS_ENDPOINT, DOJOZERO_SLS_LOGSTORE
 dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend sls
 ```
+
 
 CLI options:
 - `--host` - Host address to bind to (default: 127.0.0.1)
 - `--port` - Port to listen on (default: 3001)
 - `--trace-backend {jaeger,sls}` - Trace backend type (required)
 - `--trace-query-endpoint` - Jaeger Query API endpoint (default: http://localhost:16686)
+- `--service-name` - Service name for trace queries (default: dojozero)
 - `--static-dir` - Path to built static assets to serve (optional, for production)
 
 **Production deployment** (single server serves both API and frontend):
