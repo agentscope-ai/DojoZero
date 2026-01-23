@@ -1287,8 +1287,8 @@ def main() -> int:
     run_parser.add_argument(
         "--config",
         type=Path,
-        default=Path(__file__).parent.parent / "configs" / "nfl-pregame-betting.yaml",
-        help="Path to trial config template (default: configs/nfl-pregame-betting.yaml)",
+        default=Path(__file__).parent.parent / "configs" / "nfl-moneyline.yaml",
+        help="Path to trial config template (default: configs/nfl-moneyline.yaml)",
     )
     run_parser.add_argument(
         "--data-dir",

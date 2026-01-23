@@ -70,7 +70,7 @@ Replay historical events from a JSONL file for backtesting:
 ```bash
 dojo0 replay \
   --replay-file outputs/nba_betting_events.jsonl \
-  --params configs/nba-pregame-betting.yaml \
+  --params configs/nba-moneyline.yaml \
   --replay-speed-up 2.0 \
   --replay-max-sleep 20.0
 ```
@@ -90,10 +90,10 @@ docker run -d --name jaeger \
 dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger
 
 # 3. Submit a trial (in another terminal)
-dojo0 run --params configs/nba-pregame-betting.yaml --trial-id test --server http://localhost:8000
+dojo0 run --params configs/nba-moneyline.yaml --trial-id test --server http://localhost:8000
 
 # Or submit a replay trial for backtesting
-dojo0 replay --params configs/nba-pregame-betting.yaml --replay-file outputs/nba_betting_events.jsonl --trial-id replay-test --replay-speed-up 1.0 --replay-max-sleep 20 --server http://localhost:8000
+dojo0 replay --params configs/nba-moneyline.yaml --replay-file outputs/nba_betting_events.jsonl --trial-id replay-test --replay-speed-up 1.0 --replay-max-sleep 20 --server http://localhost:8000
 
 # 4. Start Arena Server (serves WebSocket to browser)
 dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger

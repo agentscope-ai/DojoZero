@@ -133,6 +133,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Submit trial to a running Dashboard Server (e.g., http://localhost:8000). "
         "If not provided, runs the trial locally.",
     )
+    run_parser.add_argument(
+        "--trace-backend",
+        dest="trace_backend",
+        choices=["jaeger", "sls"],
+        help="Trace backend type for local run. Use 'jaeger' for local development, "
+        "'sls' for Alibaba Cloud Simple Log Service (uses env vars). "
+        "Ignored when --server is specified.",
+    )
+    run_parser.add_argument(
+        "--trace-ingest-endpoint",
+        dest="trace_ingest_endpoint",
+        default="http://localhost:4318",
+        help="OTLP endpoint for Jaeger trace ingestion (default: http://localhost:4318). "
+        "Only used when --trace-backend=jaeger.",
+    )
+    run_parser.add_argument(
+        "--service-name",
+        dest="service_name",
+        default="dojozero",
+        help="Service name for trace export (default: dojozero).",
+    )
 
     subparsers.add_parser(
         "list-builders",
@@ -156,12 +177,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "replay",
         help="Replay events from a file for backtesting",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Replay events from JSONL files for backtesting.\n\n"
+        "Supports multiple files via glob patterns and OSS URLs:\n"
+        "  Local files:  outputs/2025-01-*/*.jsonl\n"
+        "  OSS files:    oss://bucket/prefix/*.jsonl\n\n"
+        "Files are replayed sequentially in sorted order.",
     )
     replay_parser.add_argument(
         "--replay-file",
-        type=Path,
+        type=str,
+        nargs="+",
         required=True,
-        help="Path to JSONL replay file containing events",
+        dest="replay_files",
+        help="Path(s) to JSONL replay file(s). Supports glob patterns (e.g., 'outputs/*/*.jsonl') "
+        "and OSS URLs (e.g., 'oss://bucket/prefix/*.jsonl'). Multiple patterns can be specified.",
     )
     replay_parser.add_argument(
         "--params",
@@ -191,6 +220,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--server",
         help="Submit replay to a running Dashboard Server (e.g., http://localhost:8000). "
         "The server must have access to the replay file at the same path.",
+    )
+    replay_parser.add_argument(
+        "--trace-backend",
+        dest="trace_backend",
+        choices=["jaeger", "sls"],
+        help="Trace backend type for local replay. Use 'jaeger' for local development, "
+        "'sls' for Alibaba Cloud Simple Log Service (uses env vars). "
+        "Ignored when --server is specified.",
+    )
+    replay_parser.add_argument(
+        "--trace-ingest-endpoint",
+        dest="trace_ingest_endpoint",
+        default="http://localhost:4318",
+        help="OTLP endpoint for Jaeger trace ingestion (default: http://localhost:4318). "
+        "Only used when --trace-backend=jaeger.",
+    )
+    replay_parser.add_argument(
+        "--service-name",
+        dest="service_name",
+        default="dojozero",
+        help="Service name for trace export (default: dojozero).",
     )
 
     # Dashboard Server command
@@ -688,6 +738,56 @@ async def _run_command(args: argparse.Namespace) -> int:
         )
 
     # Local execution mode
+
+    # Initialize OTLP exporter if trace backend is configured
+    trace_backend = getattr(args, "trace_backend", None)
+    trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
+    service_name = getattr(args, "service_name", "dojozero")
+    otel_exporter = None
+
+    if trace_backend:
+        from dojozero.core._tracing import (
+            OTelSpanExporter,
+            get_sls_exporter_headers,
+            set_otel_exporter,
+        )
+
+        if trace_backend == "sls":
+            import os
+
+            # Construct SLS OTLP endpoint from environment variables
+            sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
+            sls_endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
+            if not sls_project or not sls_endpoint:
+                raise DojoZeroCLIError(
+                    "SLS trace backend requires DOJOZERO_SLS_PROJECT and "
+                    "DOJOZERO_SLS_ENDPOINT environment variables"
+                )
+            otlp_endpoint = f"https://{sls_project}.{sls_endpoint}"
+            headers = get_sls_exporter_headers()
+            otel_exporter = OTelSpanExporter(
+                otlp_endpoint, service_name=service_name, headers=headers
+            )
+            set_otel_exporter(otel_exporter)
+            LOGGER.info(
+                "OTel exporter configured: %s (backend: sls, service_name: %s)",
+                otlp_endpoint,
+                service_name,
+            )
+        elif trace_backend == "jaeger":
+            otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
+            otel_exporter = OTelSpanExporter(
+                otlp_endpoint, service_name=service_name, headers=None
+            )
+            set_otel_exporter(otel_exporter)
+            LOGGER.info(
+                "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
+                otlp_endpoint,
+                service_name,
+            )
+    else:
+        LOGGER.info("No trace backend configured - traces will not be exported")
+
     config_imports = _gather_imports(config_payload)
     params_imports = _gather_imports(params_payload)
     requested_imports = list(args.import_modules or [])
@@ -724,20 +824,271 @@ async def _run_command(args: argparse.Namespace) -> int:
                 "--trial-id is required when resuming without a params file"
             )
 
-    if spec is not None:
-        await _run_trial_and_monitor(
-            dashboard=dashboard,
-            trial_id=trial_id,
-            start_fn=lambda: dashboard.launch_trial(spec),
-        )
-    else:
-        resume_checkpoint = checkpoint_id if checkpoint_id else None
-        await _run_trial_and_monitor(
-            dashboard=dashboard,
-            trial_id=trial_id,
-            start_fn=lambda: dashboard.resume_trial(trial_id, resume_checkpoint),
-        )
+    try:
+        if spec is not None:
+            await _run_trial_and_monitor(
+                dashboard=dashboard,
+                trial_id=trial_id,
+                start_fn=lambda: dashboard.launch_trial(spec),
+            )
+        else:
+            resume_checkpoint = checkpoint_id if checkpoint_id else None
+            await _run_trial_and_monitor(
+                dashboard=dashboard,
+                trial_id=trial_id,
+                start_fn=lambda: dashboard.resume_trial(trial_id, resume_checkpoint),
+            )
+    finally:
+        # Clean up OTLP exporter if configured
+        if otel_exporter is not None:
+            from dojozero.core._tracing import set_otel_exporter
+
+            otel_exporter.shutdown()
+            set_otel_exporter(None)
+            LOGGER.info("OTel exporter shutdown complete")
+
     return 0
+
+
+def _resolve_replay_files(
+    patterns: list[str], temp_dir: Path | None = None
+) -> list[Path]:
+    """Resolve replay file patterns to actual file paths.
+
+    Supports:
+    - Local file paths: outputs/game.jsonl
+    - Local glob patterns: outputs/*/*.jsonl, outputs/2025-01-*/*.jsonl
+    - OSS URLs: oss://bucket/prefix/file.jsonl
+    - OSS glob patterns: oss://bucket/prefix/*.jsonl
+
+    Args:
+        patterns: List of file patterns or OSS URLs
+        temp_dir: Temporary directory for downloading OSS files (created if None)
+
+    Returns:
+        List of resolved local file paths (sorted)
+
+    Raises:
+        DojoZeroCLIError: If no files match or OSS access fails
+    """
+    import glob
+    import tempfile
+
+    resolved_files: list[Path] = []
+    oss_temp_dir = temp_dir
+
+    # Check if any OSS patterns exist and initialize client once before the loop
+    oss_patterns = [p for p in patterns if p.startswith("oss://")]
+    oss_client = None
+    if oss_patterns:
+        # Extract bucket name from the first OSS pattern for client initialization
+        first_oss_url = oss_patterns[0][6:]  # Remove "oss://"
+        parts = first_oss_url.split("/", 1)
+        if len(parts) < 2:
+            raise DojoZeroCLIError(f"Invalid OSS URL format: {oss_patterns[0]}")
+        bucket_name = parts[0]
+
+        try:
+            from dojozero.utils.oss import OSSClient
+
+            oss_client = OSSClient.from_env(bucket_name=bucket_name)
+        except ImportError:
+            raise DojoZeroCLIError(
+                "OSS support requires oss2 package. Install with: pip install oss2"
+            )
+        except ValueError as e:
+            raise DojoZeroCLIError(f"OSS configuration error: {e}")
+
+    for pattern in patterns:
+        if pattern.startswith("oss://"):
+            # Parse OSS URL: oss://bucket/prefix/path/*.jsonl
+            # Format: oss://bucket/key or oss://bucket/prefix/*.jsonl
+            url_path = pattern[6:]  # Remove "oss://"
+            parts = url_path.split("/", 1)
+            if len(parts) < 2:
+                raise DojoZeroCLIError(f"Invalid OSS URL format: {pattern}")
+
+            bucket_name = parts[0]
+            oss_key_pattern = parts[1]
+
+            assert oss_client is not None  # Initialized above
+
+            # Create temp directory for OSS downloads if not provided
+            if oss_temp_dir is None:
+                oss_temp_dir = Path(tempfile.mkdtemp(prefix="dojozero_replay_"))
+                LOGGER.info("Created temp directory for OSS files: %s", oss_temp_dir)
+
+            # Check if pattern contains glob characters
+            if "*" in oss_key_pattern or "?" in oss_key_pattern:
+                # List files matching the pattern
+                # Extract the prefix (non-glob part) for efficient listing
+                prefix_parts = []
+                for part in oss_key_pattern.split("/"):
+                    if "*" in part or "?" in part:
+                        break
+                    prefix_parts.append(part)
+                oss_prefix = "/".join(prefix_parts)
+
+                matching_keys = oss_client.list_files(oss_prefix, oss_key_pattern)
+                if not matching_keys:
+                    LOGGER.warning("No OSS files match pattern: %s", pattern)
+                    continue
+
+                LOGGER.info(
+                    "Found %d OSS files matching %s", len(matching_keys), pattern
+                )
+
+                # Download each matching file, preserving directory structure
+                for oss_key in matching_keys:
+                    local_path = oss_temp_dir / oss_key
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    oss_client.download_file(oss_key, local_path)
+                    resolved_files.append(local_path)
+            else:
+                # Single file - download directly, preserving directory structure
+                local_path = oss_temp_dir / oss_key_pattern
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    oss_client.download_file(oss_key_pattern, local_path)
+                    resolved_files.append(local_path)
+                except Exception as e:
+                    raise DojoZeroCLIError(
+                        f"Failed to download OSS file {pattern}: {e}"
+                    )
+        else:
+            # Local file or glob pattern
+            if "*" in pattern or "?" in pattern:
+                # Glob pattern
+                matched = glob.glob(pattern, recursive=True)
+                if not matched:
+                    LOGGER.warning("No local files match pattern: %s", pattern)
+                    continue
+                LOGGER.info("Found %d local files matching %s", len(matched), pattern)
+                for match in matched:
+                    path = Path(match)
+                    if path.is_file():
+                        resolved_files.append(path)
+            else:
+                # Single file
+                path = Path(pattern)
+                if not path.exists():
+                    raise DojoZeroCLIError(f"Replay file not found: {pattern}")
+                if not path.is_file():
+                    raise DojoZeroCLIError(f"Not a file: {pattern}")
+                resolved_files.append(path)
+
+    if not resolved_files:
+        raise DojoZeroCLIError(f"No replay files found matching patterns: {patterns}")
+
+    # Sort for deterministic order
+    return sorted(resolved_files)
+
+
+async def _replay_single_file(
+    replay_file: Path,
+    trial_id: str,
+    params_payload: MutableMapping[str, Any],
+    builder_name: str,
+    speed_up: float,
+    max_sleep: float,
+    dashboard: "Dashboard",
+) -> None:
+    """Replay a single file.
+
+    Args:
+        replay_file: Path to the replay file
+        trial_id: Trial ID to use
+        params_payload: Trial params
+        builder_name: Name of the trial builder
+        speed_up: Replay speed multiplier
+        max_sleep: Maximum sleep between events
+        dashboard: Dashboard instance
+    """
+    # Prepare trial spec from params
+    spec = _prepare_trial_spec(trial_id, params_payload)
+
+    # Add replay metadata
+    spec.metadata["replay_file"] = str(replay_file)
+    spec.metadata["replay_mode"] = True
+    spec.metadata["replay_speed_up"] = speed_up
+    spec.metadata["replay_max_sleep"] = max_sleep
+    spec.metadata["builder_name"] = builder_name
+
+    # Extract hub_id from spec (from stream configs)
+    hub_id = None
+    for stream_spec in spec.data_streams:
+        config = stream_spec.config
+        if config.get("hub_id"):
+            hub_id = config["hub_id"]
+            break
+
+    if not hub_id:
+        hub_id_raw = spec.metadata.get("hub_id", "data_hub")
+        hub_id = str(hub_id_raw) if hub_id_raw else "data_hub"
+    hub_id = str(hub_id)
+
+    # Create DataHub in replay mode
+    hub = DataHub(
+        hub_id=hub_id,
+        persistence_file=None,
+        enable_persistence=False,
+    )
+
+    # Create ReplayCoordinator
+    from dojozero.data import ReplayCoordinator
+
+    coordinator = ReplayCoordinator(data_hub=hub, replay_file=replay_file)
+    coordinator.set_speed(speed_up=speed_up, max_sleep=max_sleep)
+
+    # Progress callback
+    def progress_callback(current: int, total: int) -> None:
+        if current % max(1, min(100, total // 10)) == 0:
+            progress_pct = (current / total) * 100
+            LOGGER.info(
+                "[%s] Replay progress: %d/%d events (%.1f%%)",
+                replay_file.name,
+                current,
+                total,
+                progress_pct,
+            )
+
+    coordinator.set_progress_callback(progress_callback)
+
+    # Load events
+    LOGGER.info("Loading events from replay file: %s", replay_file)
+    await coordinator.start_replay()
+
+    # Set up replay context
+    from dojozero.core._registry import get_trial_builder_definition
+
+    builder_def = get_trial_builder_definition(builder_name)
+    original_context_builder = builder_def.context_builder
+
+    def replay_context_builder(spec: TrialSpec) -> RuntimeContext:
+        return RuntimeContext(
+            trial_id=spec.trial_id,
+            data_hubs={hub_id: hub},
+            stores={},
+        )
+
+    try:
+        builder_def.context_builder = replay_context_builder
+
+        LOGGER.info("Launching trial '%s' in replay mode", trial_id)
+        await dashboard.launch_trial(spec)
+
+        builder_def.context_builder = original_context_builder
+
+        LOGGER.info(
+            "Starting replay at %.1fx speed (max sleep: %.1fs)", speed_up, max_sleep
+        )
+        await coordinator.replay_all()
+
+        LOGGER.info("Stopping trial '%s'", trial_id)
+        await dashboard.stop_trial(trial_id)
+        coordinator.stop_replay()
+    finally:
+        builder_def.context_builder = original_context_builder
 
 
 async def _submit_replay_to_server(
@@ -795,13 +1146,8 @@ async def _replay_command(args: argparse.Namespace) -> int:
     from uuid import uuid4
 
     params_payload = _load_yaml_mapping(args.params, label="params")
-    trial_id = args.trial_id or uuid4().hex
-    replay_file = args.replay_file
     speed_up = args.replay_speed_up
     max_sleep = args.replay_max_sleep
-
-    if not replay_file.exists():
-        raise DojoZeroCLIError(f"Replay file not found: {replay_file}")
 
     if speed_up <= 0:
         raise DojoZeroCLIError(f"Replay speed-up must be positive, got: {speed_up}")
@@ -809,20 +1155,78 @@ async def _replay_command(args: argparse.Namespace) -> int:
     if max_sleep <= 0:
         raise DojoZeroCLIError(f"Replay max-sleep must be positive, got: {max_sleep}")
 
+    # Resolve replay files (supports glob patterns and OSS URLs)
+    replay_files = _resolve_replay_files(args.replay_files)
+    LOGGER.info("Resolved %d replay file(s) to process", len(replay_files))
+
     # Check if submitting to a remote server
     server_url = getattr(args, "server", None)
     if server_url:
+        if len(replay_files) > 1:
+            raise DojoZeroCLIError(
+                "Server mode does not support multiple replay files. "
+                "Please submit files one at a time or run locally."
+            )
         return await _submit_replay_to_server(
             server_url=server_url,
             params_payload=params_payload,
             trial_id=args.trial_id,
-            replay_file=replay_file,
+            replay_file=replay_files[0],
             speed_up=speed_up,
             max_sleep=max_sleep,
         )
 
     # Local execution mode
     config_payload = _load_cli_config(args.setting)
+
+    # Initialize OTLP exporter if trace backend is configured
+    trace_backend = getattr(args, "trace_backend", None)
+    trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
+    service_name = getattr(args, "service_name", "dojozero")
+    otel_exporter = None
+
+    if trace_backend:
+        from dojozero.core._tracing import (
+            OTelSpanExporter,
+            get_sls_exporter_headers,
+            set_otel_exporter,
+        )
+
+        if trace_backend == "sls":
+            import os
+
+            # Construct SLS OTLP endpoint from environment variables
+            sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
+            sls_endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
+            if not sls_project or not sls_endpoint:
+                raise DojoZeroCLIError(
+                    "SLS trace backend requires DOJOZERO_SLS_PROJECT and "
+                    "DOJOZERO_SLS_ENDPOINT environment variables"
+                )
+            otlp_endpoint = f"https://{sls_project}.{sls_endpoint}"
+            headers = get_sls_exporter_headers()
+            otel_exporter = OTelSpanExporter(
+                otlp_endpoint, service_name=service_name, headers=headers
+            )
+            set_otel_exporter(otel_exporter)
+            LOGGER.info(
+                "OTel exporter configured: %s (backend: sls, service_name: %s)",
+                otlp_endpoint,
+                service_name,
+            )
+        elif trace_backend == "jaeger":
+            otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
+            otel_exporter = OTelSpanExporter(
+                otlp_endpoint, service_name=service_name, headers=None
+            )
+            set_otel_exporter(otel_exporter)
+            LOGGER.info(
+                "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
+                otlp_endpoint,
+                service_name,
+            )
+    else:
+        LOGGER.info("No trace backend configured - traces will not be exported")
 
     config_imports = _gather_imports(config_payload)
     params_imports = _gather_imports(params_payload)
@@ -839,108 +1243,71 @@ async def _replay_command(args: argparse.Namespace) -> int:
     runtime_provider = _create_runtime_provider(config_payload)
     dashboard = Dashboard(store=store, runtime_provider=runtime_provider)
 
-    # Prepare trial spec from params
-    spec = _prepare_trial_spec(trial_id, params_payload)
-
-    # Extract builder_name from scenario (it's not in metadata by default)
+    # Extract builder_name from scenario
     scenario = params_payload.get("scenario", {})
     builder_name = scenario.get("name") if isinstance(scenario, dict) else None
     if not builder_name:
         raise DojoZeroCLIError("Could not determine builder name from params")
 
-    # Add replay metadata
-    spec.metadata["replay_file"] = str(replay_file)
-    spec.metadata["replay_mode"] = True
-    spec.metadata["replay_speed_up"] = speed_up
-    spec.metadata["replay_max_sleep"] = max_sleep
-    spec.metadata["builder_name"] = builder_name  # Ensure it's in metadata
-
-    # Extract hub_id from spec (from stream configs)
-    hub_id = None
-    for stream_spec in spec.data_streams:
-        config = stream_spec.config
-        if config.get("hub_id"):
-            hub_id = config["hub_id"]
-            break
-
-    if not hub_id:
-        # Fallback: use default hub_id from params or metadata
-        hub_id_raw = spec.metadata.get("hub_id", "data_hub")
-        hub_id = str(hub_id_raw) if hub_id_raw else "data_hub"
-
-    # Ensure hub_id is a string
-    hub_id = str(hub_id)
-
-    # Create DataHub in replay mode (disable persistence, will load events from file)
-    hub = DataHub(
-        hub_id=hub_id,
-        persistence_file=None,  # Not persisting during replay
-        enable_persistence=False,
-    )
-
-    # Create ReplayCoordinator with speed control
-    from dojozero.data import ReplayCoordinator
-
-    coordinator = ReplayCoordinator(data_hub=hub, replay_file=replay_file)
-    coordinator.set_speed(speed_up=speed_up, max_sleep=max_sleep)
-
-    # Set up progress callback
-    def progress_callback(current: int, total: int) -> None:
-        if current % max(1, min(100, total // 10)) == 0:
-            progress_pct = (current / total) * 100
-            LOGGER.info(
-                "Replay progress: %d/%d events (%.1f%%)", current, total, progress_pct
-            )
-
-    coordinator.set_progress_callback(progress_callback)
-
-    # Load events into hub
-    LOGGER.info("Loading events from replay file: %s", replay_file)
-    await coordinator.start_replay()
-
-    # Create a replay-specific context builder that returns our replay hub
-    # We'll temporarily override the context builder in the trial builder registry
-    from dojozero.core._registry import get_trial_builder_definition
+    # Process each replay file sequentially
+    total_files = len(replay_files)
+    completed = 0
+    failed = 0
 
     try:
-        builder_def = get_trial_builder_definition(builder_name)
-        original_context_builder = builder_def.context_builder
+        for i, replay_file in enumerate(replay_files, 1):
+            # Generate unique trial_id for each file (unless single file with user-provided id)
+            if args.trial_id and total_files == 1:
+                trial_id = args.trial_id
+            else:
+                # Use file stem as part of trial_id for traceability
+                file_stem = replay_file.stem
+                trial_id = f"{file_stem}-{uuid4().hex[:8]}"
 
-        # Create replay context builder
-        def replay_context_builder(spec: TrialSpec) -> RuntimeContext:
-            """Replay-specific context builder that provides replay hub, no stores."""
-            return RuntimeContext(
-                trial_id=spec.trial_id,
-                data_hubs={hub_id: hub},
-                stores={},  # No stores in replay mode
+            LOGGER.info(
+                "=" * 60 + "\nProcessing file %d/%d: %s (trial_id: %s)\n" + "=" * 60,
+                i,
+                total_files,
+                replay_file.name,
+                trial_id,
             )
 
-        # Temporarily override context builder
-        builder_def.context_builder = replay_context_builder
+            try:
+                await _replay_single_file(
+                    replay_file=replay_file,
+                    trial_id=trial_id,
+                    params_payload=params_payload,
+                    builder_name=builder_name,
+                    speed_up=speed_up,
+                    max_sleep=max_sleep,
+                    dashboard=dashboard,
+                )
+                completed += 1
+                LOGGER.info("Completed replay for %s", replay_file.name)
+            except Exception as e:
+                failed += 1
+                LOGGER.error("Failed to replay %s: %s", replay_file.name, e)
+                # Continue with next file instead of aborting
+                continue
 
-        # Launch trial (will use our replay context)
-        LOGGER.info("Launching trial '%s' in replay mode", trial_id)
-        await dashboard.launch_trial(spec)
+    finally:
+        # Clean up OTLP exporter if configured
+        if otel_exporter is not None:
+            from dojozero.core._tracing import set_otel_exporter
 
-        # Restore original context builder
-        builder_def.context_builder = original_context_builder
-    except Exception as e:
-        LOGGER.error("Failed to set up replay context: %s", e)
-        raise DojoZeroCLIError(f"Failed to set up replay: {e}") from e
+            otel_exporter.shutdown()
+            set_otel_exporter(None)
+            LOGGER.info("OTel exporter shutdown complete")
 
-    # Start replay with speed control and progress tracking
+    # Summary
     LOGGER.info(
-        "Starting replay at %.1fx speed (max sleep: %.1fs)", speed_up, max_sleep
+        "=" * 60 + "\nReplay complete: %d/%d files succeeded, %d failed\n" + "=" * 60,
+        completed,
+        total_files,
+        failed,
     )
-    await coordinator.replay_all()
 
-    # Stop trial
-    LOGGER.info("Stopping trial '%s'", trial_id)
-    await dashboard.stop_trial(trial_id)
-    coordinator.stop_replay()
-
-    LOGGER.info("Replay complete for trial '%s'", trial_id)
-    return 0
+    return 0 if failed == 0 else 1
 
 
 def _list_builders_command(args: argparse.Namespace) -> int:

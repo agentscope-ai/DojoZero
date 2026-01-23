@@ -259,6 +259,65 @@ class OSSClient:
         full_key = self._make_key(oss_key)
         return self._bucket.object_exists(full_key)
 
+    def download_file(self, oss_key: str, local_path: str | Path) -> Path:
+        """Download a file from OSS.
+
+        Args:
+            oss_key: OSS object key (prefix will be applied)
+            local_path: Path to save the file locally
+
+        Returns:
+            Path to the downloaded file
+
+        Raises:
+            oss2.exceptions.NoSuchKey: If the file does not exist
+            oss2.exceptions.OssError: If download fails
+        """
+        full_key = self._make_key(oss_key)
+        local_path = Path(local_path)
+
+        # Create parent directory if needed
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        logger.info(
+            "Downloading oss://%s/%s to %s", self.bucket_name, full_key, local_path
+        )
+
+        self._bucket.get_object_to_file(full_key, str(local_path))
+
+        logger.info("Successfully downloaded %s", local_path)
+        return local_path
+
+    def list_files(self, oss_prefix: str = "", pattern: str = "*") -> list[str]:
+        """List files in OSS matching a prefix and pattern.
+
+        Args:
+            oss_prefix: OSS prefix to list (under client prefix)
+            pattern: Glob pattern to filter files (default: "*" for all files).
+                     Supports patterns like "*.jsonl", "2025-01-*/*.jsonl"
+
+        Returns:
+            List of OSS keys (without client prefix) matching the pattern
+        """
+        import fnmatch
+
+        full_prefix = self._make_key(oss_prefix)
+        matching_keys: list[str] = []
+
+        # List all objects under the prefix
+        for obj in oss2.ObjectIterator(self._bucket, prefix=full_prefix):
+            # Get key relative to client prefix
+            if self.prefix and obj.key.startswith(self.prefix):
+                relative_key = obj.key[len(self.prefix) :]
+            else:
+                relative_key = obj.key
+
+            # Apply glob pattern matching
+            if fnmatch.fnmatch(relative_key, pattern):
+                matching_keys.append(relative_key)
+
+        return sorted(matching_keys)
+
 
 def upload_file(
     local_path: str | Path,

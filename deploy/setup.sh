@@ -149,15 +149,15 @@ if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
     # Ask which trial type
     echo ""
     echo "Which trial type would you like to run?"
-    echo "  1) NBA (nba-pregame-betting)"
-    echo "  2) NFL (nfl-pregame-betting)"
+    echo "  1) NBA (nba-moneyline)"
+    echo "  2) NFL (nfl-moneyline)"
     read -p "Enter choice [1]: " TRIAL_CHOICE
     TRIAL_CHOICE="${TRIAL_CHOICE:-1}"
 
     if [ "$TRIAL_CHOICE" = "2" ]; then
-        TRIAL_CONFIG_PATH="configs/nfl-pregame-betting.yaml"
+        TRIAL_CONFIG_PATH="configs/nfl-moneyline.yaml"
     else
-        TRIAL_CONFIG_PATH="configs/nba-pregame-betting.yaml"
+        TRIAL_CONFIG_PATH="configs/nba-moneyline.yaml"
     fi
 
     # Build OSS flag
@@ -220,10 +220,10 @@ if [ ! -f "$PROJECT_ROOT/.env" ]; then
     echo "   # Edit .env with your API keys"
     echo ""
     echo "2. Test the trial runner manually:"
-    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml"
+    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py configs/nba-moneyline.yaml"
 else
     echo "1. Test the trial runner manually:"
-    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py configs/nba-pregame-betting.yaml"
+    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py configs/nba-moneyline.yaml"
 fi
 echo ""
 echo "For more options, see deploy/DEPLOYMENT.md"

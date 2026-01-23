@@ -7,12 +7,12 @@ For SLS trace export and OSS backup, start a Dashboard Server first:
     dojo0 serve --otlp-endpoint https://... --trace-backend sls --oss-backup
 
 Then run this script with --server flag:
-    python run_daily_trials.py configs/nba-pregame-betting.yaml --server http://localhost:8000
+    python run_daily_trials.py configs/nba-moneyline.yaml --server http://localhost:8000
 
 Usage:
-    python run_daily_trials.py configs/nba-pregame-betting.yaml
-    python run_daily_trials.py configs/nfl-pregame-betting.yaml --date 2025-01-20
-    python run_daily_trials.py configs/nba-pregame-betting.yaml --server http://localhost:8000
+    python run_daily_trials.py configs/nba-moneyline.yaml
+    python run_daily_trials.py configs/nfl-moneyline.yaml --date 2025-01-20
+    python run_daily_trials.py configs/nba-moneyline.yaml --server http://localhost:8000
 """
 
 import argparse
@@ -88,9 +88,9 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s configs/nba-pregame-betting.yaml
-  %(prog)s configs/nfl-pregame-betting.yaml --date 2025-01-20
-  %(prog)s configs/nba-pregame-betting.yaml --server http://localhost:8000
+  %(prog)s configs/nba-moneyline.yaml
+  %(prog)s configs/nfl-moneyline.yaml --date 2025-01-20
+  %(prog)s configs/nba-moneyline.yaml --server http://localhost:8000
         """,
     )
     parser.add_argument("config", type=Path, help="Path to trial config YAML file")

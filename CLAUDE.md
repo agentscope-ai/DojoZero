@@ -22,13 +22,13 @@ src/dojozero/
 
 ```bash
 # Run a trial
-uv run dojozero run --params configs/nba-pregame-betting.yaml
+uv run dojozero run --params configs/nba-moneyline.yaml
 
 # List available trial builders
 uv run dojozero list-builders
 
 # Generate example config for a builder
-uv run dojozero get-builder nba-pregame-betting --example
+uv run dojozero get-builder nba-moneyline --example
 
 # Replay from event files (backtesting)
 uv run dojozero replay --events events.jsonl
