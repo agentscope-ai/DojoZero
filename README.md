@@ -111,8 +111,8 @@ dojo0 serve --trace-backend jaeger --trial-source "trial_sources/*.yaml"
 # Disable auto-resume of interrupted trials
 dojo0 serve --trace-backend jaeger --no-auto-resume
 
-# With settings file
-dojo0 --setting dojozero.yaml serve --trace-backend jaeger
+# With custom store directory and Ray runtime
+dojo0 serve --store-directory ./my-store --runtime-provider ray --ray-config ray_config.yaml --trace-backend jaeger
 ```
 
 CLI options:
@@ -125,6 +125,9 @@ CLI options:
 - `--trial-source` - Path or glob pattern for trial source YAML files (repeatable)
 - `--no-auto-resume` - Disable automatic resuming of interrupted trials
 - `--stale-threshold-hours` - Skip resuming trials with checkpoints older than this (default: 24.0)
+- `--store-directory` - Directory for filesystem store (default: ./dojozero-store)
+- `--runtime-provider {local,ray}` - Runtime provider (default: local)
+- `--ray-config` - Path to Ray runtime configuration YAML file
 
 ### Auto-Resume of Interrupted Trials
 
@@ -185,43 +188,33 @@ Ensure Arena Server is running at `http://localhost:3001`.
 
 ## Runtime & Store Configuration
 
-When you need persistent storage, non-default imports, or an
-alternative runtime provider, declare those settings once in
-`dojozero.yaml` (or any filename you pass to the top-level `--setting` flag).
-The settings file captures everything the trial orchestrator needs: store,
-runtime provider, and module imports.
+Store and runtime settings are configured directly via command-line options for `run`, `backtest`, and `serve` commands:
 
-```yaml
-# dojozero.yaml
-store:
-	kind: filesystem
-	root: ./dojozero-store
-runtime:
-	kind: local
-imports:
-	- dojozero.samples
+- `--store-directory` - Directory for the filesystem store (default: `./dojozero-store`)
+- `--runtime-provider {local,ray}` - Runtime provider (default: `local`)
+- `--ray-config` - Path to Ray configuration YAML file (only used with `--runtime-provider ray`)
+
+Example with custom store directory:
+```bash
+dojo0 run --params sample_trial.yaml --store-directory ./my-store
 ```
-
-Launch with `dojo0 --setting dojozero.yaml run --params sample_trial.yaml` (or the
-serve command once available) to reuse the configuration across invocations.
 
 ### Using the Ray runtime
 
-Switch to Ray by setting `runtime.kind: ray` and passing any `ray.init`
-arguments through `init_kwargs`. Install the extras first via
-`uv pip install ".[ray]"`.
+Switch to Ray by setting `--runtime-provider ray` and optionally providing a config file. Install the extras first via `uv pip install ".[ray]"`.
 
 ```yaml
-runtime:
-	kind: ray
-	auto_init: false
-	init_kwargs:
-		address: auto
-		num_cpus: 8
+# ray_config.yaml
+auto_init: false
+init_kwargs:
+  address: auto
+  num_cpus: 8
 ```
 
-Then run `dojo0 --setting ray.yaml run --params sample_trial.yaml` to launch the
-trial with Ray actors.
+Then run with the Ray runtime:
+```bash
+dojo0 run --params sample_trial.yaml --runtime-provider ray --ray-config ray_config.yaml
+```
 
 ## Development Setup
 
@@ -240,40 +233,59 @@ pre-commit install
 
 ## Authoring New Scenarios
 
-Every scenario (a specific wiring of data streams, operators, and agents)
-exposes a *trial builder* that turns serialized configs into a `TrialSpec`.
-Builders are registered with a Pydantic `BaseModel` schema so the CLI can
-validate inputs, render JSON Schema, and generate ready-to-edit YAML templates
-automatically. New built-in scenarios that ship with DojoZero should live inside
-the `dojozero` package (for example, `dojozero.samples`).
+A scenario defines how data streams, operators, and agents are wired together for a trial. To create a new scenario:
+
+1. **Define a config schema** using Pydantic for validation
+2. **Write a builder function** that constructs a `TrialSpec`
+3. **Register the builder** so the CLI can discover it
 
 ```python
 from pydantic import BaseModel, Field
-
 from dojozero.core import TrialSpec, register_trial_builder
 
 
 class MyScenarioConfig(BaseModel):
-		stream_id: str = Field(default="prices")
-		window: int = Field(ge=1, default=10)
+    stream_id: str = Field(default="prices")
+    window: int = Field(ge=1, default=10)
 
 
 def build_my_scenario(trial_id: str, config: MyScenarioConfig) -> TrialSpec:
-		# construct AgentSpec / OperatorSpec / DataStreamSpec objects here
-		...
+    # Construct AgentSpec / OperatorSpec / DataStreamSpec objects here
+    ...
 
 
 register_trial_builder(
-		"myenv.prices",
-		MyScenarioConfig,
-		build_my_scenario,
-		description="Example scenario wiring a rolling window strategy",
-		example_config=MyScenarioConfig(window=20),
+    "myenv.prices",
+    MyScenarioConfig,
+    build_my_scenario,
+    description="Example scenario wiring a rolling window strategy",
+    example_config=MyScenarioConfig(window=20),
 )
 ```
 
-Once imported, `dojo0 get-builder myenv.prices` will show the schema and can
-emit a ready-made YAML spec for local experimentation.
+Once registered, the CLI provides discovery and scaffolding:
+
+```bash
+# List all available builders
+dojo0 list-builders
+
+# View schema and generate example params file
+dojo0 get-builder myenv.prices --create-example-params
+```
+
+### Loading Custom Scenarios
+
+DojoZero automatically imports built-in scenarios (`dojozero.samples`, `dojozero.nba_moneyline`, `dojozero.nfl_moneyline`). For custom scenarios in external modules, add the `imports` key to your params file:
+
+```yaml
+# my_trial.yaml
+imports:
+  - my_custom_module
+scenario:
+  name: myenv.prices
+  config:
+    window: 20
+```
 
 ## Tools
 

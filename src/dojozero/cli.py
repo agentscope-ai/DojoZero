@@ -19,7 +19,6 @@ from dojozero.core import (
     TrialOrchestrator,
     OrchestratorError,
     FileSystemOrchestratorStore,
-    InMemoryOrchestratorStore,
     LocalActorRuntimeProvider,
     TrialBuilderDefinition,
     TrialSpec,
@@ -40,16 +39,8 @@ DEFAULT_IMPORTS: tuple[str, ...] = (
     "dojozero.nba_moneyline",
     "dojozero.nfl_moneyline",
 )
-DEFAULT_CLI_CONFIG: Mapping[str, Any] = {
-    "store": {
-        "kind": "filesystem",
-        "root": "./dojozero-store",
-    },
-    "runtime": {
-        "kind": "local",
-    },
-    "imports": ["dojozero.samples", "dojozero.nba_moneyline", "dojozero.nfl_moneyline"],
-}
+DEFAULT_STORE_DIRECTORY: str = "./dojozero-store"
+DEFAULT_RUNTIME_PROVIDER: str = "local"
 
 RUN_USAGE_EXAMPLES = dedent(
     """
@@ -60,8 +51,8 @@ RUN_USAGE_EXAMPLES = dedent(
         2. Resume a trial from the latest checkpoint
             dojo0 run --trial-id sample-trial --resume-latest
 
-        3. Use a custom dashboard configuration (also works with `dojo0 serve`)
-            dojo0 --setting ./settings/prod.yaml run --params sample_trial.yaml --trial-id sample-trial
+        3. Use a custom store directory and Ray runtime
+            dojo0 run --store-directory ./my-store --runtime-provider ray --params sample_trial.yaml
      """
 ).strip()
 
@@ -78,28 +69,9 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Run DojoZero trials in standalone mode.",
     )
     parser.add_argument(
-        "--import-module",
-        action="append",
-        dest="import_modules",
-        default=[],
-        help="Python module to import before running the sub-command (repeatable).",
-    )
-    parser.add_argument(
-        "--no-default-imports",
-        action="store_true",
-        help="Skip importing built-in helper modules (e.g. samples).",
-    )
-    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Logging level (default: INFO).",
-    )
-    parser.add_argument(
-        "--setting",
-        type=Path,
-        help=(
-            "Path to the dashboard settings YAML (store/runtime/imports) used by DojoZero."
-        ),
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -153,6 +125,26 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="service_name",
         default="dojozero",
         help="Service name for trace export (default: dojozero).",
+    )
+    run_parser.add_argument(
+        "--store-directory",
+        dest="store_directory",
+        type=Path,
+        default=None,
+        help=f"Directory for filesystem store (default: {DEFAULT_STORE_DIRECTORY}).",
+    )
+    run_parser.add_argument(
+        "--runtime-provider",
+        dest="runtime_provider",
+        choices=["local", "ray"],
+        default=DEFAULT_RUNTIME_PROVIDER,
+        help=f"Runtime provider (default: {DEFAULT_RUNTIME_PROVIDER}).",
+    )
+    run_parser.add_argument(
+        "--ray-config",
+        dest="ray_config",
+        type=Path,
+        help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
     )
 
     subparsers.add_parser(
@@ -242,6 +234,26 @@ def _build_parser() -> argparse.ArgumentParser:
         default="dojozero",
         help="Service name for trace export (default: dojozero).",
     )
+    backtest_parser.add_argument(
+        "--store-directory",
+        dest="store_directory",
+        type=Path,
+        default=None,
+        help=f"Directory for filesystem store (default: {DEFAULT_STORE_DIRECTORY}).",
+    )
+    backtest_parser.add_argument(
+        "--runtime-provider",
+        dest="runtime_provider",
+        choices=["local", "ray"],
+        default=DEFAULT_RUNTIME_PROVIDER,
+        help=f"Runtime provider (default: {DEFAULT_RUNTIME_PROVIDER}).",
+    )
+    backtest_parser.add_argument(
+        "--ray-config",
+        dest="ray_config",
+        type=Path,
+        help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
+    )
 
     # Dashboard Server command
     serve_parser = subparsers.add_parser(
@@ -308,6 +320,26 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=24.0,
         help="Skip resuming trials with checkpoints older than this (hours). Default: 24.0",
+    )
+    serve_parser.add_argument(
+        "--store-directory",
+        dest="store_directory",
+        type=Path,
+        default=None,
+        help=f"Directory for filesystem store (default: {DEFAULT_STORE_DIRECTORY}).",
+    )
+    serve_parser.add_argument(
+        "--runtime-provider",
+        dest="runtime_provider",
+        choices=["local", "ray"],
+        default=DEFAULT_RUNTIME_PROVIDER,
+        help=f"Runtime provider (default: {DEFAULT_RUNTIME_PROVIDER}).",
+    )
+    serve_parser.add_argument(
+        "--ray-config",
+        dest="ray_config",
+        type=Path,
+        help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
     )
 
     # Arena Server command
@@ -454,49 +486,6 @@ def _load_yaml_mapping(path: Path, *, label: str) -> MutableMapping[str, Any]:
     return payload
 
 
-def _load_cli_config(path: Path | None) -> Mapping[str, Any]:
-    base = {
-        "store": dict(DEFAULT_CLI_CONFIG["store"]),
-        "runtime": dict(DEFAULT_CLI_CONFIG["runtime"]),
-        "imports": list(DEFAULT_CLI_CONFIG["imports"]),
-    }
-
-    payload: Mapping[str, Any] | None = None
-    if path is not None:
-        payload = _load_yaml_mapping(path, label="config")
-    if payload is None:
-        return base
-
-    store_cfg = payload.get("store")
-    if isinstance(store_cfg, Mapping):
-        base["store"].update(store_cfg)
-
-    runtime_cfg = payload.get("runtime")
-    if isinstance(runtime_cfg, Mapping):
-        base["runtime"].update(runtime_cfg)
-
-    imports_cfg = payload.get("imports")
-    if imports_cfg is not None:
-        if isinstance(imports_cfg, str):
-            base["imports"] = [imports_cfg]
-        elif isinstance(imports_cfg, Sequence):
-            normalized: list[str] = []
-            for item in imports_cfg:
-                if not isinstance(item, str):
-                    raise DojoZeroCLIError("entries in config.imports must be strings")
-                normalized.append(item)
-            base["imports"] = normalized
-        else:
-            raise DojoZeroCLIError(
-                "config.imports must be a string or sequence of strings"
-            )
-
-    for key, value in payload.items():
-        if key not in base:
-            base[key] = value
-    return base
-
-
 def _gather_imports(payload: Mapping[str, Any] | None) -> Sequence[str]:
     if not payload:
         return ()
@@ -586,44 +575,50 @@ def _prepare_trial_spec(trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
 
 
 def _create_store(
-    payload: Mapping[str, Any],
-) -> InMemoryOrchestratorStore | FileSystemOrchestratorStore:
-    store_cfg = payload.get("store") or {}
-    if not isinstance(store_cfg, Mapping):
-        raise DojoZeroCLIError("config.store must be a mapping when provided")
-    kind = str(store_cfg.get("kind", "memory")).lower()
-    if kind == "memory":
-        return InMemoryOrchestratorStore()
-    if kind == "filesystem":
-        root = store_cfg.get("root")
-        base_path = (
-            Path(str(root)) if root is not None else Path.cwd() / "dojozero-store"
-        )
-        return FileSystemOrchestratorStore(base_path)
-    raise DojoZeroCLIError(f"unsupported store.kind '{kind}'")
+    store_directory: Path | None,
+) -> FileSystemOrchestratorStore:
+    """Create a filesystem store from the store directory.
+
+    Args:
+        store_directory: Directory for the store. If None, uses DEFAULT_STORE_DIRECTORY.
+
+    Returns:
+        FileSystemOrchestratorStore instance.
+    """
+    base_path = store_directory if store_directory else Path(DEFAULT_STORE_DIRECTORY)
+    return FileSystemOrchestratorStore(base_path)
 
 
-def _create_runtime_provider(payload: Mapping[str, Any]):
-    runtime_cfg = payload.get("runtime") or {}
-    if not isinstance(runtime_cfg, Mapping):
-        raise DojoZeroCLIError("config.runtime must be a mapping when provided")
-    kind = str(runtime_cfg.get("kind", "local")).lower()
-    if kind == "local":
+def _create_runtime_provider(
+    runtime_provider: str,
+    ray_config_path: Path | None = None,
+):
+    """Create a runtime provider from CLI options.
+
+    Args:
+        runtime_provider: Either "local" or "ray".
+        ray_config_path: Optional path to Ray configuration YAML file.
+
+    Returns:
+        ActorRuntimeProvider instance.
+    """
+    if runtime_provider == "local":
         return LocalActorRuntimeProvider()
-    if kind == "ray":
+    if runtime_provider == "ray":
         if RayActorRuntimeProvider is None:
             raise DojoZeroCLIError(
                 "ray runtime requested but ray is not installed. "
                 "Please install ray dependencies with 'pip install dojozero[ray]'"
             )
-        init_kwargs = runtime_cfg.get("init_kwargs") or {}
-        if not isinstance(init_kwargs, Mapping):
-            raise DojoZeroCLIError(
-                "config.runtime.init_kwargs must be a mapping when provided"
-            )
-        auto_init = bool(runtime_cfg.get("auto_init", True))
+        # Load ray config from file if provided
+        init_kwargs: dict[str, Any] = {}
+        auto_init = True
+        if ray_config_path is not None:
+            ray_cfg = _load_yaml_mapping(ray_config_path, label="ray-config")
+            init_kwargs = dict(ray_cfg.get("init_kwargs") or {})
+            auto_init = bool(ray_cfg.get("auto_init", True))
         return RayActorRuntimeProvider(auto_init=auto_init, init_kwargs=init_kwargs)
-    raise DojoZeroCLIError(f"unsupported runtime.kind '{kind}'")
+    raise DojoZeroCLIError(f"unsupported runtime provider '{runtime_provider}'")
 
 
 def _default_example_filename(builder_name: str) -> str:
@@ -818,7 +813,6 @@ async def _submit_to_server(
 
 
 async def _run_command(args: argparse.Namespace) -> int:
-    config_payload = _load_cli_config(args.setting)
     params_payload = (
         _load_yaml_mapping(args.params, label="params") if args.params else None
     )
@@ -887,19 +881,14 @@ async def _run_command(args: argparse.Namespace) -> int:
     else:
         LOGGER.info("No trace backend configured - traces will not be exported")
 
-    config_imports = _gather_imports(config_payload)
+    # Imports: default imports + imports from params file
     params_imports = _gather_imports(params_payload)
-    requested_imports = list(args.import_modules or [])
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(config_imports)
+    modules_to_import: list[str] = list(DEFAULT_IMPORTS)
     modules_to_import.extend(params_imports)
-    modules_to_import.extend(requested_imports)
     _import_modules(modules_to_import)
 
-    store = _create_store(config_payload)
-    runtime_provider = _create_runtime_provider(config_payload)
+    store = _create_store(args.store_directory)
+    runtime_provider = _create_runtime_provider(args.runtime_provider, args.ray_config)
     orchestrator = TrialOrchestrator(store=store, runtime_provider=runtime_provider)
 
     checkpoint_id = args.checkpoint_id
@@ -1276,7 +1265,6 @@ async def _backtest_command(args: argparse.Namespace) -> int:
         )
 
     # Local execution mode
-    config_payload = _load_cli_config(args.setting)
 
     # Initialize OTLP exporter if trace backend is configured
     trace_backend = getattr(args, "trace_backend", None)
@@ -1327,19 +1315,14 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     else:
         LOGGER.info("No trace backend configured - traces will not be exported")
 
-    config_imports = _gather_imports(config_payload)
+    # Imports: default imports + imports from params file
     params_imports = _gather_imports(params_payload)
-    requested_imports = list(args.import_modules or [])
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(config_imports)
+    modules_to_import: list[str] = list(DEFAULT_IMPORTS)
     modules_to_import.extend(params_imports)
-    modules_to_import.extend(requested_imports)
     _import_modules(modules_to_import)
 
-    store = _create_store(config_payload)
-    runtime_provider = _create_runtime_provider(config_payload)
+    store = _create_store(args.store_directory)
+    runtime_provider = _create_runtime_provider(args.runtime_provider, args.ray_config)
     orchestrator = TrialOrchestrator(store=store, runtime_provider=runtime_provider)
 
     # Extract builder_name from scenario
@@ -1409,12 +1392,8 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
-def _list_builders_command(args: argparse.Namespace) -> int:
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(args.import_modules or [])
-    _import_modules(modules_to_import)
+def _list_builders_command(_args: argparse.Namespace) -> int:
+    _import_modules(DEFAULT_IMPORTS)
 
     builders = list_trial_builders()
     for name in builders:
@@ -1425,11 +1404,7 @@ def _list_builders_command(args: argparse.Namespace) -> int:
 
 
 def _get_builder_command(args: argparse.Namespace) -> int:
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(args.import_modules or [])
-    _import_modules(modules_to_import)
+    _import_modules(DEFAULT_IMPORTS)
 
     try:
         definition = get_trial_builder_definition(args.name)
@@ -1496,19 +1471,12 @@ async def _serve_command(args: argparse.Namespace) -> int:
     """Handle serve command - start Dashboard Server."""
     from dojozero.dashboard_server import run_dashboard_server
 
-    config_payload = _load_cli_config(args.setting)
+    # Imports: default imports and CLI --import-module flags
+    # Import default modules; trial source imports are handled dynamically when sources are loaded
+    _import_modules(DEFAULT_IMPORTS)
 
-    config_imports = _gather_imports(config_payload)
-    requested_imports = list(args.import_modules or [])
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(config_imports)
-    modules_to_import.extend(requested_imports)
-    _import_modules(modules_to_import)
-
-    store = _create_store(config_payload)
-    runtime_provider = _create_runtime_provider(config_payload)
+    store = _create_store(args.store_directory)
+    runtime_provider = _create_runtime_provider(args.runtime_provider, args.ray_config)
     orchestrator = TrialOrchestrator(store=store, runtime_provider=runtime_provider)
 
     host = args.host
@@ -1521,16 +1489,14 @@ async def _serve_command(args: argparse.Namespace) -> int:
     auto_resume = not getattr(args, "no_auto_resume", False)
     stale_threshold_hours = getattr(args, "stale_threshold_hours", 24.0)
 
+    # Determine store path from args
+    store_path = (
+        args.store_directory if args.store_directory else Path(DEFAULT_STORE_DIRECTORY)
+    )
+
     # Create scheduler store (uses store root directory for persistence)
     from dojozero.dashboard_server._scheduler import FileSchedulerStore
 
-    store_cfg = config_payload.get("store") or {}
-    store_root = store_cfg.get("root")
-    store_path = (
-        Path(str(store_root))
-        if store_root is not None
-        else Path.cwd() / "dojozero-store"
-    )
     scheduler_store = FileSchedulerStore(store_path)
 
     # Expand glob patterns and load trial source configurations
