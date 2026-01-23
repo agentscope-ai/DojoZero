@@ -76,6 +76,29 @@ The Betting Broker is the central operator that coordinates betting activities b
 - Asynchronous notification when executed
 - Can be cancelled while pending
 
+## 5.1. Bet Types
+
+The broker supports three bet types:
+
+**Moneyline Betting** (default)
+- Bet on which team will win
+- Selection: "home" or "away"
+- Uses `home_odds` and `away_odds`
+
+**Spread Betting**
+- Bet on point spread outcomes
+- Selection: "home" or "away" with a spread value (e.g., -3.5)
+- Uses `spread_lines` with multiple spread options and their respective odds
+- Settlement based on final score adjusted by spread
+
+**Total Betting** (Over/Under)
+- Bet on total points scored
+- Selection: "over" or "under" with a total value (e.g., 220.5)
+- Uses `total_lines` with multiple total options and their respective odds
+- Settlement based on combined final score vs. total line
+
+All bet types support both market and limit orders, and odds can be updated dynamically for all types.
+
 ## 6. Key Workflows
 
 ### Bet Placement
