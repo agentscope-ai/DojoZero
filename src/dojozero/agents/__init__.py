@@ -14,6 +14,7 @@ from ._trial_utils import (
     get_expanded_agent_ids,
     build_operator_to_agents_map,
     build_agent_specs,
+    load_agent_configs_cached,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "get_expanded_agent_ids",
     "build_operator_to_agents_map",
     "build_agent_specs",
+    "load_agent_configs_cached",
 ]

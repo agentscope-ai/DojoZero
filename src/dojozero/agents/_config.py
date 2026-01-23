@@ -67,6 +67,9 @@ def load_agent_config(config_path: str | Path) -> AgentConfig:
 
     Returns:
         Parsed AgentConfig dictionary with llm as a list of LLMConfig
+
+    Raises:
+        ValueError: If multiple models are specified with duplicate names
     """
     path = Path(config_path)
     with path.open("r", encoding="utf-8") as f:
@@ -83,6 +86,15 @@ def load_agent_config(config_path: str | Path) -> AgentConfig:
     else:
         # Single model config (backwards compatibility during transition)
         llm_configs.append(_parse_llm_config(llm_data))
+
+    # Validate unique model names when multiple models are specified
+    if len(llm_configs) > 1:
+        model_names = [c.get("model_name", "qwen3-max") for c in llm_configs]
+        if len(model_names) != len(set(model_names)):
+            raise ValueError(
+                f"Duplicate model names found in agent config '{path}'. "
+                "Model names must be unique when multiple models are specified."
+            )
 
     # Build AgentConfig with all required fields
     return AgentConfig(

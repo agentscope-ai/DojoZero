@@ -28,7 +28,11 @@ from dojozero.data.websearch._processors import (
 from dojozero.nba_moneyline._agent import (
     BettingAgent,
 )
-from dojozero.agents import build_operator_to_agents_map, build_agent_specs
+from dojozero.agents import (
+    build_operator_to_agents_map,
+    build_agent_specs,
+    load_agent_configs_cached,
+)
 from dojozero.nba_moneyline._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
@@ -393,8 +397,12 @@ def _build_trial_spec(
 
     # Build operator_id -> agent_ids mapping from agent configs
     # For agents with agent_config_path, expand to include all model-specific agent IDs
+    # Load configs once and reuse to avoid redundant disk I/O
+    config_cache = load_agent_configs_cached(params.agents) if params.agents else {}
     operator_to_agents = (
-        build_operator_to_agents_map(params.agents) if params.agents else {}
+        build_operator_to_agents_map(params.agents, config_cache)
+        if params.agents
+        else {}
     )
 
     # Create operators - require explicit operator configuration
@@ -454,6 +462,7 @@ def _build_trial_spec(
         agents=params.agents,
         agent_cls=BettingAgent,
         allowed_class_names={"BettingAgent"},
+        config_cache=config_cache,
     )
 
     # Build metadata with game information and hub config

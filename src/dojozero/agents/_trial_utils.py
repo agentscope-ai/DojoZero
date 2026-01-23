@@ -8,6 +8,7 @@ import logging
 from typing import Any, TypeVar
 
 from dojozero.agents._config import (
+    AgentConfig,
     LLMConfig,
     load_agent_config,
     expand_agent_config,
@@ -20,7 +21,33 @@ logger = logging.getLogger(__name__)
 TAgentConfig = TypeVar("TAgentConfig", bound=dict[str, Any])
 
 
-def get_expanded_agent_ids(agent_dict: dict[str, Any]) -> list[str]:
+def load_agent_configs_cached(
+    agents: list[dict[str, Any]],
+) -> dict[str, AgentConfig]:
+    """Load and cache agent configs from YAML files.
+
+    Loads each unique agent_config_path only once to avoid redundant disk I/O.
+
+    Args:
+        agents: List of agent configuration dicts
+
+    Returns:
+        Dict mapping agent_config_path to loaded AgentConfig
+    """
+    config_cache: dict[str, AgentConfig] = {}
+
+    for agent_dict in agents:
+        agent_config_path = agent_dict.get("agent_config_path")
+        if agent_config_path and agent_config_path not in config_cache:
+            config_cache[agent_config_path] = load_agent_config(agent_config_path)
+
+    return config_cache
+
+
+def get_expanded_agent_ids(
+    agent_dict: dict[str, Any],
+    config_cache: dict[str, AgentConfig] | None = None,
+) -> list[str]:
     """Get the list of agent IDs that will be created from an agent config.
 
     If agent_config_path is specified, returns expanded IDs (one per model).
@@ -28,6 +55,7 @@ def get_expanded_agent_ids(agent_dict: dict[str, Any]) -> list[str]:
 
     Args:
         agent_dict: Agent configuration dict with id, optional agent_config_path
+        config_cache: Optional cache of loaded configs to avoid re-loading
 
     Returns:
         List of agent IDs (expanded if using YAML config with multiple models)
@@ -38,8 +66,12 @@ def get_expanded_agent_ids(agent_dict: dict[str, Any]) -> list[str]:
 
     agent_config_path = agent_dict.get("agent_config_path")
     if agent_config_path:
-        # Load YAML and get all model names to create expanded IDs
-        yaml_config = load_agent_config(agent_config_path)
+        # Use cached config if available, otherwise load
+        if config_cache and agent_config_path in config_cache:
+            yaml_config = config_cache[agent_config_path]
+        else:
+            yaml_config = load_agent_config(agent_config_path)
+
         expanded_ids = []
         for llm_config in yaml_config["llm"]:
             model_name = llm_config.get("model_name", "unknown")
@@ -51,6 +83,7 @@ def get_expanded_agent_ids(agent_dict: dict[str, Any]) -> list[str]:
 
 def build_operator_to_agents_map(
     agents: list[dict[str, Any]],
+    config_cache: dict[str, AgentConfig] | None = None,
 ) -> dict[str, list[str]]:
     """Build a mapping from operator IDs to agent IDs.
 
@@ -58,6 +91,7 @@ def build_operator_to_agents_map(
 
     Args:
         agents: List of agent configuration dicts
+        config_cache: Optional cache of loaded configs to avoid re-loading
 
     Returns:
         Dict mapping operator_id to list of agent IDs that reference it
@@ -70,7 +104,7 @@ def build_operator_to_agents_map(
             continue
 
         operator_ids = agent_dict.get("operators", [])
-        expanded_ids = get_expanded_agent_ids(agent_dict)
+        expanded_ids = get_expanded_agent_ids(agent_dict, config_cache)
 
         for op_id in operator_ids:
             if op_id not in operator_to_agents:
@@ -84,6 +118,7 @@ def build_agent_specs(
     agents: list[dict[str, Any]],
     agent_cls: type[Any],
     allowed_class_names: set[str] | None = None,
+    config_cache: dict[str, AgentConfig] | None = None,
 ) -> list[AgentSpec[Any]]:
     """Build AgentSpec instances from agent configuration dicts.
 
@@ -95,6 +130,7 @@ def build_agent_specs(
         agents: List of agent configuration dicts
         agent_cls: The agent class to use (e.g., BettingAgent)
         allowed_class_names: Set of allowed class names (default: {"BettingAgent"})
+        config_cache: Optional cache of loaded configs to avoid re-loading
 
     Returns:
         List of AgentSpec instances
@@ -125,8 +161,12 @@ def build_agent_specs(
         agent_config_path = agent_dict.get("agent_config_path")
 
         if agent_config_path:
-            # Load YAML and expand into multiple agents (one per model)
-            yaml_config = load_agent_config(agent_config_path)
+            # Use cached config if available, otherwise load
+            if config_cache and agent_config_path in config_cache:
+                yaml_config = config_cache[agent_config_path]
+            else:
+                yaml_config = load_agent_config(agent_config_path)
+
             expanded_configs = expand_agent_config(yaml_config)
 
             for single_config in expanded_configs:
