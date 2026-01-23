@@ -14,7 +14,7 @@ from typing import (
 
 from pydantic import BaseModel
 
-from ._dashboard import TrialSpec
+from ._trial_orchestrator import TrialSpec
 from ._types import RuntimeContext
 
 ParamModelT = TypeVar("ParamModelT", bound=BaseModel)

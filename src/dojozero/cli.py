@@ -16,10 +16,9 @@ from pydantic import ValidationError
 
 from dojozero.core import (
     RuntimeContext,
-    Dashboard,
-    DashboardError,
-    FileSystemDashboardStore,
-    InMemoryDashboardStore,
+    TrialOrchestrator,
+    OrchestratorError,
+    FileSystemOrchestratorStore,
     LocalActorRuntimeProvider,
     TrialBuilderDefinition,
     TrialSpec,
@@ -40,16 +39,8 @@ DEFAULT_IMPORTS: tuple[str, ...] = (
     "dojozero.nba_moneyline",
     "dojozero.nfl_moneyline",
 )
-DEFAULT_CLI_CONFIG: Mapping[str, Any] = {
-    "store": {
-        "kind": "filesystem",
-        "root": "./dojozero-store",
-    },
-    "runtime": {
-        "kind": "local",
-    },
-    "imports": ["dojozero.samples", "dojozero.nba_moneyline", "dojozero.nfl_moneyline"],
-}
+DEFAULT_STORE_DIRECTORY: str = "./dojozero-store"
+DEFAULT_RUNTIME_PROVIDER: str = "local"
 
 RUN_USAGE_EXAMPLES = dedent(
     """
@@ -60,8 +51,8 @@ RUN_USAGE_EXAMPLES = dedent(
         2. Resume a trial from the latest checkpoint
             dojo0 run --trial-id sample-trial --resume-latest
 
-        3. Use a custom dashboard configuration (also works with `dojo0 serve`)
-            dojo0 --setting ./settings/prod.yaml run --params sample_trial.yaml --trial-id sample-trial
+        3. Use a custom store directory and Ray runtime
+            dojo0 run --store-directory ./my-store --runtime-provider ray --params sample_trial.yaml
      """
 ).strip()
 
@@ -78,28 +69,9 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Run DojoZero trials in standalone mode.",
     )
     parser.add_argument(
-        "--import-module",
-        action="append",
-        dest="import_modules",
-        default=[],
-        help="Python module to import before running the sub-command (repeatable).",
-    )
-    parser.add_argument(
-        "--no-default-imports",
-        action="store_true",
-        help="Skip importing built-in helper modules (e.g. samples).",
-    )
-    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Logging level (default: INFO).",
-    )
-    parser.add_argument(
-        "--setting",
-        type=Path,
-        help=(
-            "Path to the dashboard settings YAML (store/runtime/imports) used by DojoZero."
-        ),
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -153,6 +125,26 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="service_name",
         default="dojozero",
         help="Service name for trace export (default: dojozero).",
+    )
+    run_parser.add_argument(
+        "--store-directory",
+        dest="store_directory",
+        type=Path,
+        default=None,
+        help=f"Directory for filesystem store (default: {DEFAULT_STORE_DIRECTORY}).",
+    )
+    run_parser.add_argument(
+        "--runtime-provider",
+        dest="runtime_provider",
+        choices=["local", "ray"],
+        default=DEFAULT_RUNTIME_PROVIDER,
+        help=f"Runtime provider (default: {DEFAULT_RUNTIME_PROVIDER}).",
+    )
+    run_parser.add_argument(
+        "--ray-config",
+        dest="ray_config",
+        type=Path,
+        help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
     )
 
     subparsers.add_parser(
@@ -242,6 +234,26 @@ def _build_parser() -> argparse.ArgumentParser:
         default="dojozero",
         help="Service name for trace export (default: dojozero).",
     )
+    backtest_parser.add_argument(
+        "--store-directory",
+        dest="store_directory",
+        type=Path,
+        default=None,
+        help=f"Directory for filesystem store (default: {DEFAULT_STORE_DIRECTORY}).",
+    )
+    backtest_parser.add_argument(
+        "--runtime-provider",
+        dest="runtime_provider",
+        choices=["local", "ray"],
+        default=DEFAULT_RUNTIME_PROVIDER,
+        help=f"Runtime provider (default: {DEFAULT_RUNTIME_PROVIDER}).",
+    )
+    backtest_parser.add_argument(
+        "--ray-config",
+        dest="ray_config",
+        type=Path,
+        help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
+    )
 
     # Dashboard Server command
     serve_parser = subparsers.add_parser(
@@ -286,6 +298,48 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable OSS backup for trial data (events JSONL). "
         "Requires DOJOZERO_OSS_BUCKET and DOJOZERO_OSS_ENDPOINT env vars.",
+    )
+    serve_parser.add_argument(
+        "--trial-source",
+        dest="trial_sources",
+        action="append",
+        default=[],
+        help="Path or glob pattern for trial source YAML files (repeatable). "
+        "Enables automatic scheduling for the specified sports/scenarios. "
+        "Requires filesystem store to be configured.",
+    )
+    serve_parser.add_argument(
+        "--no-auto-resume",
+        dest="no_auto_resume",
+        action="store_true",
+        help="Disable automatic resuming of interrupted trials from previous shutdown.",
+    )
+    serve_parser.add_argument(
+        "--stale-threshold-hours",
+        dest="stale_threshold_hours",
+        type=float,
+        default=24.0,
+        help="Skip resuming trials with checkpoints older than this (hours). Default: 24.0",
+    )
+    serve_parser.add_argument(
+        "--store-directory",
+        dest="store_directory",
+        type=Path,
+        default=None,
+        help=f"Directory for filesystem store (default: {DEFAULT_STORE_DIRECTORY}).",
+    )
+    serve_parser.add_argument(
+        "--runtime-provider",
+        dest="runtime_provider",
+        choices=["local", "ray"],
+        default=DEFAULT_RUNTIME_PROVIDER,
+        help=f"Runtime provider (default: {DEFAULT_RUNTIME_PROVIDER}).",
+    )
+    serve_parser.add_argument(
+        "--ray-config",
+        dest="ray_config",
+        type=Path,
+        help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
     )
 
     # Arena Server command
@@ -332,6 +386,83 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Path to built static assets to serve (optional).",
     )
+
+    # List trials command
+    list_trials_parser = subparsers.add_parser(
+        "list-trials",
+        help="List trials from a running Dashboard Server",
+        description="Fetch and display trials from a Dashboard Server. "
+        "Use --scheduled to list auto-scheduled trials from trial sources.",
+    )
+    list_trials_parser.add_argument(
+        "--server",
+        default="http://localhost:8000",
+        help="Dashboard Server URL (default: http://localhost:8000).",
+    )
+    list_trials_parser.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="List auto-scheduled trials (from trial sources) instead of running/queued trials.",
+    )
+    list_trials_parser.add_argument(
+        "--json",
+        dest="output_json",
+        action="store_true",
+        help="Output as raw JSON instead of pretty-printed table.",
+    )
+
+    # List trial sources command
+    list_sources_parser = subparsers.add_parser(
+        "list-sources",
+        help="List trial sources from a running Dashboard Server",
+        description="Fetch and display registered trial sources from a Dashboard Server.",
+    )
+    list_sources_parser.add_argument(
+        "--server",
+        default="http://localhost:8000",
+        help="Dashboard Server URL (default: http://localhost:8000).",
+    )
+    list_sources_parser.add_argument(
+        "--json",
+        dest="output_json",
+        action="store_true",
+        help="Output as raw JSON instead of pretty-printed table.",
+    )
+
+    # Remove trial source command
+    remove_source_parser = subparsers.add_parser(
+        "remove-source",
+        help="Remove a trial source from a running Dashboard Server",
+        description="Unregister a trial source from the Dashboard Server.",
+    )
+    remove_source_parser.add_argument(
+        "source_id",
+        help="The source ID to remove.",
+    )
+    remove_source_parser.add_argument(
+        "--server",
+        default="http://localhost:8000",
+        help="Dashboard Server URL (default: http://localhost:8000).",
+    )
+
+    # Clear scheduled trials command
+    clear_schedules_parser = subparsers.add_parser(
+        "clear-schedules",
+        help="Clear all scheduled trials from a running Dashboard Server",
+        description="Cancel and remove all scheduled trials from the Dashboard Server.",
+    )
+    clear_schedules_parser.add_argument(
+        "--server",
+        default="http://localhost:8000",
+        help="Dashboard Server URL (default: http://localhost:8000).",
+    )
+    clear_schedules_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompt.",
+    )
+
     return parser
 
 
@@ -353,49 +484,6 @@ def _load_yaml_mapping(path: Path, *, label: str) -> MutableMapping[str, Any]:
     if not isinstance(payload, MutableMapping):
         raise DojoZeroCLIError(f"{label} file must contain a mapping at the top level")
     return payload
-
-
-def _load_cli_config(path: Path | None) -> Mapping[str, Any]:
-    base = {
-        "store": dict(DEFAULT_CLI_CONFIG["store"]),
-        "runtime": dict(DEFAULT_CLI_CONFIG["runtime"]),
-        "imports": list(DEFAULT_CLI_CONFIG["imports"]),
-    }
-
-    payload: Mapping[str, Any] | None = None
-    if path is not None:
-        payload = _load_yaml_mapping(path, label="config")
-    if payload is None:
-        return base
-
-    store_cfg = payload.get("store")
-    if isinstance(store_cfg, Mapping):
-        base["store"].update(store_cfg)
-
-    runtime_cfg = payload.get("runtime")
-    if isinstance(runtime_cfg, Mapping):
-        base["runtime"].update(runtime_cfg)
-
-    imports_cfg = payload.get("imports")
-    if imports_cfg is not None:
-        if isinstance(imports_cfg, str):
-            base["imports"] = [imports_cfg]
-        elif isinstance(imports_cfg, Sequence):
-            normalized: list[str] = []
-            for item in imports_cfg:
-                if not isinstance(item, str):
-                    raise DojoZeroCLIError("entries in config.imports must be strings")
-                normalized.append(item)
-            base["imports"] = normalized
-        else:
-            raise DojoZeroCLIError(
-                "config.imports must be a string or sequence of strings"
-            )
-
-    for key, value in payload.items():
-        if key not in base:
-            base[key] = value
-    return base
 
 
 def _gather_imports(payload: Mapping[str, Any] | None) -> Sequence[str]:
@@ -487,44 +575,50 @@ def _prepare_trial_spec(trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
 
 
 def _create_store(
-    payload: Mapping[str, Any],
-) -> InMemoryDashboardStore | FileSystemDashboardStore:
-    store_cfg = payload.get("store") or {}
-    if not isinstance(store_cfg, Mapping):
-        raise DojoZeroCLIError("config.store must be a mapping when provided")
-    kind = str(store_cfg.get("kind", "memory")).lower()
-    if kind == "memory":
-        return InMemoryDashboardStore()
-    if kind == "filesystem":
-        root = store_cfg.get("root")
-        base_path = (
-            Path(str(root)) if root is not None else Path.cwd() / "dojozero-store"
-        )
-        return FileSystemDashboardStore(base_path)
-    raise DojoZeroCLIError(f"unsupported store.kind '{kind}'")
+    store_directory: Path | None,
+) -> FileSystemOrchestratorStore:
+    """Create a filesystem store from the store directory.
+
+    Args:
+        store_directory: Directory for the store. If None, uses DEFAULT_STORE_DIRECTORY.
+
+    Returns:
+        FileSystemOrchestratorStore instance.
+    """
+    base_path = store_directory if store_directory else Path(DEFAULT_STORE_DIRECTORY)
+    return FileSystemOrchestratorStore(base_path)
 
 
-def _create_runtime_provider(payload: Mapping[str, Any]):
-    runtime_cfg = payload.get("runtime") or {}
-    if not isinstance(runtime_cfg, Mapping):
-        raise DojoZeroCLIError("config.runtime must be a mapping when provided")
-    kind = str(runtime_cfg.get("kind", "local")).lower()
-    if kind == "local":
+def _create_runtime_provider(
+    runtime_provider: str,
+    ray_config_path: Path | None = None,
+):
+    """Create a runtime provider from CLI options.
+
+    Args:
+        runtime_provider: Either "local" or "ray".
+        ray_config_path: Optional path to Ray configuration YAML file.
+
+    Returns:
+        ActorRuntimeProvider instance.
+    """
+    if runtime_provider == "local":
         return LocalActorRuntimeProvider()
-    if kind == "ray":
+    if runtime_provider == "ray":
         if RayActorRuntimeProvider is None:
             raise DojoZeroCLIError(
                 "ray runtime requested but ray is not installed. "
                 "Please install ray dependencies with 'pip install dojozero[ray]'"
             )
-        init_kwargs = runtime_cfg.get("init_kwargs") or {}
-        if not isinstance(init_kwargs, Mapping):
-            raise DojoZeroCLIError(
-                "config.runtime.init_kwargs must be a mapping when provided"
-            )
-        auto_init = bool(runtime_cfg.get("auto_init", True))
+        # Load ray config from file if provided
+        init_kwargs: dict[str, Any] = {}
+        auto_init = True
+        if ray_config_path is not None:
+            ray_cfg = _load_yaml_mapping(ray_config_path, label="ray-config")
+            init_kwargs = dict(ray_cfg.get("init_kwargs") or {})
+            auto_init = bool(ray_cfg.get("auto_init", True))
         return RayActorRuntimeProvider(auto_init=auto_init, init_kwargs=init_kwargs)
-    raise DojoZeroCLIError(f"unsupported runtime.kind '{kind}'")
+    raise DojoZeroCLIError(f"unsupported runtime provider '{runtime_provider}'")
 
 
 def _default_example_filename(builder_name: str) -> str:
@@ -550,7 +644,7 @@ def _write_yaml_file(path: Path, payload: Mapping[str, Any]) -> None:
 
 async def _run_trial_and_monitor(
     *,
-    dashboard: Dashboard,
+    orchestrator: TrialOrchestrator,
     trial_id: str,
     start_fn: Callable[[], Awaitable["TrialStatus"]],
 ) -> None:
@@ -562,8 +656,8 @@ async def _run_trial_and_monitor(
 
     async def _capture_checkpoint() -> None:
         try:
-            checkpoint = await dashboard.checkpoint_trial(trial_id)
-        except DashboardError as exc:
+            checkpoint = await orchestrator.checkpoint_trial(trial_id)
+        except OrchestratorError as exc:
             LOGGER.warning("skipping checkpoint for trial '%s': %s", trial_id, exc)
         except Exception as exc:  # pragma: no cover - defensive logging
             LOGGER.warning(
@@ -582,7 +676,7 @@ async def _run_trial_and_monitor(
         try:
             await _capture_checkpoint()
             LOGGER.info("stopping trial '%s'", trial_id)
-            await dashboard.stop_trial(trial_id)
+            await orchestrator.stop_trial(trial_id)
             LOGGER.info("trial '%s' stopped", trial_id)
         finally:
             stop_event.set()
@@ -719,7 +813,6 @@ async def _submit_to_server(
 
 
 async def _run_command(args: argparse.Namespace) -> int:
-    config_payload = _load_cli_config(args.setting)
     params_payload = (
         _load_yaml_mapping(args.params, label="params") if args.params else None
     )
@@ -788,20 +881,15 @@ async def _run_command(args: argparse.Namespace) -> int:
     else:
         LOGGER.info("No trace backend configured - traces will not be exported")
 
-    config_imports = _gather_imports(config_payload)
+    # Imports: default imports + imports from params file
     params_imports = _gather_imports(params_payload)
-    requested_imports = list(args.import_modules or [])
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(config_imports)
+    modules_to_import: list[str] = list(DEFAULT_IMPORTS)
     modules_to_import.extend(params_imports)
-    modules_to_import.extend(requested_imports)
     _import_modules(modules_to_import)
 
-    store = _create_store(config_payload)
-    runtime_provider = _create_runtime_provider(config_payload)
-    dashboard = Dashboard(store=store, runtime_provider=runtime_provider)
+    store = _create_store(args.store_directory)
+    runtime_provider = _create_runtime_provider(args.runtime_provider, args.ray_config)
+    orchestrator = TrialOrchestrator(store=store, runtime_provider=runtime_provider)
 
     checkpoint_id = args.checkpoint_id
     resume_latest = bool(args.resume_latest)
@@ -827,16 +915,16 @@ async def _run_command(args: argparse.Namespace) -> int:
     try:
         if spec is not None:
             await _run_trial_and_monitor(
-                dashboard=dashboard,
+                orchestrator=orchestrator,
                 trial_id=trial_id,
-                start_fn=lambda: dashboard.launch_trial(spec),
+                start_fn=lambda: orchestrator.launch_trial(spec),
             )
         else:
             resume_checkpoint = checkpoint_id if checkpoint_id else None
             await _run_trial_and_monitor(
-                dashboard=dashboard,
+                orchestrator=orchestrator,
                 trial_id=trial_id,
-                start_fn=lambda: dashboard.resume_trial(trial_id, resume_checkpoint),
+                start_fn=lambda: orchestrator.resume_trial(trial_id, resume_checkpoint),
             )
     finally:
         # Clean up OTLP exporter if configured
@@ -991,7 +1079,7 @@ async def _backtest_single_file(
     builder_name: str,
     speed: float,
     max_sleep: float,
-    dashboard: "Dashboard",
+    orchestrator: "TrialOrchestrator",
 ) -> None:
     """Run backtest for a single file.
 
@@ -1002,7 +1090,7 @@ async def _backtest_single_file(
         builder_name: Name of the trial builder
         speed: Backtest speed multiplier
         max_sleep: Maximum sleep between events
-        dashboard: Dashboard instance
+        orchestrator: TrialOrchestrator instance
     """
     # Prepare trial spec from params
     spec = _prepare_trial_spec(trial_id, params_payload)
@@ -1075,7 +1163,7 @@ async def _backtest_single_file(
         builder_def.context_builder = backtest_context_builder
 
         LOGGER.info("Launching trial '%s' in backtest mode", trial_id)
-        await dashboard.launch_trial(spec)
+        await orchestrator.launch_trial(spec)
 
         builder_def.context_builder = original_context_builder
 
@@ -1085,7 +1173,7 @@ async def _backtest_single_file(
         await coordinator.run_all()
 
         LOGGER.info("Stopping trial '%s'", trial_id)
-        await dashboard.stop_trial(trial_id)
+        await orchestrator.stop_trial(trial_id)
         coordinator.stop()
     finally:
         builder_def.context_builder = original_context_builder
@@ -1177,7 +1265,6 @@ async def _backtest_command(args: argparse.Namespace) -> int:
         )
 
     # Local execution mode
-    config_payload = _load_cli_config(args.setting)
 
     # Initialize OTLP exporter if trace backend is configured
     trace_backend = getattr(args, "trace_backend", None)
@@ -1228,20 +1315,15 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     else:
         LOGGER.info("No trace backend configured - traces will not be exported")
 
-    config_imports = _gather_imports(config_payload)
+    # Imports: default imports + imports from params file
     params_imports = _gather_imports(params_payload)
-    requested_imports = list(args.import_modules or [])
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(config_imports)
+    modules_to_import: list[str] = list(DEFAULT_IMPORTS)
     modules_to_import.extend(params_imports)
-    modules_to_import.extend(requested_imports)
     _import_modules(modules_to_import)
 
-    store = _create_store(config_payload)
-    runtime_provider = _create_runtime_provider(config_payload)
-    dashboard = Dashboard(store=store, runtime_provider=runtime_provider)
+    store = _create_store(args.store_directory)
+    runtime_provider = _create_runtime_provider(args.runtime_provider, args.ray_config)
+    orchestrator = TrialOrchestrator(store=store, runtime_provider=runtime_provider)
 
     # Extract builder_name from scenario
     scenario = params_payload.get("scenario", {})
@@ -1280,7 +1362,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
                     builder_name=builder_name,
                     speed=speed,
                     max_sleep=max_sleep,
-                    dashboard=dashboard,
+                    orchestrator=orchestrator,
                 )
                 completed += 1
                 LOGGER.info("Completed backtest for %s", event_file.name)
@@ -1310,12 +1392,8 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
-def _list_builders_command(args: argparse.Namespace) -> int:
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(args.import_modules or [])
-    _import_modules(modules_to_import)
+def _list_builders_command(_args: argparse.Namespace) -> int:
+    _import_modules(DEFAULT_IMPORTS)
 
     builders = list_trial_builders()
     for name in builders:
@@ -1326,11 +1404,7 @@ def _list_builders_command(args: argparse.Namespace) -> int:
 
 
 def _get_builder_command(args: argparse.Namespace) -> int:
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(args.import_modules or [])
-    _import_modules(modules_to_import)
+    _import_modules(DEFAULT_IMPORTS)
 
     try:
         definition = get_trial_builder_definition(args.name)
@@ -1356,24 +1430,54 @@ def _get_builder_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_trial_source_from_yaml(path: Path) -> dict[str, Any]:
+    """Load a trial source configuration from a YAML file.
+
+    Args:
+        path: Path to the YAML file
+
+    Returns:
+        Dictionary with trial source configuration
+
+    Raises:
+        DojoZeroCLIError: If file doesn't exist or is invalid
+    """
+    if not path.exists():
+        raise DojoZeroCLIError(f"Trial source file not found: {path}")
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise DojoZeroCLIError(f"Invalid YAML in trial source file {path}: {e}")
+
+    if not isinstance(data, dict):
+        raise DojoZeroCLIError(
+            f"Trial source file {path} must contain a mapping at the top level"
+        )
+
+    # Validate required fields
+    required_fields = ["source_id", "sport_type", "config"]
+    for field in required_fields:
+        if field not in data:
+            raise DojoZeroCLIError(
+                f"Trial source file {path} missing required field: {field}"
+            )
+
+    return data
+
+
 async def _serve_command(args: argparse.Namespace) -> int:
     """Handle serve command - start Dashboard Server."""
-    from dojozero.core._dashboard_server import run_dashboard_server
+    from dojozero.dashboard_server import run_dashboard_server
 
-    config_payload = _load_cli_config(args.setting)
+    # Imports: default imports and CLI --import-module flags
+    # Import default modules; trial source imports are handled dynamically when sources are loaded
+    _import_modules(DEFAULT_IMPORTS)
 
-    config_imports = _gather_imports(config_payload)
-    requested_imports = list(args.import_modules or [])
-    modules_to_import: list[str] = []
-    if not args.no_default_imports:
-        modules_to_import.extend(DEFAULT_IMPORTS)
-    modules_to_import.extend(config_imports)
-    modules_to_import.extend(requested_imports)
-    _import_modules(modules_to_import)
-
-    store = _create_store(config_payload)
-    runtime_provider = _create_runtime_provider(config_payload)
-    dashboard = Dashboard(store=store, runtime_provider=runtime_provider)
+    store = _create_store(args.store_directory)
+    runtime_provider = _create_runtime_provider(args.runtime_provider, args.ray_config)
+    orchestrator = TrialOrchestrator(store=store, runtime_provider=runtime_provider)
 
     host = args.host
     port = args.port
@@ -1381,9 +1485,49 @@ async def _serve_command(args: argparse.Namespace) -> int:
     trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
     oss_backup = getattr(args, "oss_backup", False)
     service_name = getattr(args, "service_name", "dojozero")
+    trial_source_files: list[str] = getattr(args, "trial_sources", []) or []
+    auto_resume = not getattr(args, "no_auto_resume", False)
+    stale_threshold_hours = getattr(args, "stale_threshold_hours", 24.0)
+
+    # Determine store path from args
+    store_path = (
+        args.store_directory if args.store_directory else Path(DEFAULT_STORE_DIRECTORY)
+    )
+
+    # Create scheduler store (uses store root directory for persistence)
+    from dojozero.dashboard_server._scheduler import FileSchedulerStore
+
+    scheduler_store = FileSchedulerStore(store_path)
+
+    # Expand glob patterns and load trial source configurations
+    import glob as glob_module
+
+    initial_trial_sources: list[dict[str, Any]] = []
+    for source_pattern in trial_source_files:
+        # Expand glob pattern
+        matched_files = sorted(glob_module.glob(str(source_pattern)))
+        if not matched_files:
+            LOGGER.error("Trial source file not found: %s", source_pattern)
+            raise DojoZeroCLIError(f"Trial source file not found: {source_pattern}")
+
+        for source_file in matched_files:
+            source_path = Path(source_file)
+            source_data = _load_trial_source_from_yaml(source_path)
+            initial_trial_sources.append(source_data)
+            LOGGER.info(
+                "Loaded trial source from %s: %s",
+                source_path,
+                source_data.get("source_id"),
+            )
 
     LOGGER.info("Starting Dashboard Server at http://%s:%d", host, port)
     LOGGER.info("Trial API: http://%s:%d/api/trials", host, port)
+    LOGGER.info("Trial Source API: http://%s:%d/api/trial-sources", host, port)
+    LOGGER.info("Scheduled Trials API: http://%s:%d/api/scheduled-trials", host, port)
+    LOGGER.info("Game Discovery API: http://%s:%d/api/games/{nba,nfl}", host, port)
+    LOGGER.info("Store path: %s", store_path)
+    if initial_trial_sources:
+        LOGGER.info("Initial trial sources: %d", len(initial_trial_sources))
 
     if trace_backend == "sls":
         LOGGER.info("Trace backend: SLS (using env vars for configuration)")
@@ -1395,20 +1539,248 @@ async def _serve_command(args: argparse.Namespace) -> int:
         LOGGER.info("No trace backend configured - traces will not be exported")
 
     await run_dashboard_server(
-        dashboard=dashboard,
+        orchestrator=orchestrator,
+        scheduler_store=scheduler_store,
         host=host,
         port=port,
         trace_backend=trace_backend,
         trace_ingest_endpoint=trace_ingest_endpoint,
         oss_backup=oss_backup,
         service_name=service_name,
+        initial_trial_sources=initial_trial_sources if initial_trial_sources else None,
+        auto_resume=auto_resume,
+        stale_threshold_hours=stale_threshold_hours,
     )
+    return 0
+
+
+async def _list_trials_command(args: argparse.Namespace) -> int:
+    """Handle list-trials command - list trials from Dashboard Server."""
+    import json
+
+    import httpx
+
+    server = args.server.rstrip("/")
+    scheduled = args.scheduled
+    output_json = args.output_json
+
+    # Choose endpoint based on --scheduled flag
+    if scheduled:
+        url = f"{server}/api/scheduled-trials"
+    else:
+        url = f"{server}/api/trials"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text
+        raise DojoZeroCLIError(
+            f"Server returned error {e.response.status_code}: {body}"
+        )
+    except httpx.RequestError as e:
+        raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
+
+    if output_json:
+        print(json.dumps(data, indent=2))
+        return 0
+
+    # Pretty print
+    if scheduled:
+        trials = data.get("scheduled_trials", [])
+        count = data.get("count", len(trials))
+        print(f"Scheduled Trials ({count}):")
+        print("-" * 100)
+        if not trials:
+            print("  No scheduled trials found.")
+        else:
+            # Header
+            print(
+                f"  {'ID':<40} {'Phase':<12} {'Event':<15} {'Sport':<6} {'Start Time':<25}"
+            )
+            print("  " + "-" * 96)
+            for trial in trials:
+                schedule_id = trial.get("schedule_id", "")[:38]
+                phase = trial.get("phase", "")
+                event_id = trial.get("event_id", "")[:13]
+                sport = trial.get("sport_type", "")
+                # Convert UTC time to local timezone for display
+                start_time_str = trial.get("scheduled_start_time", "")
+                if start_time_str:
+                    from datetime import datetime, timezone
+
+                    try:
+                        # Parse ISO format UTC time
+                        utc_time = datetime.fromisoformat(
+                            start_time_str.replace("Z", "+00:00")
+                        )
+                        if utc_time.tzinfo is None:
+                            utc_time = utc_time.replace(tzinfo=timezone.utc)
+                        # Convert to local timezone
+                        local_time = utc_time.astimezone()
+                        start_time = local_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+                    except (ValueError, TypeError):
+                        start_time = start_time_str[:23]
+                else:
+                    start_time = ""
+                print(
+                    f"  {schedule_id:<40} {phase:<12} {event_id:<15} {sport:<6} {start_time:<25}"
+                )
+    else:
+        # Regular trials - API returns a list directly
+        trials = data if isinstance(data, list) else data.get("trials", [])
+        count = len(trials)
+        print(f"Trials ({count}):")
+        print("-" * 100)
+        if not trials:
+            print("  No trials found.")
+        else:
+            # Header
+            print(f"  {'Trial ID':<36} {'Phase':<12} {'Source':<12} {'Metadata':<30}")
+            print("  " + "-" * 88)
+            for trial in trials:
+                trial_id = trial.get("id", trial.get("trial_id", ""))[:34]
+                phase = trial.get("phase", "")
+                source = trial.get("source", "")
+                # Extract meaningful metadata
+                metadata = trial.get("metadata", {})
+                meta_str = ""
+                if metadata.get("game_id"):
+                    meta_str = f"game:{metadata['game_id']}"
+                elif metadata.get("event_id"):
+                    meta_str = f"event:{metadata['event_id']}"
+                elif metadata:
+                    # Show first key-value pair
+                    for k, v in metadata.items():
+                        meta_str = f"{k}:{v}"[:28]
+                        break
+                print(f"  {trial_id:<36} {phase:<12} {source:<12} {meta_str:<30}")
+
+    return 0
+
+
+async def _list_sources_command(args: argparse.Namespace) -> int:
+    """Handle list-sources command - list trial sources from Dashboard Server."""
+    import json
+
+    import httpx
+
+    server = args.server.rstrip("/")
+    output_json = args.output_json
+    url = f"{server}/api/trial-sources"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text
+        raise DojoZeroCLIError(
+            f"Server returned error {e.response.status_code}: {body}"
+        )
+    except httpx.RequestError as e:
+        raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
+
+    if output_json:
+        print(json.dumps(data, indent=2))
+        return 0
+
+    # Pretty print
+    sources = data.get("sources", [])
+    count = data.get("count", len(sources))
+    print(f"Trial Sources ({count}):")
+    print("-" * 100)
+    if not sources:
+        print("  No trial sources registered.")
+        print("  Tip: Use --trial-source flag with 'dojo0 serve' to register sources.")
+    else:
+        # Header
+        print(
+            f"  {'Source ID':<30} {'Sport':<6} {'Scenario':<25} {'Enabled':<8} {'Last Sync':<20}"
+        )
+        print("  " + "-" * 87)
+        for source in sources:
+            source_id = source.get("source_id", "")[:28]
+            sport = source.get("sport_type", "")
+            config = source.get("config", {})
+            scenario = config.get("scenario_name", "")[:23]
+            enabled = "Yes" if source.get("enabled", False) else "No"
+            last_sync = source.get("last_sync_at", "Never")
+            if last_sync and last_sync != "Never":
+                last_sync = last_sync[:18]
+            else:
+                last_sync = "Never"
+            print(
+                f"  {source_id:<30} {sport:<6} {scenario:<25} {enabled:<8} {last_sync:<20}"
+            )
+
+    return 0
+
+
+async def _remove_source_command(args: argparse.Namespace) -> int:
+    """Handle remove-source command - remove a trial source from Dashboard Server."""
+    import httpx
+
+    server = args.server.rstrip("/")
+    source_id = args.source_id
+    url = f"{server}/api/trial-sources/{source_id}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.delete(url)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text
+        raise DojoZeroCLIError(
+            f"Server returned error {e.response.status_code}: {body}"
+        )
+    except httpx.RequestError as e:
+        raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
+
+    print(f"Removed trial source: {source_id}")
+    return 0
+
+
+async def _clear_schedules_command(args: argparse.Namespace) -> int:
+    """Handle clear-schedules command - clear all scheduled trials."""
+    import httpx
+
+    server = args.server.rstrip("/")
+
+    # Confirm if not using --yes flag
+    if not args.yes:
+        print("This will cancel and remove ALL scheduled trials.")
+        confirm = input("Are you sure? (y/N): ")
+        if confirm.lower() not in ("y", "yes"):
+            print("Cancelled.")
+            return 0
+
+    url = f"{server}/api/scheduled-trials"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.delete(url)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text
+        raise DojoZeroCLIError(
+            f"Server returned error {e.response.status_code}: {body}"
+        )
+    except httpx.RequestError as e:
+        raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
+
+    count = data.get("cleared_count", 0)
+    print(f"Cleared {count} scheduled trial(s).")
     return 0
 
 
 async def _arena_command(args: argparse.Namespace) -> int:
     """Handle arena command - start Arena Server."""
-    from dojozero.core._arena_server import run_arena_server
+    from dojozero.arena_server import run_arena_server
 
     host = args.host
     port = args.port
@@ -1455,6 +1827,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(_serve_command(args))
         if args.command == "arena":
             return asyncio.run(_arena_command(args))
+        if args.command == "list-trials":
+            return asyncio.run(_list_trials_command(args))
+        if args.command == "list-sources":
+            return asyncio.run(_list_sources_command(args))
+        if args.command == "remove-source":
+            return asyncio.run(_remove_source_command(args))
+        if args.command == "clear-schedules":
+            return asyncio.run(_clear_schedules_command(args))
         raise DojoZeroCLIError(f"unknown command '{args.command}'")
     except DojoZeroCLIError as exc:
         LOGGER.error(str(exc))

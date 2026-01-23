@@ -7,10 +7,10 @@ import pytest
 import ray
 
 from dojozero.core import (
-    Dashboard,
-    DashboardStore,
-    FileSystemDashboardStore,
-    InMemoryDashboardStore,
+    TrialOrchestrator,
+    OrchestratorStore,
+    FileSystemOrchestratorStore,
+    InMemoryOrchestratorStore,
     TrialPhase,
     get_trial_builder_definition,
 )
@@ -24,7 +24,7 @@ from dojozero.samples.bounded_random_buffered import (
 )
 from dojozero.ray_runtime import RayActorRuntimeProvider
 
-StoreBuilder = Callable[[Path], DashboardStore]
+StoreBuilder = Callable[[Path], OrchestratorStore]
 
 
 def _build_bounded_random_buffered_spec(
@@ -34,14 +34,14 @@ def _build_bounded_random_buffered_spec(
     return builder.build(trial_id, config.model_dump(mode="python"))
 
 
-def _memory_store(_: Path) -> DashboardStore:
-    return InMemoryDashboardStore()
+def _memory_store(_: Path) -> OrchestratorStore:
+    return InMemoryOrchestratorStore()
 
 
-def _filesystem_store(tmp_path: Path) -> DashboardStore:
+def _filesystem_store(tmp_path: Path) -> OrchestratorStore:
     store_dir = tmp_path / "fs-store"
     store_dir.mkdir(parents=True, exist_ok=True)
-    return FileSystemDashboardStore(store_dir)
+    return FileSystemOrchestratorStore(store_dir)
 
 
 @pytest.mark.asyncio
@@ -56,7 +56,7 @@ async def test_bounded_random_buffered_flushes_events(
     store_builder: StoreBuilder, tmp_path: Path
 ) -> None:
     store = store_builder(tmp_path)
-    dashboard = Dashboard(store=store)
+    orchestrator = TrialOrchestrator(store=store)
     spec = _build_bounded_random_buffered_spec(
         "buffered-trial",
         BoundedRandomBufferedTrialParams(
@@ -68,18 +68,18 @@ async def test_bounded_random_buffered_flushes_events(
         ),
     )
 
-    status = await dashboard.launch_trial(spec)
+    status = await orchestrator.launch_trial(spec)
     assert status.phase is TrialPhase.RUNNING
 
-    stream = dashboard.get_actor("buffered-trial", "random-stream")
+    stream = orchestrator.get_actor("buffered-trial", "random-stream")
     assert isinstance(stream, BoundedRandomStringDataStream)
     stream = cast(BoundedRandomStringDataStream, stream)
     await asyncio.wait_for(stream.wait_until_finished(), timeout=2)
 
     await asyncio.sleep(0.2)
 
-    agent = dashboard.get_actor("buffered-trial", "counter-agent-buffered")
-    operator = dashboard.get_actor("buffered-trial", "counter-operator")
+    agent = orchestrator.get_actor("buffered-trial", "counter-agent-buffered")
+    operator = orchestrator.get_actor("buffered-trial", "counter-operator")
     assert isinstance(agent, CounterAgentBuffered)
     assert isinstance(operator, CounterOperator)
     operator = cast(CounterOperator, operator)
@@ -87,8 +87,8 @@ async def test_bounded_random_buffered_flushes_events(
     assert operator.value == 6
     assert stream.emitted == 6
 
-    await dashboard.stop_trial("buffered-trial")
-    status = dashboard.get_trial_status("buffered-trial")
+    await orchestrator.stop_trial("buffered-trial")
+    status = orchestrator.get_trial_status("buffered-trial")
     assert status.phase is TrialPhase.STOPPED
 
 
@@ -104,7 +104,7 @@ async def test_bounded_random_buffered_checkpoint_resume(
     store_builder: StoreBuilder, tmp_path: Path
 ) -> None:
     store = store_builder(tmp_path)
-    dashboard = Dashboard(store=store)
+    orchestrator = TrialOrchestrator(store=store)
     total_events = 4
     spec = _build_bounded_random_buffered_spec(
         "buffered-resume",
@@ -116,37 +116,37 @@ async def test_bounded_random_buffered_checkpoint_resume(
         ),
     )
 
-    await dashboard.launch_trial(spec)
-    stream = dashboard.get_actor("buffered-resume", "random-stream")
+    await orchestrator.launch_trial(spec)
+    stream = orchestrator.get_actor("buffered-resume", "random-stream")
     stream = cast(BoundedRandomStringDataStream, stream)
     await asyncio.wait_for(stream.wait_until_finished(), timeout=2)
     await asyncio.sleep(0.2)
 
-    checkpoint = await dashboard.checkpoint_trial("buffered-resume")
+    checkpoint = await orchestrator.checkpoint_trial("buffered-resume")
     assert checkpoint.checkpoint_id is not None
 
-    await dashboard.stop_trial("buffered-resume")
+    await orchestrator.stop_trial("buffered-resume")
 
-    resumed_dashboard = Dashboard(store=store)
-    resumed_status = await resumed_dashboard.resume_trial(
+    resumed_orchestrator = TrialOrchestrator(store=store)
+    resumed_status = await resumed_orchestrator.resume_trial(
         "buffered-resume", checkpoint_id=checkpoint.checkpoint_id
     )
     assert resumed_status.phase is TrialPhase.RUNNING
 
-    resumed_operator = resumed_dashboard.get_actor(
+    resumed_operator = resumed_orchestrator.get_actor(
         "buffered-resume", "counter-operator"
     )
     assert isinstance(resumed_operator, CounterOperator)
     assert cast(CounterOperator, resumed_operator).value == total_events
 
-    resumed_agent = resumed_dashboard.get_actor(
+    resumed_agent = resumed_orchestrator.get_actor(
         "buffered-resume", "counter-agent-buffered"
     )
     assert isinstance(resumed_agent, CounterAgentBuffered)
     assert getattr(resumed_agent, "_events") == total_events
 
-    await resumed_dashboard.stop_trial("buffered-resume")
-    await resumed_dashboard.delete_trial("buffered-resume")
+    await resumed_orchestrator.stop_trial("buffered-resume")
+    await resumed_orchestrator.delete_trial("buffered-resume")
 
 
 @pytest.mark.asyncio
@@ -157,8 +157,8 @@ async def test_bounded_random_buffered_runs_with_ray_runtime(tmp_path: Path) -> 
     provider = RayActorRuntimeProvider(
         init_kwargs={"namespace": namespace, "ignore_reinit_error": True}
     )
-    store = InMemoryDashboardStore()
-    dashboard = Dashboard(store=store, runtime_provider=provider)
+    store = InMemoryOrchestratorStore()
+    orchestrator = TrialOrchestrator(store=store, runtime_provider=provider)
     total_events = 3
     spec = _build_bounded_random_buffered_spec(
         "buffered-ray",
@@ -171,19 +171,19 @@ async def test_bounded_random_buffered_runs_with_ray_runtime(tmp_path: Path) -> 
     )
 
     try:
-        status = await dashboard.launch_trial(spec)
+        status = await orchestrator.launch_trial(spec)
         assert status.phase is TrialPhase.RUNNING
 
-        stream = dashboard.get_actor("buffered-ray", "random-stream")
+        stream = orchestrator.get_actor("buffered-ray", "random-stream")
         stream = cast(BoundedRandomStringDataStream, stream)
         await asyncio.wait_for(stream.wait_until_finished(), timeout=5)
         await asyncio.sleep(0.2)
 
-        checkpoint = await dashboard.checkpoint_trial("buffered-ray")
+        checkpoint = await orchestrator.checkpoint_trial("buffered-ray")
         agent_state = checkpoint.actor_states["counter-agent-buffered"]
         assert agent_state["events"] == total_events
 
-        await dashboard.stop_trial("buffered-ray")
+        await orchestrator.stop_trial("buffered-ray")
     finally:
         if ray.is_initialized():
             ray.shutdown()
