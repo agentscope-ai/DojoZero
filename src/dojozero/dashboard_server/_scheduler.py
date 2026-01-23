@@ -1215,16 +1215,8 @@ class ScheduleManager:
             return
 
         try:
-            # Stop via trial manager
+            # Stop via trial manager (which handles orchestrator stop internally)
             await self._trial_manager.cancel(scheduled.launched_trial_id)
-
-            # Also try to stop via dashboard
-            try:
-                await self._trial_manager.orchestrator.stop_trial(
-                    scheduled.launched_trial_id
-                )
-            except Exception:
-                pass  # Might already be stopped
 
             scheduled.phase = ScheduledTrialPhase.COMPLETED
             self._persist()

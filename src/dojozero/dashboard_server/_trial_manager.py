@@ -17,6 +17,7 @@ from dojozero.core import (
     TrialExistsError,
     TrialNotFoundError,
     TrialPhase,
+    TrialRecord,
     TrialSpec,
     TrialStatus,
 )
@@ -190,8 +191,6 @@ class TrialManager:
                 skipped_no_checkpoint += 1
                 # Update the status to FAILED so we don't keep trying to resume it
                 if record.last_status is not None:
-                    from dojozero.core import TrialStatus, TrialRecord
-
                     failed_status = TrialStatus(
                         trial_id=trial_id,
                         phase=TrialPhase.FAILED,
@@ -521,14 +520,14 @@ class TrialManager:
         persistence_file_path = spec.metadata.get("persistence_file")
         if persistence_file_path and isinstance(persistence_file_path, str):
             persistence_file = Path(persistence_file_path)
-            _upload_trial_to_oss(trial_id, persistence_file)
+            upload_trial_to_oss(trial_id, persistence_file)
 
 
 # Lazy import for OSS to avoid import errors if oss2 not installed
 _oss_client = None
 
 
-def _upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
+def upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
     """Upload trial data to OSS.
 
     Args:
@@ -571,4 +570,5 @@ __all__ = [
     "QueuedTrial",
     "QueuedTrialPhase",
     "TrialManager",
+    "upload_trial_to_oss",
 ]

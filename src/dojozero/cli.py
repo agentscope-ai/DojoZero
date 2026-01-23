@@ -1557,8 +1557,8 @@ async def _serve_command(args: argparse.Namespace) -> int:
 async def _list_trials_command(args: argparse.Namespace) -> int:
     """Handle list-trials command - list trials from Dashboard Server."""
     import json
-    import urllib.request
-    import urllib.error
+
+    import httpx
 
     server = args.server.rstrip("/")
     scheduled = args.scheduled
@@ -1571,12 +1571,16 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
         url = f"{server}/api/trials"
 
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise DojoZeroCLIError(f"Server returned error {e.code}: {body}")
-    except urllib.error.URLError as e:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text
+        raise DojoZeroCLIError(
+            f"Server returned error {e.response.status_code}: {body}"
+        )
+    except httpx.RequestError as e:
         raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
 
     if output_json:
@@ -1660,20 +1664,24 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
 async def _list_sources_command(args: argparse.Namespace) -> int:
     """Handle list-sources command - list trial sources from Dashboard Server."""
     import json
-    import urllib.request
-    import urllib.error
+
+    import httpx
 
     server = args.server.rstrip("/")
     output_json = args.output_json
     url = f"{server}/api/trial-sources"
 
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise DojoZeroCLIError(f"Server returned error {e.code}: {body}")
-    except urllib.error.URLError as e:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text
+        raise DojoZeroCLIError(
+            f"Server returned error {e.response.status_code}: {body}"
+        )
+    except httpx.RequestError as e:
         raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
 
     if output_json:
@@ -1714,22 +1722,22 @@ async def _list_sources_command(args: argparse.Namespace) -> int:
 
 async def _remove_source_command(args: argparse.Namespace) -> int:
     """Handle remove-source command - remove a trial source from Dashboard Server."""
-    import json
-    import urllib.request
-    import urllib.error
+    import httpx
 
     server = args.server.rstrip("/")
     source_id = args.source_id
     url = f"{server}/api/trial-sources/{source_id}"
 
     try:
-        request = urllib.request.Request(url, method="DELETE")
-        with urllib.request.urlopen(request, timeout=10) as response:
-            json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise DojoZeroCLIError(f"Server returned error {e.code}: {body}")
-    except urllib.error.URLError as e:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.delete(url)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text
+        raise DojoZeroCLIError(
+            f"Server returned error {e.response.status_code}: {body}"
+        )
+    except httpx.RequestError as e:
         raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
 
     print(f"Removed trial source: {source_id}")
@@ -1738,9 +1746,7 @@ async def _remove_source_command(args: argparse.Namespace) -> int:
 
 async def _clear_schedules_command(args: argparse.Namespace) -> int:
     """Handle clear-schedules command - clear all scheduled trials."""
-    import json
-    import urllib.request
-    import urllib.error
+    import httpx
 
     server = args.server.rstrip("/")
 
@@ -1755,13 +1761,16 @@ async def _clear_schedules_command(args: argparse.Namespace) -> int:
     url = f"{server}/api/scheduled-trials"
 
     try:
-        request = urllib.request.Request(url, method="DELETE")
-        with urllib.request.urlopen(request, timeout=30) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise DojoZeroCLIError(f"Server returned error {e.code}: {body}")
-    except urllib.error.URLError as e:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.delete(url)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text
+        raise DojoZeroCLIError(
+            f"Server returned error {e.response.status_code}: {body}"
+        )
+    except httpx.RequestError as e:
         raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
 
     count = data.get("cleared_count", 0)

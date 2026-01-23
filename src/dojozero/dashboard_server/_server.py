@@ -806,7 +806,7 @@ def create_dashboard_app(
         # OSS backup if enabled
         oss_uploaded = False
         if state.oss_backup:
-            from ._trial_manager import _upload_trial_to_oss
+            from ._trial_manager import upload_trial_to_oss
 
             # Get persistence_file from trial metadata
             try:
@@ -814,7 +814,7 @@ def create_dashboard_app(
                 persistence_file_path = trial_status.metadata.get("persistence_file")
                 if persistence_file_path and isinstance(persistence_file_path, str):
                     persistence_file = Path(persistence_file_path)
-                    oss_uploaded = _upload_trial_to_oss(trial_id, persistence_file)
+                    oss_uploaded = upload_trial_to_oss(trial_id, persistence_file)
                 else:
                     LOGGER.warning(
                         "OSS backup enabled but no persistence_file in trial metadata"
