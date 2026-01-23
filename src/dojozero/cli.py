@@ -875,8 +875,29 @@ def _resolve_replay_files(
     import tempfile
 
     resolved_files: list[Path] = []
-    oss_client = None
     oss_temp_dir = temp_dir
+
+    # Check if any OSS patterns exist and initialize client once before the loop
+    oss_patterns = [p for p in patterns if p.startswith("oss://")]
+    oss_client = None
+    if oss_patterns:
+        # Extract bucket name from the first OSS pattern for client initialization
+        first_oss_url = oss_patterns[0][6:]  # Remove "oss://"
+        parts = first_oss_url.split("/", 1)
+        if len(parts) < 2:
+            raise DojoZeroCLIError(f"Invalid OSS URL format: {oss_patterns[0]}")
+        bucket_name = parts[0]
+
+        try:
+            from dojozero.utils.oss import OSSClient
+
+            oss_client = OSSClient.from_env(bucket_name=bucket_name)
+        except ImportError:
+            raise DojoZeroCLIError(
+                "OSS support requires oss2 package. Install with: pip install oss2"
+            )
+        except ValueError as e:
+            raise DojoZeroCLIError(f"OSS configuration error: {e}")
 
     for pattern in patterns:
         if pattern.startswith("oss://"):
@@ -890,18 +911,7 @@ def _resolve_replay_files(
             bucket_name = parts[0]
             oss_key_pattern = parts[1]
 
-            # Lazy initialize OSS client
-            if oss_client is None:
-                try:
-                    from dojozero.utils.oss import OSSClient
-
-                    oss_client = OSSClient.from_env(bucket_name=bucket_name)
-                except ImportError:
-                    raise DojoZeroCLIError(
-                        "OSS support requires oss2 package. Install with: pip install oss2"
-                    )
-                except ValueError as e:
-                    raise DojoZeroCLIError(f"OSS configuration error: {e}")
+            assert oss_client is not None  # Initialized above
 
             # Create temp directory for OSS downloads if not provided
             if oss_temp_dir is None:
@@ -928,14 +938,16 @@ def _resolve_replay_files(
                     "Found %d OSS files matching %s", len(matching_keys), pattern
                 )
 
-                # Download each matching file
+                # Download each matching file, preserving directory structure
                 for oss_key in matching_keys:
-                    local_path = oss_temp_dir / oss_key.replace("/", "_")
+                    local_path = oss_temp_dir / oss_key
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
                     oss_client.download_file(oss_key, local_path)
                     resolved_files.append(local_path)
             else:
-                # Single file - download directly
-                local_path = oss_temp_dir / oss_key_pattern.replace("/", "_")
+                # Single file - download directly, preserving directory structure
+                local_path = oss_temp_dir / oss_key_pattern
+                local_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     oss_client.download_file(oss_key_pattern, local_path)
                     resolved_files.append(local_path)
