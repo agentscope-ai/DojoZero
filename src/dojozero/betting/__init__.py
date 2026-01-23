@@ -38,6 +38,7 @@ from dojozero.betting._broker import (
     BetRequest,
     BetSettledPayload,
     BetStatus,
+    BetType,
     BettingEvent,
     BettingPhase,
     BrokerOperator,
@@ -68,4 +69,5 @@ __all__ = [
     "BettingPhase",
     "BetStatus",
     "BetOutcome",
+    "BetType",
 ]
