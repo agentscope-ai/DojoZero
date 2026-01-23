@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from dojozero.core import (
     RuntimeContext,
-    AgentSpec,
     DataStreamSpec,
     OperatorSpec,
     register_trial_builder,
@@ -26,7 +25,11 @@ from dojozero.data.websearch._processors import (
 )
 from dojozero.nfl_moneyline._agent import (
     BettingAgent,
-    BettingAgentConfig,
+)
+from dojozero.agents import (
+    build_operator_to_agents_map,
+    build_agent_specs,
+    load_agent_configs_cached,
 )
 from dojozero.nfl_moneyline._datastream import (
     NFLPreGameBettingDataHubDataStream,
@@ -364,17 +367,14 @@ def _build_trial_spec(
         )
 
     # Build operator_id -> agent_ids mapping from agent configs
-    operator_to_agents: dict[str, list[str]] = {}
-    if params.agents:
-        for agent_dict in params.agents:
-            agent_id = agent_dict.get("id")
-            if not agent_id:
-                continue
-            operator_ids = agent_dict.get("operators", [])
-            for op_id in operator_ids:
-                if op_id not in operator_to_agents:
-                    operator_to_agents[op_id] = []
-                operator_to_agents[op_id].append(str(agent_id))
+    # For agents with agent_config_path, expand to include all model-specific agent IDs
+    # Load configs once and reuse to avoid redundant disk I/O
+    config_cache = load_agent_configs_cached(params.agents) if params.agents else {}
+    operator_to_agents = (
+        build_operator_to_agents_map(params.agents, config_cache)
+        if params.agents
+        else {}
+    )
 
     # Create operators - require explicit operator configuration
     if not params.operators:
@@ -423,57 +423,18 @@ def _build_trial_spec(
         )
 
     # Create agent specs from agents config
-    agent_specs = []
-
+    # Agents with agent_config_path are expanded into multiple agents (one per model)
     if not params.agents:
         raise ValueError(
             "No agents specified. At least one agent with class 'BettingAgent' is required."
         )
 
-    for agent_dict in params.agents:
-        agent_id = agent_dict.get("id")
-        if not agent_id:
-            raise ValueError("Agent config missing required 'id' field")
-
-        agent_class_name = agent_dict.get("class")
-        if agent_class_name != "BettingAgent":
-            raise ValueError(
-                f"Invalid agent class '{agent_class_name}' for agent '{agent_id}'. "
-                "Only 'BettingAgent' is supported."
-            )
-
-        operator_ids = agent_dict.get("operators", [])
-        data_stream_ids = agent_dict.get("data_streams", [])
-
-        # Create agent config - pass through config fields from agent_dict
-        agent_config: BettingAgentConfig = {
-            "actor_id": agent_id,
-        }
-        # Copy optional config fields
-        if agent_dict.get("name"):
-            agent_config["name"] = agent_dict["name"]
-        if agent_dict.get("agent_config_path"):
-            agent_config["agent_config_path"] = agent_dict["agent_config_path"]
-
-        # Build LLM config if model_type or model_name are specified
-        if agent_dict.get("model_type") or agent_dict.get("model_name"):
-            from dojozero.agents._config import LLMConfig
-
-            llm_config: LLMConfig = {}
-            if agent_dict.get("model_type"):
-                llm_config["model_type"] = agent_dict["model_type"]
-            if agent_dict.get("model_name"):
-                llm_config["model_name"] = agent_dict["model_name"]
-            agent_config["llm"] = llm_config
-
-        agent_spec = AgentSpec[BettingAgentConfig](
-            actor_id=agent_id,
-            actor_cls=BettingAgent,
-            config=agent_config,
-            operator_ids=tuple(operator_ids) if operator_ids else (),
-            data_stream_ids=tuple(data_stream_ids),
-        )
-        agent_specs.append(agent_spec)
+    agent_specs = build_agent_specs(
+        agents=params.agents,
+        agent_cls=BettingAgent,
+        allowed_class_names={"BettingAgent"},
+        config_cache=config_cache,
+    )
 
     # Build metadata with game information and hub config
     # This metadata is used by build_runtime_context and store factories

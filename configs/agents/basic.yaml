@@ -5,7 +5,19 @@ sys_prompt: |
   2. Analyze the odds and decide whether to bet
   3. Report your decision and reasoning
 llm:
-  model_type: openai
-  model_name: qwen3-max
-  api_key_env: DOJOZERO_OPENAI_API_KEY
-  base_url_env: DOJOZERO_OPENAI_BASE_URL
+  - model_type: openai
+    model_name: gpt-5.1-2025-11-13
+    api_key_env: DOJOZERO_OPENAI_API_KEY
+    base_url_env: DOJOZERO_OPENAI_BASE_URL
+  - model_type: openai
+    model_name: claude-opus-4-5-20251101
+    api_key_env: DOJOZERO_OPENAI_API_KEY
+    base_url_env: DOJOZERO_OPENAI_BASE_URL
+  - model_type: openai
+    model_name: gemini-3-pro-preview
+    api_key_env: DOJOZERO_OPENAI_API_KEY
+    base_url_env: DOJOZERO_OPENAI_BASE_URL
+  - model_type: openai
+    model_name: qwen3-max
+    api_key_env: DOJOZERO_OPENAI_API_KEY
+    base_url_env: DOJOZERO_OPENAI_BASE_URL

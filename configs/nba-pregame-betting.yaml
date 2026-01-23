@@ -41,11 +41,50 @@ scenario:
       - game_status_change_stream
       - odds_update_stream
       - game_update_stream
-      
+
     agents:
-    - id: betting_agent
+    - id: basic_agent
       class: BettingAgent
       agent_config_path: configs/agents/basic.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+    - id: shark_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/shark.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+    - id: sheep_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/sheep.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+    - id: whale_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/whale.yaml
       operators:
       - betting_broker
       data_streams:
