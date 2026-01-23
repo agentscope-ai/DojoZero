@@ -58,8 +58,9 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
         event_type: str | None = None,
         event_types: list[str] | None = None,
         initializer: StreamInitializer | None = None,
+        sport_type: str = "",
     ) -> None:
-        super().__init__(actor_id, trial_id)
+        super().__init__(actor_id, trial_id, sport_type=sport_type)
         self._hub = hub
         self._event_type = event_type
         self._event_types = event_types or []
@@ -91,6 +92,7 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
             hub=hub,
             event_type=config.get("event_type"),
             event_types=config.get("event_types", []),
+            sport_type=context.sport_type,
         )
 
     async def start(self) -> None:

@@ -127,6 +127,7 @@ def build_runtime_context(
     enable_persistence: bool,
     metadata: dict[str, Any],
     store_types: list[str],
+    sport_type: str = "",
 ) -> RuntimeContext:
     """Build RuntimeContext with DataHub and stores using registered factories.
 
@@ -151,11 +152,12 @@ def build_runtime_context(
     data_hubs: dict[str, DataHub] = {}
     stores: dict[str, DataStore] = {}
 
-    # Create DataHub
+    # Create DataHub with trial_id for trace emission
     hub = DataHub(
         hub_id=hub_id,
         persistence_file=persistence_file,
         enable_persistence=enable_persistence,
+        trial_id=trial_id,
     )
     data_hubs[hub_id] = hub
 
@@ -200,6 +202,7 @@ def build_runtime_context(
 
     return RuntimeContext(
         trial_id=trial_id,
+        sport_type=sport_type,
         data_hubs=data_hubs,
         stores=stores,
         startup=start_data_stores,

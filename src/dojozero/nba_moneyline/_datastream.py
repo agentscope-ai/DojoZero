@@ -60,6 +60,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         away_team_name: str | None = None,
         game_date: str | None = None,
         search_queries: list[dict[str, Any]] | None = None,
+        sport_type: str = "",
     ) -> None:
         # Create initializer if store is provided (team names or search_queries required)
         initializer: NBAStreamInitializer | None = None
@@ -81,6 +82,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             event_type=event_type,
             event_types=event_types,
             initializer=initializer,
+            sport_type=sport_type,
         )
 
     @classmethod
@@ -118,4 +120,5 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             away_team_name=config.get("away_team_name"),
             game_date=config.get("game_date"),
             search_queries=config.get("search_queries"),
+            sport_type=context.sport_type,
         )

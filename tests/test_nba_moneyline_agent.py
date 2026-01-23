@@ -165,15 +165,18 @@ def broker_spec() -> OperatorSpec:
 def _create_ray_agent_config() -> BettingAgentConfig:
     """Create agent config with test-specific env vars for Ray."""
     config = load_agent_config(BASIC_CONFIG_PATH)
-    llm_config = config.get("llm", {})
+    # llm is a list of configs - use the first one for tests
+    llm_config = config["llm"][0]
     return BettingAgentConfig(
         actor_id=config["name"],
         name=config.get("name", ""),
         sys_prompt=config.get("sys_prompt", ""),
-        model_type=llm_config.get("model_type", "openai"),  # type: ignore[typeddict-item]
-        model_name=llm_config.get("model_name", "qwen3-max"),
-        api_key_env=TEST_API_KEY_ENV,
-        base_url_env=TEST_BASE_URL_ENV,
+        llm={
+            "model_type": llm_config.get("model_type", "openai"),
+            "model_name": llm_config.get("model_name", "qwen3-max"),
+            "api_key_env": TEST_API_KEY_ENV,
+            "base_url_env": TEST_BASE_URL_ENV,
+        },
     )
 
 
