@@ -1,0 +1,130 @@
+# NBA Moneyline Trial Source Configuration
+#
+# This configuration defines a trial source for automatic NBA game scheduling.
+# When registered with the Dashboard Server, the server will periodically sync
+# with the NBA API to discover upcoming games and automatically schedule trials.
+#
+# Usage:
+#   1. Via CLI (recommended):
+#      dojo0 serve --schedule-file ~/.dojozero/schedules.json \
+#                  --trial-source trial_sources/nba-moneyline-trial-source.yaml
+#
+#   2. Via API:
+#      POST /api/trial-sources
+#      {
+#        "source_id": "nba-moneyline-source",
+#        "sport_type": "nba",
+#        "config": <contents of config section below>,
+#        "nba_params": <contents of nba_params section below>
+#      }
+
+# Trial source registration request
+source_id: nba-moneyline-source
+sport_type: nba
+
+# Configuration for trials created from this source
+config:
+  scenario_name: nba-moneyline
+  scenario_config:
+    hub:
+      enable_persistence: true
+
+    data_streams:
+    - id: raw_web_search_stream
+      event_type: raw_web_search
+      initializer:
+        search_queries:
+        - template: NBA injury updates for {teams} on {date}
+          intent: injury_summary
+        - template: NBA power rankings
+          intent: power_ranking
+        - template: NBA expert predictions for {teams}
+          intent: expert_prediction
+    - id: injury_summary_stream
+      event_type: injury_summary
+    - id: power_ranking_stream
+      event_type: power_ranking
+    - id: expert_prediction_stream
+      event_type: expert_prediction
+    - id: game_status_change_stream
+      event_type: game_status_change
+    - id: game_update_stream
+      event_type: game_update
+    - id: odds_update_stream
+      event_type: odds_update
+    - id: play_by_play_stream
+      event_type: play_by_play
+
+    operators:
+    - id: betting_broker
+      class: BrokerOperator
+      initial_balance: "1000.00"
+      data_streams:
+      - game_status_change_stream
+      - odds_update_stream
+      - game_update_stream
+
+    agents:
+    - id: basic_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/basic.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+    - id: shark_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/shark.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+    - id: sheep_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/sheep.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+    - id: whale_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/whale.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+
+  # Schedule options (these are TrialSourceConfig fields, not scenario_config)
+  pre_start_hours: 2.0           # Start trial 2 hours before game time
+  check_interval_seconds: 60.0   # Check game status every 60 seconds
+  auto_stop_on_completion: true  # Stop trial when game finishes
+  data_dir: outputs              # Output directory for persistence files
+  sync_interval_seconds: 3600.0   # How often to sync with NBA API (5 min default)
+
+# NBA-specific parameters
+nba_params:
+  days_ahead: 7  # Sync games for the next 7 days

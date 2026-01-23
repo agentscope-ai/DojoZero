@@ -1,9 +1,9 @@
-"""Dashboard orchestration utilities for the DojoZero proof-of-concept.
+"""Trial orchestration utilities for the DojoZero proof-of-concept.
 
-This module implements the in-memory control plane that the design document
-refers to as the Dashboard. It is responsible for instantiating actors from
-serializable configurations, wiring their dependencies, and managing their
-lifecycle (start, stop, checkpoint, resume).
+This module implements the in-memory control plane for trial orchestration.
+It is responsible for instantiating actors from serializable configurations,
+wiring their dependencies, and managing their lifecycle (start, stop,
+checkpoint, resume).
 """
 
 import asyncio
@@ -42,7 +42,7 @@ from ._runtime import (
 )
 from ._types import RuntimeContext, JSONDict
 
-LOGGER = logging.getLogger("dojozero.dashboard")
+LOGGER = logging.getLogger("dojozero.orchestrator")
 
 
 def _is_operator_like(candidate: Any) -> bool:
@@ -60,23 +60,23 @@ def _is_data_stream_like(candidate: Any) -> bool:
 ConfigSpecT = TypeVar("ConfigSpecT")
 
 
-class DashboardError(RuntimeError):
-    """Base class for Dashboard specific failures."""
+class OrchestratorError(RuntimeError):
+    """Base class for orchestrator specific failures."""
 
 
-class TrialNotFoundError(DashboardError):
+class TrialNotFoundError(OrchestratorError):
     """Raised when a requested trial ID is unknown to the dashboard."""
 
 
-class TrialExistsError(DashboardError):
+class TrialExistsError(OrchestratorError):
     """Raised when a trial ID collision occurs."""
 
 
-class CheckpointNotFoundError(DashboardError):
+class CheckpointNotFoundError(OrchestratorError):
     """Raised when a referenced checkpoint does not exist."""
 
 
-class ActorLifecycleError(DashboardError):
+class ActorLifecycleError(OrchestratorError):
     """Raised when one or more actors fail to start or stop properly."""
 
 
@@ -279,8 +279,8 @@ class TrialRecord:
         return self.spec.trial_id
 
 
-class DashboardStore(Protocol):
-    """Storage abstraction used by :class:`Dashboard` for persistence."""
+class OrchestratorStore(Protocol):
+    """Storage abstraction used by :class:`TrialOrchestrator` for persistence."""
 
     def list_trial_records(self) -> Sequence[TrialRecord]: ...
 
@@ -297,8 +297,8 @@ class DashboardStore(Protocol):
     def list_checkpoints(self, trial_id: str) -> Sequence[CheckpointSummary]: ...
 
 
-class InMemoryDashboardStore(DashboardStore):
-    """Simple :class:`DashboardStore` implementation backed by local dictionaries."""
+class InMemoryOrchestratorStore(OrchestratorStore):
+    """Simple :class:`OrchestratorStore` implementation backed by local dictionaries."""
 
     def __init__(self) -> None:
         self._records: Dict[str, TrialRecord] = {}
@@ -364,7 +364,7 @@ class InMemoryDashboardStore(DashboardStore):
         )
 
 
-class Dashboard:
+class TrialOrchestrator:
     """In-memory controller responsible for coordinating actors.
 
     A dashboard instance can host multiple concurrent trials. Each trial defines its
@@ -387,10 +387,10 @@ class Dashboard:
     def __init__(
         self,
         *,
-        store: DashboardStore | None = None,
+        store: OrchestratorStore | None = None,
         runtime_provider: ActorRuntimeProvider | None = None,
     ) -> None:
-        self._store = store or InMemoryDashboardStore()
+        self._store = store or InMemoryOrchestratorStore()
         self._runtime_provider = runtime_provider or LocalActorRuntimeProvider()
         self._catalog: Dict[str, TrialRecord] = {
             record.trial_id: TrialRecord(
@@ -401,14 +401,14 @@ class Dashboard:
         self._trials: Dict[str, TrialRuntime] = {}
         self._lock = asyncio.Lock()
         LOGGER.debug(
-            "Dashboard initialized with store=%s runtime_provider=%s",
+            "TrialOrchestrator initialized with store=%s runtime_provider=%s",
             type(self._store).__name__,
             type(self._runtime_provider).__name__,
         )
 
     @property
-    def store(self) -> DashboardStore:
-        """Access the underlying DashboardStore."""
+    def store(self) -> OrchestratorStore:
+        """Access the underlying OrchestratorStore."""
         return self._store
 
     async def launch_trial(self, spec: TrialSpec) -> TrialStatus:
@@ -421,7 +421,7 @@ class Dashboard:
         if record is None:
             record = TrialRecord(spec=normalized_spec)
         elif record.spec != normalized_spec:
-            raise DashboardError(
+            raise OrchestratorError(
                 f"trial '{spec.trial_id}' already registered with a different configuration"
             )
         else:
@@ -486,7 +486,7 @@ class Dashboard:
                 TrialPhase.STOPPED,
                 TrialPhase.FAILED,
             }:
-                raise DashboardError("trial must be stopped before deletion")
+                raise OrchestratorError("trial must be stopped before deletion")
             self._trials.pop(trial_id, None)
             record = self._catalog.pop(trial_id, None)
             if record is None:
@@ -567,7 +567,7 @@ class Dashboard:
         LOGGER.info("checkpointing trial '%s'", trial_id)
         runtime = self._require_runtime(trial_id)
         if runtime.phase == TrialPhase.INITIALIZED:
-            raise DashboardError("trial must be running before checkpointing")
+            raise OrchestratorError("trial must be running before checkpointing")
         async with runtime.lock:
             actor_states = await asyncio.gather(
                 *(
@@ -687,7 +687,7 @@ class Dashboard:
                 isinstance(operator_instance, Operator)
                 or _is_operator_like(operator_instance)
             ):
-                raise DashboardError(
+                raise OrchestratorError(
                     f"actor '{runtime.actor_id}' registered as operator"
                     " does not implement the Operator protocol"
                 )
@@ -712,7 +712,7 @@ class Dashboard:
             if not (
                 isinstance(agent_instance, Agent) or _is_agent_like(agent_instance)
             ):
-                raise DashboardError(
+                raise OrchestratorError(
                     f"actor '{runtime.actor_id}' registered as agent"
                     " does not implement the Agent protocol"
                 )
@@ -733,7 +733,7 @@ class Dashboard:
                 isinstance(stream_instance, DataStream)
                 or _is_data_stream_like(stream_instance)
             ):
-                raise DashboardError(
+                raise OrchestratorError(
                     f"actor '{runtime.actor_id}' registered as data stream"
                     " does not implement the DataStream protocol"
                 )
@@ -761,7 +761,7 @@ class Dashboard:
         try:
             handler = await self._runtime_provider.create_handler(spec, context=context)
         except Exception as exc:  # pragma: no cover - defensive translation
-            raise DashboardError(str(exc)) from exc
+            raise OrchestratorError(str(exc)) from exc
         return ActorRuntime(spec=spec, handler=handler, role=role)
 
     def _build_runtime_context(self, spec: TrialSpec) -> RuntimeContext:
@@ -798,7 +798,7 @@ class Dashboard:
         self, registry: Dict[str, ActorRuntime[Any]], runtime: ActorRuntime[Any]
     ) -> None:
         if runtime.actor_id in registry:
-            raise DashboardError(f"duplicate actor id '{runtime.actor_id}' detected")
+            raise OrchestratorError(f"duplicate actor id '{runtime.actor_id}' detected")
         registry[runtime.actor_id] = runtime
 
     async def _wire_actor_dependencies(
@@ -834,14 +834,14 @@ class Dashboard:
                 continue
             operator = operators.get(operator_spec.actor_id)
             if operator is None:  # pragma: no cover - defensive
-                raise DashboardError(
+                raise OrchestratorError(
                     f"operator '{operator_spec.actor_id}' missing from runtime registry"
                 )
             dependencies: list[Agent[Any]] = []
             for agent_id in operator_spec.agent_ids:
                 agent = agents.get(agent_id)
                 if agent is None:
-                    raise DashboardError(
+                    raise OrchestratorError(
                         f"operator '{operator_spec.actor_id}' requires agent '{agent_id}'"
                     )
                 dependencies.append(agent)
@@ -863,14 +863,14 @@ class Dashboard:
                 continue
             agent = agents.get(agent_spec.actor_id)
             if agent is None:  # pragma: no cover - defensive
-                raise DashboardError(
+                raise OrchestratorError(
                     f"agent '{agent_spec.actor_id}' missing from runtime registry"
                 )
             dependencies: list[Operator[Any]] = []
             for operator_id in agent_spec.operator_ids:
                 operator = operators.get(operator_id)
                 if operator is None:
-                    raise DashboardError(
+                    raise OrchestratorError(
                         f"agent '{agent_spec.actor_id}' requires operator '{operator_id}'"
                     )
                 dependencies.append(operator)
@@ -896,14 +896,14 @@ class Dashboard:
                 continue
             agent = agents.get(agent_spec.actor_id)
             if agent is None:  # pragma: no cover - defensive
-                raise DashboardError(
+                raise OrchestratorError(
                     f"agent '{agent_spec.actor_id}' missing from runtime registry"
                 )
             dependencies: list[DataStream[Any]] = []
             for stream_id in agent_spec.data_stream_ids:
                 stream = data_streams.get(stream_id)
                 if stream is None:
-                    raise DashboardError(
+                    raise OrchestratorError(
                         f"agent '{agent_spec.actor_id}' requires data stream '{stream_id}'"
                     )
                 dependencies.append(stream)
@@ -931,14 +931,14 @@ class Dashboard:
                 continue
             operator = operators.get(operator_spec.actor_id)
             if operator is None:  # pragma: no cover - defensive
-                raise DashboardError(
+                raise OrchestratorError(
                     f"operator '{operator_spec.actor_id}' missing from runtime registry"
                 )
             dependencies: list[DataStream[Any]] = []
             for stream_id in operator_spec.data_stream_ids:
                 stream = data_streams.get(stream_id)
                 if stream is None:
-                    raise DashboardError(
+                    raise OrchestratorError(
                         f"operator '{operator_spec.actor_id}' requires data stream '{stream_id}'"
                     )
                 dependencies.append(stream)
@@ -968,7 +968,7 @@ class Dashboard:
                 continue
             stream = data_streams.get(stream_spec.actor_id)
             if stream is None:  # pragma: no cover - defensive
-                raise DashboardError(
+                raise OrchestratorError(
                     f"data stream '{stream_spec.actor_id}' missing from runtime registry"
                 )
             dependencies: list[Agent[Any] | Operator[Any]] = []
@@ -977,7 +977,7 @@ class Dashboard:
                 if consumer is None:
                     consumer = operators.get(consumer_id)
                 if consumer is None:
-                    raise DashboardError(
+                    raise OrchestratorError(
                         f"stream '{stream_spec.actor_id}' requires consumer '{consumer_id}'"
                     )
                 dependencies.append(consumer)
@@ -1000,7 +1000,7 @@ class Dashboard:
             return
         registrar = getattr(actor, method_name, None)
         if registrar is None:
-            raise DashboardError(
+            raise OrchestratorError(
                 f"actor '{actor_id}' missing required '{method_name}' method"
             )
         result = registrar(payload)
@@ -1019,7 +1019,7 @@ class Dashboard:
             TrialPhase.STOPPED,
             TrialPhase.FAILED,
         }:
-            raise DashboardError(
+            raise OrchestratorError(
                 f"trial '{runtime.spec.trial_id}' cannot start from phase '{runtime.phase.value}'"
             )
         runtime.phase = TrialPhase.STARTING
@@ -1315,7 +1315,7 @@ class Dashboard:
             checkpoint_id if checkpoint_id else None,
         )
         if checkpoint is None:
-            raise DashboardError(
+            raise OrchestratorError(
                 f"trial '{spec.trial_id}' requested latest checkpoint but none exist"
             )
         resumed_spec = self._spec_with_resume_state(spec, checkpoint)
@@ -1414,11 +1414,11 @@ __all__ = [
     "AgentSpec",
     "ActorStatus",
     "ActorLifecycleError",
-    "Dashboard",
-    "DashboardError",
-    "DashboardStore",
+    "TrialOrchestrator",
+    "OrchestratorError",
+    "OrchestratorStore",
     "DataStreamSpec",
-    "InMemoryDashboardStore",
+    "InMemoryOrchestratorStore",
     "OperatorSpec",
     "TrialCheckpoint",
     "TrialExistsError",

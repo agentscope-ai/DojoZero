@@ -1,4 +1,4 @@
-"""File-system backed implementation of :class:`DashboardStore`."""
+"""File-system backed implementation of :class:`OrchestratorStore`."""
 
 import json
 import shutil
@@ -10,7 +10,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from ._actors import Actor
-from ._dashboard import (
+from ._trial_orchestrator import (
     ActorPhase,
     ActorRole,
     ActorSpec,
@@ -19,7 +19,7 @@ from ._dashboard import (
     CheckpointNotFoundError,
     CheckpointSummary,
     DataStreamSpec,
-    DashboardStore,
+    OrchestratorStore,
     OperatorSpec,
     TrialCheckpoint,
     TrialPhase,
@@ -33,7 +33,7 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class FileSystemDashboardStore(DashboardStore):
+class FileSystemOrchestratorStore(OrchestratorStore):
     """Persist trials, statuses, and checkpoints using JSON files."""
 
     SPEC_FILE = "spec.json"
@@ -52,7 +52,7 @@ class FileSystemDashboardStore(DashboardStore):
             self._write_json(self._index_file, {"trials": []})
 
     # ------------------------------------------------------------------
-    # DashboardStore API
+    # OrchestratorStore API
     # ------------------------------------------------------------------
 
     def list_trial_records(self) -> Sequence[TrialRecord]:
@@ -406,4 +406,4 @@ class FileSystemDashboardStore(DashboardStore):
         return dt
 
 
-__all__ = ["FileSystemDashboardStore"]
+__all__ = ["FileSystemOrchestratorStore"]

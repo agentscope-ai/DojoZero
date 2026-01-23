@@ -1,0 +1,130 @@
+# NFL Moneyline Trial Source Configuration
+#
+# This configuration defines a trial source for automatic NFL game scheduling.
+# When registered with the Dashboard Server, the server will periodically sync
+# with the ESPN API to discover upcoming NFL games and automatically schedule trials.
+#
+# Usage:
+#   1. Via CLI (recommended):
+#      dojo0 serve --schedule-file ~/.dojozero/schedules.json \
+#                  --trial-source trial_sources/nfl-moneyline-trial-source.yaml
+#
+#   2. Via API:
+#      POST /api/trial-sources
+#      {
+#        "source_id": "nfl-moneyline-source",
+#        "sport_type": "nfl",
+#        "config": <contents of config section below>,
+#        "nfl_params": <contents of nfl_params section below>
+#      }
+
+# Trial source registration request
+source_id: nfl-moneyline-source
+sport_type: nfl
+
+# Configuration for trials created from this source
+config:
+  scenario_name: nfl-moneyline
+  scenario_config:
+    hub:
+      enable_persistence: true
+
+    data_streams:
+    - id: raw_web_search_stream
+      event_type: raw_web_search
+      initializer:
+        search_queries:
+        - template: NFL injury updates for {teams} on {date}
+          intent: injury_summary
+        - template: NFL power rankings
+          intent: power_ranking
+        - template: NFL expert predictions for {teams}
+          intent: expert_prediction
+    - id: injury_summary_stream
+      event_type: injury_summary
+    - id: power_ranking_stream
+      event_type: power_ranking
+    - id: expert_prediction_stream
+      event_type: expert_prediction
+    - id: nfl_game_status_change_stream
+      event_type: nfl_game_status_change
+    - id: nfl_game_update_stream
+      event_type: nfl_game_update
+    - id: nfl_odds_update_stream
+      event_type: nfl_odds_update
+    - id: nfl_play_stream
+      event_type: nfl_play
+
+    operators:
+    - id: betting_broker
+      class: BrokerOperator
+      initial_balance: "1000.00"
+      data_streams:
+      - nfl_game_status_change_stream
+      - nfl_odds_update_stream
+      - nfl_game_update_stream
+
+    agents:
+    - id: basic_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/basic.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
+      - nfl_game_status_change_stream
+      - nfl_play_stream
+    - id: shark_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/shark.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
+      - nfl_game_status_change_stream
+      - nfl_play_stream
+    - id: sheep_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/sheep.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
+      - nfl_game_status_change_stream
+      - nfl_play_stream
+    - id: whale_agent
+      class: BettingAgent
+      agent_config_path: configs/agents/whale.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
+      - nfl_game_status_change_stream
+      - nfl_play_stream
+
+  # Schedule options (these are TrialSourceConfig fields, not scenario_config)
+  pre_start_hours: 1.0           # Start trial 1 hour before kickoff
+  check_interval_seconds: 60.0   # Check game status every 60 seconds
+  auto_stop_on_completion: true  # Stop trial when game finishes
+  data_dir: outputs              # Output directory for persistence files
+  sync_interval_seconds: 3600.0   # How often to sync with ESPN API (5 min default)
+
+# NFL-specific parameters
+nfl_params:
+  week: null         # null = current scoreboard, or specify week number (1-18)

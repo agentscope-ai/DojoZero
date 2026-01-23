@@ -12,7 +12,7 @@ from dojozero.core._runtime import ActorHandler, ActorRuntimeProvider
 from dojozero.core._types import RuntimeContext
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from dojozero.core._dashboard import ActorSpec
+    from dojozero.core._trial_orchestrator import ActorSpec
 
 
 async def _await_ref(ref: "ray.ObjectRef[Any]") -> Any:

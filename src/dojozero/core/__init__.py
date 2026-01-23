@@ -9,7 +9,7 @@ from ._actors import (
     Operator,
 )
 from ._base import ActorBase, AgentBase, DataStreamBase, OperatorBase
-from ._dashboard import (
+from ._trial_orchestrator import (
     ActorLifecycleError,
     ActorPhase,
     ActorRole,
@@ -19,20 +19,21 @@ from ._dashboard import (
     CheckpointNotFoundError,
     CheckpointSummary,
     DataStreamSpec,
-    Dashboard,
-    DashboardError,
-    DashboardStore,
-    InMemoryDashboardStore,
+    InMemoryOrchestratorStore,
     OperatorSpec,
+    OrchestratorError,
+    OrchestratorStore,
     TrialCheckpoint,
     TrialExistsError,
     TrialNotFoundError,
+    TrialOrchestrator,
     TrialPhase,
     TrialRecord,
     TrialSpec,
     TrialStatus,
 )
-from ._filesystem_dashboard_store import FileSystemDashboardStore
+from ._filesystem_orchestrator_store import FileSystemOrchestratorStore
+
 from ._runtime import (
     ActorHandler,
     ActorRuntimeProvider,
@@ -49,18 +50,6 @@ from ._registry import (
     list_trial_builders,
     register_trial_builder,
     unregister_trial_builder,
-)
-from ._dashboard_server import (
-    DashboardServerState,
-    create_dashboard_app,
-    run_dashboard_server,
-)
-from ._arena_server import (
-    ArenaServerState,
-    SpanBroadcaster,
-    WSMessageType,
-    create_arena_app,
-    run_arena_server,
 )
 from ._tracing import (
     JaegerTraceReader,
@@ -102,18 +91,14 @@ __all__ = [
     "Operator",
     "OperatorBase",
     "OperatorSpec",
-    # Dashboard
+    # Orchestrator
     "CheckpointNotFoundError",
     "CheckpointSummary",
-    "Dashboard",
-    "DashboardError",
-    "DashboardStore",
-    "FileSystemDashboardStore",
-    "InMemoryDashboardStore",
-    "TrialBuilderDefinition",
-    "TrialBuilderFn",
-    "TrialBuilderNotFoundError",
-    "TrialBuilderRegistryError",
+    "FileSystemOrchestratorStore",
+    "InMemoryOrchestratorStore",
+    "OrchestratorError",
+    "OrchestratorStore",
+    "TrialOrchestrator",
     "TrialCheckpoint",
     "TrialExistsError",
     "TrialNotFoundError",
@@ -121,16 +106,6 @@ __all__ = [
     "TrialRecord",
     "TrialSpec",
     "TrialStatus",
-    # Dashboard Server
-    "DashboardServerState",
-    "create_dashboard_app",
-    "run_dashboard_server",
-    # Arena Server
-    "ArenaServerState",
-    "SpanBroadcaster",
-    "WSMessageType",
-    "create_arena_app",
-    "run_arena_server",
     # Trace Store
     "JaegerTraceReader",
     "SpanData",
@@ -144,6 +119,10 @@ __all__ = [
     "LocalActorRuntimeProvider",
     # Registry
     "ParamModelT",
+    "TrialBuilderDefinition",
+    "TrialBuilderFn",
+    "TrialBuilderNotFoundError",
+    "TrialBuilderRegistryError",
     "get_trial_builder_definition",
     "list_trial_builders",
     "register_trial_builder",

@@ -7,7 +7,7 @@ import dojozero.samples  # noqa: F401 - import triggers builder registration
 
 from dojozero import cli as agentx_cli
 from dojozero.core import (
-    InMemoryDashboardStore,
+    InMemoryOrchestratorStore,
     LocalActorRuntimeProvider,
     TrialSpec,
     get_trial_builder_definition,
@@ -43,13 +43,13 @@ def test_prepare_trial_spec_supports_legacy_environment_key() -> None:
 
 def test_create_store_supports_memory_and_filesystem(tmp_path: Path) -> None:
     store = agentx_cli._create_store({})
-    assert isinstance(store, InMemoryDashboardStore)
+    assert isinstance(store, InMemoryOrchestratorStore)
 
     fs_payload = {"store": {"kind": "filesystem", "root": str(tmp_path)}}
     fs_store = agentx_cli._create_store(fs_payload)
     assert (
         fs_store is not None
-    )  # FileSystemDashboardStore type check avoided for import cycles
+    )  # FileSystemOrchestratorStore type check avoided for import cycles
 
 
 def test_create_runtime_provider_defaults_to_local() -> None:

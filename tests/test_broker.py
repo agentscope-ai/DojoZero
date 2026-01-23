@@ -1423,5 +1423,144 @@ class TestIntegration:
         assert stats.losses == 1
 
 
+class TestEventOrdering:
+    """Tests for handling out-of-order events (race conditions)."""
+
+    async def test_game_start_before_game_initialize(self, broker):
+        """Test that GameStartEvent arriving before GameInitializeEvent is handled correctly.
+
+        This tests the race condition where play_by_play endpoint returns faster than
+        boxscore endpoint, causing GameStartEvent to arrive before GameInitializeEvent.
+        """
+        event_id = "test_event"
+
+        # 1. GameStartEvent arrives BEFORE GameInitializeEvent (out of order)
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id=event_id),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
+
+        # Event should not exist yet (GameStartEvent was buffered)
+        with pytest.raises(ValueError, match="not found"):
+            await broker.get_quote(event_id)
+
+        # 2. GameInitializeEvent arrives (normal order would be first)
+        game_init = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id=event_id,
+                game_id=event_id,
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.now(),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init)
+
+        # 3. Verify status is LIVE (buffered GameStartEvent was applied)
+        quote = await broker.get_quote(event_id)
+        assert quote["status"] == "LIVE"
+
+    async def test_game_result_before_game_initialize(self, broker):
+        """Test that GameResultEvent arriving before GameInitializeEvent is handled.
+
+        This tests the extreme case where a finished game's result event arrives
+        before the initialization event.
+        """
+        event_id = "test_event"
+
+        # 1. GameStartEvent arrives first (buffered)
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id=event_id),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
+
+        # 2. GameResultEvent arrives second (also buffered)
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                event_id=event_id,
+                winner="home",
+                final_score={"home": 110, "away": 105},
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
+
+        # Event should not exist yet
+        with pytest.raises(ValueError, match="not found"):
+            await broker.get_quote(event_id)
+
+        # 3. GameInitializeEvent arrives last
+        game_init = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id=event_id,
+                game_id=event_id,
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.now(),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init)
+
+        # 4. Verify status is SETTLED (both buffered events were applied in order)
+        quote = await broker.get_quote(event_id)
+        assert quote["status"] == "SETTLED"
+
+    async def test_normal_order_still_works(self, broker):
+        """Test that normal event ordering (initialize → start → result) still works."""
+        event_id = "test_event"
+
+        # 1. GameInitializeEvent first (normal order)
+        game_init = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id=event_id,
+                game_id=event_id,
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.now(),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init)
+
+        quote = await broker.get_quote(event_id)
+        assert quote["status"] == "SCHEDULED"
+
+        # 2. GameStartEvent second
+        game_start = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameStartEvent(event_id=event_id),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_start)
+
+        quote = await broker.get_quote(event_id)
+        assert quote["status"] == "LIVE"
+
+        # 3. GameResultEvent third
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                event_id=event_id,
+                winner="home",
+                final_score={"home": 110, "away": 105},
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
+
+        quote = await broker.get_quote(event_id)
+        assert quote["status"] == "SETTLED"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

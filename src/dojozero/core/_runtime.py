@@ -7,7 +7,7 @@ from ._actors import Actor, ActorState
 from ._types import RuntimeContext
 
 if TYPE_CHECKING:  # pragma: no cover - import-time circular guard
-    from ._dashboard import ActorSpec
+    from ._trial_orchestrator import ActorSpec
 
 
 class ActorHandler(Protocol):

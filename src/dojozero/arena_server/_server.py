@@ -40,7 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from ._tracing import (
+from dojozero.core._tracing import (
     SpanData,
     TraceReader,
     create_trace_reader,

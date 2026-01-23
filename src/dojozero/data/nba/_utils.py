@@ -200,6 +200,153 @@ def normalize_team_name(team_name: str) -> str | None:
 
 
 @with_proxy
+def get_games_for_date(
+    game_date: datetime | str,
+    print_games: bool = False,
+    proxy: str | None = None,
+) -> list[dict[str, Any]]:
+    """Get games for a specific date using ScoreboardV3 endpoint.
+
+    Args:
+        game_date: Date as datetime object or string in 'YYYY-MM-DD' format
+        print_games: Whether to print game information (default: False)
+        proxy: Optional proxy URL (automatically set from DOJOZERO_PROXY_URL env var)
+
+    Returns:
+        list[dict]: List of game dictionaries with the following structure:
+        {
+            'gameId': str,
+            'gameStatus': int,  # 1=scheduled, 2=in-progress, 3=finished
+            'gameStatusText': str,
+            'period': int,
+            'gameClock': str,
+            'gameTimeUTC': str,
+            'gameTimeLTZ': datetime | None,  # Local timezone
+            'homeTeam': {
+                'teamId': int,
+                'teamName': str,
+                'teamCity': str,
+                'teamTricode': str,
+                'score': int,
+                'wins': int,
+                'losses': int
+            },
+            'awayTeam': {...},  # Same structure as homeTeam
+            'gameLeaders': dict  # May be empty when game hasn't started
+        }
+        Returns empty list if no games found or on error.
+    """
+    import logging
+
+    from dateutil import parser
+    from nba_api.stats.endpoints import scoreboardv3
+
+    logger = logging.getLogger(__name__)
+
+    try:
+        # Parse the requested date
+        if isinstance(game_date, datetime):
+            requested_date = game_date.date()
+        elif isinstance(game_date, str):
+            try:
+                parsed_date = parser.parse(game_date).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                requested_date = parsed_date.date()
+            except Exception:
+                requested_date = None
+        else:
+            requested_date = None
+
+        if not requested_date:
+            if print_games:
+                print(f"Error: Could not parse date: {game_date}")
+            return []
+
+        date_str = requested_date.strftime("%Y-%m-%d")
+
+        board = (
+            scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy)
+            if proxy
+            else scoreboardv3.ScoreboardV3(game_date=date_str)
+        )
+        games_data = board.get_dict()
+
+        if not games_data or "scoreboard" not in games_data:
+            return []
+
+        scoreboard_data = games_data["scoreboard"]
+        games_list = scoreboard_data.get("games", [])
+
+        # Convert ScoreboardV3 format to our standard format
+        games = []
+        for game_data in games_list:
+            game: dict[str, Any] = {
+                "gameId": game_data.get("gameId", ""),
+                "gameStatus": game_data.get("gameStatus", 0),
+                "gameStatusText": game_data.get("gameStatusText", "Unknown"),
+                "period": game_data.get("period", 0),
+                "gameClock": game_data.get("gameClock", ""),
+                "gameTimeUTC": game_data.get("gameTimeUTC", ""),
+                "homeTeam": {
+                    "teamId": game_data.get("homeTeam", {}).get("teamId", 0),
+                    "teamName": game_data.get("homeTeam", {}).get("teamName", ""),
+                    "teamCity": game_data.get("homeTeam", {}).get("teamCity", ""),
+                    "teamTricode": game_data.get("homeTeam", {}).get("teamTricode", ""),
+                    "score": game_data.get("homeTeam", {}).get("score", 0),
+                    "wins": game_data.get("homeTeam", {}).get("wins", 0),
+                    "losses": game_data.get("homeTeam", {}).get("losses", 0),
+                },
+                "awayTeam": {
+                    "teamId": game_data.get("awayTeam", {}).get("teamId", 0),
+                    "teamName": game_data.get("awayTeam", {}).get("teamName", ""),
+                    "teamCity": game_data.get("awayTeam", {}).get("teamCity", ""),
+                    "teamTricode": game_data.get("awayTeam", {}).get("teamTricode", ""),
+                    "score": game_data.get("awayTeam", {}).get("score", 0),
+                    "wins": game_data.get("awayTeam", {}).get("wins", 0),
+                    "losses": game_data.get("awayTeam", {}).get("losses", 0),
+                },
+                "gameLeaders": game_data.get("gameLeaders", {}),
+            }
+
+            # Parse game time
+            if game.get("gameTimeUTC"):
+                try:
+                    from datetime import timezone
+
+                    game_time_utc = parser.parse(game["gameTimeUTC"])
+                    game_time_ltz = game_time_utc.replace(
+                        tzinfo=timezone.utc
+                    ).astimezone(tz=None)
+                    game["gameTimeLTZ"] = game_time_ltz
+                except Exception:
+                    game["gameTimeLTZ"] = None
+
+            games.append(game)
+
+        if print_games:
+            print(f"Date: {date_str}")
+            print(f"Found {len(games)} game(s)\n")
+            for game in games:
+                time_str = (
+                    game["gameTimeLTZ"].strftime("%Y-%m-%d %H:%M:%S %Z")
+                    if game.get("gameTimeLTZ")
+                    else "N/A"
+                )
+                print(
+                    f"{game['gameId']}: {game['awayTeam']['teamName']} vs. {game['homeTeam']['teamName']} @ {time_str} [{game['gameStatusText']}]"
+                )
+
+        return games
+
+    except Exception as e:
+        logger.error("Error fetching games for date %s: %s", game_date, e)
+        if print_games:
+            print(f"Error fetching games for date {game_date}: {e}")
+        return []
+
+
+@with_proxy
 def get_games_by_date_range(
     start_date: date,
     end_date: date,

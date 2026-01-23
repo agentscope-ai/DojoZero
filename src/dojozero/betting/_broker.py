@@ -401,6 +401,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Maps event_id -> {"home_team": str, "away_team": str, "game_time": datetime}
         self._pending_team_info: Dict[str, Dict[str, Any]] = {}
 
+        # Pending status events that arrived before GameInitializeEvent
+        # Maps event_id -> list of (status, data_event) tuples to apply when event is registered
+        self._pending_status_events: Dict[str, List[tuple[str, Any]]] = defaultdict(
+            list
+        )
+
         # Bet management
         self._bets: Dict[str, Bet] = {}
 
@@ -586,6 +592,59 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 initial_away_odds=None,
             )
 
+            # Apply any pending status events that arrived before this GameInitializeEvent
+            await self._apply_pending_status_events(event_id)
+
+    async def _apply_pending_status_events(self, event_id: str) -> None:
+        """Apply any buffered status events for a newly registered event.
+
+        This handles the race condition where GameStartEvent or GameResultEvent
+        arrives before GameInitializeEvent due to different API polling intervals.
+        """
+        if event_id not in self._pending_status_events:
+            return
+
+        pending_events = self._pending_status_events.pop(event_id)
+        if not pending_events:
+            return
+
+        logger.info(
+            "Applying %d pending status events for event %s",
+            len(pending_events),
+            event_id,
+        )
+
+        for event_type, data_event in pending_events:
+            try:
+                if event_type == "game_start":
+                    logger.info(
+                        "Applying buffered game_start for event %s",
+                        event_id,
+                    )
+                    await self._update_event_status(
+                        event_id=event_id, status=EventStatus.LIVE
+                    )
+                elif event_type == "game_result":
+                    logger.info(
+                        "Applying buffered game_result for event %s",
+                        event_id,
+                    )
+                    await self._update_event_status(
+                        event_id=event_id, status=EventStatus.CLOSED
+                    )
+                    await self._settle_event(
+                        event_id=event_id,
+                        winner=data_event.winner,
+                        final_score=data_event.final_score,
+                    )
+            except Exception as e:
+                logger.error(
+                    "Failed to apply pending %s for event %s: %s",
+                    event_type,
+                    event_id,
+                    e,
+                )
+
     async def _handle_odds_update(self, data_event: Any, event_id: str) -> None:
         """Handle odds update event."""
         # Get odds from event - handle both NBA and NFL odds formats
@@ -728,13 +787,14 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """Handle game start event.
 
         If the event is registered, update its status to LIVE.
-        If not registered, log a warning as betting should have been set up before game start.
+        If not registered, buffer the event to apply when GameInitializeEvent arrives.
         """
         if event_id not in self._events:
-            logger.warning(
-                "Game started but event %s was not registered for betting",
+            logger.info(
+                "Buffering game_start for event %s (GameInitializeEvent not yet received)",
                 event_id,
             )
+            self._pending_status_events[event_id].append(("game_start", data_event))
             return
 
         await self._update_event_status(event_id=event_id, status=EventStatus.LIVE)
@@ -743,10 +803,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """Handle game result event.
 
         If the event is registered, close it and settle bets.
-        If not registered, raise an error as this indicates a logic issue.
+        If not registered, buffer the event to apply when GameInitializeEvent arrives.
         """
         if event_id not in self._events:
-            raise ValueError(f"Received game_result for unregistered event {event_id}")
+            logger.info(
+                "Buffering game_result for event %s (GameInitializeEvent not yet received)",
+                event_id,
+            )
+            self._pending_status_events[event_id].append(("game_result", data_event))
+            return
 
         await self._update_event_status(event_id=event_id, status=EventStatus.CLOSED)
         await self._settle_event(

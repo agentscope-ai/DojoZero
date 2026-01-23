@@ -6,7 +6,7 @@ AI agent system for real-time data reasoning and automated betting/trading. Agen
 
 ```
 src/dojozero/
-├── core/           # Actor framework, runtime, dashboard orchestration
+├── core/           # Actor framework, runtime, trial orchestration
 ├── agents/         # AI agent implementations (BettingAgent, AgentGroup)
 ├── data/           # Data infrastructure (stores, events, processors, hub)
 │   ├── nba/        # NBA game data (play-by-play, boxscores)
@@ -67,7 +67,7 @@ def build_trial(trial_id: str, params: MyParamsModel) -> TrialSpec:
     ...
 ```
 
-The `Dashboard` orchestrates actor wiring and lifecycle.
+The `TrialOrchestrator` orchestrates actor wiring and lifecycle.
 
 ### Data Infrastructure
 
