@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Trophy, TrendingUp, Target, Percent } from "lucide-react";
+import { Trophy, TrendingUp } from "lucide-react";
 import { useDataSource } from "../hooks/useDataSource";
 
 // Podium Display for top 3

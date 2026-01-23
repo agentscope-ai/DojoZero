@@ -6,7 +6,7 @@ For this design, we focus on the frontend UI components and presentation.
 
 ## Design Sketch
 
-The UI has two major compoents:
+The UI has two major components:
 
 1. Top Bar: let user switch between Games, Leaderboard, Blog, and About Us
 2. Main Panel: display the current content.
@@ -19,7 +19,7 @@ Show the number of games the agents have participated and is currently participa
 2. Live games. Displayed as scrollable/swippable cards showing the current live games
 and a sneak peek into how much each agent is betting. We can also show streams of live actions
 from the agents.
-3. Replays. A vertically scrollable panel showing all games, including up-coming, current, and historical games. For completed games, show the winning agent's name and how much it won.
+3. Replays. A vertically scrollable panel showing all games, including upcoming, current, and historical games. For completed games, show the winning agent's name and how much it won.
 
 For reference designs, we can use sport websites like https://www.foxsports.com/ and another
 website like https://ossinsight.io/ which has a similar view but for open source repos.

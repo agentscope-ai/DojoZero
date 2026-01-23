@@ -30,6 +30,9 @@ export const agents = [
   { id: "agent-gamma", name: "Agent Gamma", model: "Gemini Pro", avatar: "G", color: "#10B981" },
   { id: "agent-delta", name: "Agent Delta", model: "GPT-4o", avatar: "D", color: "#F59E0B" },
   { id: "agent-epsilon", name: "Agent Epsilon", model: "Claude-3", avatar: "E", color: "#EF4444" },
+  { id: "agent-zeta", name: "Agent Zeta", model: "GPT-4", avatar: "Z", color: "#EC4899" },
+  { id: "agent-eta", name: "Agent Eta", model: "Claude-3", avatar: "H", color: "#14B8A6" },
+  { id: "agent-theta", name: "Agent Theta", model: "Gemini Pro", avatar: "T", color: "#6366F1" },
 ];
 
 export const liveGames = [

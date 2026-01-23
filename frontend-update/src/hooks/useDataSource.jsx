@@ -182,6 +182,8 @@ export function DataSourceProvider({ children }) {
 
     // Actions
     refresh: fetchLandingData,
+    // UI helper: show error message if not in mock mode
+    errorMessage: error && !useMockData ? `Error loading data: ${error}` : null,
   };
 
   return (

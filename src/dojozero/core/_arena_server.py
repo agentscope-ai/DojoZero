@@ -601,8 +601,9 @@ async def _extract_agent_actions(
     """
     all_actions: list[dict[str, Any]] = []
 
-    # Only check recent/running trials for live actions
-    for trial_id in trial_ids[:10]:  # Limit to avoid too many queries
+    # Limit to checking the 10 most recent trials for live actions to improve performance.
+    RECENT_TRIALS_LIMIT = 10
+    for trial_id in trial_ids[:RECENT_TRIALS_LIMIT]:
         try:
             # Get recent spans only
             start_time = datetime.now(timezone.utc) - timedelta(minutes=5)

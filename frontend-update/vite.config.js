@@ -20,8 +20,5 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
-  define: {
-    // Make env vars available at build time
-    __USE_MOCK_DATA__: JSON.stringify(process.env.VITE_USE_MOCK_DATA !== 'false'),
-  },
+  // No global define needed; use import.meta.env.VITE_USE_MOCK_DATA in code
 }))
