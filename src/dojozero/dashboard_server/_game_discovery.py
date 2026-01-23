@@ -79,13 +79,16 @@ class NBAGameFetcher:
         Returns:
             List of GameInfo objects.
         """
+        import asyncio
+
         from dojozero.data.nba._utils import get_games_for_date
 
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
 
         try:
-            games_raw = get_games_for_date(date, print_games=False)
+            # Run in thread pool to avoid blocking the event loop
+            games_raw = await asyncio.to_thread(get_games_for_date, date, False)
         except Exception as e:
             LOGGER.error("Error fetching NBA games for %s: %s", date, e)
             return []
@@ -172,6 +175,8 @@ class NBAGameFetcher:
         Returns:
             Game status (1=scheduled, 2=in_progress, 3=finished) or None if not found.
         """
+        import asyncio
+
         from dojozero.data.nba._utils import get_games_for_date
 
         if game_date:
@@ -186,7 +191,8 @@ class NBAGameFetcher:
 
         for date in dates_to_check:
             try:
-                games = get_games_for_date(date, print_games=False)
+                # Run in thread pool to avoid blocking the event loop
+                games = await asyncio.to_thread(get_games_for_date, date, False)
                 for g in games:
                     if str(g.get("gameId")) == game_id:
                         return g.get("gameStatus")

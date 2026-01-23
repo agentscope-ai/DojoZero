@@ -19,7 +19,6 @@ from dojozero.data._factory import build_runtime_context
 import dojozero.data.nba._factory  # noqa: F401
 import dojozero.data.websearch._factory  # noqa: F401
 import dojozero.data.polymarket._factory  # noqa: F401
-from dojozero.data.nba._utils import get_game_info_by_id
 from dojozero.data.websearch._processors import (
     ExpertPredictionProcessor,
     InjurySummaryProcessor,
@@ -181,14 +180,15 @@ class NBAPreGameBettingTrialParams(BaseModel):
     )
 
 
-def _build_trial_spec(
+async def _build_trial_spec(
     trial_id: str,
     params: NBAPreGameBettingTrialParams,
 ) -> TrialSpec:
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
+    from dojozero.data.nba._utils import get_game_info_by_id_async
 
     # Get game information from game_id to extract team tricodes and names
-    game_info = get_game_info_by_id(params.game_id)
+    game_info = await get_game_info_by_id_async(params.game_id)
     home_team_tricode: str | None = None
     away_team_tricode: str | None = None
     home_team_name: str | None = None

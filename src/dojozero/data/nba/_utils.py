@@ -683,3 +683,22 @@ def get_game_info_by_id(
         f"Game not found in both BoxScore and Scoreboard (searched 7 days back, 14 days forward) for game_id={game_id}"
     )
     return None
+
+
+async def get_game_info_by_id_async(
+    game_id: str, proxy: str | None = None
+) -> dict[str, Any] | None:
+    """Async version of get_game_info_by_id.
+
+    Wraps the synchronous version in a thread pool to avoid blocking the event loop.
+
+    Args:
+        game_id: NBA.com game ID (e.g., '0022500290')
+        proxy: Optional proxy URL (automatically set from DOJOZERO_PROXY_URL env var if not provided)
+
+    Returns:
+        Dictionary with game information or None if not found
+    """
+    import asyncio
+
+    return await asyncio.to_thread(get_game_info_by_id, game_id, proxy)
