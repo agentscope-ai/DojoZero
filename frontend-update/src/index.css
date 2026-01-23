@@ -20,6 +20,9 @@
   --accent-primary: #3B82F6;
   --accent-secondary: #8B5CF6;
   --accent-gradient: linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%);
+  --accent-success: #22C55E;
+  --accent-warning: #F59E0B;
+  --accent-error: #EF4444;
 
   --success: #22C55E;
   --warning: #F59E0B;
@@ -393,5 +396,23 @@ input:focus, select:focus {
 @media (max-width: 768px) {
   .container {
     padding: 0 16px;
+  }
+}
+/* Animations */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }

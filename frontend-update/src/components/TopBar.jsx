@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
-import { Sun, Moon } from "lucide-react";
+import { Sun, Moon, Database, Cloud } from "lucide-react";
 import { useTheme } from "../App";
+import { useDataSource } from "../hooks/useDataSource.jsx";
 
 const navItems = [
   { path: "/games", label: "Games" },
@@ -11,6 +12,7 @@ const navItems = [
 
 export default function TopBar() {
   const { theme, toggleTheme } = useTheme();
+  const { useMockData, isLoading, error } = useDataSource();
 
   return (
     <header style={styles.header}>
@@ -38,18 +40,48 @@ export default function TopBar() {
           ))}
         </nav>
 
-        {/* Theme toggle */}
-        <button
-          onClick={toggleTheme}
-          style={styles.themeToggle}
-          aria-label="Toggle theme"
-        >
-          {theme === "dark" ? (
-            <Sun size={18} />
-          ) : (
-            <Moon size={18} />
-          )}
-        </button>
+        {/* Right side controls */}
+        <div style={styles.controls}>
+          {/* Data source indicator (read-only, controlled via CLI) */}
+          <div
+            style={{
+              ...styles.dataIndicator,
+              borderColor: useMockData ? "var(--accent-warning)" : "var(--accent-success)",
+            }}
+            title={useMockData ? "Using mock data (use npm run dev:live for API)" : "Using live API"}
+          >
+            {useMockData ? (
+              <Database size={14} style={{ color: "var(--accent-warning)" }} />
+            ) : (
+              <Cloud size={14} style={{ color: "var(--accent-success)" }} />
+            )}
+            <span style={{
+              ...styles.dataIndicatorLabel,
+              color: useMockData ? "var(--accent-warning)" : "var(--accent-success)",
+            }}>
+              {useMockData ? "MOCK" : "LIVE"}
+            </span>
+            {isLoading && (
+              <span style={styles.loadingDot} />
+            )}
+            {error && !useMockData && (
+              <span style={styles.errorDot} title={error} />
+            )}
+          </div>
+
+          {/* Theme toggle */}
+          <button
+            onClick={toggleTheme}
+            style={styles.themeToggle}
+            aria-label="Toggle theme"
+          >
+            {theme === "dark" ? (
+              <Sun size={18} />
+            ) : (
+              <Moon size={18} />
+            )}
+          </button>
+        </div>
       </div>
     </header>
   );
@@ -100,6 +132,38 @@ const styles = {
     fontWeight: 500,
     textDecoration: "none",
     transition: "all 0.2s ease",
+  },
+  controls: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  dataIndicator: {
+    display: "flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "4px 10px",
+    background: "var(--bg-tertiary)",
+    border: "1px solid",
+    borderRadius: 6,
+    fontSize: 11,
+  },
+  dataIndicatorLabel: {
+    fontWeight: 700,
+    letterSpacing: "0.05em",
+  },
+  loadingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: "50%",
+    background: "var(--accent-primary)",
+    animation: "pulse 1s infinite",
+  },
+  errorDot: {
+    width: 6,
+    height: 6,
+    borderRadius: "50%",
+    background: "var(--accent-error, #ef4444)",
   },
   themeToggle: {
     width: 40,

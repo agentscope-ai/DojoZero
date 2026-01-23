@@ -9,25 +9,29 @@ import {
   Clock,
   Filter
 } from "lucide-react";
-import {
-  liveGames,
-  allGames,
-  liveAgentActions,
-  stats,
-  agents
-} from "../data/mockData";
+import { useDataSource } from "../hooks/useDataSource.jsx";
+import { agents } from "../data/mockData";
 
 // Hero Section with newspaper-style live stats
-function HeroSection() {
-  // Live updating stats
+function HeroSection({ stats, useMockData }) {
+  // Live updating stats - initialize from props
   const [gamesPlayed, setGamesPlayed] = useState(stats.gamesPlayed);
   const [liveNow, setLiveNow] = useState(stats.liveNow);
   const [wageredToday, setWageredToday] = useState(stats.wageredToday);
   const [betsPlaced, setBetsPlaced] = useState(342);
   const [flashStat, setFlashStat] = useState(null);
 
-  // Simulate real-time updates
+  // Update from props when they change (for live API data)
   useEffect(() => {
+    setGamesPlayed(stats.gamesPlayed);
+    setLiveNow(stats.liveNow);
+    setWageredToday(stats.wageredToday);
+  }, [stats]);
+
+  // Simulate real-time updates (only when using mock data)
+  useEffect(() => {
+    if (!useMockData) return; // Don't simulate when using live API
+    
     const interval = setInterval(() => {
       const rand = Math.random();
       if (rand < 0.3) {
@@ -50,7 +54,7 @@ function HeroSection() {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [useMockData]);
 
   return (
     <section style={styles.hero}>
@@ -183,7 +187,7 @@ function AnimatedNumber({ value, flash, format }) {
 }
 
 // Live Games Carousel
-function LiveGamesSection() {
+function LiveGamesSection({ liveGames, agentActions }) {
   const [scrollPosition, setScrollPosition] = useState(0);
   const [leagueFilter, setLeagueFilter] = useState("all");
 
@@ -195,7 +199,7 @@ function LiveGamesSection() {
     }
   };
 
-  const filteredLiveGames = liveGames.filter((game) => {
+  const filteredLiveGames = (liveGames || []).filter((game) => {
     if (leagueFilter === "all") return true;
     return game.league === leagueFilter;
   });
@@ -262,13 +266,14 @@ function LiveGamesSection() {
       </div>
 
       {/* Live Agent Actions Ticker */}
-      <LiveActionsTicker />
+      <LiveActionsTicker agentActions={agentActions} />
     </section>
   );
 }
 
 // Rolling Live Agent Actions Ticker
-function LiveActionsTicker() {
+function LiveActionsTicker({ agentActions }) {
+  const liveAgentActions = agentActions || [];
   const [visibleActions, setVisibleActions] = useState(liveAgentActions.slice(0, 4));
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -280,6 +285,8 @@ function LiveActionsTicker() {
   ];
 
   useEffect(() => {
+    if (liveAgentActions.length === 0) return;
+    
     const interval = setInterval(() => {
       setCurrentIndex((prev) => {
         const next = prev + 1;
@@ -292,10 +299,11 @@ function LiveActionsTicker() {
     }, 2500); // Roll every 2.5 seconds
 
     return () => clearInterval(interval);
-  }, []);
+  }, [liveAgentActions.length]);
 
   // Get the 4 visible actions based on current index
   const getVisibleActions = () => {
+    if (liveAgentActions.length === 0) return [];
     const actions = [];
     for (let i = 0; i < 4; i++) {
       const idx = (currentIndex + i) % liveAgentActions.length;
@@ -556,12 +564,12 @@ function TeamDisplay({ team, score, flash }) {
 }
 
 // All Games Section
-function AllGamesSection() {
+function AllGamesSection({ allGames }) {
   const [filter, setFilter] = useState("all");
   const [league, setLeague] = useState("all");
   const [timeRange, setTimeRange] = useState("7d");
 
-  const filteredGames = allGames.filter((game) => {
+  const filteredGames = (allGames || []).filter((game) => {
     // Filter by status
     if (filter !== "all" && game.status !== filter) return false;
     // Filter by league
@@ -752,12 +760,14 @@ function GameRow({ game, index }) {
 }
 
 export default function GamesPage() {
+  const { stats, liveGames, allGames, agentActions, useMockData } = useDataSource();
+  
   return (
     <div style={styles.page}>
       <div className="container">
-        <HeroSection />
-        <LiveGamesSection />
-        <AllGamesSection />
+        <HeroSection stats={stats} useMockData={useMockData} />
+        <LiveGamesSection liveGames={liveGames} agentActions={agentActions} />
+        <AllGamesSection allGames={allGames} />
       </div>
     </div>
   );

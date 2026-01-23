@@ -486,6 +486,10 @@ def _build_trial_spec(
     if home_team_tricode and away_team_tricode:
         metadata["home_team_tricode"] = home_team_tricode
         metadata["away_team_tricode"] = away_team_tricode
+        if home_team_name:
+            metadata["home_team_name"] = home_team_name
+        if away_team_name:
+            metadata["away_team_name"] = away_team_name
         if game_date:
             metadata["game_date"] = game_date
 

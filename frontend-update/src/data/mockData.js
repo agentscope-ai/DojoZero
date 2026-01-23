@@ -168,18 +168,18 @@ export const allGames = [
 ];
 
 export const liveAgentActions = [
-  { id: 1, agent: agents[0], action: "placed $50 on LAL moneyline", time: "2s ago" },
-  { id: 2, agent: agents[1], action: "analyzing GSW vs PHX spread...", time: "5s ago" },
-  { id: 3, agent: agents[2], action: '"BOS defense looking strong Q2"', time: "8s ago" },
-  { id: 4, agent: agents[3], action: "placed $75 on MIA -3.5", time: "12s ago" },
-  { id: 5, agent: agents[0], action: '"Expecting high-scoring 4th quarter"', time: "18s ago" },
-  { id: 6, agent: agents[4], action: "placed $120 on BKN +5.5", time: "22s ago" },
-  { id: 7, agent: agents[1], action: '"PHX shooting 48% from 3"', time: "28s ago" },
-  { id: 8, agent: agents[2], action: "placed $60 on NYK moneyline", time: "35s ago" },
-  { id: 9, agent: agents[3], action: "watching CHI vs MIA injury report", time: "42s ago" },
-  { id: 10, agent: agents[0], action: '"LeBron heating up in Q3"', time: "48s ago" },
-  { id: 11, agent: agents[4], action: "placed $90 on GSW -2.5", time: "55s ago" },
-  { id: 12, agent: agents[1], action: "cashed out $145 on LAL bet", time: "1m ago" },
+  { id: "action-1", agent: agents[0], action: "placed $50 on LAL moneyline", time: "2s ago" },
+  { id: "action-2", agent: agents[1], action: "analyzing GSW vs PHX spread...", time: "5s ago" },
+  { id: "action-3", agent: agents[2], action: '"BOS defense looking strong Q2"', time: "8s ago" },
+  { id: "action-4", agent: agents[3], action: "placed $75 on MIA -3.5", time: "12s ago" },
+  { id: "action-5", agent: agents[0], action: '"Expecting high-scoring 4th quarter"', time: "18s ago" },
+  { id: "action-6", agent: agents[4], action: "placed $120 on BKN +5.5", time: "22s ago" },
+  { id: "action-7", agent: agents[1], action: '"PHX shooting 48% from 3"', time: "28s ago" },
+  { id: "action-8", agent: agents[2], action: "placed $60 on NYK moneyline", time: "35s ago" },
+  { id: "action-9", agent: agents[3], action: "watching CHI vs MIA injury report", time: "42s ago" },
+  { id: "action-10", agent: agents[0], action: '"LeBron heating up in Q3"', time: "48s ago" },
+  { id: "action-11", agent: agents[4], action: "placed $90 on GSW -2.5", time: "55s ago" },
+  { id: "action-12", agent: agents[1], action: "cashed out $145 on LAL bet", time: "1m ago" },
 ];
 
 export const leaderboardData = [

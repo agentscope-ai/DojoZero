@@ -5,6 +5,7 @@ import GamesPage from "./pages/GamesPage";
 import LeaderboardPage from "./pages/LeaderboardPage";
 import BlogPage from "./pages/BlogPage";
 import AboutPage from "./pages/AboutPage";
+import { DataSourceProvider } from "./hooks/useDataSource.jsx";
 
 // Theme context
 export const ThemeContext = createContext();
@@ -24,27 +25,29 @@ function App() {
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <BrowserRouter>
-        <div
-          style={{
-            minHeight: "100vh",
-            background: "var(--bg-primary)",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <TopBar />
-          <main style={{ flex: 1 }}>
-            <Routes>
-              <Route path="/" element={<GamesPage />} />
-              <Route path="/games" element={<GamesPage />} />
-              <Route path="/leaderboard" element={<LeaderboardPage />} />
-              <Route path="/blog" element={<BlogPage />} />
-              <Route path="/about" element={<AboutPage />} />
-            </Routes>
-          </main>
-        </div>
-      </BrowserRouter>
+      <DataSourceProvider>
+        <BrowserRouter>
+          <div
+            style={{
+              minHeight: "100vh",
+              background: "var(--bg-primary)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <TopBar />
+            <main style={{ flex: 1 }}>
+              <Routes>
+                <Route path="/" element={<GamesPage />} />
+                <Route path="/games" element={<GamesPage />} />
+                <Route path="/leaderboard" element={<LeaderboardPage />} />
+                <Route path="/blog" element={<BlogPage />} />
+                <Route path="/about" element={<AboutPage />} />
+              </Routes>
+            </main>
+          </div>
+        </BrowserRouter>
+      </DataSourceProvider>
     </ThemeContext.Provider>
   );
 }

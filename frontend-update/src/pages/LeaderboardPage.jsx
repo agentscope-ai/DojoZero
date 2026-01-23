@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Trophy, TrendingUp, Target, Percent } from "lucide-react";
-import { leaderboardData } from "../data/mockData";
+import { useDataSource } from "../hooks/useDataSource";
 
 // Podium Display for top 3
-function PodiumSection() {
-  const top3 = leaderboardData.slice(0, 3);
+function PodiumSection({ leaderboardData }) {
+  const top3 = (leaderboardData || []).slice(0, 3);
+  if (top3.length < 3) return null; // Need at least 3 entries for podium
   // Reorder for display: 2nd, 1st, 3rd
   const podiumOrder = [top3[1], top3[0], top3[2]];
 
@@ -147,7 +148,8 @@ function FilterBar({ filters, setFilters }) {
 }
 
 // Ranking Table
-function RankingTable({ selectedAgent, setSelectedAgent }) {
+function RankingTable({ selectedAgent, setSelectedAgent, leaderboardData }) {
+  const data = leaderboardData || [];
   return (
     <div style={styles.tableContainer}>
       <table className="table" style={styles.table}>
@@ -162,7 +164,7 @@ function RankingTable({ selectedAgent, setSelectedAgent }) {
           </tr>
         </thead>
         <tbody>
-          {leaderboardData.map((entry, index) => (
+          {data.map((entry, index) => (
             <motion.tr
               key={entry.agent.id}
               initial={{ opacity: 0, x: -10 }}
@@ -308,12 +310,44 @@ function AgentDetailPanel({ agent }) {
 }
 
 export default function LeaderboardPage() {
+  const { leaderboard, isLoading, error } = useDataSource();
   const [filters, setFilters] = useState({
     league: "All",
     betType: "All",
     time: "7d",
   });
   const [selectedAgent, setSelectedAgent] = useState(null);
+
+  if (isLoading) {
+    return (
+      <div style={styles.page}>
+        <div className="container">
+          <div style={{ textAlign: "center", padding: "100px 0" }}>
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+              style={{ display: "inline-block", marginBottom: 16 }}
+            >
+              🔄
+            </motion.div>
+            <p style={{ color: "var(--text-secondary)" }}>Loading leaderboard...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={styles.page}>
+        <div className="container">
+          <div style={{ textAlign: "center", padding: "100px 0" }}>
+            <p style={{ color: "var(--danger)" }}>Error loading leaderboard: {error}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.page}>
@@ -341,7 +375,7 @@ export default function LeaderboardPage() {
         <FilterBar filters={filters} setFilters={setFilters} />
 
         {/* Podium */}
-        <PodiumSection />
+        <PodiumSection leaderboardData={leaderboard} />
 
         {/* Main content */}
         <div style={styles.mainContent}>
@@ -350,6 +384,7 @@ export default function LeaderboardPage() {
             <RankingTable
               selectedAgent={selectedAgent}
               setSelectedAgent={setSelectedAgent}
+              leaderboardData={leaderboard}
             />
           </div>
 
