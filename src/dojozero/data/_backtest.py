@@ -1,4 +1,4 @@
-"""ReplayCoordinator: Orchestrates replay from files to DataHub."""
+"""BacktestCoordinator: Orchestrates backtesting from files to DataHub."""
 
 import asyncio
 import logging
@@ -11,45 +11,45 @@ from dojozero.data._hub import DataHub
 logger = logging.getLogger(__name__)
 
 
-class ReplayCoordinator:
-    """Orchestrates replay from files to DataHub for backtesting.
+class BacktestCoordinator:
+    """Orchestrates backtesting from files to DataHub.
 
     Reads events from persistence files and replays them through DataHub
     to agents, simulating live data flow. Supports speed control and progress tracking.
     """
 
-    def __init__(self, data_hub: DataHub, replay_file: Path | str | None = None):
-        """Initialize replay coordinator.
+    def __init__(self, data_hub: DataHub, backtest_file: Path | str | None = None):
+        """Initialize backtest coordinator.
 
         Args:
-            data_hub: DataHub instance to replay events to
-            replay_file: Optional path to replay file (can be set later)
+            data_hub: DataHub instance to send events to
+            backtest_file: Optional path to backtest file (can be set later)
         """
         self.data_hub = data_hub
-        self.replay_file = Path(replay_file) if replay_file else None
-        self._replaying = False
+        self.backtest_file = Path(backtest_file) if backtest_file else None
+        self._running = False
         self._speed_up = 1.0
         self._max_sleep = 20.0
         self._progress_callback: Callable[[int, int], None] | None = None
 
-    async def start_replay(self, replay_file: Path | str | None = None) -> None:
-        """Start replay from a file.
+    async def start(self, backtest_file: Path | str | None = None) -> None:
+        """Start backtest from a file.
 
         Args:
-            replay_file: Path to replay file (uses instance replay_file if not provided)
+            backtest_file: Path to backtest file (uses instance backtest_file if not provided)
         """
-        if replay_file:
-            self.replay_file = Path(replay_file)
+        if backtest_file:
+            self.backtest_file = Path(backtest_file)
 
-        if not self.replay_file or not self.replay_file.exists():
-            raise FileNotFoundError(f"Replay file not found: {self.replay_file}")
+        if not self.backtest_file or not self.backtest_file.exists():
+            raise FileNotFoundError(f"Backtest file not found: {self.backtest_file}")
 
-        self._replaying = True
-        await self.data_hub.start_replay(str(self.replay_file))
-        logger.info("Started replay from file: %s", self.replay_file)
+        self._running = True
+        await self.data_hub.start_backtest(str(self.backtest_file))
+        logger.info("Started backtest from file: %s", self.backtest_file)
 
     def set_speed(self, speed_up: float = 1.0, max_sleep: float = 20.0) -> None:
-        """Set replay speed parameters.
+        """Set backtest speed parameters.
 
         Args:
             speed_up: Speed multiplier (1.0 = real-time, 2.0 = 2x speed, etc.)
@@ -67,44 +67,44 @@ class ReplayCoordinator:
         """Set callback for progress updates.
 
         Args:
-            callback: Function called with (current_count, total_count) during replay
+            callback: Function called with (current_count, total_count) during backtest
         """
         self._progress_callback = callback
 
-    async def replay_all(self) -> None:
-        """Replay all events from the file at configured speed."""
-        if not self._replaying:
-            await self.start_replay()
+    async def run_all(self) -> None:
+        """Run backtest for all events from the file at configured speed."""
+        if not self._running:
+            await self.start()
 
-        await self._replay_with_speed_control()
+        await self._run_with_speed_control()
 
-    async def replay_next(self) -> Any:
-        """Replay next event.
+    async def run_next(self) -> Any:
+        """Run next event in backtest.
 
         Returns:
-            Next event or None if replay is complete
+            Next event or None if backtest is complete
         """
-        if not self._replaying:
-            await self.start_replay()
+        if not self._running:
+            await self.start()
 
-        return await self.data_hub.replay_next()
+        return await self.data_hub.backtest_next()
 
-    async def _replay_with_speed_control(self) -> None:
-        """Replay all events with speed control and progress tracking."""
-        if not self.data_hub._replay_mode or not self.data_hub._replay_events:
-            logger.warning("Hub is not in replay mode or has no events")
+    async def _run_with_speed_control(self) -> None:
+        """Run all events with speed control and progress tracking."""
+        if not self.data_hub._backtest_mode or not self.data_hub._backtest_events:
+            logger.warning("Hub is not in backtest mode or has no events")
             return
 
-        total_events = len(self.data_hub._replay_events)
+        total_events = len(self.data_hub._backtest_events)
         if total_events == 0:
-            logger.info("No events to replay")
+            logger.info("No events to backtest")
             return
 
         start_time = datetime.now(timezone.utc)
         last_event_time: datetime | None = None
 
         logger.info(
-            "Replaying %d events at %.1fx speed (max sleep: %.1fs)",
+            "Running backtest: %d events at %.1fx speed (max sleep: %.1fs)",
             total_events,
             self._speed_up,
             self._max_sleep,
@@ -112,7 +112,7 @@ class ReplayCoordinator:
 
         event_count = 0
         while True:
-            event = await self.data_hub.replay_next()
+            event = await self.data_hub.backtest_next()
             if event is None:
                 break
 
@@ -140,7 +140,7 @@ class ReplayCoordinator:
             if event_count % max(1, min(100, total_events // 10)) == 0:
                 progress_pct = (event_count / total_events) * 100
                 logger.info(
-                    "Replay progress: %d/%d events (%.1f%%)",
+                    "Backtest progress: %d/%d events (%.1f%%)",
                     event_count,
                     total_events,
                     progress_pct,
@@ -152,14 +152,18 @@ class ReplayCoordinator:
         events_per_sec = event_count / elapsed if elapsed > 0 else 0
 
         logger.info(
-            "Replay complete: %d events in %.1f seconds (%.1f events/sec)",
+            "Backtest complete: %d events in %.1f seconds (%.1f events/sec)",
             event_count,
             elapsed,
             events_per_sec,
         )
 
-    def stop_replay(self) -> None:
-        """Stop replay."""
-        self._replaying = False
-        self.data_hub.stop_replay()
-        logger.info("Stopped replay")
+    def stop(self) -> None:
+        """Stop backtest."""
+        self._running = False
+        self.data_hub.stop_backtest()
+        logger.info("Stopped backtest")
+
+
+# Backward compatibility alias (deprecated)
+ReplayCoordinator = BacktestCoordinator

@@ -3,7 +3,7 @@
 # Core base classes
 from dojozero.data._models import DataEvent, DataEventFactory, DataFact, register_event
 from dojozero.data._processors import CompositeProcessor, DataProcessor
-from dojozero.data._replay import ReplayCoordinator
+from dojozero.data._backtest import BacktestCoordinator, ReplayCoordinator
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data._hub import DataHub
 from dojozero.data._streams import (
@@ -55,7 +55,8 @@ __all__ = [
     "DataProcessor",
     "CompositeProcessor",
     "DataHub",
-    "ReplayCoordinator",
+    "BacktestCoordinator",
+    "ReplayCoordinator",  # Deprecated alias
     "DataHubDataStream",
     "DataHubDataStreamConfig",
     "StreamInitializer",

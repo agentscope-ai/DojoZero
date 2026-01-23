@@ -122,14 +122,14 @@ Options:
   --oss-prefix          Override OSS prefix
 ```
 
-## Replay from File
+## Backtest from File
 
 ```bash
-uv run dojo0 replay \
-  --replay-file outputs/2026-01-12/401772976.jsonl \
+uv run dojo0 backtest \
+  --events outputs/2026-01-12/401772976.jsonl \
   --params outputs/2026-01-12/401772976.yaml \
-  --replay-speed-up 100 \
-  --replay-max-sleep 1
+  --speed 100 \
+  --max-sleep 1
 ```
 
 ## Output

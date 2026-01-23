@@ -7,7 +7,7 @@ Orchestrates betting trials for NBA games:
 - Starts trial 2 hours before game time
 - Runs agents that analyze data and place bets
 - Runs until game concludes
-- Persists all events to replay files
+- Persists all events to event files (for backtesting)
 
 When using --server flag, trials are submitted to a Dashboard Server which handles:
 - SLS trace export (via --otlp-endpoint on server)
@@ -96,7 +96,7 @@ class GameTrialManager:
         # Trial state
         self.trial_id: str | None = None
         self.config_file: Path | None = None
-        self.replay_file: Path | None = None
+        self.events_file: Path | None = None
         self.log_file: Path | None = None
         self.process: subprocess.Popen | None = None
         self._log_file_handle = None  # Store file handle for proper cleanup
@@ -159,7 +159,7 @@ class GameTrialManager:
                 self.game_date = datetime.now().strftime("%Y-%m-%d")
             date_dir = self.data_dir / self.game_date
             config_file = date_dir / f"{self.game_id}.yaml"
-            replay_file = date_dir / f"{self.game_id}.jsonl"
+            events_file = date_dir / f"{self.game_id}.jsonl"
             log_file = date_dir / f"{self.game_id}.log"
         else:
             # Flat structure: use default directories
@@ -167,18 +167,18 @@ class GameTrialManager:
             configs_dir = project_root / "configs"
             outputs_dir = project_root / "outputs"
             config_file = configs_dir / f"nba-moneyline_{self.game_id}.yaml"
-            replay_file = outputs_dir / f"nba_betting_events_{self.game_id}.jsonl"
+            events_file = outputs_dir / f"nba_betting_events_{self.game_id}.jsonl"
             log_file = outputs_dir / f"{self.game_id}.log"
 
         # Update persistence file in config
         if "hub" not in config["scenario"]["config"]:
             config["scenario"]["config"]["hub"] = {}
-        config["scenario"]["config"]["hub"]["persistence_file"] = str(replay_file)
+        config["scenario"]["config"]["hub"]["persistence_file"] = str(events_file)
         config["scenario"]["config"]["hub"]["enable_persistence"] = True
 
         # Create directory structure
         config_file.parent.mkdir(parents=True, exist_ok=True)
-        replay_file.parent.mkdir(parents=True, exist_ok=True)
+        events_file.parent.mkdir(parents=True, exist_ok=True)
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Save config file
@@ -186,7 +186,7 @@ class GameTrialManager:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
         self.config_file = config_file
-        self.replay_file = replay_file
+        self.events_file = events_file
         self.log_file = log_file
 
         # Generate unique trial ID with hash postfix to avoid conflicts
@@ -200,10 +200,10 @@ class GameTrialManager:
         self._setup_file_logger()
 
         logger.info(
-            "Generated config for game %s: %s (replay: %s, log: %s)",
+            "Generated config for game %s: %s (events: %s, log: %s)",
             self.game_id,
             config_file,
-            replay_file,
+            events_file,
             log_file,
         )
 
@@ -713,12 +713,12 @@ class GameTrialManager:
 
         if self.config_file:
             status_parts.append(f"Config: {self.config_file}")
-        if self.replay_file:
-            status_parts.append(f"Replay: {self.replay_file}")
-            # Check if replay file exists and get size
-            if self.replay_file.exists():
-                size_kb = self.replay_file.stat().st_size / 1024
-                status_parts.append(f"Replay size: {size_kb:.1f} KB")
+        if self.events_file:
+            status_parts.append(f"Events: {self.events_file}")
+            # Check if events file exists and get size
+            if self.events_file.exists():
+                size_kb = self.events_file.stat().st_size / 1024
+                status_parts.append(f"Events size: {size_kb:.1f} KB")
 
         if self.log_file:
             status_parts.append(f"Log: {self.log_file}")

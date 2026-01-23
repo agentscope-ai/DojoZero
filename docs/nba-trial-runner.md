@@ -1,6 +1,6 @@
 # NBA Trial Runner
 
-Automated driver for collecting NBA game replay data. Schedules and runs trials for daily games, starting 2 hours before tipoff and stopping when games conclude.
+Automated driver for collecting NBA game event data. Schedules and runs trials for daily games, starting 2 hours before tipoff and stopping when games conclude.
 
 ## Commands
 
@@ -57,7 +57,7 @@ python tools/nba_trial_runner.py run \
 ```
 data/nba-betting/2025-12-16/
   ├── 0062500001.yaml    # Trial config
-  ├── 0062500001.jsonl   # Replay events
+  ├── 0062500001.jsonl   # Event data (for backtesting)
   └── 0062500001.log     # Trial logs
 ```
 
@@ -75,13 +75,13 @@ data/nba-betting/2025-12-16/
 - Dashboard Server exports traces to SLS in real-time
 - Dashboard Server uploads events JSONL to OSS when trial stops (if `--oss-backup` enabled)
 
-## Replay
+## Backtest
 
 ```bash
-dojo0 replay \
-  --replay-file data/nba-betting/2025-12-16/0062500001.jsonl \
+dojo0 backtest \
+  --events data/nba-betting/2025-12-16/0062500001.jsonl \
   --params data/nba-betting/2025-12-16/0062500001.yaml \
-  --replay-speed-up 2.0
+  --speed 2.0
 ```
 
 ## Notes

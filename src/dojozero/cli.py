@@ -173,70 +173,70 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write an example YAML spec to PATH (defaults to <name>_example.yaml)",
     )
 
-    replay_parser = subparsers.add_parser(
-        "replay",
-        help="Replay events from a file for backtesting",
+    backtest_parser = subparsers.add_parser(
+        "backtest",
+        help="Run backtesting from historical event files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Replay events from JSONL files for backtesting.\n\n"
+        description="Run backtesting from JSONL event files.\n\n"
         "Supports multiple files via glob patterns and OSS URLs:\n"
         "  Local files:  outputs/2025-01-*/*.jsonl\n"
         "  OSS files:    oss://bucket/prefix/*.jsonl\n\n"
-        "Files are replayed sequentially in sorted order.",
+        "Files are processed sequentially in sorted order.",
     )
-    replay_parser.add_argument(
-        "--replay-file",
+    backtest_parser.add_argument(
+        "--events",
         type=str,
         nargs="+",
         required=True,
-        dest="replay_files",
-        help="Path(s) to JSONL replay file(s). Supports glob patterns (e.g., 'outputs/*/*.jsonl') "
+        dest="event_files",
+        help="Path(s) to JSONL event file(s). Supports glob patterns (e.g., 'outputs/*/*.jsonl') "
         "and OSS URLs (e.g., 'oss://bucket/prefix/*.jsonl'). Multiple patterns can be specified.",
     )
-    replay_parser.add_argument(
+    backtest_parser.add_argument(
         "--params",
         type=Path,
         required=True,
         help="Path to the trial-builder params YAML (required for agent/stream setup)",
     )
-    replay_parser.add_argument(
+    backtest_parser.add_argument(
         "--trial-id",
         help="Override the trial id (defaults to a random UUID)",
     )
-    replay_parser.add_argument(
-        "--replay-speed-up",
+    backtest_parser.add_argument(
+        "--speed",
         type=float,
         default=1.0,
-        dest="replay_speed_up",
-        help="Replay speed multiplier (e.g., 2.0 for 2x speed, 0.5 for half speed). Default: 1.0 (real-time)",
+        dest="backtest_speed",
+        help="Backtest speed multiplier (e.g., 2.0 for 2x speed, 0.5 for half speed). Default: 1.0 (real-time)",
     )
-    replay_parser.add_argument(
-        "--replay-max-sleep",
+    backtest_parser.add_argument(
+        "--max-sleep",
         type=float,
         default=20.0,
-        dest="replay_max_sleep",
+        dest="backtest_max_sleep",
         help="Maximum sleep time in seconds between events (caps long delays). Default: 20.0 seconds",
     )
-    replay_parser.add_argument(
+    backtest_parser.add_argument(
         "--server",
-        help="Submit replay to a running Dashboard Server (e.g., http://localhost:8000). "
-        "The server must have access to the replay file at the same path.",
+        help="Submit backtest to a running Dashboard Server (e.g., http://localhost:8000). "
+        "The server must have access to the event file at the same path.",
     )
-    replay_parser.add_argument(
+    backtest_parser.add_argument(
         "--trace-backend",
         dest="trace_backend",
         choices=["jaeger", "sls"],
-        help="Trace backend type for local replay. Use 'jaeger' for local development, "
+        help="Trace backend type for local backtest. Use 'jaeger' for local development, "
         "'sls' for Alibaba Cloud Simple Log Service (uses env vars). "
         "Ignored when --server is specified.",
     )
-    replay_parser.add_argument(
+    backtest_parser.add_argument(
         "--trace-ingest-endpoint",
         dest="trace_ingest_endpoint",
         default="http://localhost:4318",
         help="OTLP endpoint for Jaeger trace ingestion (default: http://localhost:4318). "
         "Only used when --trace-backend=jaeger.",
     )
-    replay_parser.add_argument(
+    backtest_parser.add_argument(
         "--service-name",
         dest="service_name",
         default="dojozero",
@@ -850,10 +850,10 @@ async def _run_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _resolve_replay_files(
+def _resolve_event_files(
     patterns: list[str], temp_dir: Path | None = None
 ) -> list[Path]:
-    """Resolve replay file patterns to actual file paths.
+    """Resolve event file patterns to actual file paths.
 
     Supports:
     - Local file paths: outputs/game.jsonl
@@ -915,7 +915,7 @@ def _resolve_replay_files(
 
             # Create temp directory for OSS downloads if not provided
             if oss_temp_dir is None:
-                oss_temp_dir = Path(tempfile.mkdtemp(prefix="dojozero_replay_"))
+                oss_temp_dir = Path(tempfile.mkdtemp(prefix="dojozero_backtest_"))
                 LOGGER.info("Created temp directory for OSS files: %s", oss_temp_dir)
 
             # Check if pattern contains glob characters
@@ -972,46 +972,46 @@ def _resolve_replay_files(
                 # Single file
                 path = Path(pattern)
                 if not path.exists():
-                    raise DojoZeroCLIError(f"Replay file not found: {pattern}")
+                    raise DojoZeroCLIError(f"Event file not found: {pattern}")
                 if not path.is_file():
                     raise DojoZeroCLIError(f"Not a file: {pattern}")
                 resolved_files.append(path)
 
     if not resolved_files:
-        raise DojoZeroCLIError(f"No replay files found matching patterns: {patterns}")
+        raise DojoZeroCLIError(f"No event files found matching patterns: {patterns}")
 
     # Sort for deterministic order
     return sorted(resolved_files)
 
 
-async def _replay_single_file(
-    replay_file: Path,
+async def _backtest_single_file(
+    event_file: Path,
     trial_id: str,
     params_payload: MutableMapping[str, Any],
     builder_name: str,
-    speed_up: float,
+    speed: float,
     max_sleep: float,
     dashboard: "Dashboard",
 ) -> None:
-    """Replay a single file.
+    """Run backtest for a single file.
 
     Args:
-        replay_file: Path to the replay file
+        event_file: Path to the event file
         trial_id: Trial ID to use
         params_payload: Trial params
         builder_name: Name of the trial builder
-        speed_up: Replay speed multiplier
+        speed: Backtest speed multiplier
         max_sleep: Maximum sleep between events
         dashboard: Dashboard instance
     """
     # Prepare trial spec from params
     spec = _prepare_trial_spec(trial_id, params_payload)
 
-    # Add replay metadata
-    spec.metadata["replay_file"] = str(replay_file)
-    spec.metadata["replay_mode"] = True
-    spec.metadata["replay_speed_up"] = speed_up
-    spec.metadata["replay_max_sleep"] = max_sleep
+    # Add backtest metadata
+    spec.metadata["backtest_file"] = str(event_file)
+    spec.metadata["backtest_mode"] = True
+    spec.metadata["backtest_speed"] = speed
+    spec.metadata["backtest_max_sleep"] = max_sleep
     spec.metadata["builder_name"] = builder_name
 
     # Extract hub_id from spec (from stream configs)
@@ -1027,26 +1027,26 @@ async def _replay_single_file(
         hub_id = str(hub_id_raw) if hub_id_raw else "data_hub"
     hub_id = str(hub_id)
 
-    # Create DataHub in replay mode
+    # Create DataHub in backtest mode
     hub = DataHub(
         hub_id=hub_id,
         persistence_file=None,
         enable_persistence=False,
     )
 
-    # Create ReplayCoordinator
-    from dojozero.data import ReplayCoordinator
+    # Create BacktestCoordinator
+    from dojozero.data import BacktestCoordinator
 
-    coordinator = ReplayCoordinator(data_hub=hub, replay_file=replay_file)
-    coordinator.set_speed(speed_up=speed_up, max_sleep=max_sleep)
+    coordinator = BacktestCoordinator(data_hub=hub, backtest_file=event_file)
+    coordinator.set_speed(speed_up=speed, max_sleep=max_sleep)
 
     # Progress callback
     def progress_callback(current: int, total: int) -> None:
         if current % max(1, min(100, total // 10)) == 0:
             progress_pct = (current / total) * 100
             LOGGER.info(
-                "[%s] Replay progress: %d/%d events (%.1f%%)",
-                replay_file.name,
+                "[%s] Backtest progress: %d/%d events (%.1f%%)",
+                event_file.name,
                 current,
                 total,
                 progress_pct,
@@ -1055,16 +1055,16 @@ async def _replay_single_file(
     coordinator.set_progress_callback(progress_callback)
 
     # Load events
-    LOGGER.info("Loading events from replay file: %s", replay_file)
-    await coordinator.start_replay()
+    LOGGER.info("Loading events from file: %s", event_file)
+    await coordinator.start()
 
-    # Set up replay context
+    # Set up backtest context
     from dojozero.core._registry import get_trial_builder_definition
 
     builder_def = get_trial_builder_definition(builder_name)
     original_context_builder = builder_def.context_builder
 
-    def replay_context_builder(spec: TrialSpec) -> RuntimeContext:
+    def backtest_context_builder(spec: TrialSpec) -> RuntimeContext:
         return RuntimeContext(
             trial_id=spec.trial_id,
             data_hubs={hub_id: hub},
@@ -1072,41 +1072,41 @@ async def _replay_single_file(
         )
 
     try:
-        builder_def.context_builder = replay_context_builder
+        builder_def.context_builder = backtest_context_builder
 
-        LOGGER.info("Launching trial '%s' in replay mode", trial_id)
+        LOGGER.info("Launching trial '%s' in backtest mode", trial_id)
         await dashboard.launch_trial(spec)
 
         builder_def.context_builder = original_context_builder
 
         LOGGER.info(
-            "Starting replay at %.1fx speed (max sleep: %.1fs)", speed_up, max_sleep
+            "Starting backtest at %.1fx speed (max sleep: %.1fs)", speed, max_sleep
         )
-        await coordinator.replay_all()
+        await coordinator.run_all()
 
         LOGGER.info("Stopping trial '%s'", trial_id)
         await dashboard.stop_trial(trial_id)
-        coordinator.stop_replay()
+        coordinator.stop()
     finally:
         builder_def.context_builder = original_context_builder
 
 
-async def _submit_replay_to_server(
+async def _submit_backtest_to_server(
     server_url: str,
     params_payload: MutableMapping[str, Any],
     trial_id: str | None,
-    replay_file: Path,
-    speed_up: float,
+    event_file: Path,
+    speed: float,
     max_sleep: float,
 ) -> int:
-    """Submit a replay trial to a remote Dashboard Server."""
+    """Submit a backtest trial to a remote Dashboard Server."""
     import httpx
 
     request_payload: dict[str, Any] = {
         "params": dict(params_payload),
-        "replay": {
-            "file": str(replay_file.absolute()),
-            "speed_up": speed_up,
+        "backtest": {
+            "file": str(event_file.absolute()),
+            "speed": speed,
             "max_sleep": max_sleep,
         },
     }
@@ -1115,7 +1115,7 @@ async def _submit_replay_to_server(
 
     base_url = server_url.rstrip("/")
     async with httpx.AsyncClient(timeout=30.0) as client:
-        LOGGER.info("Submitting replay trial to server: %s", base_url)
+        LOGGER.info("Submitting backtest trial to server: %s", base_url)
         response = await client.post(
             f"{base_url}/api/trials",
             json=request_payload,
@@ -1127,7 +1127,7 @@ async def _submit_replay_to_server(
             if "queue_position" in result:
                 queue_info = f" (queue: {result['queue_position']}, running: {result['running_count']})"
             LOGGER.info(
-                "Replay trial '%s' submitted successfully (phase: %s)%s",
+                "Backtest trial '%s' submitted successfully (phase: %s)%s",
                 result.get("id"),
                 result.get("phase"),
                 queue_info,
@@ -1138,41 +1138,41 @@ async def _submit_replay_to_server(
                 error = response.json().get("error", response.text)
             except Exception:
                 error = response.text or f"HTTP {response.status_code}"
-            raise DojoZeroCLIError(f"Failed to submit replay trial: {error}")
+            raise DojoZeroCLIError(f"Failed to submit backtest trial: {error}")
 
 
-async def _replay_command(args: argparse.Namespace) -> int:
-    """Handle replay command."""
+async def _backtest_command(args: argparse.Namespace) -> int:
+    """Handle backtest command."""
     from uuid import uuid4
 
     params_payload = _load_yaml_mapping(args.params, label="params")
-    speed_up = args.replay_speed_up
-    max_sleep = args.replay_max_sleep
+    speed = args.backtest_speed
+    max_sleep = args.backtest_max_sleep
 
-    if speed_up <= 0:
-        raise DojoZeroCLIError(f"Replay speed-up must be positive, got: {speed_up}")
+    if speed <= 0:
+        raise DojoZeroCLIError(f"Backtest speed must be positive, got: {speed}")
 
     if max_sleep <= 0:
-        raise DojoZeroCLIError(f"Replay max-sleep must be positive, got: {max_sleep}")
+        raise DojoZeroCLIError(f"Backtest max-sleep must be positive, got: {max_sleep}")
 
-    # Resolve replay files (supports glob patterns and OSS URLs)
-    replay_files = _resolve_replay_files(args.replay_files)
-    LOGGER.info("Resolved %d replay file(s) to process", len(replay_files))
+    # Resolve event files (supports glob patterns and OSS URLs)
+    event_files = _resolve_event_files(args.event_files)
+    LOGGER.info("Resolved %d event file(s) to process", len(event_files))
 
     # Check if submitting to a remote server
     server_url = getattr(args, "server", None)
     if server_url:
-        if len(replay_files) > 1:
+        if len(event_files) > 1:
             raise DojoZeroCLIError(
-                "Server mode does not support multiple replay files. "
+                "Server mode does not support multiple event files. "
                 "Please submit files one at a time or run locally."
             )
-        return await _submit_replay_to_server(
+        return await _submit_backtest_to_server(
             server_url=server_url,
             params_payload=params_payload,
             trial_id=args.trial_id,
-            replay_file=replay_files[0],
-            speed_up=speed_up,
+            event_file=event_files[0],
+            speed=speed,
             max_sleep=max_sleep,
         )
 
@@ -1249,44 +1249,44 @@ async def _replay_command(args: argparse.Namespace) -> int:
     if not builder_name:
         raise DojoZeroCLIError("Could not determine builder name from params")
 
-    # Process each replay file sequentially
-    total_files = len(replay_files)
+    # Process each event file sequentially
+    total_files = len(event_files)
     completed = 0
     failed = 0
 
     try:
-        for i, replay_file in enumerate(replay_files, 1):
+        for i, event_file in enumerate(event_files, 1):
             # Generate unique trial_id for each file (unless single file with user-provided id)
             if args.trial_id and total_files == 1:
                 trial_id = args.trial_id
             else:
                 # Use file stem as part of trial_id for traceability
-                file_stem = replay_file.stem
+                file_stem = event_file.stem
                 trial_id = f"{file_stem}-{uuid4().hex[:8]}"
 
             LOGGER.info(
                 "=" * 60 + "\nProcessing file %d/%d: %s (trial_id: %s)\n" + "=" * 60,
                 i,
                 total_files,
-                replay_file.name,
+                event_file.name,
                 trial_id,
             )
 
             try:
-                await _replay_single_file(
-                    replay_file=replay_file,
+                await _backtest_single_file(
+                    event_file=event_file,
                     trial_id=trial_id,
                     params_payload=params_payload,
                     builder_name=builder_name,
-                    speed_up=speed_up,
+                    speed=speed,
                     max_sleep=max_sleep,
                     dashboard=dashboard,
                 )
                 completed += 1
-                LOGGER.info("Completed replay for %s", replay_file.name)
+                LOGGER.info("Completed backtest for %s", event_file.name)
             except Exception as e:
                 failed += 1
-                LOGGER.error("Failed to replay %s: %s", replay_file.name, e)
+                LOGGER.error("Failed to backtest %s: %s", event_file.name, e)
                 # Continue with next file instead of aborting
                 continue
 
@@ -1301,7 +1301,7 @@ async def _replay_command(args: argparse.Namespace) -> int:
 
     # Summary
     LOGGER.info(
-        "=" * 60 + "\nReplay complete: %d/%d files succeeded, %d failed\n" + "=" * 60,
+        "=" * 60 + "\nBacktest complete: %d/%d files succeeded, %d failed\n" + "=" * 60,
         completed,
         total_files,
         failed,
@@ -1445,8 +1445,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "run":
             return asyncio.run(_run_command(args))
-        if args.command == "replay":
-            return asyncio.run(_replay_command(args))
+        if args.command == "backtest":
+            return asyncio.run(_backtest_command(args))
         if args.command == "list-builders":
             return _list_builders_command(args)
         if args.command == "get-builder":

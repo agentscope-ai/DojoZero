@@ -242,42 +242,42 @@ class TestDataHubPersistence:
         assert not test_file.exists()
 
 
-class TestDataHubReplay:
-    """Tests for replay mode."""
+class TestDataHubBacktest:
+    """Tests for backtest mode."""
 
     @pytest.mark.asyncio
-    async def test_start_replay_loads_events(self, hub, temp_persistence_file):
-        """Test that start_replay loads events from file."""
+    async def test_start_backtest_loads_events(self, hub, temp_persistence_file):
+        """Test that start_backtest loads events from file."""
         # First persist some events
         for i in range(3):
-            event = make_test_event(f"replay_{i}")
+            event = make_test_event(f"backtest_{i}")
             await hub.receive_event(event)
 
-        # Create new hub and start replay
-        replay_hub = DataHub(hub_id="replay_hub", enable_persistence=False)
-        await replay_hub.start_replay(temp_persistence_file)
+        # Create new hub and start backtest
+        backtest_hub = DataHub(hub_id="backtest_hub", enable_persistence=False)
+        await backtest_hub.start_backtest(temp_persistence_file)
 
-        assert len(replay_hub._replay_events) == 3
-        assert replay_hub._replay_mode is True
+        assert len(backtest_hub._backtest_events) == 3
+        assert backtest_hub._backtest_mode is True
 
     @pytest.mark.asyncio
-    async def test_replay_next_returns_events_in_order(
+    async def test_backtest_next_returns_events_in_order(
         self, hub, temp_persistence_file
     ):
-        """Test that replay_next returns events in order."""
+        """Test that backtest_next returns events in order."""
         # Persist events
         for i in range(3):
             event = make_test_event(f"order_{i}")
             await hub.receive_event(event)
 
-        # Replay
-        replay_hub = DataHub(hub_id="replay_hub", enable_persistence=False)
-        await replay_hub.start_replay(temp_persistence_file)
+        # Backtest
+        backtest_hub = DataHub(hub_id="backtest_hub", enable_persistence=False)
+        await backtest_hub.start_backtest(temp_persistence_file)
 
-        event1 = await replay_hub.replay_next()
-        event2 = await replay_hub.replay_next()
-        event3 = await replay_hub.replay_next()
-        event4 = await replay_hub.replay_next()
+        event1 = await backtest_hub.backtest_next()
+        event2 = await backtest_hub.backtest_next()
+        event3 = await backtest_hub.backtest_next()
+        event4 = await backtest_hub.backtest_next()
 
         assert isinstance(event1, TestEvent) and event1.value == "order_0"
         assert isinstance(event2, TestEvent) and event2.value == "order_1"
@@ -285,45 +285,45 @@ class TestDataHubReplay:
         assert event4 is None  # No more events
 
     @pytest.mark.asyncio
-    async def test_replay_all_dispatches_all_events(self, hub, temp_persistence_file):
-        """Test that replay_all dispatches all events."""
+    async def test_backtest_all_dispatches_all_events(self, hub, temp_persistence_file):
+        """Test that backtest_all dispatches all events."""
         # Persist events
         for i in range(3):
             event = make_test_event(f"all_{i}")
             await hub.receive_event(event)
 
-        # Setup replay hub with callback
-        replay_hub = DataHub(hub_id="replay_hub", enable_persistence=False)
+        # Setup backtest hub with callback
+        backtest_hub = DataHub(hub_id="backtest_hub", enable_persistence=False)
         callback = MagicMock()
-        replay_hub.subscribe_agent(
+        backtest_hub.subscribe_agent(
             agent_id="agent1", event_types=["test_event"], callback=callback
         )
 
-        await replay_hub.start_replay(temp_persistence_file)
-        await replay_hub.replay_all()
+        await backtest_hub.start_backtest(temp_persistence_file)
+        await backtest_hub.backtest_all()
 
         assert callback.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_stop_replay_clears_state(self, hub, temp_persistence_file):
-        """Test that stop_replay clears replay state."""
+    async def test_stop_backtest_clears_state(self, hub, temp_persistence_file):
+        """Test that stop_backtest clears backtest state."""
         # Persist event
         await hub.receive_event(make_test_event("stop_test"))
 
-        # Start and stop replay
-        replay_hub = DataHub(hub_id="replay_hub", enable_persistence=False)
-        await replay_hub.start_replay(temp_persistence_file)
-        replay_hub.stop_replay()
+        # Start and stop backtest
+        backtest_hub = DataHub(hub_id="backtest_hub", enable_persistence=False)
+        await backtest_hub.start_backtest(temp_persistence_file)
+        backtest_hub.stop_backtest()
 
-        assert replay_hub._replay_mode is False
-        assert len(replay_hub._replay_events) == 0
-        assert replay_hub._replay_index == 0
+        assert backtest_hub._backtest_mode is False
+        assert len(backtest_hub._backtest_events) == 0
+        assert backtest_hub._backtest_index == 0
 
     @pytest.mark.asyncio
-    async def test_replay_missing_file_raises(self, hub):
-        """Test that replaying from missing file raises FileNotFoundError."""
+    async def test_backtest_missing_file_raises(self, hub):
+        """Test that backtesting from missing file raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
-            await hub.start_replay("/nonexistent/file.jsonl")
+            await hub.start_backtest("/nonexistent/file.jsonl")
 
 
 class TestDataHubStoreConnection:

@@ -63,16 +63,16 @@ dojo0 run --trial-id sample-trial --resume-latest
 You can still start a new trial from a checkpoint by supplying both `--params`
 and `--checkpoint-id`; the CLI applies the checkpoint before launching.
 
-### Replay Mode (Backtesting)
+### Backtest Mode
 
-Replay historical events from a JSONL file for backtesting:
+Run backtesting from historical event files:
 
 ```bash
-dojo0 replay \
-  --replay-file outputs/nba_betting_events.jsonl \
+dojo0 backtest \
+  --events outputs/nba_betting_events.jsonl \
   --params configs/nba-moneyline.yaml \
-  --replay-speed-up 2.0 \
-  --replay-max-sleep 20.0
+  --speed 2.0 \
+  --max-sleep 20.0
 ```
 
 ## Quick Start (Server Mode)
@@ -92,8 +92,8 @@ dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger
 # 3. Submit a trial (in another terminal)
 dojo0 run --params configs/nba-moneyline.yaml --trial-id test --server http://localhost:8000
 
-# Or submit a replay trial for backtesting
-dojo0 replay --params configs/nba-moneyline.yaml --replay-file outputs/nba_betting_events.jsonl --trial-id replay-test --replay-speed-up 1.0 --replay-max-sleep 20 --server http://localhost:8000
+# Or submit a backtest trial
+dojo0 backtest --params configs/nba-moneyline.yaml --events outputs/nba_betting_events.jsonl --trial-id backtest-test --speed 1.0 --max-sleep 20 --server http://localhost:8000
 
 # 4. Start Arena Server (serves WebSocket to browser)
 dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger
@@ -315,5 +315,5 @@ emit a ready-made YAML spec for local experimentation.
 Utility scripts for data collection and management are available in the `tools/` directory.
 See [docs/nba-trial-runner.md](./docs/nba-trial-runner.md) for documentation on:
 
-- **NBA Trial Runner**: Automated driver for running trials and collecting replay data for NBA games
-- **JSONL Deduplication**: Tool for removing duplicate events from replay files (see `tools/deduplicate_jsonl.py`)
+- **NBA Trial Runner**: Automated driver for running trials and collecting event data for NBA games
+- **JSONL Deduplication**: Tool for removing duplicate events from event files (see `tools/deduplicate_jsonl.py`)
