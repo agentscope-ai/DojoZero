@@ -89,10 +89,6 @@ docker run -d --name jaeger \
 # 2. Start Dashboard Server (manages trials, exports traces)
 dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger
 
-# With custom trace service name
-dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger --service-name my-service
-dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend sls --service-name my-service
-
 # 3. Submit a trial (in another terminal)
 dojo0 run --params configs/nba-pregame-betting.yaml --trial-id test --server http://localhost:8000
 
@@ -120,9 +116,6 @@ The `dojo0 serve` command starts a FastAPI dashboard server that provides REST A
 ```bash
 # Start with Jaeger trace backend (development)
 dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger
-
-# With custom OTLP ingest endpoint
-dojo0 serve --host 0.0.0.0 --port 8000 --trace-backend jaeger --trace-ingest-endpoint http://localhost:4318
 
 # With SLS trace backend (production - Alibaba Cloud)
 # Set env vars: DOJOZERO_SLS_PROJECT, DOJOZERO_SLS_ENDPOINT, DOJOZERO_SLS_LOGSTORE
@@ -156,13 +149,6 @@ API endpoints:
 
 # Start with Jaeger as trace source (development)
 dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger
-
-# With custom Jaeger Query endpoint
-dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger --trace-query-endpoint http://localhost:16686
-
-# With custom trace service name
-dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger --service-name my-service
-dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend sls --service-name my-service
 
 # Start with SLS as trace source (production)
 # Set env vars: DOJOZERO_SLS_PROJECT, DOJOZERO_SLS_ENDPOINT, DOJOZERO_SLS_LOGSTORE
