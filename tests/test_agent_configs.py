@@ -6,6 +6,7 @@ are valid and their model endpoints work correctly.
 """
 
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from dojozero.agents import (
     create_formatter,
     expand_agent_config,
     LLMConfig,
+    AgentConfig,
 )
 from dojozero.betting._agent import BettingAgent
 from dojozero.core import StreamEvent
@@ -33,22 +35,32 @@ def get_all_agent_config_files() -> list[Path]:
     return list(CONFIG_DIR.glob("*.yaml"))
 
 
-def get_all_model_configs() -> list[tuple[str, dict]]:
+@lru_cache(maxsize=None)
+def _load_agent_config_cached(config_path: Path) -> AgentConfig:
+    """Load and cache agent configuration from a YAML file.
+
+    Uses lru_cache to avoid redundant file reads during test collection
+    and execution.
+    """
+    return load_agent_config(config_path)
+
+
+def get_all_model_configs() -> list[tuple[str, LLMConfig]]:
     """Get all (config_name, llm_config) pairs from all agent configs.
 
     Returns a list of tuples containing the config file name and
     each individual LLM configuration from that file.
     """
-    configs = []
+    configs: list[tuple[str, LLMConfig]] = []
     for config_path in get_all_agent_config_files():
-        agent_config = load_agent_config(config_path)
+        agent_config = _load_agent_config_cached(config_path)
         expanded = expand_agent_config(agent_config)
         for single_config in expanded:
             configs.append((config_path.stem, single_config["llm"]))
     return configs
 
 
-def _model_config_id(param) -> str:
+def _model_config_id(param: object) -> str:
     """Generate a test ID for model config parameters."""
     if isinstance(param, tuple) and len(param) == 2:
         config_name, llm_config = param
@@ -76,7 +88,7 @@ class TestAgentConfigLoading:
     )
     def test_config_loads_successfully(self, config_path: Path):
         """Test that each config file loads without errors."""
-        config = load_agent_config(config_path)
+        config = _load_agent_config_cached(config_path)
 
         assert "name" in config, f"Config {config_path} missing 'name' field"
         assert "sys_prompt" in config, (
@@ -97,7 +109,7 @@ class TestAgentConfigLoading:
     )
     def test_config_expands_correctly(self, config_path: Path):
         """Test that each config expands to separate model configs."""
-        config = load_agent_config(config_path)
+        config = _load_agent_config_cached(config_path)
         expanded = expand_agent_config(config)
 
         assert len(expanded) == len(config["llm"]), (
@@ -119,7 +131,7 @@ class TestAgentConfigLoading:
     )
     def test_llm_configs_have_required_fields(self, config_path: Path):
         """Test that each LLM config has required fields."""
-        config = load_agent_config(config_path)
+        config = _load_agent_config_cached(config_path)
 
         for i, llm_config in enumerate(config["llm"]):
             assert "model_type" in llm_config, (
@@ -226,8 +238,20 @@ class TestModelEndpoints:
                 f"Agent should have processed at least 1 event, got {agent._event_count}"
             )
 
+            # Verify we got an assistant response in memory
+            assert len(agent._state) > 0, (
+                "Agent memory should not be empty after processing event"
+            )
+            assistant_responses = [
+                msg for msg in agent._state if msg.get("role") == "assistant"
+            ]
+            assert len(assistant_responses) > 0, (
+                "Agent should have at least one assistant response in memory"
+            )
+
             await agent.stop()
-            print(f"\n✓ {config_name}/{model_name}: Agent processed event successfully")
+            response_preview = str(assistant_responses[-1].get("content", ""))[:50]
+            print(f"\n✓ {config_name}/{model_name}: {response_preview}...")
 
         except Exception as e:
             pytest.fail(
@@ -250,10 +274,10 @@ class TestAllConfigsEndToEnd:
         This test attempts to validate all model endpoints and provides
         a summary report of which endpoints are working vs failing.
         """
-        results = {"passed": [], "failed": []}
+        results: dict[str, list[tuple[str, str]]] = {"passed": [], "failed": []}
 
         for config_path in get_all_agent_config_files():
-            config = load_agent_config(config_path)
+            config = _load_agent_config_cached(config_path)
             expanded = expand_agent_config(config)
 
             for single_config in expanded:
