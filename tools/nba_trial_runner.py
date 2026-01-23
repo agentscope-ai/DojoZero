@@ -166,7 +166,7 @@ class GameTrialManager:
             project_root = Path(__file__).parent.parent
             configs_dir = project_root / "configs"
             outputs_dir = project_root / "outputs"
-            config_file = configs_dir / f"nba-pregame-betting_{self.game_id}.yaml"
+            config_file = configs_dir / f"nba-moneyline_{self.game_id}.yaml"
             replay_file = outputs_dir / f"nba_betting_events_{self.game_id}.jsonl"
             log_file = outputs_dir / f"{self.game_id}.log"
 
@@ -1074,8 +1074,8 @@ def main() -> int:
     run_parser.add_argument(
         "--config",
         type=Path,
-        default=Path(__file__).parent.parent / "configs" / "nba-pregame-betting.yaml",
-        help="Path to trial config template (default: configs/nba-pregame-betting.yaml)",
+        default=Path(__file__).parent.parent / "configs" / "nba-moneyline.yaml",
+        help="Path to trial config template (default: configs/nba-moneyline.yaml)",
     )
     run_parser.add_argument(
         "--data-dir",

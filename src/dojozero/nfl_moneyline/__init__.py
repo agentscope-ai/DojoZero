@@ -4,7 +4,7 @@ This module provides NFL-specific betting scenario components that build on
 the shared betting infrastructure from `dojozero.betting`.
 
 The trial builder is automatically registered when importing this module.
-Use: uv run dojozero run --params configs/nfl-pregame-betting.yaml
+Use: uv run dojozero run --params configs/nfl-moneyline.yaml
 
 For BrokerOperator, import directly from dojozero.betting:
     from dojozero.betting import BrokerOperator

@@ -468,7 +468,7 @@ def _build_trial_spec(
     # Build metadata with game information and hub config
     # This metadata is used by build_runtime_context and store factories
     metadata: dict[str, Any] = {
-        "sample": "nba-pregame-betting",
+        "sample": "nba-moneyline",
         "game_id": params.game_id,
         "hub_id": hub_id,
         "persistence_file": persistence_file,
@@ -503,7 +503,7 @@ def _build_trial_spec(
 
 
 def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
-    """Build runtime context for NBA pre-game betting trial.
+    """Build runtime context for NBA moneyline betting trial.
 
     Uses the generic build_runtime_context with registered store factories
     to create DataHub and store instances.
@@ -517,8 +517,8 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
     metadata = dict(spec.metadata)  # Convert to regular dict for type compatibility
 
     # Get hub configuration from metadata
-    hub_id_raw = metadata.get("hub_id", "nba_pregame_hub")
-    hub_id = str(hub_id_raw) if hub_id_raw else "nba_pregame_hub"
+    hub_id_raw = metadata.get("hub_id", "nba_moneyline_hub")
+    hub_id = str(hub_id_raw) if hub_id_raw else "nba_moneyline_hub"
 
     persistence_file_raw = metadata.get("persistence_file")
     persistence_file = str(persistence_file_raw) if persistence_file_raw else None
@@ -548,16 +548,15 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
 
 
 register_trial_builder(
-    "nba-pregame-betting",
+    "nba-moneyline",
     NBAPreGameBettingTrialParams,
     _build_trial_spec,
-    description="NBA pre-game betting scenario with relevant data inputs",
+    description="NBA moneyline betting scenario with relevant data inputs",
     context_builder=_build_nba_runtime_context,
-    # Use dict format to match the hierarchical YAML structure in nba-pregame-betting_example_1.yaml
     example_params={
         "game_id": "0022501215",
         "hub": {
-            "persistence_file": "outputs/nba_pregame_events.jsonl",
+            "persistence_file": "outputs/nba_moneyline_events.jsonl",
             "enable_persistence": True,
         },
         "data_streams": [
