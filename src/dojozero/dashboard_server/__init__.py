@@ -13,11 +13,10 @@ from ._game_discovery import (
     NBAGameFetcher,
     NFLGameFetcher,
     TeamInfo,
+    VenueInfo,
 )
 from ._scheduler import (
     FileSchedulerStore,
-    NBATrialSourceParams,
-    NFLTrialSourceParams,
     ScheduledTrial,
     ScheduledTrialPhase,
     ScheduleManager,
@@ -58,11 +57,10 @@ __all__ = [
     "TrialSource",
     "TrialSourceConfig",
     "TrialSourceStore",
-    "NBATrialSourceParams",
-    "NFLTrialSourceParams",
     # Game Discovery
     "GameInfo",
     "TeamInfo",
+    "VenueInfo",
     "NBAGameFetcher",
     "NFLGameFetcher",
 ]

@@ -106,28 +106,17 @@ class TrialSourceConfigRequest(BaseModel):
     data_dir: str | None = None
 
 
-class NBASourceParams(BaseModel):
-    """NBA-specific trial source parameters."""
-
-    days_ahead: int = 7
-
-
-class NFLSourceParams(BaseModel):
-    """NFL-specific trial source parameters."""
-
-    week: int | None = None
-
-
 class TrialSourceRequest(BaseModel):
-    """Request body for registering a trial source."""
+    """Request body for registering a trial source.
+
+    Both NBA and NFL use ESPN scoreboard to discover games automatically.
+    """
 
     model_config = {"extra": "ignore"}
 
     source_id: str
     sport_type: str  # "nba" or "nfl"
     config: TrialSourceConfigRequest
-    nba_params: NBASourceParams | None = None
-    nfl_params: NFLSourceParams | None = None
 
 
 @dataclass
@@ -319,11 +308,7 @@ def create_dashboard_app(
 
         # Register initial trial sources if provided
         if initial_trial_sources:
-            from ._scheduler import (
-                NBATrialSourceParams,
-                NFLTrialSourceParams,
-                TrialSourceConfig,
-            )
+            from ._scheduler import TrialSourceConfig
 
             for source_data in initial_trial_sources:
                 source_id = source_data["source_id"]
@@ -354,22 +339,11 @@ def create_dashboard_app(
                     ),
                 )
 
-                # Convert sport-specific params
-                nba_params = None
-                if source_data.get("nba_params"):
-                    nba_params = NBATrialSourceParams(**source_data["nba_params"])
-
-                nfl_params = None
-                if source_data.get("nfl_params"):
-                    nfl_params = NFLTrialSourceParams(**source_data["nfl_params"])
-
                 try:
                     schedule_manager.register_source(
                         source_id=source_id,
                         sport_type=sport_type,
                         config=config,
-                        nba_params=nba_params,
-                        nfl_params=nfl_params,
                     )
                     LOGGER.info(
                         "Registered initial trial source '%s' for %s",
@@ -982,11 +956,7 @@ def create_dashboard_app(
                 status_code=400,
             )
 
-        from ._scheduler import (
-            NBATrialSourceParams,
-            NFLTrialSourceParams,
-            TrialSourceConfig,
-        )
+        from ._scheduler import TrialSourceConfig
 
         try:
             # Convert request to config
@@ -999,25 +969,10 @@ def create_dashboard_app(
                 data_dir=request.config.data_dir,
             )
 
-            # Convert sport-specific params
-            nba_params = None
-            if request.nba_params:
-                nba_params = NBATrialSourceParams(
-                    days_ahead=request.nba_params.days_ahead
-                )
-
-            nfl_params = None
-            if request.nfl_params:
-                nfl_params = NFLTrialSourceParams(
-                    week=request.nfl_params.week,
-                )
-
             source = state.schedule_manager.register_source(
                 source_id=request.source_id,
                 sport_type=request.sport_type,
                 config=config,
-                nba_params=nba_params,
-                nfl_params=nfl_params,
             )
 
             return JSONResponse(
@@ -1314,8 +1269,6 @@ async def run_dashboard_server(
 __all__ = [
     "BacktestConfig",
     "DashboardServerState",
-    "NBASourceParams",
-    "NFLSourceParams",
     "ReplayConfig",
     "ResumeConfig",
     "ScenarioConfig",

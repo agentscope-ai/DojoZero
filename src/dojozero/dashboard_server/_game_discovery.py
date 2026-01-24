@@ -14,12 +14,22 @@ LOGGER = logging.getLogger("dojozero.game_discovery")
 
 @dataclass(slots=True)
 class TeamInfo:
-    """Team information."""
+    """Team information from ESPN API.
+
+    Captures all team data returned by ESPN to avoid additional API calls in the UI.
+    """
 
     team_id: str
-    name: str
-    tricode: str  # e.g., "LAL", "BOS"
+    name: str  # Full display name (e.g., "Detroit Pistons")
+    tricode: str  # Abbreviation (e.g., "DET")
     score: int = 0
+    # Additional ESPN fields
+    location: str = ""  # City/location (e.g., "Detroit")
+    short_name: str = ""  # Short team name (e.g., "Pistons")
+    color: str = ""  # Primary team color hex (e.g., "1d428a")
+    alternate_color: str = ""  # Secondary team color hex (e.g., "c8102e")
+    logo: str = ""  # Team logo URL
+    record: str = ""  # Team record (e.g., "15-10")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -27,12 +37,41 @@ class TeamInfo:
             "name": self.name,
             "tricode": self.tricode,
             "score": self.score,
+            "location": self.location,
+            "short_name": self.short_name,
+            "color": self.color,
+            "alternate_color": self.alternate_color,
+            "logo": self.logo,
+            "record": self.record,
+        }
+
+
+@dataclass(slots=True)
+class VenueInfo:
+    """Venue information from ESPN API."""
+
+    venue_id: str = ""
+    name: str = ""
+    city: str = ""
+    state: str = ""
+    indoor: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "venue_id": self.venue_id,
+            "name": self.name,
+            "city": self.city,
+            "state": self.state,
+            "indoor": self.indoor,
         }
 
 
 @dataclass(slots=True)
 class GameInfo:
-    """Unified game information across sports."""
+    """Unified game information across sports.
+
+    Captures all game data from ESPN to avoid additional API calls in the UI.
+    """
 
     event_id: str  # ESPN event ID (used for both NBA and NFL)
     sport_type: str  # "nba" or "nfl"
@@ -41,10 +80,26 @@ class GameInfo:
     game_time_utc: datetime | None
     home_team: TeamInfo
     away_team: TeamInfo
-    venue: str = ""
-    broadcast: str = ""
-    short_name: str = ""  # e.g., "KC @ BUF"
+    # Venue information
+    venue: VenueInfo = field(default_factory=VenueInfo)
+    # Broadcast information
+    broadcasts: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # Full broadcast list
+    broadcast: str = ""  # Simplified broadcast string for display
+    # Game identifiers
+    name: str = ""  # Full game name (e.g., "Houston Rockets at Detroit Pistons")
+    short_name: str = ""  # e.g., "HOU @ DET"
+    # Betting odds
     odds: dict[str, Any] = field(default_factory=dict)
+    # Game state
+    period: int = 0  # Current period/quarter
+    clock: str = ""  # Game clock display
+    attendance: int = 0  # Attendance count
+    neutral_site: bool = False  # Whether game is at neutral location
+    # Season info
+    season_year: int = 0
+    season_type: str = ""  # "regular", "postseason", etc.
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,10 +112,18 @@ class GameInfo:
             else None,
             "home_team": self.home_team.to_dict(),
             "away_team": self.away_team.to_dict(),
-            "venue": self.venue,
+            "venue": self.venue.to_dict(),
+            "broadcasts": self.broadcasts,
             "broadcast": self.broadcast,
+            "name": self.name,
             "short_name": self.short_name,
             "odds": self.odds,
+            "period": self.period,
+            "clock": self.clock,
+            "attendance": self.attendance,
+            "neutral_site": self.neutral_site,
+            "season_year": self.season_year,
+            "season_type": self.season_type,
         }
 
 
@@ -106,17 +169,68 @@ class NBAGameFetcher:
                 except Exception:
                     pass
 
+            home_data = g.get("homeTeam", {})
+            away_data = g.get("awayTeam", {})
             home_team = TeamInfo(
-                team_id=str(g.get("homeTeam", {}).get("teamId", "")),
-                name=g.get("homeTeam", {}).get("teamName", ""),
-                tricode=g.get("homeTeam", {}).get("teamTricode", ""),
-                score=g.get("homeTeam", {}).get("score", 0) or 0,
+                team_id=str(home_data.get("teamId", "")),
+                name=home_data.get("displayName", "")
+                or f"{home_data.get('teamCity', '')} {home_data.get('teamName', '')}".strip(),
+                tricode=home_data.get("teamTricode", ""),
+                score=home_data.get("score", 0) or 0,
+                location=home_data.get("teamCity", ""),
+                short_name=home_data.get("shortDisplayName", "")
+                or home_data.get("teamName", ""),
+                color=home_data.get("color", ""),
+                alternate_color=home_data.get("alternateColor", ""),
+                logo=home_data.get("logo", ""),
+                record=home_data.get("record", ""),
             )
             away_team = TeamInfo(
-                team_id=str(g.get("awayTeam", {}).get("teamId", "")),
-                name=g.get("awayTeam", {}).get("teamName", ""),
-                tricode=g.get("awayTeam", {}).get("teamTricode", ""),
-                score=g.get("awayTeam", {}).get("score", 0) or 0,
+                team_id=str(away_data.get("teamId", "")),
+                name=away_data.get("displayName", "")
+                or f"{away_data.get('teamCity', '')} {away_data.get('teamName', '')}".strip(),
+                tricode=away_data.get("teamTricode", ""),
+                score=away_data.get("score", 0) or 0,
+                location=away_data.get("teamCity", ""),
+                short_name=away_data.get("shortDisplayName", "")
+                or away_data.get("teamName", ""),
+                color=away_data.get("color", ""),
+                alternate_color=away_data.get("alternateColor", ""),
+                logo=away_data.get("logo", ""),
+                record=away_data.get("record", ""),
+            )
+
+            # Extract venue info
+            venue_data = g.get("venue", {})
+            venue_info = VenueInfo(
+                venue_id=str(venue_data.get("venueId", "")),
+                name=venue_data.get("name", ""),
+                city=venue_data.get("city", ""),
+                state=venue_data.get("state", ""),
+                indoor=venue_data.get("indoor", True),
+            )
+
+            # Get broadcast info
+            broadcasts = g.get("broadcasts", [])
+            broadcast = g.get("broadcast", "")
+
+            # Get odds
+            odds = g.get("odds", {})
+
+            # Get game state
+            period = g.get("period", 0)
+            clock = g.get("gameClock", "")
+            attendance = g.get("attendance", 0)
+            neutral_site = g.get("neutralSite", False)
+
+            # Get season info
+            season_year = g.get("seasonYear", 0)
+            season_type = g.get("seasonType", "")
+
+            # Get game names
+            game_name = g.get("name", "")
+            short_name = (
+                g.get("shortName", "") or f"{away_team.tricode} @ {home_team.tricode}"
             )
 
             game = GameInfo(
@@ -127,7 +241,18 @@ class NBAGameFetcher:
                 game_time_utc=game_time_utc,
                 home_team=home_team,
                 away_team=away_team,
-                short_name=f"{away_team.tricode} @ {home_team.tricode}",
+                venue=venue_info,
+                broadcasts=broadcasts,
+                broadcast=broadcast,
+                name=game_name,
+                short_name=short_name,
+                odds=odds,
+                period=period,
+                clock=clock,
+                attendance=attendance,
+                neutral_site=neutral_site,
+                season_year=season_year,
+                season_type=season_type,
             )
             games.append(game)
 
@@ -306,26 +431,50 @@ class NFLGameFetcher:
             away_team = TeamInfo(team_id="", name="", tricode="")
             for c in competitors:
                 team = c.get("team", {})
+                # Extract record from competitor records array
+                records = c.get("records", [])
+                record = ""
+                if records:
+                    record = records[0].get("summary", "")
                 team_info = TeamInfo(
                     team_id=team.get("id", ""),
                     name=team.get("displayName", ""),
                     tricode=team.get("abbreviation", ""),
                     score=int(c.get("score", "0") or "0"),
+                    location=team.get("location", ""),
+                    short_name=team.get("shortDisplayName", ""),
+                    color=team.get("color", ""),
+                    alternate_color=team.get("alternateColor", ""),
+                    logo=team.get("logo", ""),
+                    record=record,
                 )
                 if c.get("homeAway") == "home":
                     home_team = team_info
                 else:
                     away_team = team_info
 
-            # Get venue
-            venue = comp.get("venue", {}).get("fullName", "")
+            # Get venue info
+            venue_data = comp.get("venue", {})
+            venue_address = venue_data.get("address", {})
+            venue_info = VenueInfo(
+                venue_id=str(venue_data.get("id", "")),
+                name=venue_data.get("fullName", ""),
+                city=venue_address.get("city", ""),
+                state=venue_address.get("state", ""),
+                indoor=venue_data.get("indoor", True),
+            )
 
-            # Get broadcast
-            broadcasts = comp.get("broadcasts", [])
-            broadcast = ""
-            if broadcasts:
-                names = broadcasts[0].get("names", [])
-                broadcast = ", ".join(names) if names else ""
+            # Get broadcast info - capture all broadcasts
+            broadcasts_raw = comp.get("broadcasts", [])
+            broadcasts: list[dict[str, Any]] = []
+            broadcast_names: list[str] = []
+            for b in broadcasts_raw:
+                market = b.get("market", "")
+                names = b.get("names", [])
+                broadcasts.append({"market": market, "names": names})
+                if names:
+                    broadcast_names.extend(names)
+            broadcast = ", ".join(broadcast_names) if broadcast_names else ""
 
             # Get odds
             odds_list = comp.get("odds", [])
@@ -340,6 +489,27 @@ class NFLGameFetcher:
                     "awayMoneyLine": o.get("awayTeamOdds", {}).get("moneyLine", 0),
                 }
 
+            # Get game state
+            period = status.get("period", 0)
+            clock = status.get("displayClock", "")
+            attendance = comp.get("attendance", 0)
+            neutral_site = comp.get("neutralSite", False)
+
+            # Get season info
+            season = event.get("season", {})
+            season_year = season.get("year", 0)
+            season_type_id = season.get("type", 0)
+            season_type_map = {
+                1: "preseason",
+                2: "regular",
+                3: "postseason",
+                4: "offseason",
+            }
+            season_type = season_type_map.get(season_type_id, "")
+
+            # Get game name
+            game_name = event.get("name", "")
+
             game = GameInfo(
                 event_id=event_id,
                 sport_type="nfl",
@@ -348,10 +518,18 @@ class NFLGameFetcher:
                 game_time_utc=game_time_utc,
                 home_team=home_team,
                 away_team=away_team,
-                venue=venue,
+                venue=venue_info,
+                broadcasts=broadcasts,
                 broadcast=broadcast,
+                name=game_name,
                 short_name=short_name,
                 odds=odds,
+                period=period,
+                clock=clock,
+                attendance=attendance,
+                neutral_site=neutral_site,
+                season_year=season_year,
+                season_type=season_type,
             )
             games.append(game)
 

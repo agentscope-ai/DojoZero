@@ -50,26 +50,12 @@ class TrialSourceConfig(BaseModel):
     )
 
 
-class NBATrialSourceParams(BaseModel):
-    """Parameters for NBA trial source."""
-
-    # Date range to sync (optional, defaults to today + 7 days)
-    days_ahead: int = 7
-
-
-class NFLTrialSourceParams(BaseModel):
-    """Parameters for NFL trial source."""
-
-    # Week to sync (optional, defaults to current scoreboard)
-    week: int | None = None
-
-
 @dataclass
 class TrialSource:
     """A registered trial source for automatic scheduling.
 
     Trial sources define how to schedule trials for a sport type.
-    The server periodically syncs with external APIs to discover
+    The server periodically syncs with ESPN API scoreboard to discover
     upcoming games and automatically schedules trials.
     """
 
@@ -79,9 +65,6 @@ class TrialSource:
     enabled: bool = True
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_sync_at: datetime | None = None
-    # Sport-specific parameters
-    nba_params: NBATrialSourceParams | None = None
-    nfl_params: NFLTrialSourceParams | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -94,8 +77,6 @@ class TrialSource:
             "last_sync_at": self.last_sync_at.isoformat()
             if self.last_sync_at
             else None,
-            "nba_params": self.nba_params.model_dump() if self.nba_params else None,
-            "nfl_params": self.nfl_params.model_dump() if self.nfl_params else None,
         }
 
     @classmethod
@@ -105,14 +86,6 @@ class TrialSource:
 
         config_data = data.get("config", {})
         config = TrialSourceConfig(**config_data)
-
-        nba_params = None
-        if data.get("nba_params"):
-            nba_params = NBATrialSourceParams(**data["nba_params"])
-
-        nfl_params = None
-        if data.get("nfl_params"):
-            nfl_params = NFLTrialSourceParams(**data["nfl_params"])
 
         last_sync_at = None
         if data.get("last_sync_at"):
@@ -127,8 +100,6 @@ class TrialSource:
             if data.get("created_at")
             else datetime.now(timezone.utc),
             last_sync_at=last_sync_at,
-            nba_params=nba_params,
-            nfl_params=nfl_params,
         )
 
 
@@ -702,8 +673,6 @@ class ScheduleManager:
         source_id: str,
         sport_type: str,
         config: TrialSourceConfig,
-        nba_params: NBATrialSourceParams | None = None,
-        nfl_params: NFLTrialSourceParams | None = None,
     ) -> TrialSource:
         """Register a new trial source.
 
@@ -711,8 +680,6 @@ class ScheduleManager:
             source_id: Unique identifier for this source
             sport_type: "nba" or "nfl"
             config: Trial source configuration
-            nba_params: NBA-specific parameters (if sport_type="nba")
-            nfl_params: NFL-specific parameters (if sport_type="nfl")
 
         Returns:
             The created TrialSource
@@ -728,8 +695,6 @@ class ScheduleManager:
             sport_type=sport_type,
             config=config,
             enabled=True,
-            nba_params=nba_params if sport_type == "nba" else None,
-            nfl_params=nfl_params if sport_type == "nfl" else None,
         )
 
         self._sources[source_id] = source
@@ -818,22 +783,12 @@ class ScheduleManager:
 
         try:
             if source.sport_type == "nba":
-                # Fetch NBA games for date range
-                params = source.nba_params or NBATrialSourceParams()
-                today = datetime.now()
-                for days in range(params.days_ahead + 1):
-                    date = (today + timedelta(days=days)).strftime("%Y-%m-%d")
-                    day_games = await self._nba_fetcher.fetch_games_for_date(date)
-                    games.extend(day_games)
+                # Fetch NBA games from ESPN scoreboard
+                games = await self._nba_fetcher.fetch_games_for_date(None)
 
             elif source.sport_type == "nfl":
-                # Fetch NFL games for week
-                params = source.nfl_params or NFLTrialSourceParams()
-                if params.week is not None:
-                    games = await self._nfl_fetcher.fetch_games_for_week(params.week)
-                else:
-                    # Default: fetch current scoreboard
-                    games = await self._nfl_fetcher.fetch_games_for_date(None)
+                # Fetch NFL games from ESPN scoreboard
+                games = await self._nfl_fetcher.fetch_games_for_date(None)
 
         except Exception as e:
             LOGGER.error("Error fetching games for source %s: %s", source.source_id, e)
@@ -1239,8 +1194,6 @@ class ScheduleManager:
 
 __all__ = [
     "FileSchedulerStore",
-    "NBATrialSourceParams",
-    "NFLTrialSourceParams",
     "ScheduledTrial",
     "ScheduledTrialPhase",
     "ScheduleManager",

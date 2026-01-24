@@ -229,12 +229,14 @@ async def _fetch_espn_scoreboard(
 def _parse_espn_event(event: dict[str, Any], game_date: date) -> dict[str, Any]:
     """Parse an ESPN event into our standard game format.
 
+    Captures all game data from ESPN to avoid additional API calls in the UI.
+
     Args:
         event: ESPN event dict
         game_date: The date of the game
 
     Returns:
-        Game dict in our standard format
+        Game dict in our standard format with all ESPN data
     """
     event_id = event.get("id", "")
     event_date = event.get("date", "")
@@ -288,9 +290,15 @@ def _parse_espn_event(event: dict[str, Any], game_date: date) -> dict[str, Any]:
             "teamName": team_info.get("name", ""),
             "teamCity": team_info.get("location", ""),
             "teamTricode": team_info.get("abbreviation", ""),
+            "displayName": team_info.get("displayName", ""),
+            "shortDisplayName": team_info.get("shortDisplayName", ""),
+            "color": team_info.get("color", ""),
+            "alternateColor": team_info.get("alternateColor", ""),
+            "logo": team_info.get("logo", ""),
             "score": int(score) if score else 0,
             "wins": wins,
             "losses": losses,
+            "record": record.get("summary", "") if record else "",
         }
 
         if is_home:
@@ -312,6 +320,57 @@ def _parse_espn_event(event: dict[str, Any], game_date: date) -> dict[str, Any]:
     period = status.get("period", 0)
     clock = status.get("displayClock", "")
 
+    # Get venue info
+    venue_data = comp.get("venue", {})
+    venue_address = venue_data.get("address", {})
+    venue = {
+        "venueId": str(venue_data.get("id", "")),
+        "name": venue_data.get("fullName", ""),
+        "city": venue_address.get("city", ""),
+        "state": venue_address.get("state", ""),
+        "indoor": venue_data.get("indoor", True),
+    }
+
+    # Get broadcast info - capture all broadcasts
+    broadcasts_raw = comp.get("broadcasts", [])
+    broadcasts: list[dict[str, Any]] = []
+    broadcast_names: list[str] = []
+    for b in broadcasts_raw:
+        market = b.get("market", "")
+        names = b.get("names", [])
+        broadcasts.append({"market": market, "names": names})
+        if names:
+            broadcast_names.extend(names)
+    broadcast = ", ".join(broadcast_names) if broadcast_names else ""
+
+    # Get odds
+    odds_list = comp.get("odds", [])
+    odds: dict[str, Any] = {}
+    if odds_list:
+        o = odds_list[0]
+        odds = {
+            "provider": o.get("provider", {}).get("name", ""),
+            "spread": o.get("spread", 0),
+            "overUnder": o.get("overUnder", 0),
+            "homeMoneyLine": o.get("homeTeamOdds", {}).get("moneyLine", 0),
+            "awayMoneyLine": o.get("awayTeamOdds", {}).get("moneyLine", 0),
+        }
+
+    # Get game state
+    attendance = comp.get("attendance", 0)
+    neutral_site = comp.get("neutralSite", False)
+
+    # Get season info from event
+    season = event.get("season", {})
+    season_year = season.get("year", 0)
+    season_type_id = season.get("type", 0)
+    season_type_map = {1: "preseason", 2: "regular", 3: "postseason", 4: "offseason"}
+    season_type = season_type_map.get(season_type_id, "")
+
+    # Get game names from event
+    game_name = event.get("name", "")
+    short_name = event.get("shortName", "")
+
     return {
         "gameId": event_id,
         "gameStatus": game_status,
@@ -323,6 +382,17 @@ def _parse_espn_event(event: dict[str, Any], game_date: date) -> dict[str, Any]:
         "homeTeam": home_team,
         "awayTeam": away_team,
         "gameLeaders": {},  # ESPN doesn't provide this in scoreboard
+        # Additional ESPN fields
+        "venue": venue,
+        "broadcasts": broadcasts,
+        "broadcast": broadcast,
+        "odds": odds,
+        "attendance": attendance,
+        "neutralSite": neutral_site,
+        "seasonYear": season_year,
+        "seasonType": season_type,
+        "name": game_name,
+        "shortName": short_name,
     }
 
 
