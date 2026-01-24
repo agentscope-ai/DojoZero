@@ -11,7 +11,9 @@ from typing import Any
 from dojozero.betting import (
     BrokerOperator,
     BrokerOperatorConfig,
-    BetRequest,
+    BetRequestMoneyline,
+    BetRequestSpread,
+    BetRequestTotal,
     OrderType,
     BettingPhase,
     BetStatus,
@@ -486,7 +488,7 @@ class TestBetPlacement:
 
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -544,7 +546,7 @@ class TestBetPlacement:
 
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -604,7 +606,7 @@ class TestBetPlacement:
         # Place limit order
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -672,7 +674,7 @@ class TestBetPlacement:
 
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("10000.00"),  # More than balance
                 selection="home",
                 event_id="test_event",
@@ -743,7 +745,7 @@ class TestBetPlacement:
 
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -792,7 +794,7 @@ class TestBetPlacement:
         # Place limit order
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -856,7 +858,7 @@ class TestBetPlacement:
         # Place and execute market bet
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -920,7 +922,7 @@ class TestBetSettlement:
         # Place bet on home team
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -998,7 +1000,7 @@ class TestBetSettlement:
         # Place bet on home team
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -1075,7 +1077,7 @@ class TestBetSettlement:
         # Place pregame limit order
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -1147,7 +1149,7 @@ class TestStatistics:
         # Place two bets
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -1158,7 +1160,7 @@ class TestStatistics:
 
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -1260,7 +1262,7 @@ class TestStateManagement:
         # Place a bet
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -1334,7 +1336,7 @@ class TestIntegration:
         # 2. Place market bet
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="game1",
@@ -1347,7 +1349,7 @@ class TestIntegration:
         # 3. Place limit order
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="game1",
@@ -1483,13 +1485,12 @@ class TestSpreadBetting:
         # Place spread bet
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestSpread(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.SPREAD,
                 spread_value=Decimal("-3.5"),
             ),
         )
@@ -1541,13 +1542,12 @@ class TestSpreadBetting:
         # Place spread bet on home (-3.5)
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestSpread(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.SPREAD,
                 spread_value=Decimal("-3.5"),
             ),
         )
@@ -1603,13 +1603,12 @@ class TestSpreadBetting:
         # Place spread bet on home (-3.5)
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestSpread(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.SPREAD,
                 spread_value=Decimal("-3.5"),
             ),
         )
@@ -1722,13 +1721,12 @@ class TestSpreadBetting:
         # Place limit order for spread bet
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestSpread(
                 amount=Decimal("50.00"),
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.SPREAD,
                 spread_value=Decimal("-3.5"),
                 limit_odds=Decimal("1.95"),  # Want better odds
             ),
@@ -1804,13 +1802,12 @@ class TestTotalBetting:
         # Place over bet
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestTotal(
                 amount=Decimal("100.00"),
                 selection="over",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.TOTAL,
                 total_value=Decimal("220.5"),
             ),
         )
@@ -1858,13 +1855,12 @@ class TestTotalBetting:
         # Place over bet
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestTotal(
                 amount=Decimal("100.00"),
                 selection="over",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.TOTAL,
                 total_value=Decimal("220.5"),
             ),
         )
@@ -1920,13 +1916,12 @@ class TestTotalBetting:
         # Place under bet
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestTotal(
                 amount=Decimal("100.00"),
                 selection="under",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.TOTAL,
                 total_value=Decimal("220.5"),
             ),
         )
@@ -2039,13 +2034,12 @@ class TestTotalBetting:
         # Place limit order for over bet
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestTotal(
                 amount=Decimal("50.00"),
                 selection="over",
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.TOTAL,
                 total_value=Decimal("220.5"),
                 limit_odds=Decimal("1.90"),  # Want better odds
             ),
@@ -2123,26 +2117,24 @@ class TestMultipleSpreadsTotals:
         # Place bets on different spreads
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestSpread(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.SPREAD,
                 spread_value=Decimal("-3.5"),
             ),
         )
 
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestSpread(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
                 betting_phase=BettingPhase.PRE_GAME,
-                bet_type=BetType.SPREAD,
                 spread_value=Decimal("-4.5"),  # Away gets +4.5
             ),
         )
@@ -2191,7 +2183,7 @@ class TestMultipleSpreadsTotals:
         # Place bet without bet_type (should default to MONEYLINE)
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -2208,6 +2200,81 @@ class TestMultipleSpreadsTotals:
         assert len(active_bets) == 1
         assert active_bets[0].bet_type == BetType.MONEYLINE
         assert active_bets[0].odds == Decimal("1.95")
+
+
+# =============================================================================
+# Agent Tools Configuration Tests
+# =============================================================================
+
+
+class TestAllowedTools:
+    """Test allowed_tools configuration"""
+
+    @pytest_asyncio.fixture
+    async def broker_with_limited_tools(self):
+        """Create broker with limited allowed tools"""
+        config: BrokerOperatorConfig = {
+            "actor_id": "test_broker",
+            "initial_balance": "1000.00",
+            "allowed_tools": ["get_balance", "get_quote", "place_bet"],
+        }
+        context = RuntimeContext(
+            trial_id="test-trial",
+            data_hubs={},
+            stores={},
+            startup=None,
+        )
+        broker = BrokerOperator.from_dict(dict(config), context)
+        await broker.start()
+        yield broker
+        await broker.stop()
+
+    async def test_allowed_tools_filtering(self, broker_with_limited_tools, agent):
+        """Test that only allowed tools are exposed"""
+        broker = broker_with_limited_tools
+        broker.register_agents([agent])  # type: ignore[arg-type]
+
+        # Get tools for agent
+        tools = broker.agent_tools(agent.actor_id)
+        tool_names = [tool.__name__ for tool in tools]
+
+        # Should only have the allowed tools
+        assert "get_balance" in tool_names
+        assert "get_quote" in tool_names
+        assert "place_bet" in tool_names
+
+        # Should NOT have the restricted tools
+        assert "place_bet_spread" not in tool_names
+        assert "place_bet_total" not in tool_names
+        assert "cancel_bet" not in tool_names
+
+    async def test_all_tools_when_none_specified(self, broker, agent):
+        """Test that all tools are available when allowed_tools is None"""
+        broker.register_agents([agent])  # type: ignore[arg-type]
+
+        # Get tools for agent
+        tools = broker.agent_tools(agent.actor_id)
+        tool_names = [tool.__name__ for tool in tools]
+
+        # Should have all tools
+        expected_tools = [
+            "get_balance",
+            "get_quote",
+            "place_bet",
+            "place_bet_spread",
+            "place_bet_total",
+            "cancel_bet",
+            "get_active_bets",
+            "get_pending_orders",
+            "get_bet_history",
+            "get_statistics",
+            "get_available_events",
+        ]
+
+        for tool_name in expected_tools:
+            assert tool_name in tool_names, f"Expected tool {tool_name} not found"
+
+        assert len(tool_names) == len(expected_tools)
 
 
 if __name__ == "__main__":

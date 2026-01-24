@@ -141,3 +141,41 @@ All bet types support both market and limit orders, and odds can be updated dyna
 - Account operations: create_account, deposit, withdraw, get_balance
 - Bet operations: place_bet, cancel_bet
 - Query operations: get_quote, get_active_bets, get_pending_orders, get_bet_history, get_statistics
+
+## 9. Agent Tool Configuration
+
+The broker supports configurable tool exposure via `allowed_tools` in the operator configuration:
+
+```yaml
+operators:
+  - id: betting_broker
+    class: BrokerOperator
+    initial_balance: "1000.00"
+    allowed_tools:
+      - get_balance
+      - get_quote
+      - place_bet
+      - place_bet_spread
+      - place_bet_total
+      - cancel_bet
+      - get_active_bets
+      - get_pending_orders
+      - get_bet_history
+      - get_statistics
+      - get_available_events
+```
+
+**Available Tools:**
+- `get_balance` - Get account balance
+- `get_quote` - Get current odds for an event
+- `place_bet` - Place moneyline bet
+- `place_bet_spread` - Place spread bet
+- `place_bet_total` - Place total (over/under) bet
+- `cancel_bet` - Cancel pending limit order
+- `get_active_bets` - Get active bets
+- `get_pending_orders` - Get pending orders
+- `get_bet_history` - Get bet history
+- `get_statistics` - Get performance statistics
+- `get_available_events` - Get available events
+
+If `allowed_tools` is omitted or `None`, all tools are enabled by default.
