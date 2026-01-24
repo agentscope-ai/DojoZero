@@ -1951,7 +1951,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         target = operator if operator is not None else self
         # Get allowed tools from self (the broker instance), not from target
-        # This works even when target is a Ray proxy
         # None means all tools are allowed
         allowed_tools = getattr(self, "allowed_tools", None)
         allowed_tools_set = (
@@ -1988,10 +1987,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         @tool
         async def place_bet(
             amount: str,
-            selection: str,
+            selection: Literal["home", "away"],
             event_id: str,
-            order_type: str = "MARKET",
-            betting_phase: str = "PRE_GAME",
+            order_type: str = OrderType.MARKET.value,
+            betting_phase: str = BettingPhase.PRE_GAME.value,
             limit_odds: str | None = None,
         ) -> str:
             """Place a moneyline bet on an event.
@@ -2010,7 +2009,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             bet_request = BetRequestMoneyline(
                 amount=Decimal(amount),
-                selection=selection,  # type: ignore[arg-type]
+                selection=selection,
                 event_id=event_id,
                 order_type=OrderType[order_type],
                 betting_phase=BettingPhase[betting_phase],
@@ -2022,11 +2021,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         @tool
         async def place_bet_spread(
             amount: str,
-            selection: str,
+            selection: Literal["home", "away"],
             event_id: str,
             spread_value: str,
-            order_type: str = "MARKET",
-            betting_phase: str = "PRE_GAME",
+            order_type: str = OrderType.MARKET.value,
+            betting_phase: str = BettingPhase.PRE_GAME.value,
             limit_odds: str | None = None,
         ) -> str:
             """Place a spread bet on an event.
@@ -2046,7 +2045,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             bet_request = BetRequestSpread(
                 amount=Decimal(amount),
-                selection=selection,  # type: ignore[arg-type]
+                selection=selection,
                 event_id=event_id,
                 spread_value=Decimal(spread_value),
                 order_type=OrderType[order_type],
@@ -2059,11 +2058,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         @tool
         async def place_bet_total(
             amount: str,
-            selection: str,
+            selection: Literal["over", "under"],
             event_id: str,
             total_value: str,
-            order_type: str = "MARKET",
-            betting_phase: str = "PRE_GAME",
+            order_type: str = OrderType.MARKET.value,
+            betting_phase: str = BettingPhase.PRE_GAME.value,
             limit_odds: str | None = None,
         ) -> str:
             """Place a total (over/under) bet on an event.
@@ -2083,7 +2082,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             bet_request = BetRequestTotal(
                 amount=Decimal(amount),
-                selection=selection,  # type: ignore[arg-type]
+                selection=selection,
                 event_id=event_id,
                 total_value=Decimal(total_value),
                 order_type=OrderType[order_type],

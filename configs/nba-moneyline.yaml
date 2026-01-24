@@ -43,7 +43,7 @@ scenario:
       - place_bet
       - cancel_bet
       - get_active_bets
-      - get_pending_orders
+      - get_pending_order
       - get_bet_history
       - get_statistics
       - get_available_events
