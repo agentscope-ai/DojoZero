@@ -1,4 +1,4 @@
-"""Trial builder for NFL pre-game betting scenario."""
+"""Trial builder for NFL betting scenario."""
 
 import logging
 import re
@@ -23,7 +23,7 @@ from dojozero.data.websearch._processors import (
     InjurySummaryProcessor,
     PowerRankingProcessor,
 )
-from dojozero.nfl_moneyline._agent import (
+from dojozero.nfl._agent import (
     BettingAgent,
 )
 from dojozero.agents import (
@@ -31,7 +31,7 @@ from dojozero.agents import (
     build_agent_specs,
     load_agent_configs_cached,
 )
-from dojozero.nfl_moneyline._datastream import (
+from dojozero.nfl._datastream import (
     NFLPreGameBettingDataHubDataStream,
     NFLPreGameBettingDataHubDataStreamConfig,
 )
@@ -71,7 +71,7 @@ SYNTHETIC_EVENT_TYPE_MAP: dict[str, list[str]] = {
 class HubConfig(BaseModel):
     """Hub configuration."""
 
-    persistence_file: str = Field(default="outputs/nfl_pregame_events.jsonl")
+    persistence_file: str = Field(default="outputs/nfl_events.jsonl")
     enable_persistence: bool = Field(default=True)
 
 
@@ -102,17 +102,17 @@ class OperatorConfig(BaseModel):
     )
 
 
-class NFLPreGameBettingTrialParams(BaseModel):
-    """Trial parameters for NFL pre-game betting scenario."""
+class NFLTrialParams(BaseModel):
+    """Trial parameters for NFL scenario."""
 
     # NFL game configuration
     espn_game_id: str = Field(..., description="ESPN game ID (e.g., '401671827')")
 
     # Hub configuration (optional, can be nested or flat)
     hub: HubConfig | None = Field(default=None)
-    hub_id: str = Field(default="nfl_pregame_hub")
-    persistence_file: str | None = Field(default=None)
-    enable_persistence: bool | None = Field(default=None)
+    hub_id: str = Field(default="nfl_hub")
+    persistence_file: str = Field(default="outputs/nfl_events.jsonl")
+    enable_persistence: bool = Field(default=True)
 
     # Store configuration
     websearch_store_id: str = Field(default="websearch_store")
@@ -122,8 +122,13 @@ class NFLPreGameBettingTrialParams(BaseModel):
     data_streams: list[DataStreamConfig] | None = Field(default=None)
 
     # Event type configuration (which event types to create streams for) - used if data_streams not provided
-    event_types: list[str] | None = Field(
-        default=None,
+    event_types: list[str] = Field(
+        default_factory=lambda: [
+            "raw_web_search",
+            "injury_summary",
+            "power_ranking",
+            "expert_prediction",
+        ],
         description="List of event types to create streams for (used if data_streams not provided)",
     )
 
@@ -168,7 +173,7 @@ class NFLPreGameBettingTrialParams(BaseModel):
 
 def _build_trial_spec(
     trial_id: str,
-    params: NFLPreGameBettingTrialParams,
+    params: NFLTrialParams,
 ) -> TrialSpec:
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
 
@@ -202,16 +207,13 @@ def _build_trial_spec(
                 )
 
     # Extract hub configuration (support both hierarchical and flat)
+    hub_id = params.hub_id
     if params.hub:
-        hub_id = params.hub_id
         persistence_file = params.hub.persistence_file
         enable_persistence = params.hub.enable_persistence
     else:
-        hub_id = params.hub_id
-        persistence_file = params.persistence_file or "outputs/nfl_pregame_events.jsonl"
-        enable_persistence = (
-            params.enable_persistence if params.enable_persistence is not None else True
-        )
+        persistence_file = params.persistence_file
+        enable_persistence = params.enable_persistence
 
     # Extract event_types from data_streams if provided, otherwise use event_types field
     if params.data_streams:
@@ -220,22 +222,10 @@ def _build_trial_spec(
             "Extracted event types from data_streams config: %s",
             event_types_list,
         )
-    elif params.event_types:
+    else:
         event_types_list = params.event_types
         logger.info(
             "Using event_types from params: %s",
-            event_types_list,
-        )
-    else:
-        # Default event types for NFL
-        event_types_list = [
-            "raw_web_search",
-            "injury_summary",
-            "power_ranking",
-            "expert_prediction",
-        ]
-        logger.info(
-            "Using default event types: %s",
             event_types_list,
         )
 
@@ -517,15 +507,15 @@ def _build_nfl_runtime_context(spec: TrialSpec) -> RuntimeContext:
 
 
 register_trial_builder(
-    "nfl-moneyline",
-    NFLPreGameBettingTrialParams,
+    "nfl",
+    NFLTrialParams,
     _build_trial_spec,
-    description="NFL moneyline betting scenario with relevant data inputs",
+    description="NFL betting scenario with relevant data inputs",
     context_builder=_build_nfl_runtime_context,
     example_params={
         "espn_game_id": "401671827",
         "hub": {
-            "persistence_file": "outputs/nfl_moneyline_events.jsonl",
+            "persistence_file": "outputs/nfl_events.jsonl",
             "enable_persistence": True,
         },
         "data_streams": [

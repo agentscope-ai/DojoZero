@@ -1,4 +1,4 @@
-"""Trial builder for NBA pre-game betting scenario."""
+"""Trial builder for NBA betting scenario."""
 
 import logging
 import re
@@ -24,7 +24,7 @@ from dojozero.data.websearch._processors import (
     InjurySummaryProcessor,
     PowerRankingProcessor,
 )
-from dojozero.nba_moneyline._agent import (
+from dojozero.nba._agent import (
     BettingAgent,
 )
 from dojozero.agents import (
@@ -32,7 +32,7 @@ from dojozero.agents import (
     build_agent_specs,
     load_agent_configs_cached,
 )
-from dojozero.nba_moneyline._datastream import (
+from dojozero.nba._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
 )
@@ -73,7 +73,7 @@ SYNTHETIC_EVENT_TYPE_MAP: dict[str, list[str]] = {
 class HubConfig(BaseModel):
     """Hub configuration."""
 
-    persistence_file: str = Field(default="outputs/nba_pregame_events.jsonl")
+    persistence_file: str = Field(default="outputs/nba_events.jsonl")
     enable_persistence: bool = Field(default=True)
 
 
@@ -104,8 +104,8 @@ class OperatorConfig(BaseModel):
     )
 
 
-class NBAPreGameBettingTrialParams(BaseModel):
-    """Trial parameters for NBA pre-game betting scenario."""
+class NBATrialParams(BaseModel):
+    """Trial parameters for NBA scenario."""
 
     # NBA game configuration
     espn_game_id: str = Field(..., description="ESPN game ID (e.g., '401810490')")
@@ -120,9 +120,9 @@ class NBAPreGameBettingTrialParams(BaseModel):
 
     # Hub configuration (optional, can be nested or flat)
     hub: HubConfig | None = Field(default=None)
-    hub_id: str = Field(default="nba_pregame_hub")
-    persistence_file: str | None = Field(default=None)
-    enable_persistence: bool | None = Field(default=None)
+    hub_id: str = Field(default="nba_hub")
+    persistence_file: str = Field(default="outputs/nba_events.jsonl")
+    enable_persistence: bool = Field(default=True)
 
     # Store configuration
     websearch_store_id: str = Field(default="websearch_store")
@@ -132,8 +132,13 @@ class NBAPreGameBettingTrialParams(BaseModel):
     data_streams: list[DataStreamConfig] | None = Field(default=None)
 
     # Event type configuration (which event types to create streams for) - used if data_streams not provided
-    event_types: list[str] | None = Field(
-        default=None,
+    event_types: list[str] = Field(
+        default_factory=lambda: [
+            "raw_web_search",
+            "injury_summary",
+            "power_ranking",
+            "expert_prediction",
+        ],
         description="List of event types to create streams for (used if data_streams not provided)",
     )
 
@@ -186,7 +191,7 @@ class NBAPreGameBettingTrialParams(BaseModel):
 
 async def _build_trial_spec(
     trial_id: str,
-    params: NBAPreGameBettingTrialParams,
+    params: NBATrialParams,
 ) -> TrialSpec:
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
     from dojozero.data.nba._utils import get_game_info_by_id_async
@@ -237,16 +242,13 @@ async def _build_trial_spec(
                 )
 
     # Extract hub configuration (support both hierarchical and flat)
+    hub_id = params.hub_id
     if params.hub:
-        hub_id = params.hub_id
         persistence_file = params.hub.persistence_file
         enable_persistence = params.hub.enable_persistence
     else:
-        hub_id = params.hub_id
-        persistence_file = params.persistence_file or "outputs/nba_pregame_events.jsonl"
-        enable_persistence = (
-            params.enable_persistence if params.enable_persistence is not None else True
-        )
+        persistence_file = params.persistence_file
+        enable_persistence = params.enable_persistence
 
     # Extract event_types from data_streams if provided, otherwise use event_types field
     if params.data_streams:
@@ -255,22 +257,10 @@ async def _build_trial_spec(
             "Extracted event types from data_streams config: %s",
             event_types_list,
         )
-    elif params.event_types:
+    else:
         event_types_list = params.event_types
         logger.info(
             "Using event_types from params: %s",
-            event_types_list,
-        )
-    else:
-        # Default event types
-        event_types_list = [
-            "raw_web_search",
-            "injury_summary",
-            "power_ranking",
-            "expert_prediction",
-        ]
-        logger.info(
-            "Using default event types: %s",
             event_types_list,
         )
 
@@ -476,7 +466,7 @@ async def _build_trial_spec(
     # Build metadata with game information and hub config
     # This metadata is used by build_runtime_context and store factories
     metadata: dict[str, Any] = {
-        "sample": "nba-moneyline",
+        "sample": "nba",
         "espn_game_id": params.espn_game_id,
         "hub_id": hub_id,
         "persistence_file": persistence_file,
@@ -511,7 +501,7 @@ async def _build_trial_spec(
 
 
 def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
-    """Build runtime context for NBA moneyline betting trial.
+    """Build runtime context for NBA betting trial.
 
     Uses the generic build_runtime_context with registered store factories
     to create DataHub and store instances.
@@ -525,8 +515,8 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
     metadata = dict(spec.metadata)  # Convert to regular dict for type compatibility
 
     # Get hub configuration from metadata
-    hub_id_raw = metadata.get("hub_id", "nba_moneyline_hub")
-    hub_id = str(hub_id_raw) if hub_id_raw else "nba_moneyline_hub"
+    hub_id_raw = metadata.get("hub_id", "nba_hub")
+    hub_id = str(hub_id_raw) if hub_id_raw else "nba_hub"
 
     persistence_file_raw = metadata.get("persistence_file")
     persistence_file = str(persistence_file_raw) if persistence_file_raw else None
@@ -556,15 +546,15 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
 
 
 register_trial_builder(
-    "nba-moneyline",
-    NBAPreGameBettingTrialParams,
+    "nba",
+    NBATrialParams,
     _build_trial_spec,
-    description="NBA moneyline betting scenario with relevant data inputs",
+    description="NBA betting scenario with relevant data inputs",
     context_builder=_build_nba_runtime_context,
     example_params={
         "espn_game_id": "401810490",
         "hub": {
-            "persistence_file": "outputs/nba_moneyline_events.jsonl",
+            "persistence_file": "outputs/nba_events.jsonl",
             "enable_persistence": True,
         },
         "data_streams": [

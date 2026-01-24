@@ -1,4 +1,4 @@
-"""NFL pre-game betting stream initializer for triggering web searches."""
+"""NFL betting stream initializer for triggering web searches."""
 
 import logging
 from typing import Any
@@ -39,7 +39,7 @@ class NFLStreamInitializer:
         week: int | None = None,
         search_queries: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Initialize the NFL stream initializer.
+        """Initialize the NFL pre-game stream initializer.
 
         Args:
             store: WebSearchStore instance to use for searches

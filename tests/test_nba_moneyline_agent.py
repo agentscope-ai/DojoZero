@@ -15,7 +15,7 @@ from dojozero.betting import BrokerOperator
 from dojozero.core import RuntimeContext, AgentSpec, OperatorSpec, StreamEvent
 from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
 from dojozero.data.polymarket._events import OddsUpdateEvent
-from dojozero.nba_moneyline._agent import BettingAgent, BettingAgentConfig
+from dojozero.nba._agent import BettingAgent, BettingAgentConfig
 from dojozero.ray_runtime import RayActorRuntimeProvider
 
 # Import shared fixtures - conftest.py is auto-loaded by pytest

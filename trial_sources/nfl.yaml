@@ -24,7 +24,7 @@ sport_type: nfl
 
 # Configuration for trials created from this source
 config:
-  scenario_name: nfl-moneyline
+  scenario_name: nfl
   scenario_config:
     hub:
       enable_persistence: true

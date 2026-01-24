@@ -1,5 +1,5 @@
 scenario:
-  name: nfl-moneyline
+  name: nfl
   config:
     espn_game_id: '401547417'  # ESPN game ID for the NFL game
 

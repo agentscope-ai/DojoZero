@@ -1,4 +1,4 @@
-"""NBA pre-game betting DataStream with search initialization."""
+"""NFL pre-game betting DataStream with search initialization."""
 
 import logging
 from typing import Any, TypedDict
@@ -6,7 +6,7 @@ from typing import Any, TypedDict
 from dojozero.core import RuntimeContext
 from dojozero.data import DataHub, WebSearchStore
 from dojozero.data._streams import DataHubDataStream as BaseDataHubDataStream
-from dojozero.nba_moneyline._initializer import NBAStreamInitializer
+from dojozero.nfl._initializer import NFLStreamInitializer
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +15,8 @@ class _ActorIdConfig(TypedDict):
     actor_id: str
 
 
-class NBAPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
-    """Configuration for NBA pre-game betting DataHubDataStream."""
+class NFLPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
+    """Configuration for NFL pre-game betting DataHubDataStream."""
 
     hub_id: str
     persistence_file: str
@@ -28,8 +28,8 @@ class NBAPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
     websearch_store_id: (
         str  # Store ID for triggering searches (only for raw_web_search stream)
     )
-    home_team_tricode: str  # Team metadata for generating queries
-    away_team_tricode: str
+    home_team_abbreviation: str  # Team metadata for generating queries
+    away_team_abbreviation: str
     home_team_name: str  # Full team name for search queries
     away_team_name: str
     game_date: str
@@ -38,11 +38,11 @@ class NBAPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
     ]  # Custom search queries (only for raw_web_search stream)
 
 
-class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
-    """NBA pre-game betting DataStream that extends generic DataHubDataStream.
+class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
+    """NFL DataStream that extends generic DataHubDataStream.
 
-    Adds NBA-specific initialization logic (triggering web searches) via
-    NBAStreamInitializer.
+    Adds NFL-specific initialization logic (triggering web searches) via
+    NFLPreGameStreamInitializer.
     """
 
     def __init__(
@@ -54,8 +54,8 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         event_type: str | None = None,
         event_types: list[str] | None = None,
         store: WebSearchStore | None = None,
-        home_team_tricode: str | None = None,
-        away_team_tricode: str | None = None,
+        home_team_abbreviation: str | None = None,
+        away_team_abbreviation: str | None = None,
         home_team_name: str | None = None,
         away_team_name: str | None = None,
         game_date: str | None = None,
@@ -63,15 +63,15 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         sport_type: str = "",
     ) -> None:
         # Create initializer if store is provided (team names or search_queries required)
-        initializer: NBAStreamInitializer | None = None
+        initializer: NFLStreamInitializer | None = None
         if store and (search_queries or (home_team_name and away_team_name)):
-            initializer = NBAStreamInitializer(
+            initializer = NFLStreamInitializer(
                 store=store,
                 home_team_name=home_team_name,
                 away_team_name=away_team_name,
                 game_date=game_date,
-                home_team_tricode=home_team_tricode,
-                away_team_tricode=away_team_tricode,
+                home_team_abbreviation=home_team_abbreviation,
+                away_team_abbreviation=away_team_abbreviation,
                 search_queries=search_queries,
             )
 
@@ -88,9 +88,9 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
     @classmethod
     def from_dict(
         cls,
-        config: NBAPreGameBettingDataHubDataStreamConfig,
+        config: NFLPreGameBettingDataHubDataStreamConfig,
         context: RuntimeContext,
-    ) -> "NBAPreGameBettingDataHubDataStream":
+    ) -> "NFLPreGameBettingDataHubDataStream":
         # Get hub and store from context (provided by dashboard during materialization)
         hub: DataHub | None = None
         store: WebSearchStore | None = None
@@ -114,8 +114,8 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             event_type=config.get("event_type"),
             event_types=config.get("event_types", []),
             store=store,
-            home_team_tricode=config.get("home_team_tricode"),
-            away_team_tricode=config.get("away_team_tricode"),
+            home_team_abbreviation=config.get("home_team_abbreviation"),
+            away_team_abbreviation=config.get("away_team_abbreviation"),
             home_team_name=config.get("home_team_name"),
             away_team_name=config.get("away_team_name"),
             game_date=config.get("game_date"),

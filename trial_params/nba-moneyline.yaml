@@ -1,5 +1,5 @@
 scenario:
-  name: nba-moneyline
+  name: nba
   config:
     espn_game_id: '401810490'  # ESPN game ID for the NBA game
 

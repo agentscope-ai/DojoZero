@@ -25,7 +25,7 @@ sport_type: nba
 
 # Configuration for trials created from this source
 config:
-  scenario_name: nba-moneyline
+  scenario_name: nba
   scenario_config:
     hub:
       enable_persistence: true
