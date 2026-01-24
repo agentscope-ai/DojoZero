@@ -17,9 +17,8 @@ src/dojozero/
 │   ├── polymarket/    # Prediction market odds
 │   └── websearch/     # Web search with LLM processing
 ├── betting/           # Shared betting utilities
-├── nba_moneyline/     # NBA moneyline betting scenario
-├── nfl_moneyline/     # NFL moneyline betting scenario
-├── nfl_game/          # NFL game data support
+├── nba/               # NBA betting scenario
+├── nfl/               # NFL betting scenario
 ├── samples/           # Reference implementations (bounded_random)
 ├── dashboard_server/  # Trial orchestration server
 ├── arena_server/      # Web UI server

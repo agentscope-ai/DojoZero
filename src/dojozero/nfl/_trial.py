@@ -476,8 +476,8 @@ def _build_nfl_runtime_context(spec: TrialSpec) -> RuntimeContext:
     metadata = dict(spec.metadata)  # Convert to regular dict for type compatibility
 
     # Get hub configuration from metadata
-    hub_id_raw = metadata.get("hub_id", "nfl_moneyline_hub")
-    hub_id = str(hub_id_raw) if hub_id_raw else "nfl_moneyline_hub"
+    hub_id_raw = metadata.get("hub_id", "nfl_hub")
+    hub_id = str(hub_id_raw) if hub_id_raw else "nfl_hub"
 
     persistence_file_raw = metadata.get("persistence_file")
     persistence_file = str(persistence_file_raw) if persistence_file_raw else None
