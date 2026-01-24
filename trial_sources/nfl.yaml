@@ -129,7 +129,7 @@ config:
       - nfl_play_stream
 
   # Schedule options (these are TrialSourceConfig fields, not scenario_config)
-  pre_start_hours: 1.0           # Start trial 1 hour before kickoff
+  pre_start_hours: 0.1           # Start trial 0.1 hours before kickoff
   check_interval_seconds: 60.0   # Check game status every 60 seconds
   auto_stop_on_completion: true  # Stop trial when game finishes
   data_dir: outputs              # Output directory for persistence files

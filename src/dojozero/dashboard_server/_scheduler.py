@@ -796,15 +796,15 @@ class ScheduleManager:
 
         # Schedule trials for new games
         scheduled_trials: list[ScheduledTrial] = []
-        now = datetime.now(timezone.utc)
 
         for game in games:
-            # Skip games without time or already past
+            # Skip games without time
             if game.game_time_utc is None:
                 continue
 
-            # Skip games that have already started
-            if game.game_time_utc <= now:
+            # Skip games that have already finished (status 3 = finished)
+            # Allow scheduling for: scheduled (1), in-progress (2)
+            if game.status == 3:
                 continue
 
             # Skip if already scheduled for this source
