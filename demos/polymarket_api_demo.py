@@ -239,7 +239,6 @@ async def test_polymarket_store_logic(market_url: str):
                     stream_id=f"game_init_{test_event_id}",
                     payload=GameInitializeEvent(
                         event_id=test_event_id,
-                        game_id=test_event_id,
                         home_team="Test Home",
                         away_team="Test Away",
                         game_time=datetime.now(),

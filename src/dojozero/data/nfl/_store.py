@@ -583,8 +583,8 @@ class NFLStore(DataStore):
         events: list[DataEvent] = []
         identifier = identifier or {}
 
-        # Get target event_id for filtering (if monitoring a single game)
-        target_event_id = identifier.get("event_id")
+        # Get espn_game_id for filtering (if monitoring a single game)
+        espn_game_id = identifier.get("espn_game_id")
 
         # Poll scoreboard for game status/odds updates
         if self._should_poll_endpoint("scoreboard"):
@@ -598,26 +598,28 @@ class NFLStore(DataStore):
 
             scoreboard_data = await self._api.fetch("scoreboard", scoreboard_params)
             if scoreboard_data:
-                # Pass target_event_id to filter to single game (if configured)
+                # Pass espn_game_id to filter to single game (if configured)
                 scoreboard_events = self._parse_api_response(
-                    scoreboard_data, target_event_id
+                    scoreboard_data, espn_game_id
                 )
                 events.extend(scoreboard_events)
                 self._record_poll_time("scoreboard")
 
         # Poll summary for specific game
-        if "event_id" in identifier:
-            event_id = identifier["event_id"]
+        if "espn_game_id" in identifier:
+            espn_game_id = identifier["espn_game_id"]
 
             if self._should_poll_endpoint("summary"):
-                summary_data = await self._api.fetch("summary", {"event_id": event_id})
+                summary_data = await self._api.fetch(
+                    "summary", {"event_id": espn_game_id}
+                )
                 if summary_data:
                     summary_events = self._parse_api_response(summary_data)
                     events.extend(summary_events)
                     self._record_poll_time("summary")
 
             if self._should_poll_endpoint("plays"):
-                plays_data = await self._api.fetch("plays", {"event_id": event_id})
+                plays_data = await self._api.fetch("plays", {"event_id": espn_game_id})
                 if plays_data:
                     plays_events = self._parse_api_response(plays_data)
                     events.extend(plays_events)

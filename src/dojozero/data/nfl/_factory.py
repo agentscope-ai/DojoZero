@@ -14,7 +14,7 @@ class NFLStoreFactory(StoreFactory):
     """Factory for creating NFLStore instances.
 
     Required metadata:
-        - event_id: ESPN event ID (e.g., "401671827")
+        - espn_game_id: ESPN game ID (e.g., "401671827")
 
     Optional metadata:
         - poll_intervals: Dict of endpoint -> interval in seconds
@@ -23,7 +23,7 @@ class NFLStoreFactory(StoreFactory):
 
     def get_required_metadata_keys(self) -> list[str]:
         """Return required metadata keys."""
-        return ["event_id"]
+        return ["espn_game_id"]
 
     def create_store(
         self,
@@ -36,14 +36,14 @@ class NFLStoreFactory(StoreFactory):
         Args:
             store_id: Unique identifier for the store
             metadata: Trial metadata containing:
-                - event_id: ESPN event ID
+                - espn_game_id: ESPN game ID
                 - poll_intervals: Optional custom poll intervals
             hub: DataHub to connect the store to
 
         Returns:
             Configured NFLStore connected to hub
         """
-        event_id = metadata.get("event_id", "")
+        espn_game_id = metadata.get("espn_game_id", "")
         poll_intervals = metadata.get("nfl_poll_intervals")
 
         api = NFLExternalAPI()
@@ -61,8 +61,8 @@ class NFLStoreFactory(StoreFactory):
                 api=api,
             )
 
-        # Set poll identifier
-        store.set_poll_identifier({"event_id": event_id})
+        # Set poll identifier - espn_game_id is used to fetch game data from ESPN API
+        store.set_poll_identifier({"espn_game_id": espn_game_id})
 
         # Connect to hub
         hub.connect_store(store)

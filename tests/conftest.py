@@ -77,7 +77,6 @@ def nba_game_init_data(test_event_id):
 
     return {
         "event_id": test_event_id,
-        "game_id": test_event_id,
         "home_team": "Lakers",
         "away_team": "Warriors",
         "game_time": datetime.now(),

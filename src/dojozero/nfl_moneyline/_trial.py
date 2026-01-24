@@ -106,7 +106,7 @@ class NFLPreGameBettingTrialParams(BaseModel):
     """Trial parameters for NFL pre-game betting scenario."""
 
     # NFL game configuration
-    event_id: str = Field(..., description="ESPN event ID (e.g., '401671827')")
+    espn_game_id: str = Field(..., description="ESPN game ID (e.g., '401671827')")
 
     # Hub configuration (optional, can be nested or flat)
     hub: HubConfig | None = Field(default=None)
@@ -144,7 +144,7 @@ class NFLPreGameBettingTrialParams(BaseModel):
     )
 
     # Search queries (optional, for triggering searches)
-    # If not provided, will be auto-generated based on event_id
+    # If not provided, will be auto-generated based on espn_game_id
     # Supports query templates with placeholders: {teams}, {home_team}, {away_team}, {date}, {home_abbrev}, {away_abbrev}, {week}
     # Use "template" field for templates or "query" field for literal queries
     search_queries: list[dict[str, Any]] = Field(
@@ -172,9 +172,9 @@ def _build_trial_spec(
 ) -> TrialSpec:
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
 
-    # For NFL, we'll use the event_id directly since NFL data comes from ESPN
+    # For NFL, we'll use the espn_game_id directly since NFL data comes from ESPN
     # Team info will be filled in from the store when the game initializes
-    event_id = params.event_id
+    espn_game_id = params.espn_game_id
     home_team_abbreviation: str | None = None
     away_team_abbreviation: str | None = None
     home_team_name: str | None = None
@@ -182,12 +182,12 @@ def _build_trial_spec(
     game_date: str | None = None
 
     logger.info(
-        "Building NFL trial for event_id=%s (team info will be populated from store)",
-        event_id,
+        "Building NFL trial for espn_game_id=%s (team info will be populated from store)",
+        espn_game_id,
     )
 
     # Fallback: extract game_date from persistence_file path if not available
-    # Path format: data/nfl-betting/YYYY-MM-DD/event_id.jsonl
+    # Path format: data/nfl-betting/YYYY-MM-DD/espn_game_id.jsonl
     if not game_date:
         persistence_path = (
             params.hub.persistence_file if params.hub else params.persistence_file
@@ -446,7 +446,7 @@ def _build_trial_spec(
     # This metadata is used by build_runtime_context and store factories
     metadata: dict[str, Any] = {
         "sample": "nfl-moneyline",
-        "event_id": params.event_id,
+        "espn_game_id": params.espn_game_id,
         "hub_id": hub_id,
         "persistence_file": persistence_file,
         "enable_persistence": enable_persistence,
@@ -523,7 +523,7 @@ register_trial_builder(
     description="NFL moneyline betting scenario with relevant data inputs",
     context_builder=_build_nfl_runtime_context,
     example_params={
-        "event_id": "401671827",
+        "espn_game_id": "401671827",
         "hub": {
             "persistence_file": "outputs/nfl_moneyline_events.jsonl",
             "enable_persistence": True,
