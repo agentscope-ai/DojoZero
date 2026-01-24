@@ -727,16 +727,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 away_odds = self._moneyline_to_decimal(moneyline_away)
 
         # Extract spread updates (optional - for backward compatibility)
-        spread_updates = getattr(data_event, "spread_updates", [])
-        if not spread_updates and hasattr(data_event, "spread_updates"):
-            # Handle case where spread_updates is None
-            spread_updates = []
+        spread_updates = getattr(data_event, "spread_updates", None) or []
 
         # Extract total updates (optional - for backward compatibility)
-        total_updates = getattr(data_event, "total_updates", [])
-        if not total_updates and hasattr(data_event, "total_updates"):
-            # Handle case where total_updates is None
-            total_updates = []
+        total_updates = getattr(data_event, "total_updates", None) or []
 
         # Check if we have any odds to update (moneyline OR spreads OR totals)
         has_moneyline = home_odds is not None and away_odds is not None
