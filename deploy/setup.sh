@@ -155,9 +155,9 @@ if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
     TRIAL_CHOICE="${TRIAL_CHOICE:-1}"
 
     if [ "$TRIAL_CHOICE" = "2" ]; then
-        TRIAL_CONFIG_PATH="configs/nfl-moneyline.yaml"
+        TRIAL_CONFIG_PATH="trial_params/nfl-moneyline.yaml"
     else
-        TRIAL_CONFIG_PATH="configs/nba-moneyline.yaml"
+        TRIAL_CONFIG_PATH="trial_params/nba-moneyline.yaml"
     fi
 
     # Build OSS flag
@@ -220,10 +220,10 @@ if [ ! -f "$PROJECT_ROOT/.env" ]; then
     echo "   # Edit .env with your API keys"
     echo ""
     echo "2. Test the trial runner manually:"
-    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py configs/nba-moneyline.yaml"
+    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml"
 else
     echo "1. Test the trial runner manually:"
-    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py configs/nba-moneyline.yaml"
+    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml"
 fi
 echo ""
 echo "For more options, see deploy/DEPLOYMENT.md"

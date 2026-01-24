@@ -19,33 +19,46 @@ This installs DojoZero for running trials only. For development workflows (tests
 lint, editable installs), see the [Development Setup](#development-setup)
 section below.
 
+## Configuration Files
+
+DojoZero uses two types of YAML configuration files:
+
+| File Type | Directory | Purpose | Used With |
+|-----------|-----------|---------|-----------|
+| **Trial params** | `trial_params/` | Run a single trial for a specific game | `dojo0 run`, `dojo0 backtest` |
+| **Trial sources** | `trial_sources/` | Auto-discover games and schedule trials | `dojo0 serve --trial-source` |
+
+**Trial params** define a complete trial specification with a specific `game_id`/`event_id`. Use these for manual trial runs (see [Standalone Usage](#standalone-usage)) or backtesting (see [Backtest Usage](#backtest-usage)).
+
+**Trial sources** define how to discover upcoming games and create trials automatically. The Dashboard Server periodically syncs with sports APIs (NBA/NFL) and schedules trials based on game times. See [Trial Sources (Automatic Scheduling)](#trial-sources-automatic-scheduling).
+
 ## Standalone Usage
 
-DojoZero trials start from a params file that names the trial builder and its
+Trials start from a trial params file that names the trial builder and its
 inputs. Each builder defines the scenario—the combination of data streams,
 operators, and agents that act together during the trial. Use `dojo0
 list-builders` to see registered scenarios, then run `dojo0 get-builder
 <name> --create-example-params` (or author the params file directly):
 
 ```yaml
-# sample_trial.yaml
+# trial_params/sample.yaml
 scenario:
-	name: samples.bounded-random
-	config:
-		total_events: 5
-		interval_seconds: 0.0
+  name: samples.bounded-random
+  config:
+    total_events: 5
+    interval_seconds: 0.0
 ```
 
 Launch the trial by pointing `dojo0 run` at the params file (add `--trial-id`
 to set a friendly identifier, otherwise a UUID is generated):
 
 ```bash
-dojo0 run --params sample_trial.yaml --trial-id sample-trial
+dojo0 run --params trial_params/sample.yaml --trial-id sample-trial
 ```
 
 Use `dojo0 list-builders` to discover registered scenarios (their
-data streams, operators, and agents), and add imports with repeated `--import-module`
-flags whenever your builder lives outside the defaults.
+data streams, operators, and agents). For custom scenarios in external modules,
+add the `imports` key to your params file (see [Loading Custom Scenarios](#loading-custom-scenarios)).
 
 ### Resuming trials
 
@@ -63,18 +76,6 @@ dojo0 run --trial-id sample-trial --resume-latest
 You can still start a new trial from a checkpoint by supplying both `--params`
 and `--checkpoint-id`; the CLI applies the checkpoint before launching.
 
-### Backtest Mode
-
-Run backtesting from historical event files:
-
-```bash
-dojo0 backtest \
-  --events outputs/nba_betting_events.jsonl \
-  --params configs/nba-moneyline.yaml \
-  --speed 2.0 \
-  --max-sleep 20.0
-```
-
 ## Server Usage
 
 The Dashboard Server (`dojo0 serve`) manages trials and exports traces via OTLP. Submit trials to a running server using the `--server` flag with `dojo0 run` or `dojo0 backtest`.
@@ -89,11 +90,7 @@ docker run -d --name jaeger \
 dojo0 serve --trace-backend jaeger
 
 # 3. Submit a trial (in another terminal)
-dojo0 run --params configs/nba-moneyline.yaml --trial-id test --server http://localhost:8000
-
-# Or submit a backtest trial
-dojo0 backtest --params configs/nba-moneyline.yaml --events outputs/nba_betting_events.jsonl \
-  --trial-id backtest-test --speed 1.0 --max-sleep 20 --server http://localhost:8000
+dojo0 run --params trial_params/nba-moneyline.yaml --trial-id test --server http://localhost:8000
 ```
 
 ### Dashboard Server Options
@@ -128,6 +125,43 @@ CLI options:
 - `--store-directory` - Directory for filesystem store (default: ./dojozero-store)
 - `--runtime-provider {local,ray}` - Runtime provider (default: local)
 - `--ray-config` - Path to Ray runtime configuration YAML file
+
+### Trial Sources (Automatic Scheduling)
+
+Trial sources enable automatic game discovery and trial scheduling. When the server starts with `--trial-source`, it periodically syncs with sports APIs to find upcoming games and schedules trials to start before each game.
+
+```yaml
+# trial_sources/nba.yaml
+source_id: nba-moneyline-source
+sport_type: nba
+
+config:
+  scenario_name: nba-moneyline
+  scenario_config:
+    # Same structure as trial params, but without game_id
+    # (game_id is filled in automatically for each discovered game)
+    hub:
+      enable_persistence: true
+    data_streams:
+      # ... stream definitions
+    operators:
+      # ... operator definitions
+    agents:
+      # ... agent definitions
+
+  # Scheduling options
+  pre_start_hours: 2.0           # Start trial 2 hours before game
+  check_interval_seconds: 60.0   # Check game status every 60 seconds
+  auto_stop_on_completion: true  # Stop trial when game finishes
+```
+
+Manage trial sources via CLI:
+```bash
+dojo0 list-sources --server http://localhost:8000
+dojo0 list-trials --scheduled --server http://localhost:8000
+dojo0 remove-source <source_id> --server http://localhost:8000
+dojo0 clear-schedules --server http://localhost:8000
+```
 
 ### Auto-Resume of Interrupted Trials
 
@@ -185,6 +219,61 @@ npm run dev      # Start dev server at http://localhost:5173
 ```
 
 Ensure Arena Server is running at `http://localhost:3001`.
+
+## Backtest Usage
+
+Run backtesting to replay historical events through agents. This allows testing agent behavior against recorded data.
+
+```bash
+# Single file
+dojo0 backtest \
+  --events outputs/nba_betting_events.jsonl \
+  --params trial_params/nba-moneyline.yaml \
+  --speed 2.0 \
+  --max-sleep 20.0
+
+# Multiple files with glob pattern
+dojo0 backtest \
+  --events "outputs/2025-01-*/*.jsonl" \
+  --params trial_params/nba-moneyline.yaml \
+  --speed 2.0
+
+# OSS files (requires oss2 package)
+dojo0 backtest \
+  --events "oss://bucket/prefix/*.jsonl" \
+  --params trial_params/nba-moneyline.yaml
+
+# Submit to Dashboard Server
+dojo0 backtest \
+  --events outputs/nba_betting_events.jsonl \
+  --params trial_params/nba-moneyline.yaml \
+  --server http://localhost:8000
+```
+
+CLI options:
+- `--events` - Path(s) to JSONL event files (supports glob patterns and OSS URLs)
+- `--params` - Trial params YAML file
+- `--speed` - Playback speed multiplier (default: 1.0 = real-time)
+- `--max-sleep` - Maximum sleep between events in seconds (default: 20.0)
+- `--trial-id` - Custom trial ID (auto-generated from filename if not specified)
+- `--server` - Submit to Dashboard Server instead of running locally
+
+Files are processed sequentially in sorted order. Each file gets a unique trial ID based on the filename.
+
+### Params Usage in Backtest
+
+In backtest mode, events are replayed from the JSONL file rather than fetched live. The params file is still required but certain fields are ignored:
+
+**Ignored fields:**
+- `game_id` / `event_id` - Events come from the file, not live sources
+- `hub.persistence_file` - Backtest uses an in-memory hub (no persistence)
+- `hub.enable_persistence` - Always disabled in backtest
+- Data stream `initializer` configs - No live data fetching occurs
+
+**Used fields:**
+- `agents` - Agent configurations (IDs, classes, config paths, subscriptions)
+- `operators` - Operator configurations
+- `data_streams` - Stream definitions for routing events to agents
 
 ## Runtime & Store Configuration
 

@@ -5,7 +5,7 @@
 1. Transfer project: `scp -r /path/to/DojoZero user@host:/path/` or `git clone`
 2. Run setup: `cd DojoZero && chmod +x deploy/setup.sh && ./deploy/setup.sh` (creates `.env.template` if missing)
 3. Configure: `cp .env.template .env && nano .env` (add `DOJOZERO_TAVILY_API_KEY`, `DOJOZERO_DASHSCOPE_API_KEY`, `DOJOZERO_PROXY_URL`, `DOJOZERO_POLY_PRIVATE_KEY`)
-4. Test: `python deploy/run_daily_trials.py configs/nba-moneyline.yaml`
+4. Test: `python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml`
 
 ## Usage
 
@@ -13,19 +13,19 @@ The script requires a config file and automatically detects trial type (NBA/NFL)
 
 ```bash
 # NBA trials (local mode)
-python deploy/run_daily_trials.py configs/nba-moneyline.yaml
-python deploy/run_daily_trials.py configs/nba-moneyline.yaml --date 2025-01-20
+python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml
+python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --date 2025-01-20
 
 # NFL trials (local mode)
-python deploy/run_daily_trials.py configs/nfl-moneyline.yaml
-python deploy/run_daily_trials.py configs/nfl-moneyline.yaml --date 2025-01-20
+python deploy/run_daily_trials.py trial_params/nfl-moneyline.yaml
+python deploy/run_daily_trials.py trial_params/nfl-moneyline.yaml --date 2025-01-20
 
 # With Dashboard Server (SLS + OSS integration)
 # Terminal 1: Start server (SLS config from env vars)
 dojo0 serve --trace-backend sls --oss-backup
 
 # Terminal 2: Run trials
-python deploy/run_daily_trials.py configs/nba-moneyline.yaml --server http://localhost:8000
+python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --server http://localhost:8000
 ```
 
 ## Automation
@@ -41,10 +41,10 @@ Or manually:
 ```bash
 crontab -e
 # NBA trials at 6 AM (local mode):
-# 0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-moneyline.yaml --data-dir data/nba-betting >> cron.log 2>&1
+# 0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --data-dir data/nba-betting >> cron.log 2>&1
 
 # NFL trials at 10 AM:
-# 0 10 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nfl-moneyline.yaml --data-dir data/nfl >> cron_nfl.log 2>&1
+# 0 10 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py trial_params/nfl-moneyline.yaml --data-dir data/nfl >> cron_nfl.log 2>&1
 ```
 
 **Systemd (Linux):**
@@ -57,7 +57,7 @@ After=network.target
 Type=oneshot
 User=your-username
 WorkingDirectory=/path/to/DojoZero
-ExecStart=/usr/bin/python3 deploy/run_daily_trials.py configs/nba-moneyline.yaml
+ExecStart=/usr/bin/python3 deploy/run_daily_trials.py trial_params/nba-moneyline.yaml
 StandardOutput=append:/path/to/DojoZero/systemd.log
 StandardError=append:/path/to/DojoZero/systemd_error.log
 
@@ -85,7 +85,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now nba-trials.timer
 
 **Example with custom data directory:**
 ```bash
-python deploy/run_daily_trials.py configs/nfl-moneyline.yaml --data-dir /custom/path --date 2025-01-20
+python deploy/run_daily_trials.py trial_params/nfl-moneyline.yaml --data-dir /custom/path --date 2025-01-20
 ```
 
 ## Monitoring
@@ -176,7 +176,7 @@ dojo0 serve --trace-backend sls --oss-backup
 ```bash
 crontab -e
 # Add:
-0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py configs/nba-moneyline.yaml --data-dir data/nba-betting --server http://localhost:8000 >> cron.log 2>&1
+0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --data-dir data/nba-betting --server http://localhost:8000 >> cron.log 2>&1
 ```
 
 ### Common SLS/OSS Endpoints
@@ -198,6 +198,6 @@ crontab -e
 
 ## Advanced
 
-- Custom data dir: `python deploy/run_daily_trials.py configs/nba-moneyline.yaml --data-dir /custom/path`
+- Custom data dir: `python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --data-dir /custom/path`
 - Multiple dates: Loop through dates with `--date` parameter
 - Run both NBA and NFL: Set up two cron entries with different configs

@@ -45,7 +45,7 @@ scenario:
     agents:
     - id: basic_agent
       class: BettingAgent
-      agent_config_path: configs/agents/basic.yaml
+      agent_config_path: agents/basic.yaml
       operators:
       - betting_broker
       data_streams:
@@ -58,7 +58,7 @@ scenario:
       - play_by_play_stream
     - id: shark_agent
       class: BettingAgent
-      agent_config_path: configs/agents/shark.yaml
+      agent_config_path: agents/shark.yaml
       operators:
       - betting_broker
       data_streams:
@@ -71,7 +71,7 @@ scenario:
       - play_by_play_stream
     - id: sheep_agent
       class: BettingAgent
-      agent_config_path: configs/agents/sheep.yaml
+      agent_config_path: agents/sheep.yaml
       operators:
       - betting_broker
       data_streams:
@@ -84,7 +84,7 @@ scenario:
       - play_by_play_stream
     - id: whale_agent
       class: BettingAgent
-      agent_config_path: configs/agents/whale.yaml
+      agent_config_path: agents/whale.yaml
       operators:
       - betting_broker
       data_streams:
