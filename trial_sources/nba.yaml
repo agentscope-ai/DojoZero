@@ -2,7 +2,8 @@
 #
 # This configuration defines a trial source for automatic NBA game scheduling.
 # When registered with the Dashboard Server, the server will periodically sync
-# with the NBA API to discover upcoming games and automatically schedule trials.
+# with the ESPN API to discover upcoming games and automatically schedule trials.
+# Games are identified by ESPN event IDs (e.g., '401810490').
 #
 # Usage:
 #   1. Via CLI (recommended):

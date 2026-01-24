@@ -164,7 +164,7 @@ class ScheduledTrial:
     scenario_name: str
     scenario_config: dict[str, Any]
     sport_type: str  # "nba" or "nfl"
-    event_id: str  # game_id or ESPN event_id
+    event_id: str  # ESPN event ID (used for both NBA and NFL)
     event_time: datetime  # When the game starts
     scheduled_start_time: datetime  # When to launch trial
     pre_start_hours: float
@@ -581,11 +581,8 @@ class ScheduleManager:
             # Build config for this game
             config = dict(scenario_config or {})
 
-            # Add game-specific config
-            if sport_type == "nba":
-                config["game_id"] = game.event_id
-            else:
-                config["event_id"] = game.event_id
+            # Add game-specific config (both NBA and NFL use event_id with ESPN)
+            config["event_id"] = game.event_id
 
             # Add data_dir to hub config if specified
             if data_dir:
@@ -862,11 +859,8 @@ class ScheduleManager:
             # Build config for this game
             game_config = dict(config.scenario_config)
 
-            # Add game-specific config
-            if source.sport_type == "nba":
-                game_config["game_id"] = game.event_id
-            else:
-                game_config["event_id"] = game.event_id
+            # Add game-specific config (both NBA and NFL use event_id with ESPN)
+            game_config["event_id"] = game.event_id
 
             # Add data_dir to hub config if specified
             if config.data_dir:

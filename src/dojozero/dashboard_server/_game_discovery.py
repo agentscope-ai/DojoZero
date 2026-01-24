@@ -34,7 +34,7 @@ class TeamInfo:
 class GameInfo:
     """Unified game information across sports."""
 
-    event_id: str  # game_id for NBA, event_id for NFL
+    event_id: str  # ESPN event ID (used for both NBA and NFL)
     sport_type: str  # "nba" or "nfl"
     status: int  # 1=scheduled, 2=in_progress, 3=finished
     status_text: str
@@ -169,7 +169,7 @@ class NBAGameFetcher:
         """Get current status of a game.
 
         Args:
-            game_id: NBA game ID
+            game_id: ESPN event ID
             game_date: Date of the game (YYYY-MM-DD). If None, searches recent dates.
 
         Returns:

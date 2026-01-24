@@ -1,8 +1,11 @@
 """
 Tests for NBA data infrastructure.
 
-Unit tests run by default. Integration tests make real API calls and are skipped by default.
+Unit tests run by default. Integration tests make real ESPN API calls and are skipped by default.
 Run integration tests with: pytest -v --run-integration tests/test_data_nba.py
+
+Note: NBA data now uses ESPN API (not stats.nba.com) for improved reliability.
+Games are identified by ESPN event IDs (e.g., '401810490').
 """
 
 import os
@@ -45,7 +48,7 @@ def sample_boxscore_data():
     """Sample boxscore data for testing."""
     return {
         "boxscore": {
-            "gameId": "0022400123",
+            "gameId": "401810001",
             "homeTeam": {
                 "teamId": 1610612747,
                 "teamName": "Lakers",
@@ -75,7 +78,7 @@ def sample_pbp_data():
     """Sample play-by-play data for testing."""
     return {
         "play_by_play": {
-            "gameId": "0022400123",
+            "gameId": "401810001",
             "actions": [
                 {
                     "actionNumber": 1,
@@ -114,7 +117,7 @@ class TestNBAStoreParseBoxscore:
         assert len(init_events) == 1
 
         update = update_events[0]
-        assert update.game_id == "0022400123"
+        assert update.game_id == "401810001"
         assert update.home_team["score"] == 110
         assert update.away_team["score"] == 105
         assert update.home_team["teamTricode"] == "LAL"
@@ -123,7 +126,7 @@ class TestNBAStoreParseBoxscore:
         assert len(update.player_stats["away"]) == 1
 
         init = init_events[0]
-        assert init.game_id == "0022400123"
+        assert init.game_id == "401810001"
         assert init.home_team == "Los Angeles Lakers"
         assert init.away_team == "Golden State Warriors"
 
@@ -131,7 +134,7 @@ class TestNBAStoreParseBoxscore:
         """Test parsing boxscore before game starts (no team data)."""
         boxscore_data = {
             "boxscore": {
-                "gameId": "0022400123",
+                "gameId": "401810001",
                 "homeTeam": {},
                 "awayTeam": {},
             }
@@ -196,7 +199,7 @@ class TestNBAStoreParsePlayByPlay:
         pbp_events = [e for e in events if isinstance(e, PlayByPlayEvent)]
 
         assert len(start_events) == 1
-        assert start_events[0].event_id == "0022400123"
+        assert start_events[0].event_id == "401810001"
         assert len(pbp_events) == 1
         assert pbp_events[0].action_type == "jumpball"
         assert pbp_events[0].action_number == 1
@@ -204,12 +207,12 @@ class TestNBAStoreParsePlayByPlay:
     def test_parse_pbp_game_end_detection(self, nba_store):
         """Test that game end action triggers GameResultEvent."""
         # First, simulate game start
-        nba_store._state.set_previous_status("0022400123", 2)  # In Progress
-        nba_store._state.mark_pbp_available("0022400123")
+        nba_store._state.set_previous_status("401810001", 2)  # In Progress
+        nba_store._state.mark_pbp_available("401810001")
 
         pbp_data = {
             "play_by_play": {
-                "gameId": "0022400123",
+                "gameId": "401810001",
                 "actions": [
                     {
                         "actionNumber": 999,
@@ -234,12 +237,12 @@ class TestNBAStoreParsePlayByPlay:
 
     def test_parse_pbp_away_team_wins(self, nba_store):
         """Test GameResultEvent with away team winning."""
-        nba_store._state.set_previous_status("0022400123", 2)
-        nba_store._state.mark_pbp_available("0022400123")
+        nba_store._state.set_previous_status("401810001", 2)
+        nba_store._state.mark_pbp_available("401810001")
 
         pbp_data = {
             "play_by_play": {
-                "gameId": "0022400123",
+                "gameId": "401810001",
                 "actions": [
                     {
                         "actionNumber": 999,
@@ -262,7 +265,7 @@ class TestNBAStoreParsePlayByPlay:
         """Test that duplicate actions are not emitted twice."""
         pbp_data = {
             "play_by_play": {
-                "gameId": "0022400123",
+                "gameId": "401810001",
                 "actions": [
                     {
                         "actionNumber": 1,
@@ -293,7 +296,7 @@ class TestNBAStoreParsePlayByPlay:
         # First batch
         pbp_data1 = {
             "play_by_play": {
-                "gameId": "0022400123",
+                "gameId": "401810001",
                 "actions": [
                     {
                         "actionNumber": 1,
@@ -310,7 +313,7 @@ class TestNBAStoreParsePlayByPlay:
         # Second batch with new action
         pbp_data2 = {
             "play_by_play": {
-                "gameId": "0022400123",
+                "gameId": "401810001",
                 "actions": [
                     {
                         "actionNumber": 1,
@@ -336,7 +339,7 @@ class TestNBAStoreParsePlayByPlay:
         """Test that player info is extracted from play-by-play."""
         pbp_data = {
             "play_by_play": {
-                "gameId": "0022400123",
+                "gameId": "401810001",
                 "actions": [
                     {
                         "actionNumber": 10,
@@ -373,7 +376,7 @@ class TestNBAStoreStateTransitions:
         """Test that GameStartEvent is only emitted once."""
         pbp_data = {
             "play_by_play": {
-                "gameId": "0022400123",
+                "gameId": "401810001",
                 "actions": [{"actionNumber": 1, "actionType": "jumpball"}],
             }
         }
@@ -393,12 +396,12 @@ class TestNBAStoreStateTransitions:
 
     def test_game_result_not_emitted_twice(self, nba_store):
         """Test that GameResultEvent is only emitted once."""
-        nba_store._state.set_previous_status("0022400123", 2)
-        nba_store._state.mark_pbp_available("0022400123")
+        nba_store._state.set_previous_status("401810001", 2)
+        nba_store._state.mark_pbp_available("401810001")
 
         pbp_data = {
             "play_by_play": {
-                "gameId": "0022400123",
+                "gameId": "401810001",
                 "actions": [
                     {
                         "actionNumber": 999,
@@ -425,13 +428,13 @@ class TestNBAStoreStateTransitions:
         """Test that state is tracked separately per game."""
         pbp_data_game1 = {
             "play_by_play": {
-                "gameId": "0022400001",
+                "gameId": "401810002",
                 "actions": [{"actionNumber": 1, "actionType": "jumpball"}],
             }
         }
         pbp_data_game2 = {
             "play_by_play": {
-                "gameId": "0022400002",
+                "gameId": "401810003",
                 "actions": [{"actionNumber": 1, "actionType": "jumpball"}],
             }
         }
@@ -445,8 +448,8 @@ class TestNBAStoreStateTransitions:
 
         assert len(start_events1) == 1
         assert len(start_events2) == 1
-        assert start_events1[0].event_id == "0022400001"
-        assert start_events2[0].event_id == "0022400002"
+        assert start_events1[0].event_id == "401810002"
+        assert start_events2[0].event_id == "401810003"
 
 
 class TestNBAStoreExtractPlayerStats:
@@ -512,7 +515,7 @@ class TestNBAStoreExtractPlayerStats:
 
 @pytest.fixture(scope="module")
 def test_game_ids() -> dict[str, str]:
-    """Get game IDs for testing (shared across all tests to minimize API calls)."""
+    """Get ESPN event IDs for testing (shared across all tests to minimize API calls)."""
     game_ids = {}
 
     # Get recent historical game (yesterday)
@@ -617,7 +620,7 @@ class TestGetGamesByDateRangeIntegration:
 class TestGetGameInfoByIdIntegration:
     """Integration tests for get_game_info_by_id function.
 
-    These tests make real API calls to NBA.com and require network connectivity.
+    These tests make real API calls to ESPN and require network connectivity.
     Tests are combined to minimize API calls.
     """
 
@@ -690,7 +693,7 @@ class TestGetGameInfoByIdIntegration:
     def test_future_scheduled_game(self, test_game_ids):
         """Test fetching info for a future scheduled game.
 
-        This should fall back to Scoreboard endpoint search.
+        Uses ESPN summary endpoint to fetch game info.
         """
         if "future" not in test_game_ids:
             pytest.skip("No future scheduled game found in test data")
@@ -839,8 +842,8 @@ class TestNBAEvents:
     def test_play_by_play_event_creation(self):
         """Test PlayByPlayEvent creation and properties."""
         event = PlayByPlayEvent(
-            event_id="0022400123_pbp_10",
-            game_id="0022400123",
+            event_id="401810001_pbp_10",
+            game_id="401810001",
             action_type="2pt",
             action_number=10,
             period=1,
@@ -853,7 +856,7 @@ class TestNBAEvents:
             description="LeBron James makes layup",
         )
 
-        assert event.event_id == "0022400123_pbp_10"
+        assert event.event_id == "401810001_pbp_10"
         assert event.action_type == "2pt"
         assert event.player_name == "LeBron James"
         assert event.event_type == "play_by_play"
@@ -863,34 +866,34 @@ class TestNBAEvents:
         from datetime import datetime, timezone
 
         event = GameInitializeEvent(
-            event_id="0022400123",
-            game_id="0022400123",
+            event_id="401810001",
+            game_id="401810001",
             home_team="Los Angeles Lakers",
             away_team="Golden State Warriors",
             game_time=datetime(2024, 1, 15, 3, 0, 0, tzinfo=timezone.utc),
         )
 
-        assert event.event_id == "0022400123"
+        assert event.event_id == "401810001"
         assert event.home_team == "Los Angeles Lakers"
         assert event.away_team == "Golden State Warriors"
         assert event.event_type == "game_initialize"
 
     def test_game_start_event_creation(self):
         """Test GameStartEvent creation and properties."""
-        event = GameStartEvent(event_id="0022400123")
+        event = GameStartEvent(event_id="401810001")
 
-        assert event.event_id == "0022400123"
+        assert event.event_id == "401810001"
         assert event.event_type == "game_start"
 
     def test_game_result_event_creation(self):
         """Test GameResultEvent creation and properties."""
         event = GameResultEvent(
-            event_id="0022400123",
+            event_id="401810001",
             winner="home",
             final_score={"home": 110, "away": 105},
         )
 
-        assert event.event_id == "0022400123"
+        assert event.event_id == "401810001"
         assert event.winner == "home"
         assert event.final_score["home"] == 110
         assert event.event_type == "game_result"

@@ -1,7 +1,7 @@
 scenario:
   name: nba-moneyline
   config:
-    game_id: '0022500477'
+    event_id: '401810490'  # ESPN event ID (get from ESPN scoreboard API)
 
     hub:
       persistence_file: outputs/nba_betting_events.jsonl
