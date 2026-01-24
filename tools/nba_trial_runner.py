@@ -1074,8 +1074,8 @@ def main() -> int:
     run_parser.add_argument(
         "--config",
         type=Path,
-        default=Path(__file__).parent.parent / "configs" / "nba-moneyline.yaml",
-        help="Path to trial config template (default: configs/nba-moneyline.yaml)",
+        default=Path(__file__).parent.parent / "trial_params" / "nba-moneyline.yaml",
+        help="Path to trial config template (default: trial_params/nba-moneyline.yaml)",
     )
     run_parser.add_argument(
         "--data-dir",

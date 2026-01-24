@@ -1,7 +1,7 @@
 """
 Integration tests for agent configs.
 
-Validates that all agent configurations in configs/agents/ directory
+Validates that all agent configurations in agents/ directory
 are valid and their model endpoints work correctly.
 """
 
@@ -27,7 +27,7 @@ TEST_API_KEY_ENV = "DOJOZERO_OPENAI_API_KEY"
 TEST_BASE_URL_ENV = "DOJOZERO_OPENAI_BASE_URL"
 
 # Path to agent configs
-CONFIG_DIR = Path(__file__).parent.parent / "configs" / "agents"
+CONFIG_DIR = Path(__file__).parent.parent / "agents"
 
 
 def get_all_agent_config_files() -> list[Path]:
