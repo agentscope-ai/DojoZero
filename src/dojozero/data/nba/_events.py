@@ -17,7 +17,7 @@ class PlayByPlayEvent(DataEvent):
     """
 
     event_id: str = field(default="")  # Unique event ID: {game_id}_pbp_{action_number}
-    game_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game this play belongs to
     action_type: str = field(
         default=""
     )  # Action type string (e.g., "rebound", "shot", "foul", "turnover", "substitution", "timeout")
@@ -57,8 +57,7 @@ class GameInitializeEvent(DataEvent):
     when OddsUpdateEvent arrives.
     """
 
-    event_id: str = field(default="")
-    game_id: str = field(default="")
+    event_id: str = field(default="")  # ESPN event ID
     home_team: str = field(default="")  # Full team name (e.g., "New York Knicks")
     away_team: str = field(default="")  # Full team name (e.g., "San Antonio Spurs")
     game_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -254,8 +253,7 @@ class GameUpdateEvent(DataEvent):
     Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay.
     """
 
-    event_id: str = field(default="")
-    game_id: str = field(default="")
+    event_id: str = field(default="")  # ESPN event ID
     period: int = field(default=0)
     game_clock: str = field(default="")
     game_time_utc: str = field(default="")  # ISO format datetime string

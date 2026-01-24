@@ -102,7 +102,6 @@ async def initialized_event(broker):
         stream_id="nba_game_stream",
         payload=GameInitializeEvent(
             event_id="lakers_vs_warriors",
-            game_id="lakers_vs_warriors",
             home_team="Lakers",
             away_team="Warriors",
             game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -213,7 +212,6 @@ class TestEventManagement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="game1",
-                game_id="game1",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
@@ -373,7 +371,6 @@ class TestEventManagement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="game1",
-                game_id="game1",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
@@ -398,7 +395,6 @@ class TestEventManagement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="game2",
-                game_id="game2",
                 home_team="Celtics",
                 away_team="Heat",
                 game_time=datetime.now(),
@@ -462,7 +458,6 @@ class TestBetPlacement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -520,7 +515,6 @@ class TestBetPlacement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -579,7 +573,6 @@ class TestBetPlacement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -648,7 +641,6 @@ class TestBetPlacement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -700,7 +692,6 @@ class TestBetPlacement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -767,7 +758,6 @@ class TestBetPlacement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -831,7 +821,6 @@ class TestBetPlacement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -895,7 +884,6 @@ class TestBetSettlement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -973,7 +961,6 @@ class TestBetSettlement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1050,7 +1037,6 @@ class TestBetSettlement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1122,7 +1108,6 @@ class TestStatistics:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1235,7 +1220,6 @@ class TestStateManagement:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1312,7 +1296,6 @@ class TestIntegration:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="game1",
-                game_id="game1",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1457,7 +1440,6 @@ class TestSpreadBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1517,7 +1499,6 @@ class TestSpreadBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1578,7 +1559,6 @@ class TestSpreadBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1639,7 +1619,6 @@ class TestSpreadBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1696,7 +1675,6 @@ class TestSpreadBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1774,7 +1752,6 @@ class TestTotalBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1830,7 +1807,6 @@ class TestTotalBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1891,7 +1867,6 @@ class TestTotalBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1952,7 +1927,6 @@ class TestTotalBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -2009,7 +1983,6 @@ class TestTotalBetting:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -2088,7 +2061,6 @@ class TestMultipleSpreadsTotals:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -2158,7 +2130,6 @@ class TestMultipleSpreadsTotals:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id="test_event",
-                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -2309,7 +2280,6 @@ class TestEventOrdering:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id=event_id,
-                game_id=event_id,
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
@@ -2359,7 +2329,6 @@ class TestEventOrdering:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id=event_id,
-                game_id=event_id,
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
@@ -2381,7 +2350,6 @@ class TestEventOrdering:
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
                 event_id=event_id,
-                game_id=event_id,
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),

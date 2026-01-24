@@ -36,8 +36,8 @@ except ImportError:  # pragma: no cover - ray is optional
 
 DEFAULT_IMPORTS: tuple[str, ...] = (
     "dojozero.samples",
-    "dojozero.nba_moneyline",
-    "dojozero.nfl_moneyline",
+    "dojozero.nba",
+    "dojozero.nfl",
 )
 DEFAULT_STORE_DIRECTORY: str = "./dojozero-store"
 DEFAULT_RUNTIME_PROVIDER: str = "local"

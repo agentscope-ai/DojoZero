@@ -127,7 +127,6 @@ class NBAStore(DataStore):
                                 GameInitializeEvent(
                                     timestamp=timestamp,
                                     event_id=game_id,
-                                    game_id=game_id,
                                     home_team=home_team_str,
                                     away_team=away_team_str,
                                     game_time=game_time_dt,
@@ -165,7 +164,6 @@ class NBAStore(DataStore):
                     GameUpdateEvent(
                         timestamp=timestamp,
                         event_id=game_id,
-                        game_id=game_id,
                         period=0,  # BoxScore doesn't provide period info
                         game_clock="",  # BoxScore doesn't provide clock info
                         game_time_utc="",  # BoxScore doesn't provide game time
@@ -238,7 +236,6 @@ class NBAStore(DataStore):
                             GameInitializeEvent(
                                 timestamp=timestamp,
                                 event_id=game_id,
-                                game_id=game_id,
                                 home_team=home_team_str,
                                 away_team=away_team_str,
                                 game_time=game_time_dt,
@@ -370,10 +367,10 @@ class NBAStore(DataStore):
 
         # Poll boxscore data (for complete game updates with all leaders)
         # Check if enough time has passed since last poll
-        if identifier and "game_id" in identifier:
+        if identifier and "espn_game_id" in identifier:
             if self._should_poll_endpoint("boxscore"):
-                game_id = identifier["game_id"]
-                boxscore_params = {"game_id": game_id}
+                espn_game_id = identifier["espn_game_id"]
+                boxscore_params = {"game_id": espn_game_id}
 
                 # Fetch boxscore data
                 boxscore_data = await self._api.fetch("boxscore", boxscore_params)
@@ -384,10 +381,10 @@ class NBAStore(DataStore):
 
         # Poll play-by-play events (for all PBP events and game status detection)
         # Check if enough time has passed since last poll
-        if identifier and "game_id" in identifier:
+        if identifier and "espn_game_id" in identifier:
             if self._should_poll_endpoint("play_by_play"):
-                game_id = identifier["game_id"]
-                pbp_params = {"game_id": game_id}
+                espn_game_id = identifier["espn_game_id"]
+                pbp_params = {"game_id": espn_game_id}
 
                 # Fetch play-by-play data
                 pbp_data = await self._api.fetch("play_by_play", pbp_params)

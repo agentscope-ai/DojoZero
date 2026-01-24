@@ -14,16 +14,16 @@ class NBAStoreFactory(StoreFactory):
     """Factory for creating NBAStore instances.
 
     Required metadata:
-        - game_id: NBA game ID (e.g., "0022500477")
+        - espn_game_id: ESPN game ID (e.g., "401810490")
 
     Optional metadata:
         - poll_intervals: Dict of endpoint -> interval in seconds
-          Default: {"scoreboard": 5.0, "play_by_play": 2.0}
+          Default: {"boxscore": 60.0, "play_by_play": 20.0}
     """
 
     def get_required_metadata_keys(self) -> list[str]:
         """Return required metadata keys."""
-        return ["game_id"]
+        return ["espn_game_id"]
 
     def create_store(
         self,
@@ -36,14 +36,14 @@ class NBAStoreFactory(StoreFactory):
         Args:
             store_id: Unique identifier for the store
             metadata: Trial metadata containing:
-                - game_id: NBA game ID
+                - espn_game_id: ESPN game ID
                 - poll_intervals: Optional custom poll intervals
             hub: DataHub to connect the store to
 
         Returns:
             Configured NBAStore connected to hub
         """
-        game_id = metadata.get("game_id", "")
+        espn_game_id = metadata.get("espn_game_id", "")
         poll_intervals = metadata.get("nba_poll_intervals")
 
         api = NBAExternalAPI()
@@ -55,14 +55,14 @@ class NBAStoreFactory(StoreFactory):
                 poll_intervals=poll_intervals,
             )
         else:
-            # Use default intervals: {"scoreboard": 5.0, "play_by_play": 2.0}
+            # Use default intervals: {"boxscore": 60.0, "play_by_play": 20.0}
             store = NBAStore(
                 store_id=store_id,
                 api=api,
             )
 
-        # Set poll identifier
-        store.set_poll_identifier({"game_id": game_id})
+        # Set poll identifier - espn_game_id is used to fetch game data from ESPN API
+        store.set_poll_identifier({"espn_game_id": espn_game_id})
 
         # Connect to hub
         hub.connect_store(store)

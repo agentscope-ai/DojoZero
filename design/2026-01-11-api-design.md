@@ -125,8 +125,8 @@ Options:
 {
   "trial_id": "optional-trial-id",
   "scenario": {
-    "name": "nba_moneyline.pregame_betting",
-    "module": "dojozero.nba_moneyline",
+    "name": "nba.pregame_betting",
+    "module": "dojozero.nba",
     "config": {...}
   },
   "metadata": {...},

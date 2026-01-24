@@ -117,7 +117,7 @@ class TestNBAStoreParseBoxscore:
         assert len(init_events) == 1
 
         update = update_events[0]
-        assert update.game_id == "401810001"
+        assert update.event_id == "401810001"
         assert update.home_team["score"] == 110
         assert update.away_team["score"] == 105
         assert update.home_team["teamTricode"] == "LAL"
@@ -126,7 +126,7 @@ class TestNBAStoreParseBoxscore:
         assert len(update.player_stats["away"]) == 1
 
         init = init_events[0]
-        assert init.game_id == "401810001"
+        assert init.event_id == "401810001"
         assert init.home_team == "Los Angeles Lakers"
         assert init.away_team == "Golden State Warriors"
 
@@ -867,7 +867,6 @@ class TestNBAEvents:
 
         event = GameInitializeEvent(
             event_id="401810001",
-            game_id="401810001",
             home_team="Los Angeles Lakers",
             away_team="Golden State Warriors",
             game_time=datetime(2024, 1, 15, 3, 0, 0, tzinfo=timezone.utc),

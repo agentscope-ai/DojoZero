@@ -1,4 +1,4 @@
-"""Event formatters for NFL moneyline betting agent."""
+"""Event formatters for NFL betting agent."""
 
 import json
 from datetime import datetime

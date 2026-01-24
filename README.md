@@ -364,7 +364,7 @@ dojo0 get-builder myenv.prices --create-example-params
 
 ### Loading Custom Scenarios
 
-DojoZero automatically imports built-in scenarios (`dojozero.samples`, `dojozero.nba_moneyline`, `dojozero.nfl_moneyline`). For custom scenarios in external modules, add the `imports` key to your params file:
+DojoZero automatically imports built-in scenarios (`dojozero.samples`, `dojozero.nba`, `dojozero.nfl`). For custom scenarios in external modules, add the `imports` key to your params file:
 
 ```yaml
 # my_trial.yaml

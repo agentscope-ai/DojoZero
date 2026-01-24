@@ -77,7 +77,6 @@ def nba_game_init_data(test_event_id):
 
     return {
         "event_id": test_event_id,
-        "game_id": test_event_id,
         "home_team": "Lakers",
         "away_team": "Warriors",
         "game_time": datetime.now(),
@@ -148,7 +147,7 @@ def create_broker_fixture(actor_id: str, trial_id: str = "test-trial"):
 
 def create_nba_test_agent(config_path: Path, trial_id: str = "test-trial"):
     """Create NBA BettingAgent with test-specific env vars."""
-    from dojozero.nba_moneyline._agent import BettingAgent
+    from dojozero.nba._agent import BettingAgent
     from dojozero.agents import load_agent_config, create_model, create_formatter
 
     config = load_agent_config(config_path)
@@ -169,7 +168,7 @@ def create_nba_test_agent(config_path: Path, trial_id: str = "test-trial"):
 
 def create_nfl_test_agent(config_path: Path, trial_id: str = "test-trial"):
     """Create NFL BettingAgent with test-specific env vars."""
-    from dojozero.nfl_moneyline._agent import BettingAgent
+    from dojozero.nfl._agent import BettingAgent
     from dojozero.agents import load_agent_config, create_model, create_formatter
 
     config = load_agent_config(config_path)

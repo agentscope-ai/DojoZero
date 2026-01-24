@@ -1,7 +1,7 @@
 scenario:
-  name: nfl-moneyline
+  name: nfl
   config:
-    event_id: '401547417'  # Example NFL event ID
+    espn_game_id: '401547417'  # ESPN game ID for the NFL game
 
     hub:
       persistence_file: outputs/nfl_betting_events.jsonl
