@@ -37,6 +37,7 @@ from dojozero.nba._datastream import (
     NBAPreGameBettingDataHubDataStreamConfig,
 )
 from dojozero.data._models import EventTypes
+from dojozero.data.nba._utils import get_game_info_by_id_async
 
 # Import shared operators from betting module
 from dojozero.betting import (
@@ -194,8 +195,6 @@ async def _build_trial_spec(
     params: NBATrialParams,
 ) -> TrialSpec:
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
-    from dojozero.data.nba._utils import get_game_info_by_id_async
-
     # Get game information from espn_game_id to extract team tricodes and names
     game_info = await get_game_info_by_id_async(params.espn_game_id)
     home_team_tricode: str | None = None

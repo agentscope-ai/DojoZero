@@ -4,11 +4,16 @@ Provides unified interfaces for fetching game information from
 NBA API and ESPN API (for NFL).
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
+
+from dojozero.data.espn._api import ESPNExternalAPI
+from dojozero.data.nba._utils import get_games_for_date
+from dojozero.data.nfl._api import NFLExternalAPI
 
 LOGGER = logging.getLogger("dojozero.game_discovery")
 
@@ -181,6 +186,169 @@ class GameInfo(BaseModel):
         return result
 
 
+def _parse_team_data(competitor: dict[str, Any]) -> dict[str, Any]:
+    """Parse team data from ESPN competitor object.
+
+    Args:
+        competitor: ESPN competitor dict from competition.competitors
+
+    Returns:
+        Dict with team data formatted for TeamInfo model.
+    """
+    team = competitor.get("team", {})
+    records = competitor.get("records", [])
+    record = records[0].get("summary", "") if records else ""
+
+    return {
+        "teamId": team.get("id", ""),
+        "displayName": team.get("displayName", ""),
+        "teamTricode": team.get("abbreviation", ""),
+        "score": competitor.get("score", "0"),
+        "teamCity": team.get("location", ""),
+        "shortDisplayName": team.get("shortDisplayName", ""),
+        "color": team.get("color", ""),
+        "alternateColor": team.get("alternateColor", ""),
+        "logo": team.get("logo", ""),
+        "record": record,
+    }
+
+
+def _parse_venue_data(venue_data: dict[str, Any]) -> dict[str, Any]:
+    """Parse venue data from ESPN venue object.
+
+    Args:
+        venue_data: ESPN venue dict from competition.venue
+
+    Returns:
+        Dict with venue data formatted for VenueInfo model.
+    """
+    venue_address = venue_data.get("address", {})
+    return {
+        "venueId": str(venue_data.get("id", "")),
+        "name": venue_data.get("fullName", ""),
+        "city": venue_address.get("city", ""),
+        "state": venue_address.get("state", ""),
+        "indoor": venue_data.get("indoor", True),
+    }
+
+
+def _parse_broadcast_data(
+    broadcasts_raw: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str]:
+    """Parse broadcast data from ESPN broadcasts array.
+
+    Args:
+        broadcasts_raw: ESPN broadcasts list from competition.broadcasts
+
+    Returns:
+        Tuple of (broadcasts list, broadcast summary string).
+    """
+    broadcasts: list[dict[str, Any]] = []
+    broadcast_names: list[str] = []
+    for b in broadcasts_raw:
+        market = b.get("market", "")
+        names = b.get("names", [])
+        broadcasts.append({"market": market, "names": names})
+        if names:
+            broadcast_names.extend(names)
+    broadcast = ", ".join(broadcast_names) if broadcast_names else ""
+    return broadcasts, broadcast
+
+
+def _parse_odds_data(odds_list: list[dict[str, Any]]) -> dict[str, Any]:
+    """Parse odds data from ESPN odds array.
+
+    Args:
+        odds_list: ESPN odds list from competition.odds
+
+    Returns:
+        Dict with odds data.
+    """
+    if not odds_list:
+        return {}
+    o = odds_list[0]
+    return {
+        "provider": o.get("provider", {}).get("name", ""),
+        "spread": o.get("spread", 0),
+        "overUnder": o.get("overUnder", 0),
+        "homeMoneyLine": o.get("homeTeamOdds", {}).get("moneyLine", 0),
+        "awayMoneyLine": o.get("awayTeamOdds", {}).get("moneyLine", 0),
+    }
+
+
+# Mapping from ESPN season type ID to readable string
+_SEASON_TYPE_MAP = {
+    1: "preseason",
+    2: "regular",
+    3: "postseason",
+    4: "offseason",
+}
+
+
+def _parse_espn_event(event: dict[str, Any], sport_type: str) -> GameInfo | None:
+    """Parse a single ESPN event into a GameInfo object.
+
+    Args:
+        event: ESPN event dict from scoreboard.events
+        sport_type: Sport type string (e.g., "nba", "nfl")
+
+    Returns:
+        GameInfo object or None if event has no competitions.
+    """
+    competitions = event.get("competitions", [])
+    if not competitions:
+        return None
+
+    comp = competitions[0]
+    status = comp.get("status", {})
+    status_type = status.get("type", {})
+
+    # Parse competitors into home/away team data
+    competitors = comp.get("competitors", [])
+    home_team_data: dict[str, Any] = {}
+    away_team_data: dict[str, Any] = {}
+    for c in competitors:
+        team_data = _parse_team_data(c)
+        if c.get("homeAway") == "home":
+            home_team_data = team_data
+        else:
+            away_team_data = team_data
+
+    # Parse other competition data
+    venue = _parse_venue_data(comp.get("venue", {}))
+    broadcasts, broadcast = _parse_broadcast_data(comp.get("broadcasts", []))
+    odds = _parse_odds_data(comp.get("odds", []))
+
+    # Get season info
+    season = event.get("season", {})
+    season_type_id = season.get("type", 0)
+
+    # Build game data dict for Pydantic validation
+    game_data = {
+        "gameId": event.get("id", ""),
+        "sport_type": sport_type,
+        "gameStatus": int(status_type.get("id", "1")),
+        "gameStatusText": status_type.get("description", "Scheduled"),
+        "gameTimeUTC": comp.get("date", ""),
+        "homeTeam": home_team_data,
+        "awayTeam": away_team_data,
+        "venue": venue,
+        "broadcasts": broadcasts,
+        "broadcast": broadcast,
+        "name": event.get("name", ""),
+        "shortName": event.get("shortName", ""),
+        "odds": odds,
+        "period": status.get("period", 0),
+        "gameClock": status.get("displayClock", ""),
+        "attendance": comp.get("attendance", 0),
+        "neutralSite": comp.get("neutralSite", False),
+        "seasonYear": season.get("year", 0),
+        "seasonType": _SEASON_TYPE_MAP.get(season_type_id, ""),
+    }
+
+    return GameInfo.model_validate(game_data)
+
+
 def _parse_espn_scoreboard(data: dict[str, Any], sport_type: str) -> list[GameInfo]:
     """Parse ESPN scoreboard response into GameInfo objects.
 
@@ -199,112 +367,9 @@ def _parse_espn_scoreboard(data: dict[str, Any], sport_type: str) -> list[GameIn
 
     games: list[GameInfo] = []
     for event in events:
-        competitions = event.get("competitions", [])
-        if not competitions:
-            continue
-
-        comp = competitions[0]
-        status = comp.get("status", {})
-        status_type = status.get("type", {})
-
-        # Get competitors and convert to our format
-        competitors = comp.get("competitors", [])
-        home_team_data: dict[str, Any] = {}
-        away_team_data: dict[str, Any] = {}
-        for c in competitors:
-            team = c.get("team", {})
-            # Extract record from competitor records array
-            records = c.get("records", [])
-            record = records[0].get("summary", "") if records else ""
-
-            team_data = {
-                "teamId": team.get("id", ""),
-                "displayName": team.get("displayName", ""),
-                "teamTricode": team.get("abbreviation", ""),
-                "score": c.get("score", "0"),
-                "teamCity": team.get("location", ""),
-                "shortDisplayName": team.get("shortDisplayName", ""),
-                "color": team.get("color", ""),
-                "alternateColor": team.get("alternateColor", ""),
-                "logo": team.get("logo", ""),
-                "record": record,
-            }
-            if c.get("homeAway") == "home":
-                home_team_data = team_data
-            else:
-                away_team_data = team_data
-
-        # Get venue info
-        venue_data = comp.get("venue", {})
-        venue_address = venue_data.get("address", {})
-        venue = {
-            "venueId": str(venue_data.get("id", "")),
-            "name": venue_data.get("fullName", ""),
-            "city": venue_address.get("city", ""),
-            "state": venue_address.get("state", ""),
-            "indoor": venue_data.get("indoor", True),
-        }
-
-        # Get broadcast info
-        broadcasts_raw = comp.get("broadcasts", [])
-        broadcasts: list[dict[str, Any]] = []
-        broadcast_names: list[str] = []
-        for b in broadcasts_raw:
-            market = b.get("market", "")
-            names = b.get("names", [])
-            broadcasts.append({"market": market, "names": names})
-            if names:
-                broadcast_names.extend(names)
-        broadcast = ", ".join(broadcast_names) if broadcast_names else ""
-
-        # Get odds
-        odds_list = comp.get("odds", [])
-        odds: dict[str, Any] = {}
-        if odds_list:
-            o = odds_list[0]
-            odds = {
-                "provider": o.get("provider", {}).get("name", ""),
-                "spread": o.get("spread", 0),
-                "overUnder": o.get("overUnder", 0),
-                "homeMoneyLine": o.get("homeTeamOdds", {}).get("moneyLine", 0),
-                "awayMoneyLine": o.get("awayTeamOdds", {}).get("moneyLine", 0),
-            }
-
-        # Get season info
-        season = event.get("season", {})
-        season_type_id = season.get("type", 0)
-        season_type_map = {
-            1: "preseason",
-            2: "regular",
-            3: "postseason",
-            4: "offseason",
-        }
-
-        # Build game data dict for Pydantic validation
-        game_data = {
-            "gameId": event.get("id", ""),
-            "sport_type": sport_type,
-            "gameStatus": int(status_type.get("id", "1")),
-            "gameStatusText": status_type.get("description", "Scheduled"),
-            "gameTimeUTC": comp.get("date", ""),
-            "homeTeam": home_team_data,
-            "awayTeam": away_team_data,
-            "venue": venue,
-            "broadcasts": broadcasts,
-            "broadcast": broadcast,
-            "name": event.get("name", ""),
-            "shortName": event.get("shortName", ""),
-            "odds": odds,
-            "period": status.get("period", 0),
-            "gameClock": status.get("displayClock", ""),
-            "attendance": comp.get("attendance", 0),
-            "neutralSite": comp.get("neutralSite", False),
-            "seasonYear": season.get("year", 0),
-            "seasonType": season_type_map.get(season_type_id, ""),
-        }
-
-        game = GameInfo.model_validate(game_data)
-        games.append(game)
+        game = _parse_espn_event(event, sport_type)
+        if game is not None:
+            games.append(game)
 
     return games
 
@@ -327,8 +392,6 @@ class NBAGameFetcher:
         Returns:
             List of GameInfo objects.
         """
-        from dojozero.data.espn._api import ESPNExternalAPI
-
         api = ESPNExternalAPI(sport="basketball", league="nba")
         try:
             # Default to today if no date provided
@@ -392,10 +455,6 @@ class NBAGameFetcher:
         Returns:
             Game status (1=scheduled, 2=in_progress, 3=finished) or None if not found.
         """
-        import asyncio
-
-        from dojozero.data.nba._utils import get_games_for_date
-
         if game_date:
             dates_to_check = [game_date]
         else:
@@ -437,8 +496,6 @@ class NFLGameFetcher:
         Returns:
             List of GameInfo objects.
         """
-        from dojozero.data.nfl._api import NFLExternalAPI
-
         api = NFLExternalAPI()
         try:
             if date is None:
@@ -472,8 +529,6 @@ class NFLGameFetcher:
         Returns:
             List of GameInfo objects.
         """
-        from dojozero.data.nfl._api import NFLExternalAPI
-
         api = NFLExternalAPI()
         try:
             data = await api.fetch("scoreboard", {"week": week})
@@ -503,8 +558,6 @@ class NFLGameFetcher:
                     return g.status
 
         # If no date provided or not found, try current scoreboard
-        from dojozero.data.nfl._api import NFLExternalAPI
-
         api = NFLExternalAPI()
         try:
             data = await api.fetch("scoreboard")
