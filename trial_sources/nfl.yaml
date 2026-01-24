@@ -123,8 +123,6 @@ config:
   check_interval_seconds: 60.0   # Check game status every 60 seconds
   auto_stop_on_completion: true  # Stop trial when game finishes
   data_dir: outputs              # Output directory for persistence files
-  sync_interval_seconds: 3600.0   # How often to sync with ESPN API (5 min default)
+  sync_interval_seconds: 3600.0  # How often to sync with ESPN API
 
-# NFL-specific parameters
-nfl_params:
-  week: null         # null = current scoreboard, or specify week number (1-18)
+# Games are discovered automatically from ESPN scoreboard

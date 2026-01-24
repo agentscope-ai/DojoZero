@@ -37,10 +37,9 @@ import yaml
 from dateutil import parser
 
 # Add parent directory to path to import dojozero modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from demos.nba_api_demo import get_games_for_date
-from dojozero.data.nba._utils import get_game_info_by_id
+from dojozero.data.nba._utils import get_game_info_by_id, get_games_for_date
 
 logger = logging.getLogger(__name__)
 

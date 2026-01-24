@@ -9,7 +9,6 @@ import pytest
 
 from dojozero.dashboard_server._scheduler import (
     FileSchedulerStore,
-    NBATrialSourceParams,
     ScheduledTrial,
     ScheduledTrialPhase,
     ScheduleManager,
@@ -356,15 +355,12 @@ class TestTrialSource:
             data_dir="outputs",
         )
 
-        nba_params = NBATrialSourceParams(days_ahead=7)
-
         source = TrialSource(
             source_id="nba-source-1",
             sport_type="nba",
             config=config,
             enabled=True,
             created_at=now,
-            nba_params=nba_params,
         )
 
         d = source.to_dict()
@@ -374,8 +370,6 @@ class TestTrialSource:
         assert d["enabled"] is True
         assert d["config"]["scenario_name"] == "nba-moneyline"
         assert d["config"]["pre_start_hours"] == 2.0
-        assert d["nba_params"]["days_ahead"] == 7
-        assert d["nfl_params"] is None
 
     def test_from_dict(self):
         """Test deserialization from dictionary."""
@@ -395,8 +389,6 @@ class TestTrialSource:
             "enabled": True,
             "created_at": now.isoformat(),
             "last_sync_at": None,
-            "nba_params": None,
-            "nfl_params": {"week": 18},
         }
 
         source = TrialSource.from_dict(d)
@@ -404,9 +396,6 @@ class TestTrialSource:
         assert source.source_id == "nfl-source-1"
         assert source.sport_type == "nfl"
         assert source.config.scenario_name == "nfl-moneyline"
-        assert source.nfl_params is not None
-        assert source.nfl_params.week == 18
-        assert source.nba_params is None
 
 
 class TestFileSchedulerStoreTrialSources:
@@ -432,7 +421,6 @@ class TestFileSchedulerStoreTrialSources:
                 config=config,
                 enabled=True,
                 created_at=now,
-                nba_params=NBATrialSourceParams(days_ahead=7),
             )
 
             # Save
@@ -443,8 +431,6 @@ class TestFileSchedulerStoreTrialSources:
             assert len(loaded) == 1
             assert loaded[0].source_id == "test-source"
             assert loaded[0].config.scenario_name == "nba-moneyline"
-            assert loaded[0].nba_params is not None
-            assert loaded[0].nba_params.days_ahead == 7
 
     def test_load_empty_sources(self):
         """Test loading sources from non-existent file returns empty list."""
@@ -486,7 +472,6 @@ class TestScheduleManagerTrialSources:
             source_id="nba-source-1",
             sport_type="nba",
             config=config,
-            nba_params=NBATrialSourceParams(days_ahead=7),
         )
 
         assert source.source_id == "nba-source-1"

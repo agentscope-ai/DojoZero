@@ -1,182 +1,336 @@
-"""NBA ExternalAPI implementation."""
+"""NBA ExternalAPI implementation using ESPN API."""
 
-import json
 import logging
 from typing import Any
 
-import requests
-
 from dojozero.data._stores import ExternalAPI
-from dojozero.data.nba._utils import get_proxy
+from dojozero.data.espn import ESPNExternalAPI
 
 logger = logging.getLogger(__name__)
 
+# ESPN play type IDs
+_ESPN_GAME_END_TYPE_ID = "13"
+
 
 class NBAExternalAPI(ExternalAPI):
-    """NBA API implementation."""
+    """ESPN NBA API implementation.
 
-    def __init__(self, api_key: str | None = None):
+    Wraps the generic ESPNExternalAPI with sport="basketball" and league="nba".
+
+    Endpoints:
+    - scoreboard: Get all games for a date
+    - summary: Get full game data by event_id (replaces boxscore)
+    - plays: Get play-by-play data by event_id
+    - teams: Get all NBA teams
+
+    Proxy support:
+    - Set DOJOZERO_PROXY_URL environment variable to use a proxy
+    - Example: export DOJOZERO_PROXY_URL="http://proxy.example.com:8080"
+    """
+
+    def __init__(self, timeout: int = 30, proxy: str | None = None):
         """Initialize NBA API.
 
         Args:
-            api_key: Optional API key (for real implementation)
+            timeout: Request timeout in seconds
+            proxy: Optional proxy URL. If not provided, will use DOJOZERO_PROXY_URL env var
         """
-        self.api_key = api_key
+        super().__init__()
+        self._api = ESPNExternalAPI(
+            sport="basketball",
+            league="nba",
+            timeout=timeout,
+            proxy=proxy,
+        )
 
     async def fetch(
         self, endpoint: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Fetch NBA data."""
-        game_id = params.get("game_id", "game_123") if params else "game_123"
+        """Fetch NBA data from ESPN API.
 
-        if endpoint == "scoreboard":
-            # DEPRECATED: Use boxscore endpoint instead
-            # This is kept for backward compatibility but will be removed
-            # For new code, use "boxscore" endpoint
-            return {"scoreboard": []}
-        elif endpoint == "play_by_play":
-            # Fetch play-by-play data from NBA API
-            game_id_param = params.get("game_id") if params else game_id
+        Args:
+            endpoint: API endpoint. Supports:
+                - "scoreboard": Get games for a date (params: dates=YYYYMMDD)
+                - "summary": Get game summary (params: event_id)
+                - "plays": Get play-by-play (params: event_id)
+                - "teams": Get all teams
+                - Legacy endpoints (mapped to ESPN equivalents):
+                  - "boxscore": Maps to "summary" (params: game_id -> event_id)
+                  - "play_by_play": Maps to "plays" (params: game_id -> event_id)
+            params: Request parameters (varies by endpoint)
 
-            if not game_id_param:
-                return {"play_by_play": {"gameId": "", "actions": []}}
+        Returns:
+            API response as dict
+        """
+        params = params or {}
 
-            try:
-                from nba_api.live.nba.endpoints import playbyplay
-                from nba_api.stats.static import players
-
-                proxy = get_proxy()
-                if proxy:
-                    pbp = playbyplay.PlayByPlay(game_id_param, proxy=proxy)
-                else:
-                    pbp = playbyplay.PlayByPlay(game_id_param)
-
-                # Handle potential JSON parsing errors
-                try:
-                    pbp_dict = pbp.get_dict()
-                except (ValueError, TypeError):
-                    # Empty response or invalid JSON - return empty result
-                    return {"play_by_play": {"gameId": game_id_param, "actions": []}}
-
-                # Check if response is valid
-                if not pbp_dict or not isinstance(pbp_dict, dict):
-                    return {"play_by_play": {"gameId": game_id_param, "actions": []}}
-
-                if "game" not in pbp_dict:
-                    return {"play_by_play": {"gameId": game_id_param, "actions": []}}
-
-                game_data = pbp_dict["game"]
-                if not isinstance(game_data, dict):
-                    return {"play_by_play": {"gameId": game_id_param, "actions": []}}
-
-                actions = game_data.get("actions", [])
-                if not isinstance(actions, list):
-                    actions = []
-
-                # Enrich actions with player names
-                for action in actions:
-                    if not isinstance(action, dict):
-                        continue
-                    person_id = action.get("personId")
-                    if person_id:
-                        try:
-                            player = players.find_player_by_id(person_id)
-                            if player is not None:
-                                action["playerName"] = player["full_name"]
-                        except (KeyError, TypeError) as e:
-                            logger.debug(
-                                "Could not find player name for ID %s: %s",
-                                person_id,
-                                e,
-                            )
-
-                return {
-                    "play_by_play": {
-                        "gameId": game_id_param,
-                        "actions": actions,
-                    }
-                }
-            except ImportError as e:
-                raise RuntimeError(f"nba_api package not available: {e}") from e
-            except (ValueError, TypeError, json.JSONDecodeError) as json_error:
-                # JSON/data parsing error - return empty result instead of crashing
-                logger.debug(
-                    f"JSON parsing error for game {game_id_param}: {json_error}"
-                )
-                return {"play_by_play": {"gameId": game_id_param, "actions": []}}
-            except requests.exceptions.RequestException as e:
-                # Network errors - log but return empty result to avoid crashing the poll loop
-                logger.warning(
-                    f"Network error fetching play-by-play data for game {game_id_param}: {e}"
-                )
-                return {"play_by_play": {"gameId": game_id_param, "actions": []}}
-            except KeyError as e:
-                # Missing expected keys in response
-                logger.warning(
-                    f"Missing data in play-by-play response for game {game_id_param}: {e}"
-                )
-                return {"play_by_play": {"gameId": game_id_param, "actions": []}}
-        elif endpoint == "boxscore":
-            # Fetch box score data using BoxScoreTraditionalV3
-            # This replaces ScoreboardV3 and provides complete game data including all leaders
-            game_id_param = params.get("game_id") if params else None
-
-            if not game_id_param:
+        # Map legacy endpoints to ESPN equivalents
+        if endpoint == "boxscore":
+            # Legacy: boxscore with game_id -> ESPN: summary with event_id
+            event_id = params.get("game_id") or params.get("event_id")
+            if not event_id:
                 return {"boxscore": {"gameId": ""}}
 
+            result = await self._api.fetch("summary", {"event_id": event_id})
+            summary = result.get("summary", {})
+
+            # Convert ESPN summary to boxscore format expected by _store.py
+            return self._convert_summary_to_boxscore(summary, event_id)
+
+        elif endpoint == "play_by_play":
+            # Legacy: play_by_play with game_id -> ESPN: plays with event_id
+            event_id = params.get("game_id") or params.get("event_id")
+            if not event_id:
+                return {"play_by_play": {"gameId": "", "actions": []}}
+
+            result = await self._api.fetch("plays", {"event_id": event_id})
+            plays = result.get("plays", {})
+
+            # Convert ESPN plays to play_by_play format expected by _store.py
+            return self._convert_plays_to_play_by_play(plays, event_id)
+
+        elif endpoint == "scoreboard":
+            return await self._api.fetch("scoreboard", params)
+
+        elif endpoint == "summary":
+            return await self._api.fetch("summary", params)
+
+        elif endpoint == "plays":
+            return await self._api.fetch("plays", params)
+
+        elif endpoint == "teams":
+            return await self._api.fetch("teams", params)
+
+        else:
+            logger.warning("Unknown endpoint: %s", endpoint)
+            return {}
+
+    def _convert_summary_to_boxscore(
+        self, summary: dict[str, Any], event_id: str
+    ) -> dict[str, Any]:
+        """Convert ESPN summary response to boxscore format.
+
+        Args:
+            summary: ESPN summary response
+            event_id: The event ID
+
+        Returns:
+            Boxscore dict in legacy format expected by _store.py
+        """
+        if not summary or "boxscore" not in summary:
+            return {"boxscore": {"gameId": event_id}}
+
+        espn_boxscore = summary.get("boxscore", {})
+        teams = espn_boxscore.get("teams", [])
+
+        # Find home and away teams
+        home_team_data: dict[str, Any] = {}
+        away_team_data: dict[str, Any] = {}
+
+        for team in teams:
+            team_info = team.get("team", {})
+            # ESPN uses homeAway field to identify home/away
+            if team.get("homeAway") == "home":
+                home_team_data = self._extract_team_data(team, team_info)
+            elif team.get("homeAway") == "away":
+                away_team_data = self._extract_team_data(team, team_info)
+
+        # Also check header for additional info
+        header = summary.get("header", {})
+        competitions = header.get("competitions", [])
+        if competitions:
+            comp = competitions[0]
+            for competitor in comp.get("competitors", []):
+                if competitor.get("homeAway") == "home" and not home_team_data:
+                    home_team_data = self._extract_competitor_data(competitor)
+                elif competitor.get("homeAway") == "away" and not away_team_data:
+                    away_team_data = self._extract_competitor_data(competitor)
+                # Update scores from header (more reliable for live games)
+                score = competitor.get("score", "0")
+                if competitor.get("homeAway") == "home" and home_team_data:
+                    home_team_data["statistics"] = home_team_data.get("statistics", {})
+                    home_team_data["statistics"]["points"] = int(score) if score else 0
+                elif competitor.get("homeAway") == "away" and away_team_data:
+                    away_team_data["statistics"] = away_team_data.get("statistics", {})
+                    away_team_data["statistics"]["points"] = int(score) if score else 0
+
+        return {
+            "boxscore": {
+                "gameId": event_id,
+                "homeTeam": home_team_data,
+                "awayTeam": away_team_data,
+            }
+        }
+
+    def _extract_team_data(
+        self, team: dict[str, Any], team_info: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Extract team data from ESPN boxscore team entry."""
+        # Extract statistics
+        stats_list = team.get("statistics", [])
+        statistics: dict[str, Any] = {}
+        for stat in stats_list:
+            stat_name = stat.get("name", "")
+            stat_value = stat.get("displayValue", "0")
             try:
-                from nba_api.stats.endpoints import boxscoretraditionalv3
-
-                proxy = get_proxy()
-                if proxy:
-                    box_score = boxscoretraditionalv3.BoxScoreTraditionalV3(
-                        game_id=game_id_param, proxy=proxy
-                    )
+                # Try to parse as number
+                if "." in str(stat_value):
+                    statistics[stat_name] = float(stat_value)
                 else:
-                    box_score = boxscoretraditionalv3.BoxScoreTraditionalV3(
-                        game_id=game_id_param
-                    )
+                    statistics[stat_name] = int(stat_value)
+            except (ValueError, TypeError):
+                statistics[stat_name] = stat_value
 
-                # Get full dict response (not just dataframes)
-                box_score_dict = box_score.get_dict()
+        # Extract players
+        players = []
+        for player_entry in team.get("players", []):
+            for stat_entry in player_entry.get("statistics", []):
+                for athlete in stat_entry.get("athletes", []):
+                    player_data = self._extract_player_data(athlete, stat_entry)
+                    if player_data:
+                        players.append(player_data)
 
-                if not box_score_dict or "boxScoreTraditional" not in box_score_dict:
-                    # Return gameId even when no data available (for pre-game initialization)
-                    return {"boxscore": {"gameId": game_id_param}}
+        return {
+            "teamId": team_info.get("id", ""),
+            "teamName": team_info.get("name", ""),
+            "teamCity": team_info.get("location", ""),
+            "teamTricode": team_info.get("abbreviation", ""),
+            "statistics": statistics,
+            "players": players,
+        }
 
-                boxscore_data = box_score_dict["boxScoreTraditional"]
+    def _extract_competitor_data(self, competitor: dict[str, Any]) -> dict[str, Any]:
+        """Extract team data from ESPN header competitor."""
+        team_info = competitor.get("team", {})
+        score = competitor.get("score", "0")
 
-                # Before game starts, boxScoreTraditional may be None or empty
-                # Return gameId even when no data available (for pre-game initialization)
-                if not boxscore_data or not isinstance(boxscore_data, dict):
-                    return {"boxscore": {"gameId": game_id_param}}
+        return {
+            "teamId": team_info.get("id", ""),
+            "teamName": team_info.get("name", ""),
+            "teamCity": team_info.get("location", ""),
+            "teamTricode": team_info.get("abbreviation", ""),
+            "statistics": {"points": int(score) if score else 0},
+            "players": [],
+        }
 
-                # Ensure gameId is included in the response
-                if "gameId" not in boxscore_data:
-                    boxscore_data["gameId"] = game_id_param
+    def _extract_player_data(
+        self, athlete: dict[str, Any], stat_entry: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Extract player data from ESPN athlete entry."""
+        athlete_info = athlete.get("athlete", {})
+        if not athlete_info:
+            return None
 
-                # Return full boxscore data including teams, players, and statistics
-                return {"boxscore": boxscore_data}
-            except ImportError as e:
-                raise RuntimeError(f"nba_api package not available: {e}") from e
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    f"JSON error fetching boxscore data for game {game_id_param}: {e}"
-                )
-                return {"boxscore": {"gameId": game_id_param}}
-            except (AttributeError, TypeError, KeyError, ValueError) as e:
-                # These errors often occur when boxscore data is None/empty before game starts
-                # This is expected behavior, so we suppress the warning and return gameId
-                # Only log at debug level to avoid noise in logs
-                logger.debug(
-                    "Boxscore data not available for game %s (likely pre-game): %s",
-                    game_id_param,
-                    e,
-                )
-                return {"boxscore": {"gameId": game_id_param}}
-            except requests.exceptions.RequestException as e:
-                logger.warning(
-                    f"Network error fetching boxscore data for game {game_id_param}: {e}"
-                )
-                return {"boxscore": {"gameId": game_id_param}}
-        return {}
+        # Get stat keys and values
+        stat_keys = stat_entry.get("keys", [])
+        stat_values = athlete.get("stats", [])
+
+        # Build statistics dict
+        statistics: dict[str, Any] = {}
+        for i, key in enumerate(stat_keys):
+            if i < len(stat_values):
+                val = stat_values[i]
+                try:
+                    if "-" in str(val):
+                        # Handle "5-10" format (made-attempted)
+                        statistics[key] = val
+                    elif "." in str(val):
+                        statistics[key] = float(val)
+                    else:
+                        statistics[key] = int(val)
+                except (ValueError, TypeError):
+                    statistics[key] = val
+
+        return {
+            "personId": athlete_info.get("id", 0),
+            "name": athlete_info.get("displayName", ""),
+            "position": athlete_info.get("position", {}).get("abbreviation", ""),
+            "statistics": statistics,
+        }
+
+    def _convert_plays_to_play_by_play(
+        self, plays: dict[str, Any], event_id: str
+    ) -> dict[str, Any]:
+        """Convert ESPN plays response to play_by_play format.
+
+        Args:
+            plays: ESPN plays response
+            event_id: The event ID
+
+        Returns:
+            play_by_play dict in legacy format expected by _store.py
+        """
+        actions = []
+        items = plays.get("items", [])
+
+        for i, item in enumerate(items):
+            action = self._convert_play_to_action(item, i)
+            if action:
+                actions.append(action)
+
+        return {
+            "play_by_play": {
+                "gameId": event_id,
+                "actions": actions,
+            }
+        }
+
+    def _convert_play_to_action(
+        self, play: dict[str, Any], index: int
+    ) -> dict[str, Any] | None:
+        """Convert a single ESPN play to action format."""
+        if not play:
+            return None
+
+        # Extract play type
+        play_type = play.get("type", {})
+        action_type = play_type.get("text", "") if isinstance(play_type, dict) else ""
+
+        # Extract team info
+        team = play.get("team", {})
+        team_tricode = team.get("abbreviation", "") if team else ""
+
+        # Extract period and clock
+        period = play.get("period", {})
+        period_num = period.get("number", 0) if isinstance(period, dict) else 0
+        clock = play.get("clock", {})
+        clock_str = clock.get("displayValue", "") if isinstance(clock, dict) else ""
+
+        # Extract scores
+        home_score = play.get("homeScore", 0) or 0
+        away_score = play.get("awayScore", 0) or 0
+
+        # Extract description
+        description = play.get("text", "")
+
+        # Extract participant (player)
+        participants = play.get("participants", [])
+        person_id = 0
+        player_name = ""
+        if participants:
+            athlete = participants[0].get("athlete", {})
+            person_id = athlete.get("id", 0) if athlete else 0
+            player_name = athlete.get("displayName", "") if athlete else ""
+
+        # Check for game end
+        if play.get("type", {}).get("id") == _ESPN_GAME_END_TYPE_ID:
+            action_type = "game"
+            description = "Game End"
+
+        return {
+            "actionNumber": index,
+            "actionType": action_type.lower() if action_type else "",
+            "period": period_num,
+            "clock": clock_str,
+            "personId": person_id,
+            "playerName": player_name,
+            "teamTricode": team_tricode,
+            "scoreHome": home_score,
+            "scoreAway": away_score,
+            "description": description,
+            "timeActual": play.get("wallclock", ""),
+        }
+
+    async def close(self) -> None:
+        """Close the underlying API session."""
+        await self._api.close()

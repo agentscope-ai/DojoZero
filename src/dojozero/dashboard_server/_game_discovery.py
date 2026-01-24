@@ -5,63 +5,180 @@ NBA API and ESPN API (for NFL).
 """
 
 import logging
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
 
 LOGGER = logging.getLogger("dojozero.game_discovery")
 
 
-@dataclass(slots=True)
-class TeamInfo:
-    """Team information."""
+class TeamInfo(BaseModel):
+    """Team information from ESPN API.
 
-    team_id: str
-    name: str
-    tricode: str  # e.g., "LAL", "BOS"
+    Captures all team data returned by ESPN to avoid additional API calls in the UI.
+    """
+
+    model_config = {"populate_by_name": True}
+
+    team_id: str = Field(default="", alias="teamId")
+    name: str = Field(default="", alias="displayName")
+    tricode: str = Field(default="", alias="teamTricode")
     score: int = 0
+    location: str = Field(default="", alias="teamCity")
+    short_name: str = Field(default="", alias="shortDisplayName")
+    color: str = ""
+    alternate_color: str = Field(default="", alias="alternateColor")
+    logo: str = ""
+    record: str = ""
+
+    @field_validator("team_id", mode="before")
+    @classmethod
+    def coerce_team_id(cls, v: Any) -> str:
+        return str(v) if v is not None else ""
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def coerce_score(cls, v: Any) -> int:
+        if v is None:
+            return 0
+        if isinstance(v, str):
+            return int(v) if v else 0
+        return int(v)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def coerce_name(cls, v: Any, info: Any) -> str:
+        if v:
+            return str(v)
+        # Fall back to teamCity + teamName if displayName not provided
+        data = info.data if hasattr(info, "data") else {}
+        city = data.get("teamCity", "") or data.get("location", "")
+        team_name = data.get("teamName", "")
+        return f"{city} {team_name}".strip() if city or team_name else ""
+
+    @field_validator("short_name", mode="before")
+    @classmethod
+    def coerce_short_name(cls, v: Any, info: Any) -> str:
+        if v:
+            return str(v)
+        # Fall back to teamName if shortDisplayName not provided
+        data = info.data if hasattr(info, "data") else {}
+        return data.get("teamName", "") or ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "team_id": self.team_id,
-            "name": self.name,
-            "tricode": self.tricode,
-            "score": self.score,
-        }
+        return self.model_dump(by_alias=False)
 
 
-@dataclass(slots=True)
-class GameInfo:
-    """Unified game information across sports."""
+class VenueInfo(BaseModel):
+    """Venue information from ESPN API."""
 
-    event_id: str  # game_id for NBA, event_id for NFL
-    sport_type: str  # "nba" or "nfl"
-    status: int  # 1=scheduled, 2=in_progress, 3=finished
-    status_text: str
-    game_time_utc: datetime | None
-    home_team: TeamInfo
-    away_team: TeamInfo
-    venue: str = ""
+    model_config = {"populate_by_name": True}
+
+    venue_id: str = Field(default="", alias="venueId")
+    name: str = ""
+    city: str = ""
+    state: str = ""
+    indoor: bool = True
+
+    @field_validator("venue_id", mode="before")
+    @classmethod
+    def coerce_venue_id(cls, v: Any) -> str:
+        return str(v) if v is not None else ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump(by_alias=False)
+
+
+class GameInfo(BaseModel):
+    """Unified game information across sports.
+
+    Captures all game data from ESPN to avoid additional API calls in the UI.
+    """
+
+    model_config = {"populate_by_name": True}
+
+    event_id: str = Field(default="", alias="gameId")
+    sport_type: str = ""
+    status: int = Field(default=1, alias="gameStatus")
+    status_text: str = Field(default="", alias="gameStatusText")
+    game_time_utc: datetime | None = Field(default=None, alias="gameTimeUTC")
+    home_team: TeamInfo = Field(default_factory=TeamInfo, alias="homeTeam")
+    away_team: TeamInfo = Field(default_factory=TeamInfo, alias="awayTeam")
+    venue: VenueInfo = Field(default_factory=VenueInfo)
+    broadcasts: list[dict[str, Any]] = Field(default_factory=list)
     broadcast: str = ""
-    short_name: str = ""  # e.g., "KC @ BUF"
-    odds: dict[str, Any] = field(default_factory=dict)
+    name: str = ""
+    short_name: str = Field(default="", alias="shortName")
+    odds: dict[str, Any] = Field(default_factory=dict)
+    period: int = 0
+    clock: str = Field(default="", alias="gameClock")
+    attendance: int = 0
+    neutral_site: bool = Field(default=False, alias="neutralSite")
+    season_year: int = Field(default=0, alias="seasonYear")
+    season_type: str = Field(default="", alias="seasonType")
+
+    @field_validator("event_id", mode="before")
+    @classmethod
+    def coerce_event_id(cls, v: Any) -> str:
+        return str(v) if v is not None else ""
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def coerce_status(cls, v: Any) -> int:
+        if v is None:
+            return 1
+        return int(v)
+
+    @field_validator("game_time_utc", mode="before")
+    @classmethod
+    def parse_game_time(cls, v: Any) -> datetime | None:
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            if v.tzinfo is None:
+                return v.replace(tzinfo=timezone.utc)
+            return v
+        if isinstance(v, str) and v:
+            from dateutil import parser
+
+            try:
+                dt = parser.parse(v)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except Exception:
+                return None
+        return None
+
+    @field_validator("home_team", "away_team", mode="before")
+    @classmethod
+    def parse_team(cls, v: Any) -> TeamInfo:
+        if isinstance(v, TeamInfo):
+            return v
+        if isinstance(v, dict):
+            return TeamInfo.model_validate(v)
+        return TeamInfo()
+
+    @field_validator("venue", mode="before")
+    @classmethod
+    def parse_venue(cls, v: Any) -> VenueInfo:
+        if isinstance(v, VenueInfo):
+            return v
+        if isinstance(v, dict):
+            return VenueInfo.model_validate(v)
+        return VenueInfo()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "event_id": self.event_id,
-            "sport_type": self.sport_type,
-            "status": self.status,
-            "status_text": self.status_text,
-            "game_time_utc": self.game_time_utc.isoformat()
-            if self.game_time_utc
-            else None,
-            "home_team": self.home_team.to_dict(),
-            "away_team": self.away_team.to_dict(),
-            "venue": self.venue,
-            "broadcast": self.broadcast,
-            "short_name": self.short_name,
-            "odds": self.odds,
-        }
+        result = self.model_dump(by_alias=False)
+        # Format datetime as ISO string
+        if result.get("game_time_utc"):
+            result["game_time_utc"] = result["game_time_utc"].isoformat()
+        # Nested models need to be converted to dicts
+        result["home_team"] = self.home_team.to_dict()
+        result["away_team"] = self.away_team.to_dict()
+        result["venue"] = self.venue.to_dict()
+        return result
 
 
 class NBAGameFetcher:
@@ -95,40 +212,17 @@ class NBAGameFetcher:
 
         games: list[GameInfo] = []
         for g in games_raw:
-            game_time_utc = None
-            if g.get("gameTimeUTC"):
-                try:
-                    from dateutil import parser
+            # Add sport_type and generate short_name if missing
+            g["sport_type"] = "nba"
+            if not g.get("shortName"):
+                home = g.get("homeTeam", {})
+                away = g.get("awayTeam", {})
+                g["shortName"] = (
+                    f"{away.get('teamTricode', '')} @ {home.get('teamTricode', '')}"
+                )
 
-                    game_time_utc = parser.parse(g["gameTimeUTC"])
-                    if game_time_utc.tzinfo is None:
-                        game_time_utc = game_time_utc.replace(tzinfo=timezone.utc)
-                except Exception:
-                    pass
-
-            home_team = TeamInfo(
-                team_id=str(g.get("homeTeam", {}).get("teamId", "")),
-                name=g.get("homeTeam", {}).get("teamName", ""),
-                tricode=g.get("homeTeam", {}).get("teamTricode", ""),
-                score=g.get("homeTeam", {}).get("score", 0) or 0,
-            )
-            away_team = TeamInfo(
-                team_id=str(g.get("awayTeam", {}).get("teamId", "")),
-                name=g.get("awayTeam", {}).get("teamName", ""),
-                tricode=g.get("awayTeam", {}).get("teamTricode", ""),
-                score=g.get("awayTeam", {}).get("score", 0) or 0,
-            )
-
-            game = GameInfo(
-                event_id=str(g.get("gameId", "")),
-                sport_type="nba",
-                status=g.get("gameStatus", 1),
-                status_text=g.get("gameStatusText", ""),
-                game_time_utc=game_time_utc,
-                home_team=home_team,
-                away_team=away_team,
-                short_name=f"{away_team.tricode} @ {home_team.tricode}",
-            )
+            # Use Pydantic to parse and validate
+            game = GameInfo.model_validate(g)
             games.append(game)
 
         return games
@@ -169,7 +263,7 @@ class NBAGameFetcher:
         """Get current status of a game.
 
         Args:
-            game_id: NBA game ID
+            game_id: ESPN event ID
             game_date: Date of the game (YYYY-MM-DD). If None, searches recent dates.
 
         Returns:
@@ -269,16 +363,11 @@ class NFLGameFetcher:
 
     def _parse_scoreboard(self, data: dict[str, Any]) -> list[GameInfo]:
         """Parse ESPN scoreboard response into GameInfo objects."""
-        from dateutil import parser
-
         scoreboard = data.get("scoreboard", {})
         events = scoreboard.get("events", [])
 
         games: list[GameInfo] = []
         for event in events:
-            event_id = event.get("id", "")
-            short_name = event.get("shortName", "")
-
             competitions = event.get("competitions", [])
             if not competitions:
                 continue
@@ -286,46 +375,56 @@ class NFLGameFetcher:
             comp = competitions[0]
             status = comp.get("status", {})
             status_type = status.get("type", {})
-            status_id = int(status_type.get("id", "1"))
-            status_desc = status_type.get("description", "Scheduled")
 
-            # Parse game time
-            game_time_utc_str = comp.get("date", "")
-            game_time_utc = None
-            if game_time_utc_str:
-                try:
-                    game_time_utc = parser.parse(game_time_utc_str)
-                    if game_time_utc.tzinfo is None:
-                        game_time_utc = game_time_utc.replace(tzinfo=timezone.utc)
-                except Exception:
-                    pass
-
-            # Get competitors
+            # Get competitors and convert to our format
             competitors = comp.get("competitors", [])
-            home_team = TeamInfo(team_id="", name="", tricode="")
-            away_team = TeamInfo(team_id="", name="", tricode="")
+            home_team_data: dict[str, Any] = {}
+            away_team_data: dict[str, Any] = {}
             for c in competitors:
                 team = c.get("team", {})
-                team_info = TeamInfo(
-                    team_id=team.get("id", ""),
-                    name=team.get("displayName", ""),
-                    tricode=team.get("abbreviation", ""),
-                    score=int(c.get("score", "0") or "0"),
-                )
+                # Extract record from competitor records array
+                records = c.get("records", [])
+                record = records[0].get("summary", "") if records else ""
+
+                team_data = {
+                    "teamId": team.get("id", ""),
+                    "displayName": team.get("displayName", ""),
+                    "teamTricode": team.get("abbreviation", ""),
+                    "score": c.get("score", "0"),
+                    "teamCity": team.get("location", ""),
+                    "shortDisplayName": team.get("shortDisplayName", ""),
+                    "color": team.get("color", ""),
+                    "alternateColor": team.get("alternateColor", ""),
+                    "logo": team.get("logo", ""),
+                    "record": record,
+                }
                 if c.get("homeAway") == "home":
-                    home_team = team_info
+                    home_team_data = team_data
                 else:
-                    away_team = team_info
+                    away_team_data = team_data
 
-            # Get venue
-            venue = comp.get("venue", {}).get("fullName", "")
+            # Get venue info
+            venue_data = comp.get("venue", {})
+            venue_address = venue_data.get("address", {})
+            venue = {
+                "venueId": str(venue_data.get("id", "")),
+                "name": venue_data.get("fullName", ""),
+                "city": venue_address.get("city", ""),
+                "state": venue_address.get("state", ""),
+                "indoor": venue_data.get("indoor", True),
+            }
 
-            # Get broadcast
-            broadcasts = comp.get("broadcasts", [])
-            broadcast = ""
-            if broadcasts:
-                names = broadcasts[0].get("names", [])
-                broadcast = ", ".join(names) if names else ""
+            # Get broadcast info
+            broadcasts_raw = comp.get("broadcasts", [])
+            broadcasts: list[dict[str, Any]] = []
+            broadcast_names: list[str] = []
+            for b in broadcasts_raw:
+                market = b.get("market", "")
+                names = b.get("names", [])
+                broadcasts.append({"market": market, "names": names})
+                if names:
+                    broadcast_names.extend(names)
+            broadcast = ", ".join(broadcast_names) if broadcast_names else ""
 
             # Get odds
             odds_list = comp.get("odds", [])
@@ -340,19 +439,40 @@ class NFLGameFetcher:
                     "awayMoneyLine": o.get("awayTeamOdds", {}).get("moneyLine", 0),
                 }
 
-            game = GameInfo(
-                event_id=event_id,
-                sport_type="nfl",
-                status=status_id,
-                status_text=status_desc,
-                game_time_utc=game_time_utc,
-                home_team=home_team,
-                away_team=away_team,
-                venue=venue,
-                broadcast=broadcast,
-                short_name=short_name,
-                odds=odds,
-            )
+            # Get season info
+            season = event.get("season", {})
+            season_type_id = season.get("type", 0)
+            season_type_map = {
+                1: "preseason",
+                2: "regular",
+                3: "postseason",
+                4: "offseason",
+            }
+
+            # Build game data dict for Pydantic validation
+            game_data = {
+                "gameId": event.get("id", ""),
+                "sport_type": "nfl",
+                "gameStatus": int(status_type.get("id", "1")),
+                "gameStatusText": status_type.get("description", "Scheduled"),
+                "gameTimeUTC": comp.get("date", ""),
+                "homeTeam": home_team_data,
+                "awayTeam": away_team_data,
+                "venue": venue,
+                "broadcasts": broadcasts,
+                "broadcast": broadcast,
+                "name": event.get("name", ""),
+                "shortName": event.get("shortName", ""),
+                "odds": odds,
+                "period": status.get("period", 0),
+                "gameClock": status.get("displayClock", ""),
+                "attendance": comp.get("attendance", 0),
+                "neutralSite": comp.get("neutralSite", False),
+                "seasonYear": season.get("year", 0),
+                "seasonType": season_type_map.get(season_type_id, ""),
+            }
+
+            game = GameInfo.model_validate(game_data)
             games.append(game)
 
         return games
@@ -398,4 +518,5 @@ __all__ = [
     "NBAGameFetcher",
     "NFLGameFetcher",
     "TeamInfo",
+    "VenueInfo",
 ]
