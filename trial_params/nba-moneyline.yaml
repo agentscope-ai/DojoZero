@@ -1,0 +1,107 @@
+scenario:
+  name: nba-moneyline
+  config:
+    event_id: '401810490'  # ESPN event ID (get from ESPN scoreboard API)
+
+    hub:
+      persistence_file: outputs/nba_betting_events.jsonl
+      enable_persistence: true
+
+    data_streams:
+    - id: raw_web_search_stream
+      event_type: raw_web_search
+      initializer:
+        search_queries:
+        - template: NBA injury updates for {teams} on {date}
+          intent: injury_summary
+        - template: NBA power rankings
+          intent: power_ranking
+        - template: NBA expert predictions for {teams}
+          intent: expert_prediction
+    - id: injury_summary_stream
+      event_type: injury_summary
+    - id: power_ranking_stream
+      event_type: power_ranking
+    - id: expert_prediction_stream
+      event_type: expert_prediction
+    - id: game_status_change_stream
+      event_type: game_status_change
+    - id: game_update_stream
+      event_type: game_update
+    - id: odds_update_stream
+      event_type: odds_update
+    - id: play_by_play_stream
+      event_type: play_by_play
+
+    operators:
+    - id: betting_broker
+      class: BrokerOperator
+      initial_balance: "1000.00"
+      allowed_tools:
+      - get_balance
+      - get_quote
+      - place_bet
+      - cancel_bet
+      - get_active_bets
+      - get_pending_orders
+      - get_bet_history
+      - get_statistics
+      - get_available_events
+      data_streams:
+      - game_status_change_stream
+      - odds_update_stream
+      - game_update_stream
+
+    agents:
+    - id: basic_agent
+      class: BettingAgent
+      agent_config_path: agents/basic.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+    - id: shark_agent
+      class: BettingAgent
+      agent_config_path: agents/shark.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+    - id: sheep_agent
+      class: BettingAgent
+      agent_config_path: agents/sheep.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream
+    - id: whale_agent
+      class: BettingAgent
+      agent_config_path: agents/whale.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - injury_summary_stream
+      - power_ranking_stream
+      - expert_prediction_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_status_change_stream
+      - play_by_play_stream

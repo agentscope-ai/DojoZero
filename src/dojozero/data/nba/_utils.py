@@ -1,15 +1,38 @@
 """NBA-specific utility functions."""
 
-import json
+import asyncio
+import logging
 import os
 from datetime import date, datetime, timedelta
-from functools import wraps
-from typing import Any, Callable, TypeVar, cast
+from typing import Any
 
-import requests
+import aiohttp
+
+logger = logging.getLogger(__name__)
 
 
-F = TypeVar("F", bound=Callable[..., Any])
+def _run_async(coro):
+    """Run an async coroutine from sync context, handling existing event loops.
+
+    This handles the case where we're called from within an async context
+    (like FastAPI/uvicorn) where an event loop already exists.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop, we can create one
+        loop = None
+
+    if loop is not None:
+        # We're in an async context, need to run in a new thread
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        # No running loop, safe to use asyncio.run
+        return asyncio.run(coro)
 
 
 def parse_iso_datetime(time_str: str) -> datetime:
@@ -40,43 +63,8 @@ def get_proxy() -> str | None:
     return os.getenv("DOJOZERO_PROXY_URL")
 
 
-def with_proxy(func: F) -> F:
-    """Decorator to ensure DOJOZERO_PROXY_URL is set up for NBA API calls.
-
-    This decorator:
-    1. Checks if DOJOZERO_PROXY_URL is available
-    2. Passes proxy parameter to functions that accept it (checks function signature)
-    3. Handles ImportError if nba_api is not available
-
-    Usage:
-        @with_proxy
-        def my_nba_function(game_id: str):
-            from dojozero.data.nba._utils import get_proxy
-            proxy = get_proxy()
-            from nba_api.stats.endpoints import scoreboardv3
-            board = scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy) if proxy else scoreboardv3.ScoreboardV3(game_date=date_str)
-            ...
-    """
-    import inspect
-
-    @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        # Check if function accepts 'proxy' parameter
-        sig = inspect.signature(func)
-        if "proxy" in sig.parameters and "proxy" not in kwargs:
-            kwargs["proxy"] = get_proxy()
-
-        try:
-            return func(*args, **kwargs)
-        except ImportError as e:
-            # nba_api not available
-            raise ImportError(
-                f"nba_api library is required for {func.__name__}. "
-                "Install it with: pip install nba-api"
-            ) from e
-
-    # Cast is needed here because pyright cannot infer that @wraps preserves the function type
-    return cast(F, wrapper)
+# ESPN API base URL
+ESPN_SITE_API_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 
 
 # Common NBA team name variations for matching
@@ -199,18 +187,366 @@ def normalize_team_name(team_name: str) -> str | None:
     return None
 
 
-@with_proxy
+async def _fetch_espn_scoreboard(
+    game_date: date,
+    timeout: int = 30,
+    proxy: str | None = None,
+) -> dict[str, Any]:
+    """Fetch scoreboard data from ESPN API.
+
+    Args:
+        game_date: Date to fetch games for
+        timeout: Request timeout in seconds
+        proxy: Optional proxy URL
+
+    Returns:
+        ESPN scoreboard response dict
+    """
+    date_str = game_date.strftime("%Y%m%d")
+    url = f"{ESPN_SITE_API_BASE}/scoreboard"
+    params = {"dates": date_str}
+
+    proxy = proxy if proxy is not None else get_proxy()
+
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=timeout)
+    ) as session:
+        try:
+            async with session.get(url, params=params, proxy=proxy) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "ESPN scoreboard request failed: status=%d, date=%s",
+                        response.status,
+                        date_str,
+                    )
+                    return {"events": []}
+                return await response.json()
+        except Exception as e:
+            logger.error("Error fetching ESPN scoreboard for date %s: %s", date_str, e)
+            return {"events": []}
+
+
+def _parse_espn_event(event: dict[str, Any], game_date: date) -> dict[str, Any]:
+    """Parse an ESPN event into our standard game format.
+
+    Captures all game data from ESPN to avoid additional API calls in the UI.
+
+    Args:
+        event: ESPN event dict
+        game_date: The date of the game
+
+    Returns:
+        Game dict in our standard format with all ESPN data
+    """
+    event_id = event.get("id", "")
+    event_date = event.get("date", "")
+
+    # Parse game time
+    game_time_ltz = None
+    if event_date:
+        try:
+            from datetime import timezone
+
+            from dateutil import parser
+
+            game_time_utc = parser.parse(event_date)
+            game_time_ltz = game_time_utc.replace(tzinfo=timezone.utc).astimezone(
+                tz=None
+            )
+        except Exception:
+            pass
+
+    # Get competition data
+    competitions = event.get("competitions", [])
+    if not competitions:
+        return {}
+
+    comp = competitions[0]
+    competitors = comp.get("competitors", [])
+
+    home_team: dict[str, Any] = {}
+    away_team: dict[str, Any] = {}
+
+    for competitor in competitors:
+        team_info = competitor.get("team", {})
+        is_home = competitor.get("homeAway") == "home"
+        score = competitor.get("score", "0")
+        record = competitor.get("records", [{}])[0] if competitor.get("records") else {}
+
+        # Parse wins/losses from record
+        wins = 0
+        losses = 0
+        if record and record.get("summary"):
+            try:
+                parts = record["summary"].split("-")
+                if len(parts) == 2:
+                    wins = int(parts[0])
+                    losses = int(parts[1])
+            except (ValueError, IndexError):
+                pass
+
+        team_data = {
+            "teamId": team_info.get("id", 0),
+            "teamName": team_info.get("name", ""),
+            "teamCity": team_info.get("location", ""),
+            "teamTricode": team_info.get("abbreviation", ""),
+            "displayName": team_info.get("displayName", ""),
+            "shortDisplayName": team_info.get("shortDisplayName", ""),
+            "color": team_info.get("color", ""),
+            "alternateColor": team_info.get("alternateColor", ""),
+            "logo": team_info.get("logo", ""),
+            "score": int(score) if score else 0,
+            "wins": wins,
+            "losses": losses,
+            "record": record.get("summary", "") if record else "",
+        }
+
+        if is_home:
+            home_team = team_data
+        else:
+            away_team = team_data
+
+    # Get game status
+    status = comp.get("status", {})
+    status_type = status.get("type", {})
+    status_id = int(status_type.get("id", 0))
+    status_text = status_type.get("shortDetail", "")
+
+    # Map ESPN status to our format: 1=scheduled, 2=in-progress, 3=finished
+    # ESPN: 1=scheduled, 2=in-progress, 3=final
+    game_status = status_id
+
+    # Get period info
+    period = status.get("period", 0)
+    clock = status.get("displayClock", "")
+
+    # Get venue info
+    venue_data = comp.get("venue", {})
+    venue_address = venue_data.get("address", {})
+    venue = {
+        "venueId": str(venue_data.get("id", "")),
+        "name": venue_data.get("fullName", ""),
+        "city": venue_address.get("city", ""),
+        "state": venue_address.get("state", ""),
+        "indoor": venue_data.get("indoor", True),
+    }
+
+    # Get broadcast info - capture all broadcasts
+    broadcasts_raw = comp.get("broadcasts", [])
+    broadcasts: list[dict[str, Any]] = []
+    broadcast_names: list[str] = []
+    for b in broadcasts_raw:
+        market = b.get("market", "")
+        names = b.get("names", [])
+        broadcasts.append({"market": market, "names": names})
+        if names:
+            broadcast_names.extend(names)
+    broadcast = ", ".join(broadcast_names) if broadcast_names else ""
+
+    # Get odds
+    odds_list = comp.get("odds", [])
+    odds: dict[str, Any] = {}
+    if odds_list:
+        o = odds_list[0]
+        odds = {
+            "provider": o.get("provider", {}).get("name", ""),
+            "spread": o.get("spread", 0),
+            "overUnder": o.get("overUnder", 0),
+            "homeMoneyLine": o.get("homeTeamOdds", {}).get("moneyLine", 0),
+            "awayMoneyLine": o.get("awayTeamOdds", {}).get("moneyLine", 0),
+        }
+
+    # Get game state
+    attendance = comp.get("attendance", 0)
+    neutral_site = comp.get("neutralSite", False)
+
+    # Get season info from event
+    season = event.get("season", {})
+    season_year = season.get("year", 0)
+    season_type_id = season.get("type", 0)
+    season_type_map = {1: "preseason", 2: "regular", 3: "postseason", 4: "offseason"}
+    season_type = season_type_map.get(season_type_id, "")
+
+    # Get game names from event
+    game_name = event.get("name", "")
+    short_name = event.get("shortName", "")
+
+    return {
+        "gameId": event_id,
+        "gameStatus": game_status,
+        "gameStatusText": status_text,
+        "period": period,
+        "gameClock": clock,
+        "gameTimeUTC": event_date,
+        "gameTimeLTZ": game_time_ltz,
+        "homeTeam": home_team,
+        "awayTeam": away_team,
+        "gameLeaders": {},  # ESPN doesn't provide this in scoreboard
+        # Additional ESPN fields
+        "venue": venue,
+        "broadcasts": broadcasts,
+        "broadcast": broadcast,
+        "odds": odds,
+        "attendance": attendance,
+        "neutralSite": neutral_site,
+        "seasonYear": season_year,
+        "seasonType": season_type,
+        "name": game_name,
+        "shortName": short_name,
+    }
+
+
+def get_games_for_date(
+    game_date: datetime | str,
+    print_games: bool = False,
+    proxy: str | None = None,
+) -> list[dict[str, Any]]:
+    """Get games for a specific date using ESPN API.
+
+    Args:
+        game_date: Date as datetime object or string in 'YYYY-MM-DD' format
+        print_games: Whether to print game information (default: False)
+        proxy: Optional proxy URL (automatically set from DOJOZERO_PROXY_URL env var)
+
+    Returns:
+        list[dict]: List of game dictionaries with the following structure:
+        {
+            'gameId': str,
+            'gameStatus': int,  # 1=scheduled, 2=in-progress, 3=finished
+            'gameStatusText': str,
+            'period': int,
+            'gameClock': str,
+            'gameTimeUTC': str,
+            'gameTimeLTZ': datetime | None,  # Local timezone
+            'homeTeam': {
+                'teamId': int,
+                'teamName': str,
+                'teamCity': str,
+                'teamTricode': str,
+                'score': int,
+                'wins': int,
+                'losses': int
+            },
+            'awayTeam': {...},  # Same structure as homeTeam
+            'gameLeaders': dict  # May be empty when game hasn't started
+        }
+        Returns empty list if no games found or on error.
+    """
+    try:
+        from dateutil import parser
+
+        # Parse the requested date
+        if isinstance(game_date, datetime):
+            requested_date = game_date.date()
+        elif isinstance(game_date, str):
+            try:
+                parsed_date = parser.parse(game_date).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                requested_date = parsed_date.date()
+            except Exception:
+                requested_date = None
+        else:
+            requested_date = None
+
+        if not requested_date:
+            if print_games:
+                print(f"Error: Could not parse date: {game_date}")
+            return []
+
+        # Run async fetch in sync context
+        scoreboard_data = _run_async(
+            _fetch_espn_scoreboard(requested_date, proxy=proxy)
+        )
+
+        events = scoreboard_data.get("events", [])
+        games = []
+
+        for event in events:
+            game = _parse_espn_event(event, requested_date)
+            if game:
+                games.append(game)
+
+        if print_games:
+            date_str = requested_date.strftime("%Y-%m-%d")
+            print(f"Date: {date_str}")
+            print(f"Found {len(games)} game(s)\n")
+            for game in games:
+                time_str = (
+                    game["gameTimeLTZ"].strftime("%Y-%m-%d %H:%M:%S %Z")
+                    if game.get("gameTimeLTZ")
+                    else "N/A"
+                )
+                print(
+                    f"{game['gameId']}: {game['awayTeam']['teamName']} vs. {game['homeTeam']['teamName']} @ {time_str} [{game['gameStatusText']}]"
+                )
+
+        return games
+
+    except Exception as e:
+        logger.error("Error fetching games for date %s: %s", game_date, e)
+        if print_games:
+            print(f"Error fetching games for date {game_date}: {e}")
+        return []
+
+
+async def get_games_for_date_async(
+    game_date: datetime | str,
+    proxy: str | None = None,
+) -> list[dict[str, Any]]:
+    """Async version of get_games_for_date using ESPN API.
+
+    Args:
+        game_date: Date as datetime object or string in 'YYYY-MM-DD' format
+        proxy: Optional proxy URL
+
+    Returns:
+        List of game dictionaries
+    """
+    try:
+        from dateutil import parser
+
+        # Parse the requested date
+        if isinstance(game_date, datetime):
+            requested_date = game_date.date()
+        elif isinstance(game_date, str):
+            try:
+                parsed_date = parser.parse(game_date).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                requested_date = parsed_date.date()
+            except Exception:
+                return []
+        else:
+            return []
+
+        scoreboard_data = await _fetch_espn_scoreboard(requested_date, proxy=proxy)
+        events = scoreboard_data.get("events", [])
+
+        games = []
+        for event in events:
+            game = _parse_espn_event(event, requested_date)
+            if game:
+                games.append(game)
+
+        return games
+
+    except Exception as e:
+        logger.error("Error fetching games for date %s: %s", game_date, e)
+        return []
+
+
 def get_games_by_date_range(
     start_date: date,
     end_date: date,
     proxy: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Get all games within a date range.
+    """Get all games within a date range using ESPN API.
 
     Args:
         start_date: Start date (inclusive)
         end_date: End date (inclusive)
-        proxy: Optional proxy URL (automatically set from DOJOZERO_PROXY_URL env var if not provided)
+        proxy: Optional proxy URL
 
     Returns:
         List of game dictionaries with structure:
@@ -225,12 +561,6 @@ def get_games_by_date_range(
             'game_status': int,  # 1=scheduled, 2=in-progress, 3=completed
         }
     """
-    import logging
-
-    from nba_api.stats.endpoints import scoreboardv3
-
-    logger = logging.getLogger(__name__)
-
     games = []
     current_date = start_date
 
@@ -239,44 +569,39 @@ def get_games_by_date_range(
         logger.debug(f"Fetching games for date={date_str}")
 
         try:
-            if proxy:
-                board = scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy)
-            else:
-                board = scoreboardv3.ScoreboardV3(game_date=date_str)
+            # Run async fetch in sync context
+            scoreboard_data = _run_async(
+                _fetch_espn_scoreboard(current_date, proxy=proxy)
+            )
 
-            games_data = board.get_dict()
+            events = scoreboard_data.get("events", [])
 
-            if games_data and "scoreboard" in games_data:
-                scoreboard_data = games_data["scoreboard"]
-                games_list = scoreboard_data.get("games", [])
-
-                for game_data in games_list:
-                    home_team = game_data.get("homeTeam", {})
-                    away_team = game_data.get("awayTeam", {})
+            for event in events:
+                game = _parse_espn_event(event, current_date)
+                if game:
+                    home_team = game.get("homeTeam", {})
+                    away_team = game.get("awayTeam", {})
 
                     home_team_name = f"{home_team.get('teamCity', '')} {home_team.get('teamName', '')}".strip()
                     away_team_name = f"{away_team.get('teamCity', '')} {away_team.get('teamName', '')}".strip()
 
                     games.append(
                         {
-                            "game_id": str(game_data.get("gameId", "")),
+                            "game_id": str(game.get("gameId", "")),
                             "home_team": home_team_name,
                             "away_team": away_team_name,
                             "home_team_tricode": home_team.get("teamTricode", ""),
                             "away_team_tricode": away_team.get("teamTricode", ""),
                             "game_date": date_str,
-                            "game_time_utc": game_data.get("gameTimeUTC", ""),
-                            "game_status": game_data.get("gameStatus", 0),
+                            "game_time_utc": game.get("gameTimeUTC", ""),
+                            "game_status": game.get("gameStatus", 0),
                         }
                     )
 
-                logger.debug(f"Found {len(games_list)} games on {date_str}")
-        except requests.exceptions.RequestException as e:
-            logger.debug(f"Network error fetching games for date={date_str}: {e}")
-        except json.JSONDecodeError as e:
-            logger.debug(f"JSON parsing error fetching games for date={date_str}: {e}")
-        except (KeyError, TypeError, ValueError) as e:
-            logger.debug(f"Data parsing error fetching games for date={date_str}: {e}")
+            logger.debug(f"Found {len(events)} games on {date_str}")
+
+        except Exception as e:
+            logger.debug(f"Error fetching games for date={date_str}: {e}")
 
         current_date += timedelta(days=1)
 
@@ -284,19 +609,182 @@ def get_games_by_date_range(
     return games
 
 
-@with_proxy
+async def get_games_by_date_range_async(
+    start_date: date,
+    end_date: date,
+    proxy: str | None = None,
+) -> list[dict[str, Any]]:
+    """Async version of get_games_by_date_range.
+
+    Args:
+        start_date: Start date (inclusive)
+        end_date: End date (inclusive)
+        proxy: Optional proxy URL
+
+    Returns:
+        List of game dictionaries
+    """
+    games = []
+    current_date = start_date
+
+    while current_date <= end_date:
+        date_str = current_date.strftime("%Y-%m-%d")
+        logger.debug(f"Fetching games for date={date_str}")
+
+        try:
+            scoreboard_data = await _fetch_espn_scoreboard(current_date, proxy=proxy)
+            events = scoreboard_data.get("events", [])
+
+            for event in events:
+                game = _parse_espn_event(event, current_date)
+                if game:
+                    home_team = game.get("homeTeam", {})
+                    away_team = game.get("awayTeam", {})
+
+                    home_team_name = f"{home_team.get('teamCity', '')} {home_team.get('teamName', '')}".strip()
+                    away_team_name = f"{away_team.get('teamCity', '')} {away_team.get('teamName', '')}".strip()
+
+                    games.append(
+                        {
+                            "game_id": str(game.get("gameId", "")),
+                            "home_team": home_team_name,
+                            "away_team": away_team_name,
+                            "home_team_tricode": home_team.get("teamTricode", ""),
+                            "away_team_tricode": away_team.get("teamTricode", ""),
+                            "game_date": date_str,
+                            "game_time_utc": game.get("gameTimeUTC", ""),
+                            "game_status": game.get("gameStatus", 0),
+                        }
+                    )
+
+            logger.debug(f"Found {len(events)} games on {date_str}")
+
+        except Exception as e:
+            logger.debug(f"Error fetching games for date={date_str}: {e}")
+
+        current_date += timedelta(days=1)
+
+    logger.debug(f"Found {len(games)} total games between {start_date} and {end_date}")
+    return games
+
+
+async def _fetch_espn_summary(
+    event_id: str,
+    timeout: int = 30,
+    proxy: str | None = None,
+) -> dict[str, Any]:
+    """Fetch game summary from ESPN API.
+
+    Args:
+        event_id: ESPN event ID
+        timeout: Request timeout in seconds
+        proxy: Optional proxy URL
+
+    Returns:
+        ESPN summary response dict
+    """
+    url = f"{ESPN_SITE_API_BASE}/summary"
+    params = {"event": event_id}
+
+    proxy = proxy if proxy is not None else get_proxy()
+
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=timeout)
+    ) as session:
+        try:
+            async with session.get(url, params=params, proxy=proxy) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "ESPN summary request failed: status=%d, event_id=%s",
+                        response.status,
+                        event_id,
+                    )
+                    return {}
+                return await response.json()
+        except Exception as e:
+            logger.error("Error fetching ESPN summary for event %s: %s", event_id, e)
+            return {}
+
+
+def _is_nba_game_id(game_id: str) -> bool:
+    """Check if the game_id is an NBA.com game ID format.
+
+    NBA game IDs are 10 digits starting with 00, 01, 02, etc.
+    ESPN event IDs are typically 9 digits starting with 4.
+    """
+    return len(game_id) == 10 and game_id.startswith("00")
+
+
+def _extract_game_info_from_summary(
+    summary: dict[str, Any], game_id: str
+) -> dict[str, Any] | None:
+    """Extract game info from ESPN summary response."""
+    header = summary.get("header", {})
+    competitions = header.get("competitions", [])
+
+    if not competitions:
+        return None
+
+    comp = competitions[0]
+    competitors = comp.get("competitors", [])
+
+    home_team_name = ""
+    away_team_name = ""
+    home_team_tricode = ""
+    away_team_tricode = ""
+
+    for competitor in competitors:
+        team_info = competitor.get("team", {})
+        team_name = (
+            f"{team_info.get('location', '')} {team_info.get('name', '')}".strip()
+        )
+        team_tricode = team_info.get("abbreviation", "")
+
+        if competitor.get("homeAway") == "home":
+            home_team_name = team_name
+            home_team_tricode = team_tricode
+        else:
+            away_team_name = team_name
+            away_team_tricode = team_tricode
+
+    # Get game date/time
+    game_time_utc = comp.get("date", "")
+    game_date = ""
+    if game_time_utc:
+        try:
+            from dateutil import parser
+
+            dt = parser.parse(game_time_utc)
+            game_date = dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    if not home_team_name or not away_team_name:
+        return None
+
+    return {
+        "game_id": game_id,
+        "home_team": home_team_name,
+        "away_team": away_team_name,
+        "home_team_tricode": home_team_tricode,
+        "away_team_tricode": away_team_tricode,
+        "game_date": game_date,
+        "game_time_utc": game_time_utc,
+    }
+
+
 def get_game_info_by_id(
     game_id: str, proxy: str | None = None
 ) -> dict[str, Any] | None:
-    """Get team names and game date for a given NBA game ID.
+    """Get team names and game date for a given game/event ID using ESPN API.
 
-    This function uses a hybrid approach:
-    1. First tries BoxScoreTraditionalV3 (fast, works for past/completed games)
-    2. If that fails, searches upcoming games in ScoreboardV3 (for future games)
+    Supports both ESPN event IDs (e.g., '401584701') and legacy NBA.com game IDs
+    (e.g., '0022500640'). For NBA.com IDs, this function will search recent dates
+    to find a matching game.
 
     Args:
-        game_id: NBA.com game ID (e.g., '0022500290')
-        proxy: Optional proxy URL (automatically set from DOJOZERO_PROXY_URL env var if not provided)
+        game_id: ESPN event ID or NBA.com game ID
+        proxy: Optional proxy URL
 
     Returns:
         Dictionary with game information:
@@ -311,228 +799,77 @@ def get_game_info_by_id(
         }
         Returns None if game not found or is invalid
     """
-    import logging
-
-    from nba_api.stats.endpoints import boxscoretraditionalv3, scoreboardv3
-
-    logger = logging.getLogger(__name__)
-
     logger.debug(f"Looking up game_id={game_id}")
 
-    # Strategy 1: Try BoxScore endpoint (works for completed/in-progress games)
-    logger.debug(f"Attempting BoxScore lookup for game_id={game_id}")
+    # First, try direct ESPN lookup (works for ESPN event IDs)
     try:
-        if proxy:
-            box_score = boxscoretraditionalv3.BoxScoreTraditionalV3(
-                game_id=game_id, proxy=proxy
-            )
-        else:
-            box_score = boxscoretraditionalv3.BoxScoreTraditionalV3(game_id=game_id)
+        summary = _run_async(_fetch_espn_summary(game_id, proxy=proxy))
 
-        box_score_dict = box_score.get_dict()
+        if summary:
+            result = _extract_game_info_from_summary(summary, game_id)
+            if result:
+                logger.debug(
+                    f"Found game via ESPN: {result['away_team_tricode']} @ {result['home_team_tricode']}"
+                )
+                return result
+    except Exception as e:
+        logger.debug(f"ESPN direct lookup failed for game_id={game_id}: {e}")
 
-        if box_score_dict and "boxScoreTraditional" in box_score_dict:
-            boxscore_data = box_score_dict["boxScoreTraditional"]
+    # If direct lookup failed and this looks like an NBA.com game ID,
+    # we can't look it up via ESPN (different ID systems)
+    if _is_nba_game_id(game_id):
+        logger.warning(
+            f"game_id={game_id} appears to be an NBA.com game ID. "
+            "ESPN uses different event IDs. Please use ESPN event IDs for new trials. "
+            "You can find ESPN event IDs from the scoreboard API or game URLs."
+        )
+        return None
 
-            if boxscore_data and isinstance(boxscore_data, dict):
-                # Extract team information from boxscore
-                home_team = boxscore_data.get("homeTeam", {})
-                away_team = boxscore_data.get("awayTeam", {})
+    logger.debug(f"No game info found for game_id={game_id}")
+    return None
 
-                # Build full team name
-                home_team_name = f"{home_team.get('teamCity', '')} {home_team.get('teamName', '')}".strip()
-                away_team_name = f"{away_team.get('teamCity', '')} {away_team.get('teamName', '')}".strip()
 
-                # If team names are available, we found the game
-                if home_team_name and away_team_name:
-                    logger.debug(
-                        f"Found game via BoxScore: {away_team.get('teamTricode')} @ {home_team.get('teamTricode')}"
-                    )
+async def get_game_info_by_id_async(
+    game_id: str, proxy: str | None = None
+) -> dict[str, Any] | None:
+    """Async version of get_game_info_by_id using ESPN API.
 
-                    # BoxScore doesn't include date, use LeagueGameFinder to get it
-                    game_date = ""
-                    home_team_id = home_team.get("teamId")
-                    if home_team_id:
-                        try:
-                            from nba_api.stats.endpoints import leaguegamefinder
+    Supports both ESPN event IDs (e.g., '401584701') and legacy NBA.com game IDs
+    (e.g., '0022500640'). For NBA.com IDs, this function will log a warning
+    as ESPN uses different event IDs.
 
-                            # Get games for the home team to find the date
-                            if proxy:
-                                gamefinder = leaguegamefinder.LeagueGameFinder(
-                                    team_id_nullable=home_team_id, proxy=proxy
-                                )
-                            else:
-                                gamefinder = leaguegamefinder.LeagueGameFinder(
-                                    team_id_nullable=home_team_id
-                                )
-                            games_df = gamefinder.get_data_frames()[0]
-                            matching_game = games_df[games_df["GAME_ID"] == game_id]
-                            if not matching_game.empty:
-                                game_date = matching_game.iloc[0]["GAME_DATE"]
-                                logger.debug(
-                                    f"Found game date via LeagueGameFinder: {game_date}"
-                                )
-                        except requests.exceptions.RequestException as e:
-                            logger.debug(f"LeagueGameFinder network error: {e}")
-                        except (KeyError, IndexError, TypeError, ValueError) as e:
-                            logger.debug(f"LeagueGameFinder data error: {e}")
+    Args:
+        game_id: ESPN event ID or NBA.com game ID
+        proxy: Optional proxy URL
 
-                    # BoxScore doesn't include date, use LeagueGameFinder to get it
-                    game_date = ""
-                    home_team_id = home_team.get("teamId")
-                    if home_team_id:
-                        try:
-                            from nba_api.stats.endpoints import leaguegamefinder
+    Returns:
+        Dictionary with game information or None if not found
+    """
+    logger.debug(f"Looking up game_id={game_id}")
 
-                            # Get games for the home team to find the date
-                            if proxy:
-                                gamefinder = leaguegamefinder.LeagueGameFinder(
-                                    team_id_nullable=home_team_id, proxy=proxy
-                                )
-                            else:
-                                gamefinder = leaguegamefinder.LeagueGameFinder(
-                                    team_id_nullable=home_team_id
-                                )
-                            games_df = gamefinder.get_data_frames()[0]
-                            matching_game = games_df[games_df["GAME_ID"] == game_id]
-                            if not matching_game.empty:
-                                game_date = matching_game.iloc[0]["GAME_DATE"]
-                                logger.debug(
-                                    f"Found game date via LeagueGameFinder: {game_date}"
-                                )
-                        except requests.exceptions.RequestException as e:
-                            logger.debug(f"LeagueGameFinder network error: {e}")
-                        except (KeyError, IndexError, TypeError, ValueError) as e:
-                            logger.debug(f"LeagueGameFinder data error: {e}")
+    # First, try direct ESPN lookup
+    try:
+        summary = await _fetch_espn_summary(game_id, proxy=proxy)
 
-                    return {
-                        "game_id": game_id,
-                        "home_team": home_team_name,
-                        "away_team": away_team_name,
-                        "home_team_tricode": home_team.get("teamTricode", ""),
-                        "away_team_tricode": away_team.get("teamTricode", ""),
-                        "game_date": game_date,
-                        "game_time_utc": "",
-                    }
-                else:
-                    logger.debug(
-                        f"BoxScore returned data but team names are empty for game_id={game_id}"
-                    )
-        else:
-            logger.debug(
-                f"BoxScore returned no data or missing 'boxScoreTraditional' for game_id={game_id}"
-            )
-    except requests.exceptions.RequestException as e:
-        # BoxScore failed due to network error, will try Scoreboard fallback
-        logger.debug(f"BoxScore network error for game_id={game_id}: {e}")
-    except json.JSONDecodeError as e:
-        # BoxScore returned invalid JSON, will try Scoreboard fallback
-        logger.debug(f"BoxScore JSON error for game_id={game_id}: {e}")
-    except (KeyError, TypeError, ValueError, AttributeError) as e:
-        # BoxScore data parsing failed, will try Scoreboard fallback
-        # AttributeError occurs when nba_api tries to parse empty team stats
-        # for games that haven't started yet
-        logger.debug(f"BoxScore data error for game_id={game_id}: {e}")
+        if summary:
+            result = _extract_game_info_from_summary(summary, game_id)
+            if result:
+                logger.debug(
+                    f"Found game via ESPN: {result['away_team_tricode']} @ {result['home_team_tricode']}"
+                )
+                return result
+    except Exception as e:
+        logger.debug(f"ESPN direct lookup failed for game_id={game_id}: {e}")
 
-    # Strategy 2: Fallback to Scoreboard search for future/upcoming games
-    # Search 7 days back and 14 days forward for scheduled/recent games
-    # Search 7 days back and 14 days forward for scheduled/recent games
-    logger.debug(
-        f"BoxScore lookup unsuccessful, searching Scoreboard for game_id={game_id}"
-    )
-    today = datetime.now().date()
+    # If direct lookup failed and this looks like an NBA.com game ID,
+    # we can't look it up via ESPN (different ID systems)
+    if _is_nba_game_id(game_id):
+        logger.warning(
+            f"game_id={game_id} appears to be an NBA.com game ID. "
+            "ESPN uses different event IDs. Please use ESPN event IDs for new trials. "
+            "You can find ESPN event IDs from the scoreboard API or game URLs."
+        )
+        return None
 
-    # Build list of dates to search: 7 days back, then 14 days forward
-    dates_to_search = []
-    # Past dates (7 days back, most recent first)
-    for i in range(1, 8):
-        dates_to_search.append(today - timedelta(days=i))
-    # Today and future dates (14 days forward)
-
-    # Build list of dates to search: 7 days back, then 14 days forward
-    dates_to_search = []
-    # Past dates (7 days back, most recent first)
-    for i in range(1, 8):
-        dates_to_search.append(today - timedelta(days=i))
-    # Today and future dates (14 days forward)
-    for i in range(14):
-        dates_to_search.append(today + timedelta(days=i))
-
-    # Prioritize: today first, then nearby dates
-    # Sort by distance from today
-    dates_to_search.sort(key=lambda d: abs((d - today).days))
-
-    for search_date in dates_to_search:
-        date_str = search_date.strftime("%Y-%m-%d")
-        dates_to_search.append(today + timedelta(days=i))
-
-    # Prioritize: today first, then nearby dates
-    # Sort by distance from today
-    dates_to_search.sort(key=lambda d: abs((d - today).days))
-
-    for search_date in dates_to_search:
-        date_str = search_date.strftime("%Y-%m-%d")
-
-        logger.debug(f"Searching scoreboard for date={date_str}")
-
-        try:
-            if proxy:
-                board = scoreboardv3.ScoreboardV3(game_date=date_str, proxy=proxy)
-            else:
-                board = scoreboardv3.ScoreboardV3(game_date=date_str)
-
-            games_data = board.get_dict()
-            if not games_data or "scoreboard" not in games_data:
-                logger.debug(f"No scoreboard data for date={date_str}")
-                continue
-
-            scoreboard_data = games_data["scoreboard"]
-            games_list = scoreboard_data.get("games", [])
-
-            logger.debug(f"Found {len(games_list)} games on {date_str}")
-
-            # Search for the game_id
-            for game_data in games_list:
-                if str(game_data.get("gameId", "")) == str(game_id):
-                    # Found the game!
-                    home_team = game_data.get("homeTeam", {})
-                    away_team = game_data.get("awayTeam", {})
-
-                    # Build full team name
-                    home_team_name = f"{home_team.get('teamCity', '')} {home_team.get('teamName', '')}".strip()
-                    away_team_name = f"{away_team.get('teamCity', '')} {away_team.get('teamName', '')}".strip()
-
-                    game_time_utc = game_data.get("gameTimeUTC", "")
-
-                    logger.debug(
-                        f"Found game via Scoreboard on {date_str}: {away_team.get('teamTricode')} @ {home_team.get('teamTricode')}"
-                    )
-
-                    return {
-                        "game_id": game_id,
-                        "home_team": home_team_name,
-                        "away_team": away_team_name,
-                        "home_team_tricode": home_team.get("teamTricode", ""),
-                        "away_team_tricode": away_team.get("teamTricode", ""),
-                        "game_date": date_str,
-                        "game_time_utc": game_time_utc,
-                    }
-        except requests.exceptions.RequestException as e:
-            # Continue to next date if this one fails due to network error
-            logger.debug(f"Network error searching scoreboard for date={date_str}: {e}")
-            continue
-        except json.JSONDecodeError as e:
-            # Continue to next date if JSON parsing fails
-            logger.debug(f"JSON error searching scoreboard for date={date_str}: {e}")
-            continue
-        except (KeyError, TypeError, ValueError) as e:
-            # Continue to next date if data parsing fails
-            logger.debug(f"Data error searching scoreboard for date={date_str}: {e}")
-            continue
-
-    # Game not found in both BoxScore and Scoreboards
-    # Game not found in both BoxScore and Scoreboards
-    logger.debug(
-        f"Game not found in both BoxScore and Scoreboard (searched 7 days back, 14 days forward) for game_id={game_id}"
-    )
+    logger.debug(f"No game info found for game_id={game_id}")
     return None

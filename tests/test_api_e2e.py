@@ -28,12 +28,12 @@ from fastapi.testclient import TestClient
 
 import dojozero.samples  # noqa: F401 - trigger registration
 from dojozero.core import (
-    Dashboard,
-    InMemoryDashboardStore,
+    TrialOrchestrator,
+    InMemoryOrchestratorStore,
     LocalActorRuntimeProvider,
 )
-from dojozero.core._dashboard_server import create_dashboard_app
-from dojozero.core._arena_server import create_arena_app
+from dojozero.dashboard_server import create_dashboard_app
+from dojozero.arena_server import create_arena_app
 from dojozero.core._tracing import (
     JaegerTraceReader,
     OTelSpanExporter,
@@ -91,18 +91,22 @@ def jaeger_reader():
 
 
 @pytest.fixture
-def dashboard():
-    """Create a Dashboard instance with in-memory store."""
-    store = InMemoryDashboardStore()
+def orchestrator():
+    """Create a TrialOrchestrator instance with in-memory store."""
+    store = InMemoryOrchestratorStore()
     provider = LocalActorRuntimeProvider()
-    return Dashboard(store=store, runtime_provider=provider)
+    return TrialOrchestrator(store=store, runtime_provider=provider)
 
 
 @pytest.fixture
-def dashboard_app(dashboard, otel_exporter):
+def dashboard_app(orchestrator, otel_exporter, tmp_path):
     """Create Dashboard Server FastAPI app with OTel configured."""
+    from dojozero.dashboard_server._scheduler import FileSchedulerStore
+
+    scheduler_store = FileSchedulerStore(tmp_path / "scheduler")
     app = create_dashboard_app(
-        dashboard,
+        orchestrator,
+        scheduler_store=scheduler_store,
         trace_backend="jaeger",
         trace_ingest_endpoint=JAEGER_OTLP_URL,
     )

@@ -5,11 +5,9 @@ This module implements the Dashboard Server which is responsible for:
 - Emitting OTel traces for all actor operations
 - Providing REST API for trial control (submit, stop, checkpoint)
 - Serving as trace store for Frontend Server
+- Scheduling trials for future game events
 
-The server uses an async TrialManager to queue and run trials:
-- Submissions return immediately with trial_id
-- Trials are queued and run up to max_concurrent (default 20)
-- Status can be polled via GET /api/trials/{trial_id}/status
+Refactored from core/_dashboard_server.py to separate server code from core abstractions.
 """
 
 import asyncio
@@ -17,449 +15,38 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Coroutine
+from typing import Any, Coroutine
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
-from ._dashboard import (
-    Dashboard,
-    DashboardError,
+from dojozero.core import (
+    TrialOrchestrator,
+    OrchestratorError,
     TrialExistsError,
     TrialNotFoundError,
     TrialSpec,
     TrialStatus,
 )
-from ._registry import (
+from dojozero.core._registry import (
     TrialBuilderNotFoundError,
     get_trial_builder_definition,
 )
-from ._tracing import (
+from dojozero.core._tracing import (
     OTelSpanExporter,
     SLSLogExporter,
     get_sls_exporter_headers,
+    get_sls_log_exporter,
     set_otel_exporter,
     set_sls_log_exporter,
 )
-from ._types import RuntimeContext
+from dojozero.core._types import RuntimeContext
 
-
-class QueuedTrialPhase(str, Enum):
-    """Phase of a queued trial in the TrialManager."""
-
-    PENDING = "pending"  # In queue, waiting to start
-    STARTING = "starting"  # Being launched
-    RUNNING = "running"  # Active
-    COMPLETED = "completed"  # Finished successfully
-    FAILED = "failed"  # Failed with error
-    CANCELLED = "cancelled"  # Cancelled by user
-
-
-@dataclass
-class QueuedTrial:
-    """A trial in the TrialManager queue."""
-
-    trial_id: str
-    spec: TrialSpec
-    phase: QueuedTrialPhase = QueuedTrialPhase.PENDING
-    error: str | None = None
-    # Coroutine factory for launching (supports backtest mode)
-    launch_coro_factory: Callable[[], Coroutine[Any, Any, TrialStatus]] | None = None
-
-
-class TrialManager:
-    """Async task manager for running trials with queuing.
-
-    Features:
-    - Accepts trial submissions and returns immediately
-    - Queues trials and runs up to max_concurrent in parallel
-    - Tracks trial status (pending, running, completed, failed)
-    - Supports cancellation of pending/running trials
-
-    Usage:
-        manager = TrialManager(dashboard, max_concurrent=20)
-        await manager.start()  # Start background worker
-
-        trial_id = await manager.submit(spec)  # Returns immediately
-        status = manager.get_status(trial_id)  # Check status
-
-        await manager.cancel(trial_id)  # Cancel if needed
-        await manager.stop()  # Graceful shutdown
-    """
-
-    def __init__(
-        self,
-        dashboard: Dashboard,
-        max_concurrent: int = 20,
-        oss_backup: bool = False,
-    ):
-        """Initialize the TrialManager.
-
-        Args:
-            dashboard: Dashboard instance for launching trials
-            max_concurrent: Maximum number of concurrent running trials
-            oss_backup: Enable OSS backup when trials complete
-        """
-        self._dashboard = dashboard
-        self._max_concurrent = max_concurrent
-        self._oss_backup = oss_backup
-
-        # Queue for pending trials
-        self._pending: asyncio.Queue[QueuedTrial] = asyncio.Queue()
-
-        # Track all trials by ID
-        self._trials: dict[str, QueuedTrial] = {}
-
-        # Track running tasks
-        self._running_tasks: dict[str, asyncio.Task[None]] = {}
-
-        # Background worker task
-        self._worker_task: asyncio.Task[None] | None = None
-        self._status_task: asyncio.Task[None] | None = None
-        self._shutdown_event = asyncio.Event()
-
-        self._logger = logging.getLogger("dojozero.trial_manager")
-
-    async def start(self) -> None:
-        """Start the background worker."""
-        if self._worker_task is not None:
-            return
-        self._shutdown_event.clear()
-        self._worker_task = asyncio.create_task(self._worker_loop())
-        self._status_task = asyncio.create_task(self._status_loop())
-        self._logger.info(
-            "TrialManager started (max_concurrent=%d)", self._max_concurrent
-        )
-
-    async def _status_loop(self) -> None:
-        """Periodic status logging loop."""
-        while not self._shutdown_event.is_set():
-            try:
-                await asyncio.sleep(30.0)  # Log every 30 seconds
-                self._log_status()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self._logger.error("Status loop error: %s", e)
-
-    def _log_status(self) -> None:
-        """Log current trial manager status."""
-        running_ids = list(self._running_tasks.keys())
-        pending_count = self._pending.qsize()
-
-        if running_ids or pending_count > 0:
-            self._logger.info(
-                "TrialManager status: running=%d/%d, pending=%d, running_ids=%s",
-                len(running_ids),
-                self._max_concurrent,
-                pending_count,
-                running_ids,
-            )
-
-    async def stop(self) -> None:
-        """Stop the manager and cancel all running trials."""
-        self._logger.info("TrialManager stopping...")
-        self._shutdown_event.set()
-
-        # Cancel all running tasks
-        for trial_id, task in list(self._running_tasks.items()):
-            if not task.done():
-                self._logger.info("Cancelling running trial: %s", trial_id)
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-
-        # Cancel status task
-        if self._status_task is not None:
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
-            self._status_task = None
-
-        # Cancel worker
-        if self._worker_task is not None:
-            self._worker_task.cancel()
-            try:
-                await self._worker_task
-            except asyncio.CancelledError:
-                pass
-            self._worker_task = None
-
-        self._logger.info("TrialManager stopped")
-
-    async def submit(
-        self,
-        spec: TrialSpec,
-        launch_coro_factory: Callable[[], Coroutine[Any, Any, TrialStatus]]
-        | None = None,
-    ) -> str:
-        """Submit a trial for execution.
-
-        Args:
-            spec: Trial specification
-            launch_coro_factory: Optional custom launch coroutine factory
-                                 (for replay mode). If None, uses dashboard.launch_trial.
-
-        Returns:
-            Trial ID
-
-        Raises:
-            TrialExistsError: If trial with this ID already exists
-        """
-        trial_id = spec.trial_id
-
-        # Check for duplicate
-        if trial_id in self._trials:
-            raise TrialExistsError(f"Trial '{trial_id}' already exists")
-
-        # Create queued trial
-        queued = QueuedTrial(
-            trial_id=trial_id,
-            spec=spec,
-            phase=QueuedTrialPhase.PENDING,
-            launch_coro_factory=launch_coro_factory,
-        )
-        self._trials[trial_id] = queued
-
-        # Add to queue
-        await self._pending.put(queued)
-        self._logger.info(
-            "Trial '%s' queued (queue_size=%d, running=%d)",
-            trial_id,
-            self._pending.qsize(),
-            len(self._running_tasks),
-        )
-
-        return trial_id
-
-    def get_status(self, trial_id: str) -> QueuedTrial | None:
-        """Get status of a queued trial.
-
-        Args:
-            trial_id: Trial identifier
-
-        Returns:
-            QueuedTrial or None if not found
-        """
-        return self._trials.get(trial_id)
-
-    def list_trials(self) -> list[QueuedTrial]:
-        """List all trials tracked by the manager."""
-        return list(self._trials.values())
-
-    async def cancel(self, trial_id: str) -> bool:
-        """Cancel a pending or running trial.
-
-        Args:
-            trial_id: Trial identifier
-
-        Returns:
-            True if cancelled, False if not found or already completed
-        """
-        queued = self._trials.get(trial_id)
-        if queued is None:
-            return False
-
-        if queued.phase == QueuedTrialPhase.PENDING:
-            # Mark as cancelled (will be skipped by worker)
-            queued.phase = QueuedTrialPhase.CANCELLED
-            self._logger.info("Cancelled pending trial: %s", trial_id)
-            return True
-
-        if queued.phase in (QueuedTrialPhase.STARTING, QueuedTrialPhase.RUNNING):
-            # Cancel running task
-            task = self._running_tasks.get(trial_id)
-            if task and not task.done():
-                task.cancel()
-                queued.phase = QueuedTrialPhase.CANCELLED
-                self._logger.info("Cancelled running trial: %s", trial_id)
-                # Also stop via dashboard
-                try:
-                    await self._dashboard.stop_trial(trial_id)
-                except Exception as e:
-                    self._logger.warning("Error stopping trial %s: %s", trial_id, e)
-                return True
-
-        return False
-
-    @property
-    def pending_count(self) -> int:
-        """Number of pending trials in queue."""
-        return self._pending.qsize()
-
-    @property
-    def running_count(self) -> int:
-        """Number of currently running trials."""
-        return len(self._running_tasks)
-
-    async def _worker_loop(self) -> None:
-        """Background worker that processes the queue."""
-        while not self._shutdown_event.is_set():
-            try:
-                # Wait for a slot to be available
-                while len(self._running_tasks) >= self._max_concurrent:
-                    # Clean up completed tasks
-                    self._cleanup_completed_tasks()
-                    if len(self._running_tasks) >= self._max_concurrent:
-                        await asyncio.sleep(0.5)
-                    if self._shutdown_event.is_set():
-                        return
-
-                # Get next trial from queue (with timeout to check shutdown)
-                try:
-                    queued = await asyncio.wait_for(self._pending.get(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    continue
-
-                # Skip cancelled trials
-                if queued.phase == QueuedTrialPhase.CANCELLED:
-                    self._logger.debug("Skipping cancelled trial: %s", queued.trial_id)
-                    continue
-
-                # Launch trial in background task
-                task = asyncio.create_task(self._run_trial(queued))
-                self._running_tasks[queued.trial_id] = task
-                self._logger.info(
-                    "Launched trial '%s' (running=%d/%d, pending=%d)",
-                    queued.trial_id,
-                    len(self._running_tasks),
-                    self._max_concurrent,
-                    self._pending.qsize(),
-                )
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self._logger.error("Worker error: %s", e, exc_info=True)
-                await asyncio.sleep(1.0)
-
-    def _cleanup_completed_tasks(self) -> None:
-        """Remove completed tasks from running dict."""
-        completed = [
-            trial_id for trial_id, task in self._running_tasks.items() if task.done()
-        ]
-        for trial_id in completed:
-            del self._running_tasks[trial_id]
-            self._logger.info(
-                "Trial '%s' task completed (running=%d/%d)",
-                trial_id,
-                len(self._running_tasks),
-                self._max_concurrent,
-            )
-
-    async def _run_trial(self, queued: QueuedTrial) -> None:
-        """Run a single trial."""
-        trial_id = queued.trial_id
-        self._logger.info("Starting trial: %s", trial_id)
-        queued.phase = QueuedTrialPhase.STARTING
-
-        try:
-            # Launch via custom factory or default
-            if queued.launch_coro_factory:
-                await queued.launch_coro_factory()
-            else:
-                await self._dashboard.launch_trial(queued.spec)
-
-            queued.phase = QueuedTrialPhase.RUNNING
-            self._logger.info("Trial '%s' is now running", trial_id)
-
-            # Wait for trial to complete by monitoring dashboard status
-            while True:
-                await asyncio.sleep(2.0)
-                try:
-                    status = self._dashboard.get_trial_status(trial_id)
-                    if status.phase.value in ("completed", "stopped", "failed"):
-                        break
-                except TrialNotFoundError:
-                    # Trial removed from dashboard
-                    break
-
-            # Check final status
-            try:
-                status = self._dashboard.get_trial_status(trial_id)
-                if status.phase.value == "failed":
-                    queued.phase = QueuedTrialPhase.FAILED
-                    queued.error = status.last_error
-                else:
-                    queued.phase = QueuedTrialPhase.COMPLETED
-            except TrialNotFoundError:
-                queued.phase = QueuedTrialPhase.COMPLETED
-
-            # OSS backup if enabled
-            if self._oss_backup and queued.phase == QueuedTrialPhase.COMPLETED:
-                self._upload_to_oss(trial_id, queued.spec)
-
-            self._logger.info(
-                "Trial '%s' finished with phase: %s", trial_id, queued.phase.value
-            )
-
-        except asyncio.CancelledError:
-            queued.phase = QueuedTrialPhase.CANCELLED
-            self._logger.info("Trial '%s' was cancelled", trial_id)
-            raise
-        except Exception as e:
-            queued.phase = QueuedTrialPhase.FAILED
-            queued.error = str(e)
-            self._logger.error("Trial '%s' failed: %s", trial_id, e, exc_info=True)
-
-    def _upload_to_oss(self, trial_id: str, spec: TrialSpec) -> None:
-        """Upload trial data to OSS if configured."""
-        persistence_file_path = spec.metadata.get("persistence_file")
-        if persistence_file_path and isinstance(persistence_file_path, str):
-            persistence_file = Path(persistence_file_path)
-            _upload_trial_to_oss(trial_id, persistence_file)
-
-
-# Lazy import for OSS to avoid import errors if oss2 not installed
-_oss_client = None
-
-
-def _upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
-    """Upload trial data to OSS.
-
-    Args:
-        trial_id: Trial identifier
-        persistence_file: Path to the persistence JSONL file
-
-    Returns:
-        True if upload succeeded, False otherwise
-    """
-    global _oss_client
-
-    if not persistence_file or not persistence_file.exists():
-        LOGGER.warning("No persistence file to upload for trial %s", trial_id)
-        return False
-
-    try:
-        from dojozero.utils.oss import OSSClient
-
-        if _oss_client is None:
-            _oss_client = OSSClient.from_env()
-
-        # Upload with key: trials/{trial_id}/events.jsonl
-        oss_key = f"trials/{trial_id}/events.jsonl"
-        full_key = _oss_client.upload_file(persistence_file, oss_key)
-        LOGGER.info("Uploaded trial data to OSS: %s", full_key)
-        return True
-
-    except ImportError:
-        LOGGER.warning("OSS backup requested but oss2 package not installed")
-        return False
-    except ValueError as e:
-        LOGGER.warning("OSS backup failed - configuration error: %s", e)
-        return False
-    except Exception as e:
-        LOGGER.error("OSS backup failed for trial %s: %s", trial_id, e)
-        return False
-
+from ._scheduler import SchedulerStore
+from ._trial_manager import TrialManager
 
 LOGGER = logging.getLogger("dojozero.dashboard_server")
 
@@ -508,12 +95,37 @@ class TrialSubmitRequest(BaseModel):
     backtest: BacktestConfig | None = None
 
 
+class TrialSourceConfigRequest(BaseModel):
+    """Configuration for a trial source."""
+
+    scenario_name: str
+    scenario_config: dict[str, Any] = {}
+    pre_start_hours: float = 2.0
+    check_interval_seconds: float = 60.0
+    auto_stop_on_completion: bool = True
+    data_dir: str | None = None
+
+
+class TrialSourceRequest(BaseModel):
+    """Request body for registering a trial source.
+
+    Both NBA and NFL use ESPN scoreboard to discover games automatically.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    source_id: str
+    sport_type: str  # "nba" or "nfl"
+    config: TrialSourceConfigRequest
+
+
 @dataclass
 class DashboardServerState:
     """Shared state for the Dashboard Server."""
 
-    dashboard: Dashboard
+    orchestrator: TrialOrchestrator
     trial_manager: TrialManager
+    schedule_manager: Any | None = None  # ScheduleManager, lazy import
     trace_backend: str | None = None
     oss_backup: bool = False
     imported_modules: set[str] = field(default_factory=set)
@@ -529,7 +141,7 @@ def get_server_state(request: Request) -> DashboardServerState:
 
 
 async def _launch_backtest_trial(
-    dashboard: Dashboard,
+    orchestrator: TrialOrchestrator,
     spec: TrialSpec,
     event_file: Path,
     speed: float,
@@ -541,11 +153,11 @@ async def _launch_backtest_trial(
     events from the specified file.
     """
 
-    from dojozero.data import DataHub, BacktestCoordinator
+    from dojozero.data import BacktestCoordinator, DataHub
 
     builder_name = spec.metadata.get("builder_name")
     if not builder_name:
-        raise DashboardError("builder_name is required in metadata for backtest")
+        raise OrchestratorError("builder_name is required in metadata for backtest")
     builder_name = str(builder_name)
 
     # Extract hub_id from spec (from stream configs)
@@ -589,10 +201,9 @@ async def _launch_backtest_trial(
 
     try:
         # Launch trial
-        status = await dashboard.launch_trial(spec)
+        status = await orchestrator.launch_trial(spec)
 
         # Start backtest in background
-        import asyncio
 
         async def run_backtest():
             try:
@@ -613,8 +224,6 @@ async def _launch_backtest_trial(
 
 def _get_sls_otlp_endpoint() -> str:
     """Construct SLS OTLP endpoint from environment variables."""
-    import os
-
     project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
     endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
 
@@ -631,21 +240,30 @@ def _get_sls_otlp_endpoint() -> str:
 
 
 def create_dashboard_app(
-    dashboard: Dashboard,
+    orchestrator: TrialOrchestrator,
+    scheduler_store: SchedulerStore,
     trace_backend: str | None = None,
     trace_ingest_endpoint: str | None = None,
     oss_backup: bool = False,
     max_concurrent_trials: int = 20,
     service_name: str = "dojozero",
+    initial_trial_sources: list[dict[str, Any]] | None = None,
+    auto_resume: bool = True,
+    stale_threshold_hours: float = 24.0,
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
     Args:
-        dashboard: Dashboard instance for trial management
+        orchestrator: TrialOrchestrator instance for trial management
+        scheduler_store: SchedulerStore instance for schedule persistence
         trace_backend: Trace backend type ("jaeger" or "sls"), or None to disable tracing
         trace_ingest_endpoint: OTLP endpoint for Jaeger (only used when trace_backend="jaeger")
         oss_backup: Enable OSS backup for trial data when trials complete
         max_concurrent_trials: Maximum number of concurrent running trials (default 20)
+        service_name: Service name for tracing
+        initial_trial_sources: List of trial source configurations to register on startup
+        auto_resume: Automatically resume interrupted trials on startup (default True)
+        stale_threshold_hours: Skip resuming trials older than this many hours (default 24)
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
@@ -657,21 +275,87 @@ def create_dashboard_app(
     async def lifespan(app: FastAPI):
         # Create trial manager
         trial_manager = TrialManager(
-            dashboard=dashboard,
+            orchestrator=orchestrator,
             max_concurrent=max_concurrent_trials,
             oss_backup=oss_backup,
+            auto_resume=auto_resume,
+            stale_threshold_hours=stale_threshold_hours,
+        )
+
+        # Create schedule manager
+        from ._scheduler import ScheduleManager
+
+        schedule_manager = ScheduleManager(
+            trial_manager=trial_manager,
+            store=scheduler_store,
         )
 
         # Store state on app.state instead of global variable
         app.state.server_state = DashboardServerState(
-            dashboard=dashboard,
+            orchestrator=orchestrator,
             trial_manager=trial_manager,
+            schedule_manager=schedule_manager,
             trace_backend=trace_backend,
             oss_backup=oss_backup,
         )
 
         # Start trial manager worker
         await trial_manager.start()
+
+        # Start schedule manager
+        await schedule_manager.start()
+        LOGGER.info("ScheduleManager started")
+
+        # Register initial trial sources if provided
+        if initial_trial_sources:
+            from ._scheduler import TrialSourceConfig
+
+            for source_data in initial_trial_sources:
+                source_id = source_data["source_id"]
+                sport_type = source_data["sport_type"]
+
+                # Skip if already registered (from persistence)
+                if schedule_manager.get_source(source_id) is not None:
+                    LOGGER.info(
+                        "Trial source '%s' already registered, skipping", source_id
+                    )
+                    continue
+
+                # Convert config
+                config_data = source_data.get("config", {})
+                config = TrialSourceConfig(
+                    scenario_name=config_data.get("scenario_name", ""),
+                    scenario_config=config_data.get("scenario_config", {}),
+                    pre_start_hours=config_data.get("pre_start_hours", 2.0),
+                    check_interval_seconds=config_data.get(
+                        "check_interval_seconds", 60.0
+                    ),
+                    auto_stop_on_completion=config_data.get(
+                        "auto_stop_on_completion", True
+                    ),
+                    data_dir=config_data.get("data_dir"),
+                    sync_interval_seconds=config_data.get(
+                        "sync_interval_seconds", 300.0
+                    ),
+                )
+
+                try:
+                    schedule_manager.register_source(
+                        source_id=source_id,
+                        sport_type=sport_type,
+                        config=config,
+                    )
+                    LOGGER.info(
+                        "Registered initial trial source '%s' for %s",
+                        source_id,
+                        sport_type,
+                    )
+                except ValueError as e:
+                    LOGGER.warning(
+                        "Failed to register trial source '%s': %s",
+                        source_id,
+                        e,
+                    )
 
         # Initialize OTel exporter based on backend
         otel_exporter = None
@@ -730,18 +414,26 @@ def create_dashboard_app(
         )
         yield
 
-        # Graceful shutdown: stop trial manager (handles all running trials)
+        # Graceful shutdown: stop schedule manager first
+        if schedule_manager is not None:
+            LOGGER.info("Dashboard Server shutting down - stopping schedule manager")
+            try:
+                await schedule_manager.stop()
+            except Exception as e:
+                LOGGER.error("Error stopping schedule manager: %s", e)
+
+        # Stop trial manager (handles all running trials)
         LOGGER.info("Dashboard Server shutting down - stopping trial manager")
         try:
             await trial_manager.stop()
         except Exception as e:
             LOGGER.error("Error stopping trial manager: %s", e)
 
-        # Also stop any trials that might be running directly in dashboard
+        # Also stop any trials that might be running directly in orchestrator
         try:
             running_trials = [
                 status
-                for status in dashboard.list_trials()
+                for status in orchestrator.list_trials()
                 if status.phase.value in ("running", "starting")
             ]
             for trial_status in running_trials:
@@ -750,13 +442,13 @@ def create_dashboard_app(
                         "Stopping trial '%s' due to server shutdown",
                         trial_status.trial_id,
                     )
-                    await dashboard.stop_trial(trial_status.trial_id)
+                    await orchestrator.stop_trial(trial_status.trial_id)
                 except Exception as e:
                     LOGGER.warning(
                         "Failed to stop trial '%s': %s", trial_status.trial_id, e
                     )
                     # Still emit a terminated span even if stop fails
-                    dashboard._emit_trial_lifecycle_span(
+                    orchestrator._emit_trial_lifecycle_span(
                         trial_id=trial_status.trial_id,
                         phase="terminated",
                         metadata={"reason": "server_shutdown", "error": str(e)},
@@ -769,8 +461,6 @@ def create_dashboard_app(
             otel_exporter.shutdown()
             set_otel_exporter(None)
 
-        from ._tracing import get_sls_log_exporter
-
         sls_log_exp = get_sls_log_exporter()
         if sls_log_exp is not None:
             sls_log_exp.shutdown()
@@ -780,7 +470,7 @@ def create_dashboard_app(
 
     app = FastAPI(
         title="DojoZero Dashboard Server",
-        description="REST API for trial management and trace collection",
+        description="REST API for trial management, scheduling, and trace collection",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -823,7 +513,7 @@ def create_dashboard_app(
             seen_ids.add(queued.trial_id)
 
         # Then add trials from Dashboard (active/historical)
-        for trial_status in state.dashboard.list_trials():
+        for trial_status in state.orchestrator.list_trials():
             if trial_status.trial_id in seen_ids:
                 continue  # Already included from queue
             trial_info = {
@@ -941,9 +631,11 @@ def create_dashboard_app(
                 status_code=400,
             )
 
-        # Build the trial spec
+        # Build the trial spec - uses build_async which handles both sync and async builders
         try:
-            spec = definition.build(trial_id, scenario.config or scenario_config)
+            spec = await definition.build_async(
+                trial_id, scenario.config or scenario_config
+            )
         except ValidationError as e:
             return JSONResponse(
                 content={"error": f"Invalid config for builder '{scenario.name}': {e}"},
@@ -984,7 +676,7 @@ def create_dashboard_app(
             # Create factory for backtest launch
             def make_backtest_coro() -> Coroutine[Any, Any, TrialStatus]:
                 return _launch_backtest_trial(
-                    dashboard=state.dashboard,
+                    orchestrator=state.orchestrator,
                     spec=spec,
                     event_file=event_file,
                     speed=backtest_speed,
@@ -1047,7 +739,7 @@ def create_dashboard_app(
 
         # Fall back to Dashboard for active/completed trials
         try:
-            status = state.dashboard.get_trial_status(trial_id)
+            status = state.orchestrator.get_trial_status(trial_id)
         except TrialNotFoundError:
             return JSONResponse(
                 content={"error": f"Trial '{trial_id}' not found"},
@@ -1080,7 +772,7 @@ def create_dashboard_app(
     ) -> JSONResponse:
         """Stop a running trial."""
         try:
-            status = await state.dashboard.stop_trial(trial_id)
+            status = await state.orchestrator.stop_trial(trial_id)
         except TrialNotFoundError:
             return JSONResponse(
                 content={"error": f"Trial '{trial_id}' not found"},
@@ -1090,13 +782,15 @@ def create_dashboard_app(
         # OSS backup if enabled
         oss_uploaded = False
         if state.oss_backup:
+            from ._trial_manager import upload_trial_to_oss
+
             # Get persistence_file from trial metadata
             try:
-                trial_status = state.dashboard.get_trial_status(trial_id)
+                trial_status = state.orchestrator.get_trial_status(trial_id)
                 persistence_file_path = trial_status.metadata.get("persistence_file")
                 if persistence_file_path and isinstance(persistence_file_path, str):
                     persistence_file = Path(persistence_file_path)
-                    oss_uploaded = _upload_trial_to_oss(trial_id, persistence_file)
+                    oss_uploaded = upload_trial_to_oss(trial_id, persistence_file)
                 else:
                     LOGGER.warning(
                         "OSS backup enabled but no persistence_file in trial metadata"
@@ -1135,7 +829,7 @@ def create_dashboard_app(
 
         # Fall back to stopping via Dashboard (for trials not in queue)
         try:
-            status = await state.dashboard.stop_trial(trial_id)
+            status = await state.orchestrator.stop_trial(trial_id)
             return JSONResponse(
                 content={
                     "id": status.trial_id,
@@ -1150,19 +844,376 @@ def create_dashboard_app(
             )
 
     # -------------------------------------------------------------------------
+    # Game Discovery Endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/games/nba")
+    async def list_nba_games(
+        date: str | None = Query(None, description="Date in YYYY-MM-DD format"),
+        start_date: str | None = Query(None, description="Start date for range"),
+        end_date: str | None = Query(None, description="End date for range"),
+    ) -> JSONResponse:
+        """List NBA games for a date or date range."""
+        from ._game_discovery import NBAGameFetcher
+
+        fetcher = NBAGameFetcher()
+        try:
+            if start_date and end_date:
+                # Date range query
+                games = await fetcher.fetch_games_for_date_range(start_date, end_date)
+                return JSONResponse(
+                    content={
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "games": [g.to_dict() for g in games],
+                    }
+                )
+            else:
+                # Single date query
+                games = await fetcher.fetch_games_for_date(date)
+                return JSONResponse(
+                    content={
+                        "date": date or "today",
+                        "games": [g.to_dict() for g in games],
+                    }
+                )
+        except Exception as e:
+            LOGGER.error("Error fetching NBA games: %s", e)
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=500,
+            )
+
+    @app.get("/api/games/nfl")
+    async def list_nfl_games(
+        date: str | None = Query(None, description="Date in YYYY-MM-DD format"),
+        week: int | None = Query(None, description="NFL week number (1-18)"),
+    ) -> JSONResponse:
+        """List NFL games for a date or week."""
+        from ._game_discovery import NFLGameFetcher
+
+        fetcher = NFLGameFetcher()
+        try:
+            if week is not None:
+                games = await fetcher.fetch_games_for_week(week)
+                return JSONResponse(
+                    content={
+                        "week": week,
+                        "games": [g.to_dict() for g in games],
+                    }
+                )
+            else:
+                games = await fetcher.fetch_games_for_date(date)
+                return JSONResponse(
+                    content={
+                        "date": date or "today",
+                        "games": [g.to_dict() for g in games],
+                    }
+                )
+        except Exception as e:
+            LOGGER.error("Error fetching NFL games: %s", e)
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=500,
+            )
+
+    # -------------------------------------------------------------------------
+    # Trial Source Endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/trial-sources")
+    async def list_trial_sources(
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """List all registered trial sources."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={
+                    "error": "Scheduling not enabled. Configure filesystem store to enable."
+                },
+                status_code=400,
+            )
+
+        sources = state.schedule_manager.list_sources()
+        return JSONResponse(
+            content={
+                "count": len(sources),
+                "sources": [s.to_dict() for s in sources],
+            }
+        )
+
+    @app.post("/api/trial-sources")
+    async def register_trial_source(
+        request: TrialSourceRequest,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Register a new trial source for automatic scheduling."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={
+                    "error": "Scheduling not enabled. Configure filesystem store to enable."
+                },
+                status_code=400,
+            )
+
+        from ._scheduler import TrialSourceConfig
+
+        try:
+            # Convert request to config
+            config = TrialSourceConfig(
+                scenario_name=request.config.scenario_name,
+                scenario_config=request.config.scenario_config,
+                pre_start_hours=request.config.pre_start_hours,
+                check_interval_seconds=request.config.check_interval_seconds,
+                auto_stop_on_completion=request.config.auto_stop_on_completion,
+                data_dir=request.config.data_dir,
+            )
+
+            source = state.schedule_manager.register_source(
+                source_id=request.source_id,
+                sport_type=request.sport_type,
+                config=config,
+            )
+
+            return JSONResponse(
+                content=source.to_dict(),
+                status_code=201,
+            )
+        except ValueError as e:
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=400,
+            )
+        except Exception as e:
+            LOGGER.error("Failed to register trial source: %s", e, exc_info=True)
+            return JSONResponse(
+                content={"error": f"Failed to register trial source: {e}"},
+                status_code=500,
+            )
+
+    @app.get("/api/trial-sources/{source_id}")
+    async def get_trial_source(
+        source_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Get a specific trial source."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={"error": "Scheduling not enabled"},
+                status_code=400,
+            )
+
+        source = state.schedule_manager.get_source(source_id)
+        if source is None:
+            return JSONResponse(
+                content={"error": f"Trial source '{source_id}' not found"},
+                status_code=404,
+            )
+
+        return JSONResponse(content=source.to_dict())
+
+    @app.delete("/api/trial-sources/{source_id}")
+    async def unregister_trial_source(
+        source_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Unregister a trial source."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={"error": "Scheduling not enabled"},
+                status_code=400,
+            )
+
+        removed = state.schedule_manager.unregister_source(source_id)
+        if not removed:
+            return JSONResponse(
+                content={"error": f"Trial source '{source_id}' not found"},
+                status_code=404,
+            )
+
+        return JSONResponse(
+            content={
+                "source_id": source_id,
+                "message": "Trial source unregistered successfully",
+            }
+        )
+
+    @app.post("/api/trial-sources/{source_id}/sync")
+    async def sync_trial_source(
+        source_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Manually trigger sync for a trial source."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={"error": "Scheduling not enabled"},
+                status_code=400,
+            )
+
+        try:
+            scheduled = await state.schedule_manager.sync_source(source_id)
+            return JSONResponse(
+                content={
+                    "source_id": source_id,
+                    "scheduled_count": len(scheduled),
+                    "scheduled_trials": [s.to_dict() for s in scheduled],
+                }
+            )
+        except ValueError as e:
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=404,
+            )
+        except Exception as e:
+            LOGGER.error("Failed to sync trial source: %s", e, exc_info=True)
+            return JSONResponse(
+                content={"error": f"Failed to sync: {e}"},
+                status_code=500,
+            )
+
+    @app.patch("/api/trial-sources/{source_id}")
+    async def update_trial_source(
+        source_id: str,
+        enabled: bool = Query(..., description="Enable or disable the source"),
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Enable or disable a trial source."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={"error": "Scheduling not enabled"},
+                status_code=400,
+            )
+
+        updated = state.schedule_manager.set_source_enabled(source_id, enabled)
+        if not updated:
+            return JSONResponse(
+                content={"error": f"Trial source '{source_id}' not found"},
+                status_code=404,
+            )
+
+        source = state.schedule_manager.get_source(source_id)
+        return JSONResponse(
+            content=source.to_dict() if source else {"source_id": source_id}
+        )
+
+    # -------------------------------------------------------------------------
+    # Scheduled Trials Endpoints (read-only view of auto-scheduled trials)
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/scheduled-trials")
+    async def list_scheduled_trials(
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """List all scheduled trials (auto-scheduled from trial sources)."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={
+                    "error": "Scheduling not enabled. Configure filesystem store to enable."
+                },
+                status_code=400,
+            )
+
+        schedules = state.schedule_manager.list_scheduled()
+        return JSONResponse(
+            content={
+                "count": len(schedules),
+                "scheduled_trials": [s.to_dict() for s in schedules],
+            }
+        )
+
+    @app.get("/api/scheduled-trials/{schedule_id}")
+    async def get_scheduled_trial(
+        schedule_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Get status for a specific scheduled trial."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={"error": "Scheduling not enabled"},
+                status_code=400,
+            )
+
+        scheduled = state.schedule_manager.get_scheduled(schedule_id)
+        if scheduled is None:
+            return JSONResponse(
+                content={"error": f"Scheduled trial '{schedule_id}' not found"},
+                status_code=404,
+            )
+
+        return JSONResponse(content=scheduled.to_dict())
+
+    @app.delete("/api/scheduled-trials/{schedule_id}")
+    async def cancel_scheduled_trial(
+        schedule_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Cancel a scheduled trial."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={"error": "Scheduling not enabled"},
+                status_code=400,
+            )
+
+        cancelled = await state.schedule_manager.cancel_scheduled(schedule_id)
+        if not cancelled:
+            return JSONResponse(
+                content={
+                    "error": f"Scheduled trial '{schedule_id}' not found or already completed"
+                },
+                status_code=404,
+            )
+
+        return JSONResponse(
+            content={
+                "schedule_id": schedule_id,
+                "phase": "cancelled",
+                "message": "Scheduled trial cancelled successfully",
+            }
+        )
+
+    @app.delete("/api/scheduled-trials")
+    async def clear_all_scheduled_trials(
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Clear all scheduled trials."""
+        if state.schedule_manager is None:
+            return JSONResponse(
+                content={"error": "Scheduling not enabled"},
+                status_code=400,
+            )
+
+        count = await state.schedule_manager.clear_all_scheduled()
+        return JSONResponse(
+            content={
+                "cleared_count": count,
+                "message": f"Cleared {count} scheduled trial(s)",
+            }
+        )
+
+    # -------------------------------------------------------------------------
     # Health Check
     # -------------------------------------------------------------------------
 
     @app.get("/health")
-    async def health_check():
+    async def health_check(
+        state: DashboardServerState = Depends(get_server_state),
+    ):
         """Health check endpoint."""
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "trial_manager": {
+                "pending": state.trial_manager.pending_count,
+                "running": state.trial_manager.running_count,
+            },
+            "scheduling_enabled": state.schedule_manager is not None,
+        }
 
     return app
 
 
 async def run_dashboard_server(
-    dashboard: Dashboard,
+    orchestrator: TrialOrchestrator,
+    scheduler_store: SchedulerStore,
     host: str = "127.0.0.1",
     port: int = 8000,
     trace_backend: str | None = None,
@@ -1170,27 +1221,39 @@ async def run_dashboard_server(
     oss_backup: bool = False,
     max_concurrent_trials: int = 20,
     service_name: str = "dojozero",
+    initial_trial_sources: list[dict[str, Any]] | None = None,
+    auto_resume: bool = True,
+    stale_threshold_hours: float = 24.0,
 ) -> None:
     """Run the Dashboard Server.
 
     Args:
-        dashboard: Dashboard instance
+        orchestrator: TrialOrchestrator instance
+        scheduler_store: SchedulerStore instance for schedule persistence
         host: Host to bind to
         port: Port to listen on
         trace_backend: Trace backend type ("jaeger" or "sls"), or None to disable tracing
         trace_ingest_endpoint: OTLP endpoint for Jaeger (only used when trace_backend="jaeger")
         oss_backup: Enable OSS backup for trial data when trials complete
         max_concurrent_trials: Maximum number of concurrent running trials (default 20)
+        service_name: Service name for tracing
+        initial_trial_sources: List of trial source configurations to register on startup
+        auto_resume: Automatically resume interrupted trials on startup (default True)
+        stale_threshold_hours: Skip resuming trials older than this many hours (default 24)
     """
     import uvicorn
 
     app = create_dashboard_app(
-        dashboard,
+        orchestrator,
+        scheduler_store=scheduler_store,
         trace_backend=trace_backend,
         trace_ingest_endpoint=trace_ingest_endpoint,
         oss_backup=oss_backup,
         max_concurrent_trials=max_concurrent_trials,
         service_name=service_name,
+        initial_trial_sources=initial_trial_sources,
+        auto_resume=auto_resume,
+        stale_threshold_hours=stale_threshold_hours,
     )
 
     config = uvicorn.Config(
@@ -1204,10 +1267,15 @@ async def run_dashboard_server(
 
 
 __all__ = [
+    "BacktestConfig",
     "DashboardServerState",
-    "QueuedTrial",
-    "QueuedTrialPhase",
-    "TrialManager",
+    "ReplayConfig",
+    "ResumeConfig",
+    "ScenarioConfig",
+    "SchedulerStore",
+    "TrialSourceConfigRequest",
+    "TrialSourceRequest",
+    "TrialSubmitRequest",
     "create_dashboard_app",
     "get_server_state",
     "run_dashboard_server",

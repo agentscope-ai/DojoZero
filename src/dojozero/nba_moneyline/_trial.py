@@ -19,7 +19,6 @@ from dojozero.data._factory import build_runtime_context
 import dojozero.data.nba._factory  # noqa: F401
 import dojozero.data.websearch._factory  # noqa: F401
 import dojozero.data.polymarket._factory  # noqa: F401
-from dojozero.data.nba._utils import get_game_info_by_id
 from dojozero.data.websearch._processors import (
     ExpertPredictionProcessor,
     InjurySummaryProcessor,
@@ -109,12 +108,12 @@ class NBAPreGameBettingTrialParams(BaseModel):
     """Trial parameters for NBA pre-game betting scenario."""
 
     # NBA game configuration
-    game_id: str = Field(..., description="NBA.com game ID (e.g., '0022500290')")
+    event_id: str = Field(..., description="ESPN event ID (e.g., '401810490')")
     game_date: str | None = Field(
         default=None,
         description=(
             "Game date in YYYY-MM-DD format. If not provided, will try to:\n"
-            "1. Fetch from NBA API\n"
+            "1. Fetch from ESPN API\n"
             "2. Extract from persistence_file path (e.g., 'data/nba-betting/2026-01-15/...')"
         ),
     )
@@ -164,7 +163,7 @@ class NBAPreGameBettingTrialParams(BaseModel):
     )
 
     # Search queries (optional, for triggering searches)
-    # If not provided, will be auto-generated based on game_id
+    # If not provided, will be auto-generated based on event_id
     # Supports query templates with placeholders: {teams}, {home_team}, {away_team}, {date}, {home_tricode}, {away_tricode}
     # Use "template" field for templates or "query" field for literal queries
     search_queries: list[dict[str, Any]] = Field(
@@ -185,14 +184,15 @@ class NBAPreGameBettingTrialParams(BaseModel):
     )
 
 
-def _build_trial_spec(
+async def _build_trial_spec(
     trial_id: str,
     params: NBAPreGameBettingTrialParams,
 ) -> TrialSpec:
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
+    from dojozero.data.nba._utils import get_game_info_by_id_async
 
-    # Get game information from game_id to extract team tricodes and names
-    game_info = get_game_info_by_id(params.game_id)
+    # Get game information from event_id to extract team tricodes and names
+    game_info = await get_game_info_by_id_async(params.event_id)
     home_team_tricode: str | None = None
     away_team_tricode: str | None = None
     home_team_name: str | None = None
@@ -214,13 +214,13 @@ def _build_trial_spec(
         )
     else:
         logger.error(
-            "Could not find game info for game_id=%s. Exiting.",
-            params.game_id,
+            "Could not find game info for event_id=%s. Exiting.",
+            params.event_id,
         )
-        raise ValueError(f"Could not find game info for game_id={params.game_id}.")
+        raise ValueError(f"Could not find game info for event_id={params.event_id}.")
 
     # Fallback: extract game_date from persistence_file path if still not available
-    # Path format: data/nba-betting/YYYY-MM-DD/game_id.jsonl
+    # Path format: data/nba-betting/YYYY-MM-DD/event_id.jsonl
     if not game_date:
         persistence_path = (
             params.hub.persistence_file if params.hub else params.persistence_file
@@ -475,7 +475,7 @@ def _build_trial_spec(
     # This metadata is used by build_runtime_context and store factories
     metadata: dict[str, Any] = {
         "sample": "nba-moneyline",
-        "game_id": params.game_id,
+        "event_id": params.event_id,
         "hub_id": hub_id,
         "persistence_file": persistence_file,
         "enable_persistence": enable_persistence,
@@ -560,7 +560,7 @@ register_trial_builder(
     description="NBA moneyline betting scenario with relevant data inputs",
     context_builder=_build_nba_runtime_context,
     example_params={
-        "game_id": "0022501215",
+        "event_id": "401810490",
         "hub": {
             "persistence_file": "outputs/nba_moneyline_events.jsonl",
             "enable_persistence": True,

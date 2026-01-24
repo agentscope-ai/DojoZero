@@ -1,10 +1,32 @@
-scenario:
-  name: nfl-moneyline
-  config:
-    event_id: '401547417'  # Example NFL event ID
+# NFL Moneyline Trial Source Configuration
+#
+# This configuration defines a trial source for automatic NFL game scheduling.
+# When registered with the Dashboard Server, the server will periodically sync
+# with the ESPN API to discover upcoming NFL games and automatically schedule trials.
+#
+# Usage:
+#   1. Via CLI (recommended):
+#      dojo0 serve --schedule-file ~/.dojozero/schedules.json \
+#                  --trial-source trial_sources/nfl-moneyline-trial-source.yaml
+#
+#   2. Via API:
+#      POST /api/trial-sources
+#      {
+#        "source_id": "nfl-moneyline-source",
+#        "sport_type": "nfl",
+#        "config": <contents of config section below>,
+#        "nfl_params": <contents of nfl_params section below>
+#      }
 
+# Trial source registration request
+source_id: nfl-moneyline-source
+sport_type: nfl
+
+# Configuration for trials created from this source
+config:
+  scenario_name: nfl-moneyline
+  scenario_config:
     hub:
-      persistence_file: outputs/nfl_betting_events.jsonl
       enable_persistence: true
 
     data_streams:
@@ -37,25 +59,15 @@ scenario:
     - id: betting_broker
       class: BrokerOperator
       initial_balance: "1000.00"
-      allowed_tools:
-      - get_balance
-      - get_quote
-      - place_bet
-      - cancel_bet
-      - get_active_bets
-      - get_pending_orders
-      - get_bet_history
-      - get_statistics
-      - get_available_events
       data_streams:
       - nfl_game_status_change_stream
       - nfl_odds_update_stream
       - nfl_game_update_stream
-      
+
     agents:
     - id: basic_agent
       class: BettingAgent
-      agent_config_path: configs/agents/basic.yaml
+      agent_config_path: agents/basic.yaml
       operators:
       - betting_broker
       data_streams:
@@ -68,7 +80,7 @@ scenario:
       - nfl_play_stream
     - id: shark_agent
       class: BettingAgent
-      agent_config_path: configs/agents/shark.yaml
+      agent_config_path: agents/shark.yaml
       operators:
       - betting_broker
       data_streams:
@@ -81,7 +93,7 @@ scenario:
       - nfl_play_stream
     - id: sheep_agent
       class: BettingAgent
-      agent_config_path: configs/agents/sheep.yaml
+      agent_config_path: agents/sheep.yaml
       operators:
       - betting_broker
       data_streams:
@@ -94,7 +106,7 @@ scenario:
       - nfl_play_stream
     - id: whale_agent
       class: BettingAgent
-      agent_config_path: configs/agents/whale.yaml
+      agent_config_path: agents/whale.yaml
       operators:
       - betting_broker
       data_streams:
@@ -105,3 +117,12 @@ scenario:
       - nfl_odds_update_stream
       - nfl_game_status_change_stream
       - nfl_play_stream
+
+  # Schedule options (these are TrialSourceConfig fields, not scenario_config)
+  pre_start_hours: 1.0           # Start trial 1 hour before kickoff
+  check_interval_seconds: 60.0   # Check game status every 60 seconds
+  auto_stop_on_completion: true  # Stop trial when game finishes
+  data_dir: outputs              # Output directory for persistence files
+  sync_interval_seconds: 3600.0  # How often to sync with ESPN API
+
+# Games are discovered automatically from ESPN scoreboard

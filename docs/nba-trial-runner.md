@@ -46,7 +46,7 @@ python tools/nba_trial_runner.py run \
 - `--data-dir`: Output directory (`{data-dir}/{date}/{game_id}.{yaml,jsonl,log}`)
 - `--date`: Date to collect (YYYY-MM-DD, default: today)
 - `--game-id`: Specific game ID (optional)
-- `--config`: Config template (default: `configs/nba-moneyline.yaml`)
+- `--config`: Config template (default: `trial_params/nba-moneyline.yaml`)
 - `--pre-start-hours`: Hours before game to start (default: 2.0)
 - `--check-interval`: Status check interval in seconds (default: 60.0)
 - `--log-level`: DEBUG, INFO, WARNING, ERROR (default: INFO)
