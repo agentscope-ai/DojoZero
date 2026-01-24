@@ -8,6 +8,9 @@ from dojozero.data.espn import ESPNExternalAPI
 
 logger = logging.getLogger(__name__)
 
+# ESPN play type IDs
+_ESPN_GAME_END_TYPE_ID = "13"
+
 
 class NBAExternalAPI(ExternalAPI):
     """ESPN NBA API implementation.
@@ -310,7 +313,7 @@ class NBAExternalAPI(ExternalAPI):
             player_name = athlete.get("displayName", "") if athlete else ""
 
         # Check for game end
-        if play.get("type", {}).get("id") == "13":  # Game end type in ESPN
+        if play.get("type", {}).get("id") == _ESPN_GAME_END_TYPE_ID:
             action_type = "game"
             description = "Game End"
 
