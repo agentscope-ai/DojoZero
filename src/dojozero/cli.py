@@ -1581,7 +1581,11 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
             f"Server returned error {e.response.status_code}: {body}"
         )
     except httpx.RequestError as e:
-        raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
+        # httpx exceptions can have empty str() representations
+        error_detail = str(e) or type(e).__name__
+        raise DojoZeroCLIError(
+            f"Failed to connect to server at {server}: {error_detail}"
+        )
 
     if output_json:
         print(json.dumps(data, indent=2))
@@ -1682,7 +1686,11 @@ async def _list_sources_command(args: argparse.Namespace) -> int:
             f"Server returned error {e.response.status_code}: {body}"
         )
     except httpx.RequestError as e:
-        raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
+        # httpx exceptions can have empty str() representations
+        error_detail = str(e) or type(e).__name__
+        raise DojoZeroCLIError(
+            f"Failed to connect to server at {server}: {error_detail}"
+        )
 
     if output_json:
         print(json.dumps(data, indent=2))
@@ -1738,7 +1746,11 @@ async def _remove_source_command(args: argparse.Namespace) -> int:
             f"Server returned error {e.response.status_code}: {body}"
         )
     except httpx.RequestError as e:
-        raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
+        # httpx exceptions can have empty str() representations
+        error_detail = str(e) or type(e).__name__
+        raise DojoZeroCLIError(
+            f"Failed to connect to server at {server}: {error_detail}"
+        )
 
     print(f"Removed trial source: {source_id}")
     return 0
@@ -1771,7 +1783,11 @@ async def _clear_schedules_command(args: argparse.Namespace) -> int:
             f"Server returned error {e.response.status_code}: {body}"
         )
     except httpx.RequestError as e:
-        raise DojoZeroCLIError(f"Failed to connect to server at {server}: {e}")
+        # httpx exceptions can have empty str() representations
+        error_detail = str(e) or type(e).__name__
+        raise DojoZeroCLIError(
+            f"Failed to connect to server at {server}: {error_detail}"
+        )
 
     count = data.get("cleared_count", 0)
     print(f"Cleared {count} scheduled trial(s).")

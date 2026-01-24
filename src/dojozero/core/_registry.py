@@ -1,14 +1,17 @@
 """Registry utilities for discovering trial-spec builders at runtime."""
 
+import asyncio
 from dataclasses import dataclass
 from typing import (
     Any,
+    Awaitable,
     Callable,
     Generic,
     Mapping,
     MutableMapping,
     Sequence,
     TypeVar,
+    Union,
     cast,
 )
 
@@ -18,7 +21,12 @@ from ._trial_orchestrator import TrialSpec
 from ._types import RuntimeContext
 
 ParamModelT = TypeVar("ParamModelT", bound=BaseModel)
-TrialBuilderFn = Callable[[str, ParamModelT], TrialSpec]  # trial_id, params
+# Build function can be sync or async
+TrialBuilderFn = Callable[[str, ParamModelT], TrialSpec]  # trial_id, params (sync)
+AsyncTrialBuilderFn = Callable[
+    [str, ParamModelT], Awaitable[TrialSpec]
+]  # trial_id, params (async)
+AnyTrialBuilderFn = Union[TrialBuilderFn, AsyncTrialBuilderFn]
 RuntimeContextBuilder = Callable[["TrialSpec"], RuntimeContext]
 
 
@@ -28,14 +36,47 @@ class TrialBuilderDefinition(Generic[ParamModelT]):
 
     name: str
     param_model: type[ParamModelT]
-    build_fn: TrialBuilderFn
+    build_fn: AnyTrialBuilderFn  # Can be sync or async
     description: str | None = None
     example_params: ParamModelT | Mapping[str, Any] | None = None
     context_builder: RuntimeContextBuilder | None = None
 
+    @property
+    def is_async(self) -> bool:
+        """Check if the build function is async."""
+        return asyncio.iscoroutinefunction(self.build_fn)
+
     def build(self, trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
+        """Build a TrialSpec synchronously.
+
+        If the build function is async, this will raise an error.
+        Use build_async() for async build functions.
+        """
+        if self.is_async:
+            raise RuntimeError(
+                f"Builder '{self.name}' is async. Use build_async() instead."
+            )
         config = self.param_model.model_validate(payload)
-        spec = self.build_fn(trial_id, config)
+        spec = cast(TrialBuilderFn, self.build_fn)(trial_id, config)
+        # Automatically add builder_name to metadata
+        spec.metadata["builder_name"] = self.name
+        return spec
+
+    async def build_async(self, trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
+        """Build a TrialSpec asynchronously.
+
+        Works with both sync and async build functions.
+        Sync functions are run in a thread pool to avoid blocking.
+        """
+        # Run validation in thread pool to avoid blocking on complex models
+        config = await asyncio.to_thread(self.param_model.model_validate, payload)
+        if self.is_async:
+            spec = await cast(AsyncTrialBuilderFn, self.build_fn)(trial_id, config)
+        else:
+            # Run sync function in thread pool to avoid blocking
+            spec = await asyncio.to_thread(
+                cast(TrialBuilderFn, self.build_fn), trial_id, config
+            )
         # Automatically add builder_name to metadata
         spec.metadata["builder_name"] = self.name
         return spec
@@ -70,7 +111,7 @@ _REGISTRY: MutableMapping[str, TrialBuilderDefinition[Any]] = {}
 def register_trial_builder(
     name: str,
     param_model: type[ParamModelT],
-    builder: TrialBuilderFn,
+    builder: AnyTrialBuilderFn,
     *,
     description: str | None = None,
     example_params: ParamModelT | Mapping[str, Any] | None = None,
@@ -82,7 +123,7 @@ def register_trial_builder(
     Args:
         name: Builder identifier
         param_model: Pydantic model for trial parameters
-        builder: Function that builds TrialSpec from params
+        builder: Function that builds TrialSpec from params (can be sync or async)
         description: Optional description of the builder
         example_params: Optional example parameters
         context_builder: Optional function to build runtime context (DataHub/Store instances)
@@ -127,6 +168,8 @@ def list_trial_builders() -> Sequence[str]:
 
 
 __all__ = [
+    "AnyTrialBuilderFn",
+    "AsyncTrialBuilderFn",
     "ParamModelT",
     "TrialBuilderDefinition",
     "TrialBuilderRegistryError",

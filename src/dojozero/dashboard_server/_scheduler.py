@@ -1132,6 +1132,14 @@ class ScheduleManager:
 
     async def _launch_scheduled(self, scheduled: ScheduledTrial) -> None:
         """Launch a scheduled trial."""
+        # Check if shutdown is in progress - skip launching
+        if self._shutdown_event.is_set():
+            LOGGER.debug(
+                "Skipping launch of %s - scheduler is shutting down",
+                scheduled.schedule_id,
+            )
+            return
+
         scheduled.phase = ScheduledTrialPhase.LAUNCHING
 
         try:
@@ -1149,9 +1157,9 @@ class ScheduleManager:
             hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
             trial_id = f"{scheduled.sport_type}-game-{scheduled.event_id}-{hash_suffix}"
 
-            # Build trial spec
+            # Build trial spec - uses build_async which handles both sync and async builders
             try:
-                spec = definition.build(trial_id, scheduled.scenario_config)
+                spec = await definition.build_async(trial_id, scheduled.scenario_config)
             except ValidationError as e:
                 scheduled.phase = ScheduledTrialPhase.FAILED
                 scheduled.error = f"Invalid config: {e}"

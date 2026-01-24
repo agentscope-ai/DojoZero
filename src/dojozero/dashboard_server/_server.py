@@ -657,9 +657,11 @@ def create_dashboard_app(
                 status_code=400,
             )
 
-        # Build the trial spec
+        # Build the trial spec - uses build_async which handles both sync and async builders
         try:
-            spec = definition.build(trial_id, scenario.config or scenario_config)
+            spec = await definition.build_async(
+                trial_id, scenario.config or scenario_config
+            )
         except ValidationError as e:
             return JSONResponse(
                 content={"error": f"Invalid config for builder '{scenario.name}': {e}"},

@@ -318,7 +318,12 @@ class TrialManager:
 
         Raises:
             TrialExistsError: If trial with this ID already exists
+            RuntimeError: If the trial manager has been stopped
         """
+        # Check if manager has been stopped
+        if self._shutdown_event.is_set():
+            raise RuntimeError("TrialManager is not running")
+
         trial_id = spec.trial_id
 
         # Check for duplicate
