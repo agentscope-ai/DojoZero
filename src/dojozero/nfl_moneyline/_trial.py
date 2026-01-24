@@ -96,6 +96,10 @@ class OperatorConfig(BaseModel):
     initial_balance: str | None = Field(
         default=None, description="Initial balance for broker (if applicable)"
     )
+    allowed_tools: list[str] | None = Field(
+        default=None,
+        description="List of allowed agent tool names (default: all tools). Available: get_balance, get_quote, place_bet, place_bet_spread, place_bet_total, cancel_bet, get_active_bets, get_pending_orders, get_bet_history, get_statistics, get_available_events",
+    )
 
 
 class NFLPreGameBettingTrialParams(BaseModel):
@@ -399,6 +403,8 @@ def _build_trial_spec(
             }
             if op_config.initial_balance:
                 broker_config["initial_balance"] = op_config.initial_balance
+            if op_config.allowed_tools:
+                broker_config["allowed_tools"] = op_config.allowed_tools
             operator_config: BrokerOperatorConfig = broker_config
         else:
             raise ValueError(f"Unsupported operator class: {op_config.class_name}")

@@ -9,11 +9,11 @@ This module implements a generic betting broker operator that manages:
 This broker is sport-agnostic and can be used for NBA, NFL, or any other sports betting.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 import asyncio
 import logging
@@ -85,6 +85,14 @@ class BetOutcome(Enum):
     LOSS = "LOSS"
 
 
+class BetType(Enum):
+    """Type of bet"""
+
+    MONEYLINE = "MONEYLINE"  # Default: win/lose
+    SPREAD = "SPREAD"  # Point spread
+    TOTAL = "TOTAL"  # Over/under total points
+
+
 # =============================================================================
 # Account
 # =============================================================================
@@ -137,10 +145,18 @@ class BettingEvent:
     away_odds: Optional[Decimal] = (
         None  # Can be None initially, filled in when odds arrive
     )
+    # Multiple spreads: spread_value -> {home_odds, away_odds}
+    spread_lines: Dict[Decimal, Dict[str, Decimal]] = field(default_factory=dict)
+    # Multiple totals: total_value -> {over_odds, under_odds}
+    total_lines: Dict[Decimal, Dict[str, Decimal]] = field(default_factory=dict)
     last_odds_update: Optional[datetime] = None
     betting_closed_at: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        # Ensure spread_lines and total_lines are dicts (protection against None)
+        spread_lines = self.spread_lines if self.spread_lines is not None else {}
+        total_lines = self.total_lines if self.total_lines is not None else {}
+
         return {
             "event_id": self.event_id,
             "home_team": self.home_team,
@@ -149,6 +165,20 @@ class BettingEvent:
             "status": self.status.value,
             "home_odds": str(self.home_odds) if self.home_odds else None,
             "away_odds": str(self.away_odds) if self.away_odds else None,
+            "spread_lines": {
+                str(k): {
+                    "home_odds": str(v["home_odds"]),
+                    "away_odds": str(v["away_odds"]),
+                }
+                for k, v in spread_lines.items()
+            },
+            "total_lines": {
+                str(k): {
+                    "over_odds": str(v["over_odds"]),
+                    "under_odds": str(v["under_odds"]),
+                }
+                for k, v in total_lines.items()
+            },
             "last_odds_update": (
                 self.last_odds_update.isoformat() if self.last_odds_update else None
             ),
@@ -159,6 +189,30 @@ class BettingEvent:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "BettingEvent":
+        # Handle None or missing spread_lines/total_lines (backward compatibility)
+        spread_lines_data = data.get("spread_lines")
+        if spread_lines_data is None:
+            spread_lines = {}
+        else:
+            spread_lines = {
+                Decimal(k): {
+                    "home_odds": Decimal(v["home_odds"]),
+                    "away_odds": Decimal(v["away_odds"]),
+                }
+                for k, v in spread_lines_data.items()
+            }
+
+        total_lines_data = data.get("total_lines")
+        if total_lines_data is None:
+            total_lines = {}
+        else:
+            total_lines = {
+                Decimal(k): {
+                    "over_odds": Decimal(v["over_odds"]),
+                    "under_odds": Decimal(v["under_odds"]),
+                }
+                for k, v in total_lines_data.items()
+            }
         return cls(
             event_id=data["event_id"],
             home_team=data["home_team"],
@@ -167,6 +221,8 @@ class BettingEvent:
             status=EventStatus(data["status"]),
             home_odds=Decimal(val) if (val := data.get("home_odds")) else None,
             away_odds=Decimal(val) if (val := data.get("away_odds")) else None,
+            spread_lines=spread_lines,
+            total_lines=total_lines,
             last_odds_update=(
                 datetime.fromisoformat(val)
                 if (val := data.get("last_odds_update"))
@@ -186,25 +242,20 @@ class BettingEvent:
 
 
 @dataclass
-class BetRequest:
-    """Bet request from agent to broker"""
+class BetRequestMoneyline:
+    """Moneyline bet request from agent to broker"""
 
     amount: Decimal
-    selection: str  # "home" or "away"
+    selection: Literal["home", "away"]
     event_id: str
     order_type: OrderType
     betting_phase: BettingPhase
     limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
 
     def validate(self) -> None:
-        """Validate bet request prameters"""
+        """Validate bet request parameters"""
         if self.amount <= 0:
             raise ValueError(f"Bet amount must be positive, got {self.amount}")
-
-        if self.selection not in ["home", "away"]:
-            raise ValueError(
-                f"Selection must be 'home' or 'away', got {self.selection}"
-            )
 
         if self.order_type == OrderType.LIMIT:
             if self.limit_odds is None:
@@ -213,6 +264,62 @@ class BetRequest:
                 raise ValueError(
                     f"limit_odds must be greater than 1.0, got {self.limit_odds}"
                 )
+
+
+@dataclass
+class BetRequestSpread:
+    """Spread bet request from agent to broker"""
+
+    amount: Decimal
+    selection: Literal["home", "away"]
+    event_id: str
+    order_type: OrderType
+    betting_phase: BettingPhase
+    spread_value: Decimal  # Required for SPREAD bets
+    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
+
+    def validate(self) -> None:
+        """Validate bet request parameters"""
+        if self.amount <= 0:
+            raise ValueError(f"Bet amount must be positive, got {self.amount}")
+
+        if self.order_type == OrderType.LIMIT:
+            if self.limit_odds is None:
+                raise ValueError("limit_odds required for LIMIT orders")
+            if self.limit_odds <= 1.0:
+                raise ValueError(
+                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
+                )
+
+
+@dataclass
+class BetRequestTotal:
+    """Total (over/under) bet request from agent to broker"""
+
+    amount: Decimal
+    selection: Literal["over", "under"]
+    event_id: str
+    order_type: OrderType
+    betting_phase: BettingPhase
+    total_value: Decimal  # Required for TOTAL bets
+    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
+
+    def validate(self) -> None:
+        """Validate bet request parameters"""
+        if self.amount <= 0:
+            raise ValueError(f"Bet amount must be positive, got {self.amount}")
+
+        if self.order_type == OrderType.LIMIT:
+            if self.limit_odds is None:
+                raise ValueError("limit_odds required for LIMIT orders")
+            if self.limit_odds <= 1.0:
+                raise ValueError(
+                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
+                )
+
+
+# Union type for all bet request types
+BetRequest = Union[BetRequestMoneyline, BetRequestSpread, BetRequestTotal]
 
 
 # =============================================================================
@@ -236,6 +343,11 @@ class Bet:
     create_time: datetime
     execution_time: Optional[datetime]  # None until executed
     status: BetStatus
+    bet_type: BetType = (
+        BetType.MONEYLINE
+    )  # Default to moneyline for backward compatibility
+    spread_value: Optional[Decimal] = None  # For SPREAD bets
+    total_value: Optional[Decimal] = None  # For TOTAL bets
     actual_payout: Optional[Decimal] = None
     outcome: Optional[BetOutcome] = None
     settlement_time: Optional[datetime] = None
@@ -251,6 +363,9 @@ class Bet:
             "order_type": self.order_type.value,
             "limit_odds": str(self.limit_odds) if self.limit_odds else None,
             "betting_phase": self.betting_phase.value,
+            "bet_type": self.bet_type.value,
+            "spread_value": str(self.spread_value) if self.spread_value else None,
+            "total_value": str(self.total_value) if self.total_value else None,
             "create_time": self.create_time.isoformat(),
             "execution_time": (
                 self.execution_time.isoformat() if self.execution_time else None
@@ -275,6 +390,15 @@ class Bet:
             order_type=OrderType(data["order_type"]),
             limit_odds=Decimal(data["limit_odds"]) if data["limit_odds"] else None,
             betting_phase=BettingPhase(data["betting_phase"]),
+            bet_type=BetType(
+                data.get("bet_type", "MONEYLINE")
+            ),  # Default to MONEYLINE for backward compatibility
+            spread_value=Decimal(data["spread_value"])
+            if data.get("spread_value")
+            else None,
+            total_value=Decimal(data["total_value"])
+            if data.get("total_value")
+            else None,
             create_time=datetime.fromisoformat(data["create_time"]),
             execution_time=(
                 datetime.fromisoformat(data["execution_time"])
@@ -357,6 +481,7 @@ class BrokerOperatorConfig(_ActorIdConfig, total=False):
     """Configuration for BrokerOperator"""
 
     initial_balance: str  # Initial balance for all agents (as string for Decimal)
+    allowed_tools: list[str]  # List of allowed agent tool names (default: all tools)
 
 
 # =============================================================================
@@ -421,17 +546,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         # Configuration
         self.initial_balance = config.get("initial_balance", "0")
+        # Default to all tools if not specified (None means all tools allowed)
+        self.allowed_tools = config.get("allowed_tools", None)
 
     @classmethod
     def from_dict(
         cls, config: Dict[str, Any], context: RuntimeContext
     ) -> "BrokerOperator":
         """Create broker from configuration dictionary"""
-        broker_config: BrokerOperatorConfig = {
-            "actor_id": config["actor_id"],
-            "initial_balance": config.get("initial_balance", "0"),
-        }
-        return cls(broker_config, context.trial_id)
+        return cls(cast(BrokerOperatorConfig, config), context.trial_id)
 
     async def start(self) -> None:
         """Protocol hook: called before traffic is routed"""
@@ -646,8 +769,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 )
 
     async def _handle_odds_update(self, data_event: Any, event_id: str) -> None:
-        """Handle odds update event."""
-        # Get odds from event - handle both NBA and NFL odds formats
+        """Handle odds update event. Supports moneyline, spreads, and totals."""
+        # Get moneyline odds from event - handle both NBA and NFL odds formats
         home_odds = getattr(data_event, "home_odds", None)
         away_odds = getattr(data_event, "away_odds", None)
 
@@ -662,7 +785,18 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             if moneyline_away is not None and moneyline_away != 0:
                 away_odds = self._moneyline_to_decimal(moneyline_away)
 
-        if home_odds is None or away_odds is None:
+        # Extract spread updates (optional - for backward compatibility)
+        spread_updates = getattr(data_event, "spread_updates", None) or []
+
+        # Extract total updates (optional - for backward compatibility)
+        total_updates = getattr(data_event, "total_updates", None) or []
+
+        # Check if we have any odds to update (moneyline OR spreads OR totals)
+        has_moneyline = home_odds is not None and away_odds is not None
+        has_spreads = len(spread_updates) > 0
+        has_totals = len(total_updates) > 0
+
+        if not (has_moneyline or has_spreads or has_totals):
             logger.debug(
                 "OddsUpdateEvent missing valid odds: event_id=%s",
                 event_id,
@@ -671,37 +805,51 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         # Only process odds if we have team info (either from existing event or pending GameUpdateEvent)
         if event_id in self._events:
-            # Event exists - update odds
+            # Event exists - update odds (supports partial updates)
             logger.info(
-                "Updating odds: event_id=%s, home_odds=%s, away_odds=%s",
+                "Updating odds: event_id=%s, home_odds=%s, away_odds=%s, spreads=%d, totals=%d",
                 event_id,
                 home_odds,
                 away_odds,
+                len(spread_updates),
+                len(total_updates),
             )
             await self._update_odds(
                 event_id=event_id,
-                home_odds=Decimal(str(home_odds)),
-                away_odds=Decimal(str(away_odds)),
+                home_odds=Decimal(str(home_odds)) if home_odds else None,
+                away_odds=Decimal(str(away_odds)) if away_odds else None,
+                spread_updates=spread_updates,
+                total_updates=total_updates,
             )
         elif event_id in self._pending_team_info:
             # We have team info from GameUpdateEvent - initialize event with odds
             team_info = self._pending_team_info[event_id]
             logger.info(
-                "Initializing event from OddsUpdateEvent (team info already available): event_id=%s, home_team=%s, away_team=%s, home_odds=%s, away_odds=%s",
+                "Initializing event from OddsUpdateEvent (team info already available): event_id=%s, home_team=%s, away_team=%s, home_odds=%s, away_odds=%s, spreads=%d, totals=%d",
                 event_id,
                 team_info.get("home_team"),
                 team_info.get("away_team"),
                 home_odds,
                 away_odds,
+                len(spread_updates),
+                len(total_updates),
             )
+            # Initialize with moneyline odds (if available)
             await self._initialize_event(
                 event_id=event_id,
                 home_team=team_info["home_team"],
                 away_team=team_info["away_team"],
                 game_time=team_info["game_time"],
-                initial_home_odds=Decimal(str(home_odds)),
-                initial_away_odds=Decimal(str(away_odds)),
+                initial_home_odds=Decimal(str(home_odds)) if home_odds else None,
+                initial_away_odds=Decimal(str(away_odds)) if away_odds else None,
             )
+            # Update spreads/totals if provided
+            if spread_updates or total_updates:
+                await self._update_odds(
+                    event_id=event_id,
+                    spread_updates=spread_updates,
+                    total_updates=total_updates,
+                )
             # Clear pending team info
             del self._pending_team_info[event_id]
         else:
@@ -898,15 +1046,27 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         return betting_event
 
     async def _update_odds(
-        self, event_id: str, home_odds: Decimal, away_odds: Decimal
+        self,
+        event_id: str,
+        home_odds: Optional[Decimal] = None,
+        away_odds: Optional[Decimal] = None,
+        spread_updates: Optional[List[Dict[str, Any]]] = None,
+        total_updates: Optional[List[Dict[str, Any]]] = None,
     ) -> BettingEvent:
         """Update odds for an event and execute matching limit orders.
 
         This is an internal method. Odds are updated via OddsUpdateEvent
         through handle_stream_event.
 
-        Can be called to set initial odds (if event was initialized without odds)
-        or to update existing odds.
+        Supports partial updates - only provided odds are updated.
+        Backward compatible: existing calls with just home_odds/away_odds still work.
+
+        Args:
+            event_id: Event identifier
+            home_odds: Optional moneyline home odds
+            away_odds: Optional moneyline away odds
+            spread_updates: Optional list of spread updates [{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}, ...]
+            total_updates: Optional list of total updates [{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}, ...]
         """
         if event_id not in self._events:
             raise ValueError(f"Event {event_id} not found")
@@ -918,43 +1078,161 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 f"Cannot update odds for {betting_event.status.value} event"
             )
 
-        if home_odds <= 1.0 or away_odds <= 1.0:
-            raise ValueError("Odds must be greater than 1.0")
+        # Update moneyline odds (if provided)
+        if home_odds is not None:
+            if home_odds <= 1.0:
+                raise ValueError("Odds must be greater than 1.0")
+            betting_event.home_odds = home_odds
+        if away_odds is not None:
+            if away_odds <= 1.0:
+                raise ValueError("Odds must be greater than 1.0")
+            betting_event.away_odds = away_odds
 
-        # Update event odds
-        betting_event.home_odds = home_odds
-        betting_event.away_odds = away_odds
+        # Update spread lines (if provided)
+        if spread_updates:
+            # Ensure spread_lines is initialized (protection against None)
+            if betting_event.spread_lines is None:
+                betting_event.spread_lines = {}
+
+            for update in spread_updates:
+                spread_value = Decimal(str(update["spread"]))
+                home_spread_odds = Decimal(str(update["home_odds"]))
+                away_spread_odds = Decimal(str(update["away_odds"]))
+
+                if home_spread_odds <= 1.0 or away_spread_odds <= 1.0:
+                    raise ValueError("Odds must be greater than 1.0")
+
+                betting_event.spread_lines[spread_value] = {
+                    "home_odds": home_spread_odds,
+                    "away_odds": away_spread_odds,
+                }
+                logger.debug(
+                    "Updated spread line: event_id=%s, spread=%s, home_odds=%s, away_odds=%s",
+                    event_id,
+                    spread_value,
+                    home_spread_odds,
+                    away_spread_odds,
+                )
+
+        # Update total lines (if provided)
+        if total_updates:
+            # Ensure total_lines is initialized (protection against None)
+            if betting_event.total_lines is None:
+                betting_event.total_lines = {}
+
+            for update in total_updates:
+                total_value = Decimal(str(update["total"]))
+                over_odds = Decimal(str(update["over_odds"]))
+                under_odds = Decimal(str(update["under_odds"]))
+
+                if over_odds <= 1.0 or under_odds <= 1.0:
+                    raise ValueError("Odds must be greater than 1.0")
+
+                betting_event.total_lines[total_value] = {
+                    "over_odds": over_odds,
+                    "under_odds": under_odds,
+                }
+                logger.debug(
+                    "Updated total line: event_id=%s, total=%s, over_odds=%s, under_odds=%s",
+                    event_id,
+                    total_value,
+                    over_odds,
+                    under_odds,
+                )
+
         betting_event.last_odds_update = datetime.now()
 
         logger.info(
-            "Updated odds for event %s: home=%s, away=%s (status=%s)",
+            "Updated odds for event %s: home=%s, away=%s, spreads=%d, totals=%d (status=%s)",
             event_id,
             home_odds,
             away_odds,
+            len(spread_updates) if spread_updates else 0,
+            len(total_updates) if total_updates else 0,
             betting_event.status.value,
         )
 
-        # Check and execute matching limit orders
+        # Check and execute matching limit orders for all bet types
+        await self._check_limit_orders(event_id)
+
+        return betting_event
+
+    async def _check_limit_orders(self, event_id: str) -> None:
+        """Check and execute matching limit orders for all bet types.
+
+        Backward compatible: Only checks moneyline if spreads/totals not available.
+        """
         pending_bet_ids = list(self._event_pending_orders.get(event_id, set()))
+        betting_event = self._events[event_id]
 
         for bet_id in pending_bet_ids:
             bet = self._bets[bet_id]
+            if bet.status != BetStatus.PENDING:
+                continue
 
-            # Determine if limit order should execute
             should_execute = False
             execution_odds = Decimal(0)
-            if bet.limit_odds is not None:
-                if bet.selection == "home" and home_odds >= bet.limit_odds:
-                    should_execute = True
-                    execution_odds = home_odds
-                elif bet.selection == "away" and away_odds >= bet.limit_odds:
-                    should_execute = True
-                    execution_odds = away_odds
+
+            # Default to moneyline if bet_type not set (backward compatibility)
+            bet_type = getattr(bet, "bet_type", BetType.MONEYLINE)
+
+            if bet_type == BetType.MONEYLINE:
+                # Moneyline limit orders (existing behavior)
+                if bet.limit_odds is None:
+                    continue  # Skip if no limit odds set
+                if betting_event.home_odds is not None and bet.selection == "home":
+                    if betting_event.home_odds >= bet.limit_odds:
+                        should_execute = True
+                        execution_odds = betting_event.home_odds
+                elif betting_event.away_odds is not None and bet.selection == "away":
+                    if betting_event.away_odds >= bet.limit_odds:
+                        should_execute = True
+                        execution_odds = betting_event.away_odds
+
+            elif bet_type == BetType.SPREAD:
+                # Spread limit orders
+                if bet.limit_odds is None:
+                    continue  # Skip if no limit odds set
+                spread_value = getattr(bet, "spread_value", None)
+                # Protection: ensure spread_lines is not None
+                if (
+                    spread_value
+                    and betting_event.spread_lines is not None
+                    and spread_value in betting_event.spread_lines
+                ):
+                    spread_line = betting_event.spread_lines[spread_value]
+                    if bet.selection == "home":
+                        if spread_line["home_odds"] >= bet.limit_odds:
+                            should_execute = True
+                            execution_odds = spread_line["home_odds"]
+                    elif bet.selection == "away":
+                        if spread_line["away_odds"] >= bet.limit_odds:
+                            should_execute = True
+                            execution_odds = spread_line["away_odds"]
+
+            elif bet_type == BetType.TOTAL:
+                # Total limit orders
+                if bet.limit_odds is None:
+                    continue  # Skip if no limit odds set
+                total_value = getattr(bet, "total_value", None)
+                # Protection: ensure total_lines is not None
+                if (
+                    total_value
+                    and betting_event.total_lines is not None
+                    and total_value in betting_event.total_lines
+                ):
+                    total_line = betting_event.total_lines[total_value]
+                    if bet.selection == "over":
+                        if total_line["over_odds"] >= bet.limit_odds:
+                            should_execute = True
+                            execution_odds = total_line["over_odds"]
+                    elif bet.selection == "under":
+                        if total_line["under_odds"] >= bet.limit_odds:
+                            should_execute = True
+                            execution_odds = total_line["under_odds"]
 
             if should_execute:
                 await self._match_bet(bet, execution_odds)
-
-        return betting_event
 
     async def _update_event_status(self, event_id: str, status: EventStatus) -> None:
         """Update event status and perform status-specific actions.
@@ -1013,6 +1291,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         if winner not in ["home", "away"]:
             raise ValueError(f"Invalid winner: {winner}")
 
+        # Validate final_score is present and has required keys (needed for spread/total betting)
+        if not final_score or "home" not in final_score or "away" not in final_score:
+            raise ValueError(
+                f"final_score must contain 'home' and 'away' keys, got: {final_score}"
+            )
+
         logger.info(
             "Settling event %s - Winner: %s, Score: %s",
             event_id,
@@ -1028,7 +1312,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         for bet_id in active_bet_ids:
             bet = self._bets[bet_id]
             if bet.status == BetStatus.ACTIVE:
-                await self._settle_bet(bet, winner)
+                await self._settle_bet(bet, winner, final_score)
                 settled_count += 1
 
         # Update event status
@@ -1040,11 +1324,59 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             settled_count,
         )
 
-    async def _settle_bet(self, bet: Bet, winner: str) -> None:
-        """Settle a single bet"""
+    async def _settle_bet(
+        self, bet: Bet, winner: str, final_score: Dict[str, int]
+    ) -> None:
+        """Settle a single bet. Supports moneyline, spread, and total betting.
+
+        Backward compatible: Defaults to moneyline settlement if bet_type not set.
+        """
         async with self._agent_locks[bet.agent_id]:
-            # Determine outcome
-            is_win = bet.selection == winner
+            # Determine bet type (default to moneyline for backward compatibility)
+            bet_type = getattr(bet, "bet_type", BetType.MONEYLINE)
+            is_win = False
+
+            if bet_type == BetType.MONEYLINE:
+                # Moneyline settlement (existing behavior - backward compatible)
+                is_win = bet.selection == winner
+
+            elif bet_type == BetType.SPREAD:
+                # Spread settlement
+                spread_value = getattr(bet, "spread_value", None)
+                if spread_value is None:
+                    raise ValueError(
+                        f"Bet {bet.bet_id} is SPREAD type but missing spread_value"
+                    )
+
+                home_score = final_score["home"]
+                away_score = final_score["away"]
+
+                if bet.selection == "home":
+                    # Home team must win by more than the spread
+                    # spread_value is negative (e.g., -3.5), so we add it to home score
+                    adjusted_home_score = home_score + spread_value
+                    is_win = adjusted_home_score > away_score
+                else:  # away
+                    # Away team must win (or lose by less than spread)
+                    # spread_value is positive (e.g., +3.5), so we add it to away score
+                    adjusted_away_score = away_score + spread_value
+                    is_win = adjusted_away_score > home_score
+
+            elif bet_type == BetType.TOTAL:
+                # Total settlement
+                total_value = getattr(bet, "total_value", None)
+                if total_value is None:
+                    raise ValueError(
+                        f"Bet {bet.bet_id} is TOTAL type but missing total_value"
+                    )
+
+                total_points = final_score["home"] + final_score["away"]
+
+                if bet.selection == "over":
+                    is_win = total_points > total_value
+                else:  # under
+                    is_win = total_points < total_value
+
             outcome = BetOutcome.WIN if is_win else BetOutcome.LOSS
 
             # Calculate payout
@@ -1069,10 +1401,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             # Log settlement
             logger.info(
-                "Bet %s settled - Agent %s: %s, Payout: %s",
+                "Bet %s settled - Agent %s: %s (%s), Payout: %s",
                 bet.bet_id,
                 bet.agent_id,
-                outcome,
+                outcome.value,
+                bet_type.value,
                 payout,
             )
 
@@ -1271,13 +1604,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 if betting_event.status == EventStatus.SETTLED:
                     raise ValueError("Event has been settled")
 
-                # Check odds are available (event must be initialized with odds)
-                if betting_event.home_odds is None or betting_event.away_odds is None:
-                    raise ValueError(
-                        f"Odds not yet available for event {bet_request.event_id}. "
-                        "Please wait for odds to be updated."
-                    )
-
                 # Validate betting phase matches event status
                 if bet_request.betting_phase == BettingPhase.PRE_GAME:
                     if betting_event.status != EventStatus.SCHEDULED:
@@ -1299,29 +1625,93 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                         f"available {account.balance}"
                     )
 
+                # Determine execution odds based on bet request type
+                execution_odds = None
+                bet_type: BetType
+
+                if isinstance(bet_request, BetRequestMoneyline):
+                    # Moneyline betting
+                    bet_type = BetType.MONEYLINE
+                    if (
+                        betting_event.home_odds is None
+                        or betting_event.away_odds is None
+                    ):
+                        raise ValueError(
+                            f"Moneyline odds not yet available for event {bet_request.event_id}. "
+                            "Please wait for odds to be updated."
+                        )
+                    if bet_request.selection == "home":
+                        execution_odds = betting_event.home_odds
+                    else:  # away
+                        execution_odds = betting_event.away_odds
+
+                elif isinstance(bet_request, BetRequestSpread):
+                    # Spread betting
+                    bet_type = BetType.SPREAD
+                    # Protection: ensure spread_lines is not None
+                    if betting_event.spread_lines is None:
+                        raise ValueError(
+                            f"Spread odds not yet available for event {bet_request.event_id}. "
+                            "Please wait for odds to be updated."
+                        )
+                    if bet_request.spread_value not in betting_event.spread_lines:
+                        available_spreads = sorted(betting_event.spread_lines.keys())
+                        raise ValueError(
+                            f"Spread {bet_request.spread_value} not available for event {bet_request.event_id}. "
+                            f"Available spreads: {available_spreads}"
+                        )
+                    spread_line = betting_event.spread_lines[bet_request.spread_value]
+                    if bet_request.selection == "home":
+                        execution_odds = spread_line["home_odds"]
+                    else:  # away
+                        execution_odds = spread_line["away_odds"]
+
+                elif isinstance(bet_request, BetRequestTotal):
+                    # Total betting
+                    bet_type = BetType.TOTAL
+                    # Protection: ensure total_lines is not None
+                    if betting_event.total_lines is None:
+                        raise ValueError(
+                            f"Total odds not yet available for event {bet_request.event_id}. "
+                            "Please wait for odds to be updated."
+                        )
+                    if bet_request.total_value not in betting_event.total_lines:
+                        available_totals = sorted(betting_event.total_lines.keys())
+                        raise ValueError(
+                            f"Total {bet_request.total_value} not available for event {bet_request.event_id}. "
+                            f"Available totals: {available_totals}"
+                        )
+                    total_line = betting_event.total_lines[bet_request.total_value]
+                    if bet_request.selection == "over":
+                        execution_odds = total_line["over_odds"]
+                    else:  # under
+                        execution_odds = total_line["under_odds"]
+
+                else:
+                    raise ValueError(f"Unknown bet request type: {type(bet_request)}")
+
+                if execution_odds is None:
+                    raise ValueError(
+                        f"Odds not available for {bet_type.value} bet on event {bet_request.event_id}"
+                    )
+
                 # Lock funds
                 account.balance -= bet_request.amount
                 account.last_updated = datetime.now()
 
-                # Generate bet ID
-                bet_id = str(uuid.uuid4())
-
-                # Determine execution odds for market orders
-                # Odds should already be validated above, but add safety check
-                if bet_request.selection == "home":
-                    execution_odds = betting_event.home_odds
-                else:
-                    execution_odds = betting_event.away_odds
-
-                if execution_odds is None:
-                    raise ValueError(
-                        f"Odds not available for selection '{bet_request.selection}' "
-                        f"on event {bet_request.event_id}"
-                    )
-
                 # Create bet record
+                spread_value = (
+                    bet_request.spread_value
+                    if isinstance(bet_request, BetRequestSpread)
+                    else None
+                )
+                total_value = (
+                    bet_request.total_value
+                    if isinstance(bet_request, BetRequestTotal)
+                    else None
+                )
                 bet = Bet(
-                    bet_id=bet_id,
+                    bet_id=str(uuid.uuid4()),
                     agent_id=agent_id,
                     event_id=bet_request.event_id,
                     amount=bet_request.amount,
@@ -1330,13 +1720,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     order_type=bet_request.order_type,
                     limit_odds=bet_request.limit_odds,
                     betting_phase=bet_request.betting_phase,
+                    bet_type=bet_type,
+                    spread_value=spread_value,
+                    total_value=total_value,
                     create_time=datetime.now(),
                     execution_time=None,  # Set by match_bet
                     status=BetStatus.PENDING,  # Will be updated by match_bet
                 )
 
                 # Store bet
-                self._bets[bet_id] = bet
+                self._bets[bet.bet_id] = bet
 
                 # Process based on order type
                 if bet_request.order_type == OrderType.MARKET:
@@ -1344,11 +1737,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     await self._match_bet(bet, execution_odds)
                 else:
                     # Add to pending orders (order book)
-                    self._pending_orders[agent_id].append(bet_id)
-                    self._event_pending_orders[bet_request.event_id].add(bet_id)
+                    self._pending_orders[agent_id].append(bet.bet_id)
+                    self._event_pending_orders[bet_request.event_id].add(bet.bet_id)
                     logger.info(
                         "Limit order placed - %s: %s $%s on %s @ %s+",
-                        bet_id,
+                        bet.bet_id,
                         agent_id,
                         bet_request.amount,
                         bet_request.selection,
@@ -1616,6 +2009,14 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         from dojozero.agents._toolkit import tool  # type: ignore[import-untyped]
 
         target = operator if operator is not None else self
+        # Get allowed tools from self (the broker instance), not from target
+        # None means all tools are allowed
+        allowed_tools = getattr(self, "allowed_tools", None)
+        allowed_tools_set = (
+            {tool_name.lower() for tool_name in allowed_tools}
+            if allowed_tools
+            else None
+        )
 
         @tool
         async def get_balance() -> str:
@@ -1645,13 +2046,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         @tool
         async def place_bet(
             amount: str,
-            selection: str,
+            selection: Literal["home", "away"],
             event_id: str,
-            order_type: str = "MARKET",
-            betting_phase: str = "PRE_GAME",
+            order_type: str = OrderType.MARKET.value,
+            betting_phase: str = BettingPhase.PRE_GAME.value,
             limit_odds: str | None = None,
         ) -> str:
-            """Place a bet on an event.
+            """Place a moneyline bet on an event.
 
             Args:
                 amount: Bet amount (e.g., "100.00")
@@ -1665,10 +2066,84 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 "bet_placed" if successful, "bet_invalid" if rejected
             """
 
-            bet_request = BetRequest(
+            bet_request = BetRequestMoneyline(
                 amount=Decimal(amount),
                 selection=selection,
                 event_id=event_id,
+                order_type=OrderType[order_type],
+                betting_phase=BettingPhase[betting_phase],
+                limit_odds=Decimal(limit_odds) if limit_odds else None,
+            )
+            result = await target.place_bet(agent_id, bet_request)
+            return result
+
+        @tool
+        async def place_bet_spread(
+            amount: str,
+            selection: Literal["home", "away"],
+            event_id: str,
+            spread_value: str,
+            order_type: str = OrderType.MARKET.value,
+            betting_phase: str = BettingPhase.PRE_GAME.value,
+            limit_odds: str | None = None,
+        ) -> str:
+            """Place a spread bet on an event.
+
+            Args:
+                amount: Bet amount (e.g., "100.00")
+                selection: "home" or "away"
+                event_id: Event to bet on
+                spread_value: Spread value (e.g., "-3.5" or "+3.5")
+                order_type: "MARKET" (immediate) or "LIMIT" (conditional), default "MARKET"
+                betting_phase: "PRE_GAME" or "IN_GAME", default "PRE_GAME"
+                limit_odds: Minimum odds for LIMIT orders (e.g., "2.00"), required for LIMIT
+
+            Returns:
+                "bet_placed" if successful, "bet_invalid" if rejected
+            """
+
+            bet_request = BetRequestSpread(
+                amount=Decimal(amount),
+                selection=selection,
+                event_id=event_id,
+                spread_value=Decimal(spread_value),
+                order_type=OrderType[order_type],
+                betting_phase=BettingPhase[betting_phase],
+                limit_odds=Decimal(limit_odds) if limit_odds else None,
+            )
+            result = await target.place_bet(agent_id, bet_request)
+            return result
+
+        @tool
+        async def place_bet_total(
+            amount: str,
+            selection: Literal["over", "under"],
+            event_id: str,
+            total_value: str,
+            order_type: str = OrderType.MARKET.value,
+            betting_phase: str = BettingPhase.PRE_GAME.value,
+            limit_odds: str | None = None,
+        ) -> str:
+            """Place a total (over/under) bet on an event.
+
+            Args:
+                amount: Bet amount (e.g., "100.00")
+                selection: "over" or "under"
+                event_id: Event to bet on
+                total_value: Total points value (e.g., "220.5")
+                order_type: "MARKET" (immediate) or "LIMIT" (conditional), default "MARKET"
+                betting_phase: "PRE_GAME" or "IN_GAME", default "PRE_GAME"
+                limit_odds: Minimum odds for LIMIT orders (e.g., "2.00"), required for LIMIT
+
+            Returns:
+                "bet_placed" if successful, "bet_invalid" if rejected
+            """
+
+            bet_request = BetRequestTotal(
+                amount=Decimal(amount),
+                selection=selection,
+                event_id=event_id,
+                total_value=Decimal(total_value),
                 order_type=OrderType[order_type],
                 betting_phase=BettingPhase[betting_phase],
                 limit_odds=Decimal(limit_odds) if limit_odds else None,
@@ -1752,14 +2227,29 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             events = await target.get_available_events()
             return json.dumps([event.to_dict() for event in events])
 
-        return [
-            get_balance,
-            get_quote,
-            place_bet,
-            cancel_bet,
-            get_active_bets,
-            get_pending_orders,
-            get_bet_history,
-            get_statistics,
-            get_available_events,
-        ]
+        # Build mapping of tool names to tool functions
+        all_tools_map = {
+            "get_balance": get_balance,
+            "get_quote": get_quote,
+            "place_bet": place_bet,
+            "place_bet_spread": place_bet_spread,
+            "place_bet_total": place_bet_total,
+            "cancel_bet": cancel_bet,
+            "get_active_bets": get_active_bets,
+            "get_pending_orders": get_pending_orders,
+            "get_bet_history": get_bet_history,
+            "get_statistics": get_statistics,
+            "get_available_events": get_available_events,
+        }
+
+        # Filter tools based on allowed_tools configuration
+        if allowed_tools_set is None:
+            # None means all tools are allowed
+            return list(all_tools_map.values())
+        else:
+            # Only include tools that are in the allowed list
+            return [
+                tool_func
+                for tool_name, tool_func in all_tools_map.items()
+                if tool_name.lower() in allowed_tools_set
+            ]

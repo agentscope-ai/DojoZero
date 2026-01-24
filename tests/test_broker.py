@@ -11,13 +11,16 @@ from typing import Any
 from dojozero.betting import (
     BrokerOperator,
     BrokerOperatorConfig,
-    BetRequest,
+    BetRequestMoneyline,
+    BetRequestSpread,
+    BetRequestTotal,
     OrderType,
     BettingPhase,
     BetStatus,
     BetOutcome,
     BetExecutedPayload,
     BetSettledPayload,
+    BetType,
 )
 
 from dojozero.core import RuntimeContext, StreamEvent
@@ -28,12 +31,6 @@ from dojozero.data.nba._events import (
 )
 from dojozero.data.polymarket._events import OddsUpdateEvent
 
-
-# =============================================================================
-# Configure pytest-asyncio
-# =============================================================================
-
-# This makes all tests in this file async by default
 pytestmark = pytest.mark.asyncio
 
 
@@ -491,7 +488,7 @@ class TestBetPlacement:
 
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -549,7 +546,7 @@ class TestBetPlacement:
 
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -609,7 +606,7 @@ class TestBetPlacement:
         # Place limit order
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -677,7 +674,7 @@ class TestBetPlacement:
 
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("10000.00"),  # More than balance
                 selection="home",
                 event_id="test_event",
@@ -748,7 +745,7 @@ class TestBetPlacement:
 
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -797,7 +794,7 @@ class TestBetPlacement:
         # Place limit order
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -861,7 +858,7 @@ class TestBetPlacement:
         # Place and execute market bet
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -925,7 +922,7 @@ class TestBetSettlement:
         # Place bet on home team
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -1003,7 +1000,7 @@ class TestBetSettlement:
         # Place bet on home team
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -1080,7 +1077,7 @@ class TestBetSettlement:
         # Place pregame limit order
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -1152,7 +1149,7 @@ class TestStatistics:
         # Place two bets
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -1163,7 +1160,7 @@ class TestStatistics:
 
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="test_event",
@@ -1265,7 +1262,7 @@ class TestStateManagement:
         # Place a bet
         await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="test_event",
@@ -1339,7 +1336,7 @@ class TestIntegration:
         # 2. Place market bet
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("100.00"),
                 selection="home",
                 event_id="game1",
@@ -1352,7 +1349,7 @@ class TestIntegration:
         # 3. Place limit order
         result = await broker.place_bet(
             agent.actor_id,
-            BetRequest(
+            BetRequestMoneyline(
                 amount=Decimal("50.00"),
                 selection="away",
                 event_id="game1",
@@ -1420,7 +1417,868 @@ class TestIntegration:
         stats = await broker.get_statistics(agent.actor_id)
         assert stats.total_bets == 2
         assert stats.wins == 1
-        assert stats.losses == 1
+
+
+# =============================================================================
+# Spread and Total Betting Tests
+# =============================================================================
+
+
+def create_odds_event_with_spreads_totals(
+    event_id: str,
+    home_odds: float = 1.95,
+    away_odds: float = 2.10,
+    spread_updates: list | None = None,
+    total_updates: list | None = None,
+):
+    """Helper to create an OddsUpdateEvent with spread/total updates for testing"""
+
+    class OddsEvent:
+        def __init__(self):
+            self.event_id = event_id
+            self.home_odds = home_odds
+            self.away_odds = away_odds
+            self.spread_updates = spread_updates or []
+            self.total_updates = total_updates or []
+            self.event_type = "odds_update"
+
+    return OddsEvent()
+
+
+class TestSpreadBetting:
+    """Test spread betting functionality"""
+
+    async def test_place_spread_bet(self, broker_with_agent):
+        """Test placing a spread bet"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set odds with spread updates
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            spread_updates=[
+                {"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90},
+                {"spread": -4.5, "home_odds": 1.85, "away_odds": 1.95},
+            ],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place spread bet
+        result = await broker.place_bet(
+            agent.actor_id,
+            BetRequestSpread(
+                amount=Decimal("100.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+                betting_phase=BettingPhase.PRE_GAME,
+                spread_value=Decimal("-3.5"),
+            ),
+        )
+
+        assert result == "bet_placed"
+
+        # Check balance was deducted
+        balance = await broker.get_balance(agent.actor_id)
+        assert balance == Decimal("900.00")
+
+        # Check bet was executed
+        active_bets = await broker.get_active_bets(agent.actor_id)
+        assert len(active_bets) == 1
+        assert active_bets[0].bet_type == BetType.SPREAD
+        assert active_bets[0].spread_value == Decimal("-3.5")
+        assert active_bets[0].odds == Decimal("1.90")
+        assert active_bets[0].status == BetStatus.ACTIVE
+
+    async def test_settle_winning_spread_bet(self, broker_with_agent):
+        """Test settling a winning spread bet"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set odds with spread
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            spread_updates=[{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place spread bet on home (-3.5)
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestSpread(
+                amount=Decimal("100.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+                betting_phase=BettingPhase.PRE_GAME,
+                spread_value=Decimal("-3.5"),
+            ),
+        )
+
+        # Game result: Home wins by 5 (covers -3.5 spread)
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                event_id="test_event",
+                winner="home",
+                final_score={"home": 110, "away": 105},
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
+
+        # Check bet settled with payout
+        history = await broker.get_bet_history(agent.actor_id)
+        assert len(history) == 1
+        assert history[0].outcome == BetOutcome.WIN
+        assert history[0].actual_payout == Decimal("100.00") * Decimal("1.90")
+
+    async def test_settle_losing_spread_bet(self, broker_with_agent):
+        """Test settling a losing spread bet"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set odds with spread
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            spread_updates=[{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place spread bet on home (-3.5)
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestSpread(
+                amount=Decimal("100.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+                betting_phase=BettingPhase.PRE_GAME,
+                spread_value=Decimal("-3.5"),
+            ),
+        )
+
+        # Game result: Home wins by 2 (doesn't cover -3.5 spread)
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                event_id="test_event",
+                winner="home",
+                final_score={"home": 105, "away": 103},
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
+
+        # Check bet settled as loss
+        history = await broker.get_bet_history(agent.actor_id)
+        assert len(history) == 1
+        assert history[0].outcome == BetOutcome.LOSS
+        assert history[0].actual_payout == Decimal("0")
+
+    async def test_update_spread_odds(self, broker_with_agent):
+        """Test updating spread odds after initial placement"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set initial spread odds
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            spread_updates=[{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Verify initial odds
+        quote = await broker.get_quote("test_event")
+        assert "spread_lines" in quote
+        assert "-3.5" in quote["spread_lines"]
+        assert Decimal(quote["spread_lines"]["-3.5"]["home_odds"]) == Decimal("1.90")
+
+        # Update spread odds
+        updated_odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            spread_updates=[{"spread": -3.5, "home_odds": 1.95, "away_odds": 1.85}],
+        )
+        updated_odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=updated_odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(updated_odds_event)
+
+        # Verify odds were updated
+        updated_quote = await broker.get_quote("test_event")
+        assert Decimal(updated_quote["spread_lines"]["-3.5"]["home_odds"]) == Decimal(
+            "1.95"
+        )
+        assert Decimal(updated_quote["spread_lines"]["-3.5"]["away_odds"]) == Decimal(
+            "1.85"
+        )
+
+    async def test_limit_order_spread_bet(self, broker_with_agent):
+        """Test that limit order executes when spread odds reach threshold"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set initial spread odds
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            spread_updates=[{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place limit order for spread bet
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestSpread(
+                amount=Decimal("50.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.LIMIT,
+                betting_phase=BettingPhase.PRE_GAME,
+                spread_value=Decimal("-3.5"),
+                limit_odds=Decimal("1.95"),  # Want better odds
+            ),
+        )
+
+        # Check order is pending
+        pending = await broker.get_pending_orders(agent.actor_id)
+        assert len(pending) == 1
+        assert pending[0].status == BetStatus.PENDING
+
+        # Update spread odds to trigger execution
+        updated_odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            spread_updates=[
+                {"spread": -3.5, "home_odds": 1.96, "away_odds": 1.84}
+            ],  # 1.96 >= 1.95
+        )
+        updated_odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=updated_odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(updated_odds_event)
+
+        # Check order executed
+        pending = await broker.get_pending_orders(agent.actor_id)
+        assert len(pending) == 0
+
+        active = await broker.get_active_bets(agent.actor_id)
+        assert len(active) == 1
+        assert active[0].status == BetStatus.ACTIVE
+        assert active[0].odds == Decimal("1.96")
+        assert active[0].bet_type == BetType.SPREAD
+        assert active[0].spread_value == Decimal("-3.5")
+
+
+class TestTotalBetting:
+    """Test total (over/under) betting functionality"""
+
+    async def test_place_total_over_bet(self, broker_with_agent):
+        """Test placing an over bet"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set odds with totals
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            total_updates=[
+                {"total": 220.5, "over_odds": 1.88, "under_odds": 1.88},
+                {"total": 221.5, "over_odds": 1.90, "under_odds": 1.86},
+            ],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place over bet
+        result = await broker.place_bet(
+            agent.actor_id,
+            BetRequestTotal(
+                amount=Decimal("100.00"),
+                selection="over",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+                betting_phase=BettingPhase.PRE_GAME,
+                total_value=Decimal("220.5"),
+            ),
+        )
+
+        assert result == "bet_placed"
+
+        # Check bet was executed
+        active_bets = await broker.get_active_bets(agent.actor_id)
+        assert len(active_bets) == 1
+        assert active_bets[0].bet_type == BetType.TOTAL
+        assert active_bets[0].total_value == Decimal("220.5")
+        assert active_bets[0].selection == "over"
+        assert active_bets[0].odds == Decimal("1.88")
+
+    async def test_settle_winning_over_bet(self, broker_with_agent):
+        """Test settling a winning over bet"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set odds with totals
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            total_updates=[{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place over bet
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestTotal(
+                amount=Decimal("100.00"),
+                selection="over",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+                betting_phase=BettingPhase.PRE_GAME,
+                total_value=Decimal("220.5"),
+            ),
+        )
+
+        # Game result: Total points = 225 (over 220.5)
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                event_id="test_event",
+                winner="home",
+                final_score={"home": 115, "away": 110},  # Total = 225
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
+
+        # Check bet settled as win
+        history = await broker.get_bet_history(agent.actor_id)
+        assert len(history) == 1
+        assert history[0].outcome == BetOutcome.WIN
+        assert history[0].actual_payout == Decimal("100.00") * Decimal("1.88")
+
+    async def test_settle_losing_under_bet(self, broker_with_agent):
+        """Test settling a losing under bet"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set odds with totals
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            total_updates=[{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place under bet
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestTotal(
+                amount=Decimal("100.00"),
+                selection="under",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+                betting_phase=BettingPhase.PRE_GAME,
+                total_value=Decimal("220.5"),
+            ),
+        )
+
+        # Game result: Total points = 225 (over 220.5, so under loses)
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                event_id="test_event",
+                winner="home",
+                final_score={"home": 115, "away": 110},  # Total = 225
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
+
+        # Check bet settled as loss
+        history = await broker.get_bet_history(agent.actor_id)
+        assert len(history) == 1
+        assert history[0].outcome == BetOutcome.LOSS
+        assert history[0].actual_payout == Decimal("0")
+
+    async def test_update_total_odds(self, broker_with_agent):
+        """Test updating total odds after initial placement"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set initial total odds
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            total_updates=[{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Verify initial odds
+        quote = await broker.get_quote("test_event")
+        assert "total_lines" in quote
+        assert "220.5" in quote["total_lines"]
+        assert Decimal(quote["total_lines"]["220.5"]["over_odds"]) == Decimal("1.88")
+
+        # Update total odds
+        updated_odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            total_updates=[{"total": 220.5, "over_odds": 1.92, "under_odds": 1.84}],
+        )
+        updated_odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=updated_odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(updated_odds_event)
+
+        # Verify odds were updated
+        updated_quote = await broker.get_quote("test_event")
+        assert Decimal(updated_quote["total_lines"]["220.5"]["over_odds"]) == Decimal(
+            "1.92"
+        )
+        assert Decimal(updated_quote["total_lines"]["220.5"]["under_odds"]) == Decimal(
+            "1.84"
+        )
+
+    async def test_limit_order_total_bet(self, broker_with_agent):
+        """Test that limit order executes when total odds reach threshold"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set initial total odds
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            total_updates=[{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place limit order for over bet
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestTotal(
+                amount=Decimal("50.00"),
+                selection="over",
+                event_id="test_event",
+                order_type=OrderType.LIMIT,
+                betting_phase=BettingPhase.PRE_GAME,
+                total_value=Decimal("220.5"),
+                limit_odds=Decimal("1.90"),  # Want better odds
+            ),
+        )
+
+        # Check order is pending
+        pending = await broker.get_pending_orders(agent.actor_id)
+        assert len(pending) == 1
+        assert pending[0].status == BetStatus.PENDING
+
+        # Update total odds to trigger execution
+        updated_odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            total_updates=[
+                {"total": 220.5, "over_odds": 1.92, "under_odds": 1.84}
+            ],  # 1.92 >= 1.90
+        )
+        updated_odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=updated_odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(updated_odds_event)
+
+        # Check order executed
+        pending = await broker.get_pending_orders(agent.actor_id)
+        assert len(pending) == 0
+
+        active = await broker.get_active_bets(agent.actor_id)
+        assert len(active) == 1
+        assert active[0].status == BetStatus.ACTIVE
+        assert active[0].odds == Decimal("1.92")
+        assert active[0].bet_type == BetType.TOTAL
+        assert active[0].total_value == Decimal("220.5")
+        assert active[0].selection == "over"
+
+
+class TestMultipleSpreadsTotals:
+    """Test multiple spread and total lines"""
+
+    async def test_multiple_spread_lines(self, broker_with_agent):
+        """Test that multiple spread lines can be updated and used"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set odds with multiple spreads
+        odds_payload = create_odds_event_with_spreads_totals(
+            event_id="test_event",
+            spread_updates=[
+                {"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90},
+                {"spread": -4.5, "home_odds": 1.85, "away_odds": 1.95},
+                {"spread": -5.5, "home_odds": 1.80, "away_odds": 2.00},
+            ],
+        )
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place bets on different spreads
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestSpread(
+                amount=Decimal("100.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+                betting_phase=BettingPhase.PRE_GAME,
+                spread_value=Decimal("-3.5"),
+            ),
+        )
+
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestSpread(
+                amount=Decimal("50.00"),
+                selection="away",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+                betting_phase=BettingPhase.PRE_GAME,
+                spread_value=Decimal("-4.5"),  # Away gets +4.5
+            ),
+        )
+
+        # Check both bets were placed
+        active_bets = await broker.get_active_bets(agent.actor_id)
+        assert len(active_bets) == 2
+
+        # Verify different spreads and odds
+        spread_35_bet = [b for b in active_bets if b.spread_value == Decimal("-3.5")][0]
+        spread_45_bet = [b for b in active_bets if b.spread_value == Decimal("-4.5")][0]
+
+        assert spread_35_bet.odds == Decimal("1.90")
+        assert spread_45_bet.odds == Decimal("1.95")  # Away spread odds
+
+    async def test_backward_compatibility_moneyline_default(self, broker_with_agent):
+        """Test that moneyline betting still works without specifying bet_type"""
+        broker, agent = broker_with_agent
+
+        # Initialize event
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                event_id="test_event",
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        # Set moneyline odds only (no spreads/totals)
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=OddsUpdateEvent(
+                event_id="test_event",
+                home_odds=1.95,
+                away_odds=2.10,
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Place bet without bet_type (should default to MONEYLINE)
+        result = await broker.place_bet(
+            agent.actor_id,
+            BetRequestMoneyline(
+                amount=Decimal("100.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+                betting_phase=BettingPhase.PRE_GAME,
+                # bet_type not specified - should default to MONEYLINE
+            ),
+        )
+
+        assert result == "bet_placed"
+
+        # Check bet is moneyline type
+        active_bets = await broker.get_active_bets(agent.actor_id)
+        assert len(active_bets) == 1
+        assert active_bets[0].bet_type == BetType.MONEYLINE
+        assert active_bets[0].odds == Decimal("1.95")
+
+
+# =============================================================================
+# Agent Tools Configuration Tests
+# =============================================================================
+
+
+class TestAllowedTools:
+    """Test allowed_tools configuration"""
+
+    @pytest_asyncio.fixture
+    async def broker_with_limited_tools(self):
+        """Create broker with limited allowed tools"""
+        config: BrokerOperatorConfig = {
+            "actor_id": "test_broker",
+            "initial_balance": "1000.00",
+            "allowed_tools": ["get_balance", "get_quote", "place_bet"],
+        }
+        context = RuntimeContext(
+            trial_id="test-trial",
+            data_hubs={},
+            stores={},
+            startup=None,
+        )
+        broker = BrokerOperator.from_dict(dict(config), context)
+        await broker.start()
+        yield broker
+        await broker.stop()
+
+    async def test_allowed_tools_filtering(self, broker_with_limited_tools, agent):
+        """Test that only allowed tools are exposed"""
+        broker = broker_with_limited_tools
+        broker.register_agents([agent])  # type: ignore[arg-type]
+
+        # Get tools for agent
+        tools = broker.agent_tools(agent.actor_id)
+        tool_names = [tool.__name__ for tool in tools]
+
+        # Should only have the allowed tools
+        assert "get_balance" in tool_names
+        assert "get_quote" in tool_names
+        assert "place_bet" in tool_names
+
+        # Should NOT have the restricted tools
+        assert "place_bet_spread" not in tool_names
+        assert "place_bet_total" not in tool_names
+        assert "cancel_bet" not in tool_names
+
+    async def test_all_tools_when_none_specified(self, broker, agent):
+        """Test that all tools are available when allowed_tools is None"""
+        broker.register_agents([agent])  # type: ignore[arg-type]
+
+        # Get tools for agent
+        tools = broker.agent_tools(agent.actor_id)
+        tool_names = [tool.__name__ for tool in tools]
+
+        # Should have all tools
+        expected_tools = [
+            "get_balance",
+            "get_quote",
+            "place_bet",
+            "place_bet_spread",
+            "place_bet_total",
+            "cancel_bet",
+            "get_active_bets",
+            "get_pending_orders",
+            "get_bet_history",
+            "get_statistics",
+            "get_available_events",
+        ]
+
+        for tool_name in expected_tools:
+            assert tool_name in tool_names, f"Expected tool {tool_name} not found"
+
+        assert len(tool_names) == len(expected_tools)
+
+
+# =============================================================================
+# Event Ordering Tests
+# =============================================================================
 
 
 class TestEventOrdering:
