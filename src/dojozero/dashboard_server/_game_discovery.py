@@ -181,8 +181,136 @@ class GameInfo(BaseModel):
         return result
 
 
+def _parse_espn_scoreboard(data: dict[str, Any], sport_type: str) -> list[GameInfo]:
+    """Parse ESPN scoreboard response into GameInfo objects.
+
+    This is a shared parser for ESPN API scoreboard responses, which have
+    the same format across different sports (NBA, NFL, etc.).
+
+    Args:
+        data: ESPN API response with "scoreboard" key
+        sport_type: Sport type string (e.g., "nba", "nfl")
+
+    Returns:
+        List of GameInfo objects.
+    """
+    scoreboard = data.get("scoreboard", {})
+    events = scoreboard.get("events", [])
+
+    games: list[GameInfo] = []
+    for event in events:
+        competitions = event.get("competitions", [])
+        if not competitions:
+            continue
+
+        comp = competitions[0]
+        status = comp.get("status", {})
+        status_type = status.get("type", {})
+
+        # Get competitors and convert to our format
+        competitors = comp.get("competitors", [])
+        home_team_data: dict[str, Any] = {}
+        away_team_data: dict[str, Any] = {}
+        for c in competitors:
+            team = c.get("team", {})
+            # Extract record from competitor records array
+            records = c.get("records", [])
+            record = records[0].get("summary", "") if records else ""
+
+            team_data = {
+                "teamId": team.get("id", ""),
+                "displayName": team.get("displayName", ""),
+                "teamTricode": team.get("abbreviation", ""),
+                "score": c.get("score", "0"),
+                "teamCity": team.get("location", ""),
+                "shortDisplayName": team.get("shortDisplayName", ""),
+                "color": team.get("color", ""),
+                "alternateColor": team.get("alternateColor", ""),
+                "logo": team.get("logo", ""),
+                "record": record,
+            }
+            if c.get("homeAway") == "home":
+                home_team_data = team_data
+            else:
+                away_team_data = team_data
+
+        # Get venue info
+        venue_data = comp.get("venue", {})
+        venue_address = venue_data.get("address", {})
+        venue = {
+            "venueId": str(venue_data.get("id", "")),
+            "name": venue_data.get("fullName", ""),
+            "city": venue_address.get("city", ""),
+            "state": venue_address.get("state", ""),
+            "indoor": venue_data.get("indoor", True),
+        }
+
+        # Get broadcast info
+        broadcasts_raw = comp.get("broadcasts", [])
+        broadcasts: list[dict[str, Any]] = []
+        broadcast_names: list[str] = []
+        for b in broadcasts_raw:
+            market = b.get("market", "")
+            names = b.get("names", [])
+            broadcasts.append({"market": market, "names": names})
+            if names:
+                broadcast_names.extend(names)
+        broadcast = ", ".join(broadcast_names) if broadcast_names else ""
+
+        # Get odds
+        odds_list = comp.get("odds", [])
+        odds: dict[str, Any] = {}
+        if odds_list:
+            o = odds_list[0]
+            odds = {
+                "provider": o.get("provider", {}).get("name", ""),
+                "spread": o.get("spread", 0),
+                "overUnder": o.get("overUnder", 0),
+                "homeMoneyLine": o.get("homeTeamOdds", {}).get("moneyLine", 0),
+                "awayMoneyLine": o.get("awayTeamOdds", {}).get("moneyLine", 0),
+            }
+
+        # Get season info
+        season = event.get("season", {})
+        season_type_id = season.get("type", 0)
+        season_type_map = {
+            1: "preseason",
+            2: "regular",
+            3: "postseason",
+            4: "offseason",
+        }
+
+        # Build game data dict for Pydantic validation
+        game_data = {
+            "gameId": event.get("id", ""),
+            "sport_type": sport_type,
+            "gameStatus": int(status_type.get("id", "1")),
+            "gameStatusText": status_type.get("description", "Scheduled"),
+            "gameTimeUTC": comp.get("date", ""),
+            "homeTeam": home_team_data,
+            "awayTeam": away_team_data,
+            "venue": venue,
+            "broadcasts": broadcasts,
+            "broadcast": broadcast,
+            "name": event.get("name", ""),
+            "shortName": event.get("shortName", ""),
+            "odds": odds,
+            "period": status.get("period", 0),
+            "gameClock": status.get("displayClock", ""),
+            "attendance": comp.get("attendance", 0),
+            "neutralSite": comp.get("neutralSite", False),
+            "seasonYear": season.get("year", 0),
+            "seasonType": season_type_map.get(season_type_id, ""),
+        }
+
+        game = GameInfo.model_validate(game_data)
+        games.append(game)
+
+    return games
+
+
 class NBAGameFetcher:
-    """Fetches NBA game information from NBA API."""
+    """Fetches NBA game information from ESPN API."""
 
     async def fetch_games_for_date(
         self,
@@ -191,41 +319,36 @@ class NBAGameFetcher:
         """Fetch NBA games for a specific date.
 
         Args:
-            date: Date in YYYY-MM-DD format. If None, uses today.
+            date: Date in YYYY-MM-DD format. If None, uses today's date.
+                  Note: Unlike NFL which has weekly schedules, NBA has daily games,
+                  so we default to today rather than using ESPN's default
+                  (which returns yesterday's completed games).
 
         Returns:
             List of GameInfo objects.
         """
-        import asyncio
+        from dojozero.data.espn._api import ESPNExternalAPI
 
-        from dojozero.data.nba._utils import get_games_for_date
-
-        if date is None:
-            date = datetime.now().strftime("%Y-%m-%d")
-
+        api = ESPNExternalAPI(sport="basketball", league="nba")
         try:
-            # Run in thread pool to avoid blocking the event loop
-            games_raw = await asyncio.to_thread(get_games_for_date, date, False)
+            # Default to today if no date provided
+            if date is None:
+                date = datetime.now().strftime("%Y-%m-%d")
+
+            # Parse date to ESPN format (YYYYMMDD)
+            try:
+                parsed_date = datetime.strptime(date, "%Y-%m-%d")
+                date_str = parsed_date.strftime("%Y%m%d")
+            except ValueError:
+                LOGGER.error("Invalid date format: %s", date)
+                return []
+            data = await api.fetch("scoreboard", {"dates": date_str})
+            return _parse_espn_scoreboard(data, "nba")
         except Exception as e:
             LOGGER.error("Error fetching NBA games for %s: %s", date, e)
             return []
-
-        games: list[GameInfo] = []
-        for g in games_raw:
-            # Add sport_type and generate short_name if missing
-            g["sport_type"] = "nba"
-            if not g.get("shortName"):
-                home = g.get("homeTeam", {})
-                away = g.get("awayTeam", {})
-                g["shortName"] = (
-                    f"{away.get('teamTricode', '')} @ {home.get('teamTricode', '')}"
-                )
-
-            # Use Pydantic to parse and validate
-            game = GameInfo.model_validate(g)
-            games.append(game)
-
-        return games
+        finally:
+            await api.close()
 
     async def fetch_games_for_date_range(
         self,
@@ -330,7 +453,7 @@ class NFLGameFetcher:
                     LOGGER.error("Invalid date format: %s", date)
                     return []
                 data = await api.fetch("scoreboard", {"dates": date_str})
-            return self._parse_scoreboard(data)
+            return _parse_espn_scoreboard(data, "nfl")
         except Exception as e:
             LOGGER.error("Error fetching NFL games for %s: %s", date, e)
             return []
@@ -354,128 +477,12 @@ class NFLGameFetcher:
         api = NFLExternalAPI()
         try:
             data = await api.fetch("scoreboard", {"week": week})
-            return self._parse_scoreboard(data)
+            return _parse_espn_scoreboard(data, "nfl")
         except Exception as e:
             LOGGER.error("Error fetching NFL games for week %d: %s", week, e)
             return []
         finally:
             await api.close()
-
-    def _parse_scoreboard(self, data: dict[str, Any]) -> list[GameInfo]:
-        """Parse ESPN scoreboard response into GameInfo objects."""
-        scoreboard = data.get("scoreboard", {})
-        events = scoreboard.get("events", [])
-
-        games: list[GameInfo] = []
-        for event in events:
-            competitions = event.get("competitions", [])
-            if not competitions:
-                continue
-
-            comp = competitions[0]
-            status = comp.get("status", {})
-            status_type = status.get("type", {})
-
-            # Get competitors and convert to our format
-            competitors = comp.get("competitors", [])
-            home_team_data: dict[str, Any] = {}
-            away_team_data: dict[str, Any] = {}
-            for c in competitors:
-                team = c.get("team", {})
-                # Extract record from competitor records array
-                records = c.get("records", [])
-                record = records[0].get("summary", "") if records else ""
-
-                team_data = {
-                    "teamId": team.get("id", ""),
-                    "displayName": team.get("displayName", ""),
-                    "teamTricode": team.get("abbreviation", ""),
-                    "score": c.get("score", "0"),
-                    "teamCity": team.get("location", ""),
-                    "shortDisplayName": team.get("shortDisplayName", ""),
-                    "color": team.get("color", ""),
-                    "alternateColor": team.get("alternateColor", ""),
-                    "logo": team.get("logo", ""),
-                    "record": record,
-                }
-                if c.get("homeAway") == "home":
-                    home_team_data = team_data
-                else:
-                    away_team_data = team_data
-
-            # Get venue info
-            venue_data = comp.get("venue", {})
-            venue_address = venue_data.get("address", {})
-            venue = {
-                "venueId": str(venue_data.get("id", "")),
-                "name": venue_data.get("fullName", ""),
-                "city": venue_address.get("city", ""),
-                "state": venue_address.get("state", ""),
-                "indoor": venue_data.get("indoor", True),
-            }
-
-            # Get broadcast info
-            broadcasts_raw = comp.get("broadcasts", [])
-            broadcasts: list[dict[str, Any]] = []
-            broadcast_names: list[str] = []
-            for b in broadcasts_raw:
-                market = b.get("market", "")
-                names = b.get("names", [])
-                broadcasts.append({"market": market, "names": names})
-                if names:
-                    broadcast_names.extend(names)
-            broadcast = ", ".join(broadcast_names) if broadcast_names else ""
-
-            # Get odds
-            odds_list = comp.get("odds", [])
-            odds: dict[str, Any] = {}
-            if odds_list:
-                o = odds_list[0]
-                odds = {
-                    "provider": o.get("provider", {}).get("name", ""),
-                    "spread": o.get("spread", 0),
-                    "overUnder": o.get("overUnder", 0),
-                    "homeMoneyLine": o.get("homeTeamOdds", {}).get("moneyLine", 0),
-                    "awayMoneyLine": o.get("awayTeamOdds", {}).get("moneyLine", 0),
-                }
-
-            # Get season info
-            season = event.get("season", {})
-            season_type_id = season.get("type", 0)
-            season_type_map = {
-                1: "preseason",
-                2: "regular",
-                3: "postseason",
-                4: "offseason",
-            }
-
-            # Build game data dict for Pydantic validation
-            game_data = {
-                "gameId": event.get("id", ""),
-                "sport_type": "nfl",
-                "gameStatus": int(status_type.get("id", "1")),
-                "gameStatusText": status_type.get("description", "Scheduled"),
-                "gameTimeUTC": comp.get("date", ""),
-                "homeTeam": home_team_data,
-                "awayTeam": away_team_data,
-                "venue": venue,
-                "broadcasts": broadcasts,
-                "broadcast": broadcast,
-                "name": event.get("name", ""),
-                "shortName": event.get("shortName", ""),
-                "odds": odds,
-                "period": status.get("period", 0),
-                "gameClock": status.get("displayClock", ""),
-                "attendance": comp.get("attendance", 0),
-                "neutralSite": comp.get("neutralSite", False),
-                "seasonYear": season.get("year", 0),
-                "seasonType": season_type_map.get(season_type_id, ""),
-            }
-
-            game = GameInfo.model_validate(game_data)
-            games.append(game)
-
-        return games
 
     async def get_game_status(
         self, event_id: str, game_date: str | None = None
@@ -501,7 +508,7 @@ class NFLGameFetcher:
         api = NFLExternalAPI()
         try:
             data = await api.fetch("scoreboard")
-            games = self._parse_scoreboard(data)
+            games = _parse_espn_scoreboard(data, "nfl")
             for g in games:
                 if g.event_id == event_id:
                     return g.status
