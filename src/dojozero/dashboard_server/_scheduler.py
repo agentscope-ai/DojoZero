@@ -552,8 +552,8 @@ class ScheduleManager:
             # Build config for this game
             config = dict(scenario_config or {})
 
-            # Add game-specific config (both NBA and NFL use event_id with ESPN)
-            config["event_id"] = game.event_id
+            # Add game-specific config (both NBA and NFL use espn_game_id)
+            config["espn_game_id"] = game.event_id
 
             # Add data_dir to hub config if specified
             if data_dir:
@@ -814,8 +814,8 @@ class ScheduleManager:
             # Build config for this game
             game_config = dict(config.scenario_config)
 
-            # Add game-specific config (both NBA and NFL use event_id with ESPN)
-            game_config["event_id"] = game.event_id
+            # Add game-specific config (both NBA and NFL use espn_game_id)
+            game_config["espn_game_id"] = game.event_id
 
             # Add data_dir to hub config if specified
             if config.data_dir:
