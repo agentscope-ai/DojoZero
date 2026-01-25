@@ -8,12 +8,68 @@
  * - Shooting meter effects
  * - Basketball trajectory animations
  * - Event-specific icons (hoop, hand, shield, etc.)
+ * 
+ * Responsive:
+ * - All elements scale based on container size
+ * - Uses CSS clamp() and viewport units for fluid sizing
  */
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { getActionConfig } from "../../data/nba/eventTypes";
 import { actionThemes } from "../../data/constants";
+
+// =============================================================================
+// RESPONSIVE UTILITIES
+// =============================================================================
+
+// Hook to detect if we're on a small screen
+function useIsCompact() {
+  const [isCompact, setIsCompact] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.innerWidth < 768 || window.innerHeight < 500;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const checkSize = () => {
+      setIsCompact(window.innerWidth < 768 || window.innerHeight < 500);
+    };
+    
+    window.addEventListener("resize", checkSize);
+    return () => window.removeEventListener("resize", checkSize);
+  }, []);
+
+  return isCompact;
+}
+
+// Responsive scale factor based on screen size
+function useScaleFactor() {
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const calculateScale = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const minDimension = Math.min(width, height);
+      
+      // Scale from 0.5 (very small) to 1 (large screens)
+      if (minDimension < 400) return setScale(0.5);
+      if (minDimension < 500) return setScale(0.6);
+      if (minDimension < 600) return setScale(0.7);
+      if (minDimension < 768) return setScale(0.8);
+      if (minDimension < 900) return setScale(0.9);
+      setScale(1);
+    };
+    
+    calculateScale();
+    window.addEventListener("resize", calculateScale);
+    return () => window.removeEventListener("resize", calculateScale);
+  }, []);
+
+  return scale;
+}
 
 // =============================================================================
 // EVENT-SPECIFIC ICON COMPONENTS
@@ -344,7 +400,7 @@ function WhistleIcon({ color, size = 60 }) {
 }
 
 // =============================================================================
-// NBA 2K STYLE TEXT BANNER - REDESIGNED
+// NBA 2K STYLE TEXT BANNER - REDESIGNED (RESPONSIVE)
 // =============================================================================
 
 function ActionBanner2K({
@@ -356,11 +412,14 @@ function ActionBanner2K({
   direction = "left",
   points = 0,
   icon = null,
+  scale = 1,
+  isCompact = false,
 }) {
-  // Dynamic entry animation based on direction
+  // Dynamic entry animation based on direction (scaled for mobile)
+  const slideDistance = 300 * scale;
   const slideAnim = {
     initial: { 
-      x: direction === "left" ? -500 : 500, 
+      x: direction === "left" ? -slideDistance : slideDistance, 
       opacity: 0, 
       scale: 0.6,
       rotateX: 45,
@@ -372,16 +431,29 @@ function ActionBanner2K({
       rotateX: 0,
     },
     exit: { 
-      x: direction === "left" ? 500 : -500, 
+      x: direction === "left" ? slideDistance : -slideDistance, 
       opacity: 0, 
       scale: 0.8,
       rotateX: -20,
     },
   };
 
+  // Responsive sizes
+  const mainFontSize = isCompact ? 36 : Math.round(72 * scale);
+  const subtextFontSize = isCompact ? 12 : Math.round(20 * scale);
+  const pointsPlusFontSize = isCompact ? 18 : Math.round(28 * scale);
+  const pointsNumberFontSize = isCompact ? 28 : Math.round(44 * scale);
+  const cardPadding = isCompact ? "12px 20px" : `${Math.round(22 * scale)}px ${Math.round(36 * scale)}px`;
+  const cardMinWidth = isCompact ? 200 : Math.round(300 * scale);
+  const cardBorderRadius = isCompact ? 12 : Math.round(20 * scale);
+  const contentGap = isCompact ? 12 : Math.round(24 * scale);
+
   return (
     <motion.div
-      style={banner2KStyles.container}
+      style={{
+        ...banner2KStyles.container,
+        top: isCompact ? "38%" : "42%",
+      }}
       initial={slideAnim.initial}
       animate={slideAnim.animate}
       exit={slideAnim.exit}
@@ -391,20 +463,23 @@ function ActionBanner2K({
         rotateX: { duration: 0.4 }
       }}
     >
-      {/* Background burst effect */}
-      <BurstEffect color={color} />
+      {/* Background burst effect - scaled */}
+      <BurstEffect color={color} scale={scale} />
       
       {/* Unified Text Card with glassmorphism */}
       <motion.div
         style={{
           ...banner2KStyles.textCard,
+          padding: cardPadding,
+          minWidth: cardMinWidth,
+          borderRadius: cardBorderRadius,
           background: `linear-gradient(135deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.1) 100%)`,
           backdropFilter: "blur(20px)",
           WebkitBackdropFilter: "blur(20px)",
           border: "1px solid rgba(255,255,255,0.18)",
           boxShadow: `
             0 8px 32px rgba(0,0,0,0.3),
-            0 0 60px ${color}25,
+            0 0 ${Math.round(60 * scale)}px ${color}25,
             inset 0 1px 0 rgba(255,255,255,0.2),
             inset 0 -1px 0 rgba(255,255,255,0.05)
           `,
@@ -418,8 +493,8 @@ function ActionBanner2K({
           style={{
             position: "absolute",
             top: -1,
-            left: 20,
-            right: 20,
+            left: 15,
+            right: 15,
             height: 2,
             background: `linear-gradient(90deg, transparent, ${color}90, ${secondaryColor}90, transparent)`,
             borderRadius: 1,
@@ -431,15 +506,15 @@ function ActionBanner2K({
         />
 
         {/* Content wrapper with icon */}
-        <div style={banner2KStyles.contentWrapper}>
-          {/* Left icon area with subtle glow background */}
-          {icon && (
+        <div style={{ ...banner2KStyles.contentWrapper, gap: contentGap }}>
+          {/* Left icon area - hidden on very compact screens */}
+          {icon && !isCompact && (
             <motion.div
               style={{
                 ...banner2KStyles.iconArea,
                 background: `radial-gradient(circle, ${color}20 0%, transparent 70%)`,
-                borderRadius: 16,
-                padding: 8,
+                borderRadius: Math.round(16 * scale),
+                padding: Math.round(8 * scale),
               }}
               initial={{ scale: 0, x: -20 }}
               animate={{ scale: 1, x: 0 }}
@@ -461,10 +536,11 @@ function ActionBanner2K({
               <span
                 style={{
                   ...banner2KStyles.mainText,
+                  fontSize: mainFontSize,
                   color: "#FFFFFF",
                   textShadow: `
-                    0 0 20px ${color},
-                    0 0 40px ${color}80,
+                    0 0 ${Math.round(20 * scale)}px ${color},
+                    0 0 ${Math.round(40 * scale)}px ${color}80,
                     2px 2px 0 ${color}
                   `,
                 }}
@@ -474,13 +550,13 @@ function ActionBanner2K({
             </motion.div>
 
             {/* Divider line - subtle glassmorphism style */}
-            {subtext && (
+            {subtext && !isCompact && (
               <motion.div
                 style={{
                   width: "80%",
                   height: 1,
                   background: `linear-gradient(90deg, transparent, rgba(255,255,255,0.3), rgba(255,255,255,0.4), rgba(255,255,255,0.3), transparent)`,
-                  margin: "8px 0 6px 0",
+                  margin: `${Math.round(8 * scale)}px 0 ${Math.round(6 * scale)}px 0`,
                 }}
                 initial={{ scaleX: 0, opacity: 0 }}
                 animate={{ scaleX: 1, opacity: 1 }}
@@ -491,7 +567,7 @@ function ActionBanner2K({
             {/* Subtext - unified style */}
             {subtext && (
               <motion.div
-                style={banner2KStyles.subtextWrapper}
+                style={{ ...banner2KStyles.subtextWrapper, marginTop: isCompact ? 4 : 2 }}
                 initial={{ y: -10, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 transition={{ delay: 0.25, duration: 0.2 }}
@@ -499,6 +575,7 @@ function ActionBanner2K({
                 <span
                   style={{
                     ...banner2KStyles.subtextText,
+                    fontSize: subtextFontSize,
                     color: secondaryColor,
                     textShadow: `0 0 10px ${secondaryColor}60`,
                   }}
@@ -514,6 +591,8 @@ function ActionBanner2K({
             <motion.div
               style={{
                 ...banner2KStyles.pointsArea,
+                padding: isCompact ? "6px 10px" : `${Math.round(10 * scale)}px ${Math.round(14 * scale)}px`,
+                borderRadius: Math.round(12 * scale),
                 background: `linear-gradient(135deg, ${color}30 0%, ${secondaryColor}30 100%)`,
                 backdropFilter: "blur(10px)",
                 WebkitBackdropFilter: "blur(10px)",
@@ -524,8 +603,8 @@ function ActionBanner2K({
               animate={{ scale: 1, x: 0 }}
               transition={{ delay: 0.25, duration: 0.25, ease: "backOut" }}
             >
-              <span style={{ ...banner2KStyles.pointsPlus, color: color }}>+</span>
-              <span style={{ ...banner2KStyles.pointsNumber, color: "#FFFFFF", textShadow: `0 0 20px ${color}` }}>{points}</span>
+              <span style={{ ...banner2KStyles.pointsPlus, fontSize: pointsPlusFontSize, color: color }}>+</span>
+              <span style={{ ...banner2KStyles.pointsNumber, fontSize: pointsNumberFontSize, color: "#FFFFFF", textShadow: `0 0 20px ${color}` }}>{points}</span>
             </motion.div>
           )}
         </div>
@@ -535,8 +614,8 @@ function ActionBanner2K({
           style={{
             position: "absolute",
             bottom: -1,
-            left: 20,
-            right: 20,
+            left: 15,
+            right: 15,
             height: 2,
             background: `linear-gradient(90deg, transparent, ${secondaryColor}70, ${color}70, transparent)`,
             borderRadius: 1,
@@ -548,10 +627,14 @@ function ActionBanner2K({
         />
       </motion.div>
 
-      {/* Effect-specific decorations */}
-      {effect === "fire" && <FireEffect2K color={color} />}
-      {effect === "shockwave" && <ShockwaveEffect2K color={color} />}
-      {effect === "speed" && <SpeedEffect2K color={color} direction={direction} />}
+      {/* Effect-specific decorations - hidden on compact screens for performance */}
+      {!isCompact && (
+        <>
+          {effect === "fire" && <FireEffect2K color={color} scale={scale} />}
+          {effect === "shockwave" && <ShockwaveEffect2K color={color} scale={scale} />}
+          {effect === "speed" && <SpeedEffect2K color={color} direction={direction} scale={scale} />}
+        </>
+      )}
     </motion.div>
   );
 }
@@ -566,19 +649,16 @@ const banner2KStyles = {
     textAlign: "center",
     pointerEvents: "none",
     perspective: "1000px",
+    maxWidth: "95vw",
   },
   textCard: {
     position: "relative",
-    padding: "22px 36px",
-    borderRadius: 20,
-    minWidth: 360,
     overflow: "visible",
   },
   contentWrapper: {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    gap: 24,
   },
   iconArea: {
     flexShrink: 0,
@@ -591,13 +671,13 @@ const banner2KStyles = {
     flexDirection: "column",
     alignItems: "center",
     flex: 1,
+    minWidth: 0,
   },
   mainTextWrapper: {
     position: "relative",
     zIndex: 10,
   },
   mainText: {
-    fontSize: 72,
     fontWeight: 900,
     fontFamily: "'Bebas Neue', 'Impact', 'Oswald', sans-serif",
     textTransform: "uppercase",
@@ -610,9 +690,8 @@ const banner2KStyles = {
     marginTop: 2,
   },
   subtextText: {
-    fontSize: 20,
     fontWeight: 700,
-    letterSpacing: "0.2em",
+    letterSpacing: "0.15em",
     textTransform: "uppercase",
     fontFamily: "'Bebas Neue', 'Impact', sans-serif",
   },
@@ -621,18 +700,14 @@ const banner2KStyles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    padding: "10px 14px",
-    borderRadius: 12,
   },
   pointsPlus: {
-    fontSize: 28,
     fontWeight: 900,
     color: "#FFFFFF",
     fontFamily: "'Bebas Neue', 'Impact', sans-serif",
     lineHeight: 1,
   },
   pointsNumber: {
-    fontSize: 44,
     fontWeight: 900,
     color: "#FFFFFF",
     fontFamily: "'Bebas Neue', 'Impact', sans-serif",
@@ -645,14 +720,20 @@ const banner2KStyles = {
 // FLOATING POINT INDICATOR (for additional emphasis on big plays)
 // =============================================================================
 
-function FloatingPoints({ points, color }) {
+function FloatingPoints({ points, color, scale = 1, isCompact = false }) {
+  const fontSize = isCompact ? 48 : Math.round(80 * scale);
+  const yMovement = isCompact ? [-40, -60] : [-60, -100];
+  
   return (
     <motion.div
-      style={pointStyles.floatingContainer}
+      style={{
+        ...pointStyles.floatingContainer,
+        top: isCompact ? "55%" : "60%",
+      }}
       initial={{ scale: 0, y: 0, opacity: 0 }}
       animate={{ 
         scale: [0, 1.3, 1],
-        y: [0, -60, -100],
+        y: [0, ...yMovement],
         opacity: [0, 1, 1, 0],
       }}
       transition={{
@@ -664,10 +745,11 @@ function FloatingPoints({ points, color }) {
       <span
         style={{
           ...pointStyles.floatingText,
+          fontSize,
           color: "#FFFFFF",
           textShadow: `
-            0 0 30px ${color},
-            0 0 60px ${color}80,
+            0 0 ${Math.round(30 * scale)}px ${color},
+            0 0 ${Math.round(60 * scale)}px ${color}80,
             0 4px 12px rgba(0,0,0,0.4)
           `,
           WebkitTextStroke: `1px ${color}80`,
@@ -683,13 +765,11 @@ const pointStyles = {
   floatingContainer: {
     position: "absolute",
     left: "50%",
-    top: "60%",
     transform: "translateX(-50%)",
     zIndex: 320,
     pointerEvents: "none",
   },
   floatingText: {
-    fontSize: 80,
     fontWeight: 900,
     fontFamily: "'Bebas Neue', 'Impact', sans-serif",
     letterSpacing: "0.02em",
@@ -700,7 +780,12 @@ const pointStyles = {
 // BURST EFFECT BACKGROUND
 // =============================================================================
 
-function BurstEffect({ color }) {
+function BurstEffect({ color, scale = 1 }) {
+  const outerWidth = Math.round(800 * scale);
+  const outerHeight = Math.round(400 * scale);
+  const innerWidth = Math.round(500 * scale);
+  const innerHeight = Math.round(250 * scale);
+  
   return (
     <>
       {/* Outer soft glow */}
@@ -709,11 +794,11 @@ function BurstEffect({ color }) {
           position: "absolute",
           left: "50%",
           top: "50%",
-          width: 800,
-          height: 400,
+          width: outerWidth,
+          height: outerHeight,
           transform: "translate(-50%, -50%)",
           background: `radial-gradient(ellipse, ${color}20 0%, ${color}08 40%, transparent 70%)`,
-          filter: "blur(40px)",
+          filter: `blur(${Math.round(40 * scale)}px)`,
           zIndex: -2,
         }}
         initial={{ scale: 0, opacity: 0 }}
@@ -726,11 +811,11 @@ function BurstEffect({ color }) {
           position: "absolute",
           left: "50%",
           top: "50%",
-          width: 500,
-          height: 250,
+          width: innerWidth,
+          height: innerHeight,
           transform: "translate(-50%, -50%)",
           background: `radial-gradient(ellipse, ${color}30 0%, transparent 60%)`,
-          filter: "blur(20px)",
+          filter: `blur(${Math.round(20 * scale)}px)`,
           zIndex: -1,
         }}
         initial={{ scale: 0, opacity: 0 }}
@@ -745,13 +830,16 @@ function BurstEffect({ color }) {
 // EFFECT COMPONENTS - NBA 2K STYLE (Redesigned with event-specific elements)
 // =============================================================================
 
-function FireEffect2K({ color }) {
+function FireEffect2K({ color, scale = 1 }) {
+  const particleCount = scale < 0.7 ? 8 : 16;
+  const starCount = scale < 0.7 ? 3 : 6;
+  
   return (
     <>
       {/* Flame particles around the banner */}
-      {[...Array(16)].map((_, i) => {
-        const angle = (i / 16) * Math.PI * 2;
-        const radius = 180 + Math.random() * 60;
+      {[...Array(particleCount)].map((_, i) => {
+        const angle = (i / particleCount) * Math.PI * 2;
+        const radius = (180 + Math.random() * 60) * scale;
         const x = Math.cos(angle) * radius;
         const y = Math.sin(angle) * radius * 0.5;
         
@@ -762,8 +850,8 @@ function FireEffect2K({ color }) {
               position: "absolute",
               left: "50%",
               top: "50%",
-              width: 8 + Math.random() * 6,
-              height: 20 + Math.random() * 15,
+              width: (8 + Math.random() * 6) * scale,
+              height: (20 + Math.random() * 15) * scale,
               background: `linear-gradient(to top, ${color}, #FFD700, #FF6B35, transparent)`,
               borderRadius: "50% 50% 30% 30%",
               filter: "blur(1px)",
@@ -772,7 +860,7 @@ function FireEffect2K({ color }) {
             initial={{ x: 0, y: 0, opacity: 0, scale: 0 }}
             animate={{
               x: [0, x],
-              y: [0, y - 30],
+              y: [0, y - 30 * scale],
               opacity: [0, 1, 0.7, 0],
               scale: [0.2, 1, 0.6],
               rotate: [0, Math.random() * 40 - 20],
@@ -790,10 +878,10 @@ function FireEffect2K({ color }) {
       <motion.div
         style={{
           position: "absolute",
-          right: -120,
+          right: -120 * scale,
           top: "30%",
-          fontSize: 50,
-          filter: `drop-shadow(0 0 15px ${color})`,
+          fontSize: 50 * scale,
+          filter: `drop-shadow(0 0 ${15 * scale}px ${color})`,
         }}
         initial={{ scale: 0, rotate: -30, opacity: 0 }}
         animate={{ scale: [0, 1.3, 1], rotate: 0, opacity: [0, 1, 0.8] }}
@@ -803,14 +891,14 @@ function FireEffect2K({ color }) {
       </motion.div>
       
       {/* Sparkle stars */}
-      {[...Array(6)].map((_, i) => (
+      {[...Array(starCount)].map((_, i) => (
         <motion.div
           key={`star-${i}`}
           style={{
             position: "absolute",
             left: `${15 + i * 14}%`,
             top: `${20 + (i % 3) * 25}%`,
-            fontSize: 24,
+            fontSize: 24 * scale,
           }}
           initial={{ scale: 0, opacity: 0, rotate: 0 }}
           animate={{ 
@@ -827,7 +915,7 @@ function FireEffect2K({ color }) {
   );
 }
 
-function ShockwaveEffect2K({ color }) {
+function ShockwaveEffect2K({ color, scale = 1 }) {
   return (
     <>
       {/* Impact shockwave rings */}
@@ -838,12 +926,12 @@ function ShockwaveEffect2K({ color }) {
             position: "absolute",
             left: "50%",
             top: "50%",
-            width: 300,
-            height: 120,
-            border: `3px solid ${color}`,
+            width: 300 * scale,
+            height: 120 * scale,
+            border: `${3 * scale}px solid ${color}`,
             borderRadius: "50%",
             transform: "translate(-50%, -50%)",
-            boxShadow: `0 0 15px ${color}`,
+            boxShadow: `0 0 ${15 * scale}px ${color}`,
           }}
           initial={{ scale: 0.3, opacity: 0 }}
           animate={{ scale: [0.3, 2.2, 2.8], opacity: [0, 0.9, 0] }}
@@ -855,14 +943,14 @@ function ShockwaveEffect2K({ color }) {
       <motion.div
         style={{
           position: "absolute",
-          right: -100,
+          right: -100 * scale,
           top: "20%",
         }}
         initial={{ x: 0 }}
         animate={{ x: [-5, 5, -4, 4, -2, 2, 0] }}
         transition={{ duration: 0.5, ease: "easeOut" }}
       >
-        <svg width="80" height="60" viewBox="0 0 100 75">
+        <svg width={80 * scale} height={60 * scale} viewBox="0 0 100 75">
           {/* Rim */}
           <motion.ellipse
             cx="50" cy="20" rx="30" ry="10"
@@ -900,10 +988,10 @@ function ShockwaveEffect2K({ color }) {
       <motion.span
         style={{
           position: "absolute",
-          left: -80,
+          left: -80 * scale,
           top: "40%",
-          fontSize: 44,
-          filter: `drop-shadow(0 0 10px ${color})`,
+          fontSize: 44 * scale,
+          filter: `drop-shadow(0 0 ${10 * scale}px ${color})`,
         }}
         initial={{ scale: 0, opacity: 0 }}
         animate={{ scale: [0, 1.4, 1], opacity: [0, 1, 0] }}
@@ -916,13 +1004,13 @@ function ShockwaveEffect2K({ color }) {
       <motion.div
         style={{
           position: "absolute",
-          right: -140,
+          right: -140 * scale,
           bottom: "30%",
-          fontSize: 28,
+          fontSize: 28 * scale,
           fontWeight: 900,
           fontFamily: "'Bebas Neue', 'Impact', sans-serif",
           color: "#FFFFFF",
-          textShadow: `0 0 15px ${color}, 2px 2px 0 ${color}`,
+          textShadow: `0 0 ${15 * scale}px ${color}, 2px 2px 0 ${color}`,
           letterSpacing: "0.1em",
           writingMode: "vertical-rl",
           textOrientation: "mixed",
@@ -937,23 +1025,25 @@ function ShockwaveEffect2K({ color }) {
   );
 }
 
-function SpeedEffect2K({ color, direction }) {
+function SpeedEffect2K({ color, direction, scale = 1 }) {
+  const lineCount = scale < 0.7 ? 5 : 10;
+  
   return (
     <>
       {/* Dynamic speed lines */}
-      {[...Array(10)].map((_, i) => (
+      {[...Array(lineCount)].map((_, i) => (
         <motion.div
           key={i}
           style={{
             position: "absolute",
             left: direction === "left" ? "105%" : "auto",
             right: direction === "right" ? "105%" : "auto",
-            top: `${15 + i * 8}%`,
-            width: 60 + Math.random() * 80,
-            height: 3,
+            top: `${15 + i * (80 / lineCount)}%`,
+            width: (60 + Math.random() * 80) * scale,
+            height: 3 * scale,
             background: `linear-gradient(${direction === "left" ? "to left" : "to right"}, ${color}, transparent)`,
             borderRadius: 2,
-            boxShadow: `0 0 6px ${color}60`,
+            boxShadow: `0 0 ${6 * scale}px ${color}60`,
           }}
           initial={{ scaleX: 0, x: direction === "left" ? -30 : 30, opacity: 0 }}
           animate={{ 
@@ -969,20 +1059,20 @@ function SpeedEffect2K({ color, direction }) {
       <motion.div
         style={{
           position: "absolute",
-          left: direction === "left" ? "auto" : -100,
-          right: direction === "left" ? -100 : "auto",
+          left: direction === "left" ? "auto" : -100 * scale,
+          right: direction === "left" ? -100 * scale : "auto",
           top: "30%",
         }}
       >
         {/* Ball being stolen */}
         <motion.span
           style={{
-            fontSize: 36,
+            fontSize: 36 * scale,
             display: "block",
-            filter: `drop-shadow(0 0 8px ${color})`,
+            filter: `drop-shadow(0 0 ${8 * scale}px ${color})`,
           }}
           initial={{ 
-            x: direction === "left" ? 80 : -80, 
+            x: direction === "left" ? 80 * scale : -80 * scale, 
             y: 0,
             rotate: 0,
             opacity: 0 
@@ -999,35 +1089,38 @@ function SpeedEffect2K({ color, direction }) {
         </motion.span>
       </motion.div>
       
-      {/* Quick hands indicator */}
-      <motion.div
-        style={{
-          position: "absolute",
-          left: direction === "left" ? -90 : "auto",
-          right: direction === "right" ? -90 : "auto",
-          top: "60%",
-          fontSize: 16,
-          fontWeight: 800,
-          fontFamily: "'Bebas Neue', 'Impact', sans-serif",
-          color: color,
-          textShadow: `0 0 10px ${color}`,
-          letterSpacing: "0.15em",
-        }}
-        initial={{ opacity: 0, scale: 0.5 }}
-        animate={{ opacity: [0, 1, 0], scale: 1 }}
-        transition={{ delay: 0.2, duration: 0.6 }}
-      >
-        QUICK HANDS!
-      </motion.div>
+      {/* Quick hands indicator - hidden on small screens */}
+      {scale >= 0.7 && (
+        <motion.div
+          style={{
+            position: "absolute",
+            left: direction === "left" ? -90 * scale : "auto",
+            right: direction === "right" ? -90 * scale : "auto",
+            top: "60%",
+            fontSize: 16 * scale,
+            fontWeight: 800,
+            fontFamily: "'Bebas Neue', 'Impact', sans-serif",
+            color: color,
+            textShadow: `0 0 ${10 * scale}px ${color}`,
+            letterSpacing: "0.15em",
+            whiteSpace: "nowrap",
+          }}
+          initial={{ opacity: 0, scale: 0.5 }}
+          animate={{ opacity: [0, 1, 0], scale: 1 }}
+          transition={{ delay: 0.2, duration: 0.6 }}
+        >
+          QUICK HANDS!
+        </motion.div>
+      )}
       
       {/* Lightning accent */}
       <motion.span
         style={{
           position: "absolute",
-          left: direction === "left" ? -50 : "auto",
-          right: direction === "right" ? -50 : "auto",
+          left: direction === "left" ? -50 * scale : "auto",
+          right: direction === "right" ? -50 * scale : "auto",
           top: "25%",
-          fontSize: 40,
+          fontSize: 40 * scale,
         }}
         initial={{ scale: 0, opacity: 0, rotate: direction === "left" ? 15 : -15 }}
         animate={{ scale: [0, 1.2, 1], opacity: [0, 1, 0], rotate: 0 }}
@@ -1142,19 +1235,29 @@ function BlockEffect2K({ color }) {
 // SHOOTING METER (for free throws)
 // =============================================================================
 
-function ShootingMeter({ success = true, color }) {
+function ShootingMeter({ success = true, color, scale = 1 }) {
   return (
     <motion.div
-      style={meterStyles.container}
+      style={{
+        ...meterStyles.container,
+        bottom: Math.round(150 * scale),
+        right: Math.round(60 * scale),
+        width: Math.round(200 * scale),
+      }}
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
       transition={{ duration: 0.3 }}
     >
-      <div style={meterStyles.meterTrack}>
+      <div style={{
+        ...meterStyles.meterTrack,
+        height: Math.round(16 * scale),
+        borderRadius: Math.round(8 * scale),
+      }}>
         <motion.div
           style={{
             ...meterStyles.meterFill,
+            borderRadius: Math.round(6 * scale),
             background: success 
               ? `linear-gradient(90deg, #22C55E, #4ADE80)` 
               : `linear-gradient(90deg, #EF4444, #F87171)`,
@@ -1163,10 +1266,21 @@ function ShootingMeter({ success = true, color }) {
           animate={{ width: success ? "85%" : "40%" }}
           transition={{ duration: 0.8, ease: "easeOut" }}
         />
-        <div style={meterStyles.sweetSpot} />
+        <div style={{
+          ...meterStyles.sweetSpot,
+          width: Math.round(8 * scale),
+        }} />
       </div>
-      <div style={meterStyles.label}>SHOOTING METER</div>
-      <div style={meterStyles.result}>
+      <div style={{
+        ...meterStyles.label,
+        marginTop: Math.round(8 * scale),
+        fontSize: Math.round(11 * scale),
+      }}>SHOOTING METER</div>
+      <div style={{
+        ...meterStyles.result,
+        marginTop: Math.round(4 * scale),
+        fontSize: Math.round(14 * scale),
+      }}>
         {success ? "✓ 1 of 1" : "✗ MISS"}
       </div>
     </motion.div>
@@ -1176,24 +1290,18 @@ function ShootingMeter({ success = true, color }) {
 const meterStyles = {
   container: {
     position: "absolute",
-    bottom: 150,
-    right: 60,
-    width: 200,
     textAlign: "center",
     zIndex: 280,
   },
   meterTrack: {
     width: "100%",
-    height: 16,
     background: "rgba(0,0,0,0.6)",
-    borderRadius: 8,
     overflow: "hidden",
     position: "relative",
     border: "2px solid rgba(255,255,255,0.3)",
   },
   meterFill: {
     height: "100%",
-    borderRadius: 6,
     boxShadow: "0 0 10px rgba(74, 222, 128, 0.5)",
   },
   sweetSpot: {
@@ -1201,21 +1309,16 @@ const meterStyles = {
     right: "12%",
     top: 0,
     bottom: 0,
-    width: 8,
     background: "#22C55E",
     borderLeft: "2px solid #FFFFFF",
     borderRight: "2px solid #FFFFFF",
   },
   label: {
-    marginTop: 8,
-    fontSize: 11,
     fontWeight: 700,
     color: "rgba(255,255,255,0.6)",
     letterSpacing: "0.1em",
   },
   result: {
-    marginTop: 4,
-    fontSize: 14,
     fontWeight: 800,
     color: "#FFFFFF",
   },
@@ -1248,11 +1351,17 @@ function ScreenFlash({ color, intensity = "normal" }) {
 // BASKETBALL TRAJECTORY EFFECT
 // =============================================================================
 
-function BallTrajectory({ color, isThreePoint = false }) {
+function BallTrajectory({ color, isThreePoint = false, scale = 1 }) {
   const arcHeight = isThreePoint ? -150 : -100;
+  const containerWidth = Math.round(300 * scale);
+  const containerHeight = Math.round(200 * scale);
   
   return (
-    <motion.div style={trajectoryStyles.container}>
+    <motion.div style={{
+      ...trajectoryStyles.container,
+      width: containerWidth,
+      height: containerHeight,
+    }}>
       {/* Ball path line */}
       <svg 
         style={trajectoryStyles.svg} 
@@ -1272,7 +1381,10 @@ function BallTrajectory({ color, isThreePoint = false }) {
       </svg>
       {/* Ball */}
       <motion.div
-        style={trajectoryStyles.ball}
+        style={{
+          ...trajectoryStyles.ball,
+          fontSize: 32 * scale,
+        }}
         initial={{ x: 50, y: 180 }}
         animate={{
           x: [50, 150, 250],
@@ -1292,8 +1404,6 @@ const trajectoryStyles = {
     position: "absolute",
     top: "20%",
     right: "10%",
-    width: 300,
-    height: 200,
     pointerEvents: "none",
     zIndex: 250,
   },
@@ -1305,7 +1415,6 @@ const trajectoryStyles = {
   },
   ball: {
     position: "absolute",
-    fontSize: 32,
     filter: "drop-shadow(0 4px 8px rgba(0,0,0,0.4))",
   },
 };
@@ -1320,6 +1429,10 @@ export default function ActionOverlay({
   homeTeam,
   awayTeam,
 }) {
+  // Responsive scaling
+  const scale = useScaleFactor();
+  const isCompact = useIsCompact();
+  
   // Determine action type and team color
   const actionData = useMemo(() => {
     if (!currentEvent || !isAnimating) return null;
@@ -1375,6 +1488,10 @@ export default function ActionOverlay({
     points, 
     direction 
   } = actionData;
+  
+  // Responsive icon sizes
+  const iconSize = isCompact ? 40 : Math.round(70 * scale);
+  const hoopIconSize = isCompact ? 45 : Math.round(75 * scale);
 
   return (
     <div style={overlayStyles.container}>
@@ -1383,7 +1500,7 @@ export default function ActionOverlay({
         {actionType === "3pt" && isScoring && (
           <motion.div key="3pt" style={overlayStyles.scene}>
             <ScreenFlash color={teamColor} intensity="high" />
-            <BallTrajectory color={teamColor} isThreePoint={true} />
+            {!isCompact && <BallTrajectory color={teamColor} isThreePoint={true} scale={scale} />}
             <ActionBanner2K
               text={isAnd1 ? "AND 1!" : "3-POINTER!"}
               subtext={isAnd1 ? "PLUS THE FOUL" : "FROM DOWNTOWN"}
@@ -1392,9 +1509,11 @@ export default function ActionOverlay({
               effect="fire"
               direction={direction}
               points={isAnd1 ? 4 : 3}
-              icon={<BasketballHoop color={teamColor} size={75} />}
+              icon={<BasketballHoop color={teamColor} size={hoopIconSize} />}
+              scale={scale}
+              isCompact={isCompact}
             />
-            <FloatingPoints points={isAnd1 ? 4 : 3} color={teamColor} />
+            <FloatingPoints points={isAnd1 ? 4 : 3} color={teamColor} scale={scale} isCompact={isCompact} />
           </motion.div>
         )}
 
@@ -1410,9 +1529,11 @@ export default function ActionOverlay({
               effect="shockwave"
               direction={direction}
               points={isAnd1 ? 3 : 2}
-              icon={<BasketballHoop color={teamColor} size={75} />}
+              icon={<BasketballHoop color={teamColor} size={hoopIconSize} />}
+              scale={scale}
+              isCompact={isCompact}
             />
-            <FloatingPoints points={isAnd1 ? 3 : 2} color={teamColor} />
+            <FloatingPoints points={isAnd1 ? 3 : 2} color={teamColor} scale={scale} isCompact={isCompact} />
           </motion.div>
         )}
 
@@ -1420,7 +1541,7 @@ export default function ActionOverlay({
         {actionType === "2pt" && isScoring && (
           <motion.div key="2pt" style={overlayStyles.scene}>
             <ScreenFlash color={teamColor} />
-            <BallTrajectory color={teamColor} isThreePoint={false} />
+            {!isCompact && <BallTrajectory color={teamColor} isThreePoint={false} scale={scale} />}
             <ActionBanner2K
               text={isAnd1 ? "AND 1!" : "BUCKET!"}
               subtext={isAnd1 ? "PLUS THE FOUL" : "2 POINTS"}
@@ -1429,7 +1550,9 @@ export default function ActionOverlay({
               effect="default"
               direction={direction}
               points={isAnd1 ? 3 : 2}
-              icon={<BasketballHoop color={teamColor} size={70} />}
+              icon={<BasketballHoop color={teamColor} size={iconSize} />}
+              scale={scale}
+              isCompact={isCompact}
             />
           </motion.div>
         )}
@@ -1446,9 +1569,11 @@ export default function ActionOverlay({
               effect="default"
               direction={direction}
               points={1}
-              icon={<BasketballHoop color={teamColor} size={65} />}
+              icon={<BasketballHoop color={teamColor} size={isCompact ? 40 : Math.round(65 * scale)} />}
+              scale={scale}
+              isCompact={isCompact}
             />
-            <ShootingMeter success={true} color={teamColor} />
+            {!isCompact && <ShootingMeter success={true} color={teamColor} scale={scale} />}
           </motion.div>
         )}
 
@@ -1464,7 +1589,9 @@ export default function ActionOverlay({
               effect="shield"
               direction={direction}
               points={0}
-              icon={<BlockingHand color={actionThemes.defense.primary} size={70} />}
+              icon={<BlockingHand color={actionThemes.defense.primary} size={iconSize} />}
+              scale={scale}
+              isCompact={isCompact}
             />
           </motion.div>
         )}
@@ -1481,7 +1608,9 @@ export default function ActionOverlay({
               effect="speed"
               direction={direction}
               points={0}
-              icon={<StealingHand color={actionThemes.speed.primary} size={70} />}
+              icon={<StealingHand color={actionThemes.speed.primary} size={iconSize} />}
+              scale={scale}
+              isCompact={isCompact}
             />
           </motion.div>
         )}
@@ -1497,7 +1626,9 @@ export default function ActionOverlay({
               effect="default"
               direction={direction}
               points={0}
-              icon={<ReboundBoard color={teamColor} size={70} />}
+              icon={<ReboundBoard color={teamColor} size={iconSize} />}
+              scale={scale}
+              isCompact={isCompact}
             />
           </motion.div>
         )}
@@ -1523,7 +1654,9 @@ export default function ActionOverlay({
               effect="default"
               direction={direction}
               points={0}
-              icon={<TurnoverIcon color={actionThemes.negative.primary} size={60} />}
+              icon={<TurnoverIcon color={actionThemes.negative.primary} size={isCompact ? 36 : Math.round(60 * scale)} />}
+              scale={scale}
+              isCompact={isCompact}
             />
           </motion.div>
         )}
@@ -1549,7 +1682,9 @@ export default function ActionOverlay({
               effect="default"
               direction={direction}
               points={0}
-              icon={<WhistleIcon color={actionThemes.negative.secondary} size={60} />}
+              icon={<WhistleIcon color={actionThemes.negative.secondary} size={isCompact ? 36 : Math.round(60 * scale)} />}
+              scale={scale}
+              isCompact={isCompact}
             />
           </motion.div>
         )}
