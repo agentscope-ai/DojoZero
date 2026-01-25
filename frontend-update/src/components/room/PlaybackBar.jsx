@@ -94,6 +94,7 @@ export default function PlaybackBar({
   onDanmakuSend,
   homeTeam,
   awayTeam,
+  isMobile = false,
 }) {
   // Slider state
   const [previewIndex, setPreviewIndex] = useState(null);
@@ -194,16 +195,41 @@ export default function PlaybackBar({
   // Get preview event
   const previewEvent = previewIndex !== null ? events[previewIndex] : null;
 
+  // Responsive styles
+  const controlsRowStyle = {
+    ...styles.controlsRow,
+    padding: isMobile ? "6px 10px" : "10px 16px",
+    gap: isMobile ? 10 : 16,
+  };
+  
+  const controlButtonStyle = {
+    ...styles.controlButton,
+    width: isMobile ? 28 : 34,
+    height: isMobile ? 28 : 34,
+  };
+  
+  const playButtonStyle = {
+    ...styles.playButton,
+    width: isMobile ? 36 : 44,
+    height: isMobile ? 36 : 44,
+  };
+  
+  const tickerRowStyle = {
+    ...styles.tickerRow,
+    padding: isMobile ? "6px 10px" : "8px 16px",
+    minHeight: isMobile ? 32 : 40,
+  };
+
   return (
-    <div style={styles.container}>
-      {/* Row 1: Controls + Slider + Danmaku */}
-      <div style={styles.controlsRow}>
+    <div style={styles.container} className="playback-bar">
+      {/* Row 1: Controls + Slider + Danmaku (hidden on mobile) */}
+      <div style={controlsRowStyle} className="playback-controls-row">
         {/* Left: Playback Controls */}
         <div style={styles.controlsSection}>
           <button
             type="button"
             onClick={handleSkipPrevClick}
-            style={styles.controlButton}
+            style={controlButtonStyle}
           >
             <SkipBackIcon />
           </button>
@@ -211,7 +237,7 @@ export default function PlaybackBar({
           <button
             type="button"
             onClick={handlePlayPauseClick}
-            style={styles.playButton}
+            style={playButtonStyle}
           >
             {isPlaying ? <PauseIcon /> : <PlayIcon />}
           </button>
@@ -219,7 +245,7 @@ export default function PlaybackBar({
           <button
             type="button"
             onClick={handleSkipNextClick}
-            style={styles.controlButton}
+            style={controlButtonStyle}
           >
             <SkipForwardIcon />
           </button>
@@ -236,6 +262,15 @@ export default function PlaybackBar({
             onMouseDown={handleSliderMouseDown}
             onMouseMove={handleSliderMouseMove}
             onMouseLeave={handleSliderMouseLeave}
+            onTouchStart={(e) => {
+              // Handle touch for mobile
+              const touch = e.touches[0];
+              const rect = sliderRef.current.getBoundingClientRect();
+              const x = touch.clientX - rect.left;
+              const percentage = Math.max(0, Math.min(1, x / rect.width));
+              const index = Math.round(percentage * (events.length - 1));
+              onSeek?.(index);
+            }}
           >
             {/* Track background */}
             <div style={styles.sliderTrack}>
@@ -253,56 +288,70 @@ export default function PlaybackBar({
               style={{
                 ...styles.sliderThumb,
                 left: `${sliderPercentage}%`,
+                width: isMobile ? 14 : 16,
+                height: isMobile ? 14 : 16,
               }}
             />
             
-            {/* Preview tooltip */}
-            <AnimatePresence>
-              {previewEvent && previewIndex !== currentIndex && !isDragging && (
-                <motion.div
-                  initial={{ opacity: 0, x: "-50%", y: 5 }}
-                  animate={{ opacity: 1, x: "-50%", y: 0 }}
-                  exit={{ opacity: 0, x: "-50%", y: 5 }}
-                  transition={{ duration: 0.15 }}
-                  style={{
-                    ...styles.previewTooltip,
-                    left: `${previewPosition}px`,
-                  }}
-                >
-                  <EventPreview event={previewEvent} homeTeam={homeTeam} awayTeam={awayTeam} />
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {/* Preview tooltip - hidden on mobile */}
+            {!isMobile && (
+              <AnimatePresence>
+                {previewEvent && previewIndex !== currentIndex && !isDragging && (
+                  <motion.div
+                    initial={{ opacity: 0, x: "-50%", y: 5 }}
+                    animate={{ opacity: 1, x: "-50%", y: 0 }}
+                    exit={{ opacity: 0, x: "-50%", y: 5 }}
+                    transition={{ duration: 0.15 }}
+                    style={{
+                      ...styles.previewTooltip,
+                      left: `${previewPosition}px`,
+                    }}
+                  >
+                    <EventPreview event={previewEvent} homeTeam={homeTeam} awayTeam={awayTeam} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            )}
           </div>
         </div>
 
-        {/* Right: Danmaku Input */}
-        <form onSubmit={onDanmakuSend} style={styles.danmakuForm}>
-          <input
-            type="text"
-            value={danmakuInput}
-            onChange={(e) => onDanmakuInputChange?.(e.target.value)}
-            placeholder="Send a comment..."
-            style={styles.danmakuInput}
-            maxLength={100}
-          />
-          <button type="submit" style={styles.sendButton}>
-            <SendIcon />
-          </button>
-        </form>
+        {/* Right: Danmaku Input - hidden on mobile */}
+        {!isMobile && (
+          <form onSubmit={onDanmakuSend} style={styles.danmakuForm}>
+            <input
+              type="text"
+              value={danmakuInput}
+              onChange={(e) => onDanmakuInputChange?.(e.target.value)}
+              placeholder="Send a comment..."
+              style={styles.danmakuInput}
+              maxLength={100}
+            />
+            <button type="submit" style={styles.sendButton}>
+              <SendIcon />
+            </button>
+          </form>
+        )}
       </div>
 
       {/* Row 2: Event Ticker (full width) - synced with playback */}
-      <div style={styles.tickerRow}>
-        <div style={styles.tickerLabel}>
+      <div style={tickerRowStyle} className="playback-ticker-row">
+        <div style={{
+          ...styles.tickerLabel,
+          padding: isMobile ? "3px 8px" : "4px 10px",
+          fontSize: isMobile ? 9 : 10,
+        }}>
           <span style={styles.tickerLabelDot} />
-          <span>EVENTS</span>
-          {events.length > 0 && (
+          <span>{isMobile ? "LIVE" : "EVENTS"}</span>
+          {!isMobile && events.length > 0 && (
             <span style={styles.tickerLabelCounter}>[{currentIndex + 1}/{events.length}]</span>
           )}
         </div>
         
-        <div style={styles.tickerContainer}>
+        <div style={{
+          ...styles.tickerContainer,
+          height: isMobile ? 26 : 32,
+          padding: isMobile ? "0 8px" : "0 12px",
+        }}>
           <AnimatePresence mode="wait">
             {currentTickerEvent ? (
               <motion.div
@@ -317,10 +366,14 @@ export default function PlaybackBar({
                   event={currentTickerEvent} 
                   homeTeam={homeTeam}
                   awayTeam={awayTeam}
+                  isMobile={isMobile}
                 />
               </motion.div>
             ) : (
-              <div style={styles.tickerEmpty}>
+              <div style={{
+                ...styles.tickerEmpty,
+                fontSize: isMobile ? 11 : 13,
+              }}>
                 Waiting for events...
               </div>
             )}
@@ -436,7 +489,7 @@ const previewStyles = {
 /**
  * Event Message Component
  */
-function EventMessage({ event, homeTeam, awayTeam }) {
+function EventMessage({ event, homeTeam, awayTeam, isMobile = false }) {
   if (!event) return null;
 
   const eventType = event.event_type;
@@ -595,10 +648,28 @@ function EventMessage({ event, homeTeam, awayTeam }) {
     );
   }
 
+  // Responsive badge style
+  const badgeStyle = {
+    ...styles.eventBadge,
+    background: badgeColor,
+    padding: isMobile ? "2px 6px" : "2px 8px",
+    fontSize: isMobile ? 9 : 10,
+    gap: isMobile ? 2 : 4,
+  };
+  
+  // Responsive message row style
+  const messageRowStyle = {
+    ...styles.messageRow,
+    gap: isMobile ? 6 : 8,
+  };
+
   return (
-    <div style={styles.eventMessage}>
-      <span style={{ ...styles.eventBadge, background: badgeColor }}>
-        {badgeIcon} {badgeText}
+    <div style={{
+      ...styles.eventMessage,
+      gap: isMobile ? 6 : 10,
+    }}>
+      <span style={badgeStyle}>
+        {!isMobile && badgeIcon} {badgeText}
       </span>
       {messageContent}
     </div>

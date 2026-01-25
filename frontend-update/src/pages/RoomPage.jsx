@@ -5,6 +5,11 @@
  * - Header: Back button + game info + theme toggle
  * - Main: Game stage (left) + Agent sidebar (right)
  *   - Stage contains: Scoreboard (top), Court animation, Playback controls (bottom)
+ * 
+ * Responsive:
+ * - Desktop (>1024px): Stage + Sidebar side by side
+ * - Tablet/Mobile (≤1024px): Stage on top, Sidebar below (scrollable)
+ * - Stage maintains 16:9 aspect ratio and scales proportionally
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
@@ -18,6 +23,29 @@ import { DOJOZERO_CDN } from "../data/constants";
 import { Scoreboard, CourtAnimator, ActionOverlay, PlaybackBar } from "../components/room";
 
 // =============================================================================
+// RESPONSIVE HOOK
+// =============================================================================
+
+function useMediaQuery(query) {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.matchMedia(query).matches;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(query);
+    const handler = (e) => setMatches(e.matches);
+    
+    mediaQuery.addEventListener("change", handler);
+    return () => mediaQuery.removeEventListener("change", handler);
+  }, [query]);
+
+  return matches;
+}
+
+// =============================================================================
 // ROOM PAGE COMPONENT
 // =============================================================================
 
@@ -25,6 +53,10 @@ export default function RoomPage() {
   const { gameId } = useParams();
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
+  
+  // Responsive breakpoints
+  const isMobile = useMediaQuery("(max-width: 768px)");
+  const isTablet = useMediaQuery("(max-width: 1024px)");
 
   // WebSocket data stream
   const {
@@ -153,36 +185,37 @@ export default function RoomPage() {
   }
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} className="room-container">
       {/* Header */}
-      <header style={styles.header}>
-        <div style={styles.headerLeft}>
+      <header style={styles.header} className="room-header">
+        <div style={styles.headerLeft} className="room-header-left">
           <motion.button
             onClick={() => navigate("/games")}
             style={styles.navButton}
+            className="room-nav-button"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M19 12H5M12 19l-7-7 7-7" />
             </svg>
-            <span>GAMES</span>
+            {!isMobile && <span>GAMES</span>}
           </motion.button>
           
           {/* Game info badge */}
-          <div style={styles.gameInfoBadge}>
+          <div style={styles.gameInfoBadge} className="room-game-badge">
             <span style={{ color: homeTeam.color }}>{homeTeam.tricode}</span>
             <span style={styles.vsText}>vs</span>
             <span style={{ color: awayTeam.color }}>{awayTeam.tricode}</span>
           </div>
         </div>
 
-        <div style={styles.headerRight}>
+        <div style={styles.headerRight} className="room-header-right">
           {/* Live indicator */}
           {isLive && (
-            <div style={styles.liveIndicator}>
+            <div style={styles.liveIndicator} className="room-live-indicator">
               <span style={styles.liveDot} />
-              <span style={styles.liveText}>LIVE</span>
+              {!isMobile && <span style={styles.liveText}>LIVE</span>}
             </div>
           )}
           
@@ -190,6 +223,7 @@ export default function RoomPage() {
           <motion.button
             onClick={toggleTheme}
             style={styles.iconButton}
+            className="room-theme-toggle"
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
           >
@@ -199,22 +233,23 @@ export default function RoomPage() {
       </header>
 
       {/* Main Content */}
-      <main style={styles.main}>
-        {/* Game Stage (Left) */}
-        <section style={styles.stageSection}>
-          <div style={styles.stageContainer}>
+      <main style={styles.main} className="room-main">
+        {/* Game Stage (Left on desktop, Top on mobile) */}
+        <section style={styles.stageSection} className="room-stage-section">
+          <div style={styles.stageContainer} className="room-stage-container">
             {/* Scoreboard - Floating on top */}
-            <div style={styles.scoreboardContainer}>
+            <div style={styles.scoreboardContainer} className="room-scoreboard-container">
               <Scoreboard
                 homeTeam={homeTeam}
                 awayTeam={awayTeam}
                 events={events}
                 currentIndex={playback.currentIndex}
+                isMobile={isMobile}
               />
             </div>
 
             {/* Game Court Area */}
-            <div style={styles.courtArea}>
+            <div style={styles.courtArea} className="room-court-area">
               {/* Background */}
               <div style={styles.courtBackground}>
                 <img
@@ -247,7 +282,7 @@ export default function RoomPage() {
             </div>
 
             {/* Playback Controls - Bottom of stage */}
-            <div style={styles.playbackContainer}>
+            <div style={styles.playbackContainer} className="room-playback-container">
               <PlaybackBar
                 events={events}
                 currentIndex={playback.currentIndex}
@@ -264,13 +299,14 @@ export default function RoomPage() {
                 onDanmakuSend={handleSendDanmaku}
                 homeTeam={homeTeam}
                 awayTeam={awayTeam}
+                isMobile={isMobile}
               />
             </div>
           </div>
         </section>
 
-        {/* Agent Sidebar (Right) */}
-        <aside style={styles.sidebar}>
+        {/* Agent Sidebar (Right on desktop, Bottom on mobile) */}
+        <aside style={styles.sidebar} className="room-sidebar">
           <AgentSidebarPlaceholder
             agents={agents}
             agentStates={agentStates}
@@ -466,18 +502,18 @@ const styles = {
   headerLeft: {
     display: "flex",
     alignItems: "center",
-    gap: 20,
+    gap: 12,
   },
   headerRight: {
     display: "flex",
     alignItems: "center",
-    gap: 16,
+    gap: 12,
   },
   navButton: {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    padding: "8px 16px",
+    padding: "8px 12px",
     background: "transparent",
     border: "1px solid var(--border-default)",
     borderRadius: 8,
@@ -503,8 +539,8 @@ const styles = {
   liveIndicator: {
     display: "flex",
     alignItems: "center",
-    gap: 8,
-    padding: "6px 12px",
+    gap: 6,
+    padding: "6px 10px",
     background: "rgba(239, 68, 68, 0.15)",
     borderRadius: 6,
   },
@@ -523,8 +559,8 @@ const styles = {
     letterSpacing: "0.1em",
   },
   iconButton: {
-    width: 40,
-    height: 40,
+    width: 36,
+    height: 36,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -534,6 +570,7 @@ const styles = {
     fontSize: 18,
     cursor: "pointer",
   },
+  // Main layout - flex row on desktop, column on mobile (via CSS)
   main: {
     flex: 1,
     display: "flex",
@@ -542,35 +579,41 @@ const styles = {
     overflow: "hidden",
     minHeight: 0,
   },
+  // Stage section - fills available space
   stageSection: {
     flex: 1,
     display: "flex",
     flexDirection: "column",
     minWidth: 0,
+    minHeight: 0,
   },
+  // Stage container - fills parent height on desktop, aspect-ratio on mobile (via CSS)
   stageContainer: {
     flex: 1,
+    width: "100%",
     position: "relative",
     borderRadius: 16,
     overflow: "hidden",
     background: "var(--bg-secondary)",
     border: "1px solid var(--border-default)",
+    minHeight: 0,
   },
   scoreboardContainer: {
     position: "absolute",
-    top: 16,
+    top: "2%",
     left: "50%",
     transform: "translateX(-50%)",
-    zIndex: 1000, // Top layer - above everything
+    zIndex: 1000,
+    maxWidth: "calc(100% - 16px)",
   },
   courtArea: {
     position: "absolute",
     top: 0,
     left: 0,
     right: 0,
-    bottom: 95, // Leave space for two-row playback bar
+    bottom: "15%", // Percentage-based for proportional scaling
     pointerEvents: "auto",
-    zIndex: 10, // Below scoreboard and playback bar
+    zIndex: 10,
   },
   courtBackground: {
     position: "absolute",
@@ -586,16 +629,18 @@ const styles = {
     inset: 0,
     background: "rgba(0, 0, 0, 0.3)",
   },
+  // Sidebar - fixed width on desktop, full width on mobile (via CSS)
   sidebar: {
-    width: 340,
-    flexShrink: 0,
+    flex: "0 0 340px",
+    minWidth: 280,
+    overflow: "auto",
   },
   playbackContainer: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    zIndex: 1000, // Top layer - same as scoreboard
+    zIndex: 1000,
     pointerEvents: "auto",
   },
 };
@@ -624,6 +669,7 @@ const danmakuStyles = {
 const sidebarStyles = {
   container: {
     height: "100%",
+    minHeight: 200,
     display: "flex",
     flexDirection: "column",
     background: "var(--bg-secondary)",

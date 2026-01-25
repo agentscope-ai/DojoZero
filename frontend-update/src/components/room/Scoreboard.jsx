@@ -144,9 +144,15 @@ export default function Scoreboard({
   awayTeam,
   events = [],
   currentIndex = 0,
+  isMobile = false,
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState("home");
+  
+  // Responsive sizes
+  const logoSize = isMobile ? 32 : 44;
+  const scoreSize = isMobile ? 28 : 38;
+  const clockSize = isMobile ? 16 : 20;
 
   // Extract latest game_update data
   const gameData = useMemo(() => {
@@ -221,6 +227,39 @@ export default function Scoreboard({
   const period = gameData?.period ?? 1;
   const clock = gameData?.gameClock ?? "12:00";
 
+  // Responsive container style
+  const containerStyle = {
+    ...styles.container,
+    minWidth: isMobile ? "auto" : 420,
+    maxWidth: isMobile ? "100%" : 560,
+  };
+  
+  // Responsive scoreboard padding
+  const scoreboardStyle = {
+    ...styles.scoreboard,
+    padding: isMobile ? "10px 12px" : "16px 20px",
+    gap: isMobile ? 8 : 16,
+  };
+  
+  // Responsive score style
+  const scoreStyle = {
+    ...styles.score,
+    fontSize: scoreSize,
+    minWidth: isMobile ? 36 : 50,
+  };
+  
+  // Responsive clock section
+  const clockSectionStyle = {
+    ...styles.clockSection,
+    padding: isMobile ? "0 12px" : "0 20px",
+  };
+  
+  // Responsive clock style
+  const clockStyle = {
+    ...styles.clock,
+    fontSize: clockSize,
+  };
+
   return (
     <>
       {/* Hide scrollbar CSS */}
@@ -229,22 +268,27 @@ export default function Scoreboard({
           .scoreboard-table-container::-webkit-scrollbar {
             display: none;
           }
+          .scoreboard-container {
+            width: 100%;
+          }
         `}
       </style>
       
-      <div style={styles.container}>
+      <div style={containerStyle} className="scoreboard-container">
         {/* Main Scoreboard */}
-        <div style={styles.scoreboard}>
+        <div style={scoreboardStyle}>
         {/* Home Team */}
         <div style={styles.teamSection}>
-          <TeamLogo team={homeTeam} size={44} />
-          <div style={styles.teamInfo}>
-            <span style={styles.teamTricode}>{homeTeam?.tricode}</span>
-            <span style={styles.teamName}>{homeTeam?.name}</span>
-          </div>
+          <TeamLogo team={homeTeam} size={logoSize} />
+          {!isMobile && (
+            <div style={styles.teamInfo}>
+              <span style={styles.teamTricode}>{homeTeam?.tricode}</span>
+              <span style={styles.teamName}>{homeTeam?.name}</span>
+            </div>
+          )}
           <motion.span
             key={`home-${homeScore}`}
-            style={styles.score}
+            style={scoreStyle}
             initial={{ scale: 1.3, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ duration: 0.3 }}
@@ -254,21 +298,23 @@ export default function Scoreboard({
         </div>
 
         {/* Center Clock */}
-        <div style={styles.clockSection}>
+        <div style={clockSectionStyle}>
           <span style={styles.period}>Q{period}</span>
-          <span style={styles.clock}>{clock}</span>
+          <span style={clockStyle}>{clock}</span>
         </div>
 
         {/* Away Team */}
         <div style={{ ...styles.teamSection, flexDirection: "row-reverse" }}>
-          <TeamLogo team={awayTeam} size={44} />
-          <div style={{ ...styles.teamInfo, alignItems: "flex-end" }}>
-            <span style={styles.teamTricode}>{awayTeam?.tricode}</span>
-            <span style={styles.teamName}>{awayTeam?.name}</span>
-          </div>
+          <TeamLogo team={awayTeam} size={logoSize} />
+          {!isMobile && (
+            <div style={{ ...styles.teamInfo, alignItems: "flex-end" }}>
+              <span style={styles.teamTricode}>{awayTeam?.tricode}</span>
+              <span style={styles.teamName}>{awayTeam?.name}</span>
+            </div>
+          )}
           <motion.span
             key={`away-${awayScore}`}
-            style={styles.score}
+            style={scoreStyle}
             initial={{ scale: 1.3, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ duration: 0.3 }}
@@ -278,27 +324,29 @@ export default function Scoreboard({
         </div>
       </div>
 
-      {/* Expand Toggle */}
-      <motion.button
-        onClick={() => setIsExpanded(!isExpanded)}
-        style={styles.expandToggle}
-        whileHover={{ background: "rgba(255,255,255,0.08)" }}
-        whileTap={{ scale: 0.98 }}
-      >
-        <motion.svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          animate={{ rotate: isExpanded ? 180 : 0 }}
-          transition={{ duration: 0.2 }}
+      {/* Expand Toggle - Hidden on mobile to save space */}
+      {!isMobile && (
+        <motion.button
+          onClick={() => setIsExpanded(!isExpanded)}
+          style={styles.expandToggle}
+          whileHover={{ background: "rgba(255,255,255,0.08)" }}
+          whileTap={{ scale: 0.98 }}
         >
-          <path d="M6 9l6 6 6-6" />
-        </motion.svg>
-        <span style={styles.expandText}>PLAYER STATS</span>
-      </motion.button>
+          <motion.svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            animate={{ rotate: isExpanded ? 180 : 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <path d="M6 9l6 6 6-6" />
+          </motion.svg>
+          <span style={styles.expandText}>PLAYER STATS</span>
+        </motion.button>
+      )}
 
       {/* Expanded Stats Panel */}
       <AnimatePresence>
@@ -448,7 +496,7 @@ const styles = {
     borderRadius: 14,
     border: "1px solid rgba(255, 255, 255, 0.1)",
     overflow: "hidden",
-    minWidth: 520,
+    // Responsive width set inline based on isMobile prop
   },
   scoreboard: {
     display: "flex",

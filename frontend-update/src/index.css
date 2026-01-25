@@ -503,3 +503,208 @@ button:not(:disabled):hover {
 button:not(:disabled):active {
   transform: scale(0.95);
 }
+
+/* =============================================================================
+   ROOM PAGE - RESPONSIVE LAYOUT
+   ============================================================================= */
+
+/* Desktop (>1024px): Stage + Sidebar side by side, fill entire height */
+.room-main {
+  display: flex;
+  flex-direction: row;
+}
+
+.room-stage-section {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.room-stage-container {
+  flex: 1;
+  min-height: 0;
+}
+
+.room-sidebar {
+  flex: 0 0 340px;
+  max-height: 100%;
+}
+
+/* Tablet breakpoint (≤1024px): Stack vertically with aspect-ratio */
+@media (max-width: 1024px) {
+  .room-main {
+    flex-direction: column !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .room-stage-section {
+    flex: 0 0 auto !important;
+    width: 100%;
+  }
+  
+  /* Apply aspect-ratio only on tablet/mobile for proportional scaling */
+  .room-stage-container {
+    flex: none !important;
+    aspect-ratio: 4 / 3 !important;
+    max-height: 70vh;
+  }
+  
+  .room-sidebar {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 250px;
+    max-height: 400px;
+  }
+}
+
+/* Mobile breakpoint (≤768px): Compact header and smaller gaps */
+@media (max-width: 768px) {
+  .room-header {
+    padding: 8px 12px !important;
+  }
+  
+  .room-header-left {
+    gap: 8px !important;
+  }
+  
+  .room-header-right {
+    gap: 8px !important;
+  }
+  
+  .room-main {
+    padding: 8px !important;
+    gap: 8px !important;
+  }
+  
+  .room-stage-container {
+    border-radius: 12px !important;
+    max-height: 65vh;
+  }
+  
+  .room-nav-button {
+    padding: 6px 10px !important;
+  }
+  
+  .room-game-badge {
+    padding: 4px 10px !important;
+    font-size: 12px !important;
+    gap: 6px !important;
+  }
+  
+  .room-theme-toggle {
+    width: 32px !important;
+    height: 32px !important;
+    font-size: 16px !important;
+  }
+  
+  .room-live-indicator {
+    padding: 4px 8px !important;
+  }
+  
+  .room-sidebar {
+    min-height: 200px;
+    max-height: 350px;
+  }
+}
+
+/* Small mobile breakpoint (≤480px): Even more compact */
+@media (max-width: 480px) {
+  .room-header {
+    padding: 6px 8px !important;
+  }
+  
+  .room-main {
+    padding: 6px !important;
+    gap: 6px !important;
+  }
+  
+  .room-stage-container {
+    border-radius: 8px !important;
+    max-height: 60vh;
+  }
+  
+  .room-scoreboard-container {
+    top: 1% !important;
+  }
+  
+  .room-sidebar {
+    min-height: 180px;
+    max-height: 300px;
+    border-radius: 12px !important;
+  }
+}
+
+/* Landscape mobile: Optimize for horizontal viewing */
+@media (max-height: 500px) and (orientation: landscape) {
+  .room-header {
+    padding: 4px 12px !important;
+  }
+  
+  .room-main {
+    padding: 4px 8px !important;
+    gap: 8px !important;
+    flex-direction: row !important;
+    overflow: hidden !important;
+  }
+  
+  .room-stage-section {
+    flex: 1 !important;
+  }
+  
+  .room-stage-container {
+    flex: 1 !important;
+    aspect-ratio: unset !important;
+    max-height: none !important;
+  }
+  
+  /* Hide sidebar in landscape mobile to maximize stage area */
+  .room-sidebar {
+    display: none !important;
+  }
+}
+
+/* =============================================================================
+   PLAYBACK BAR - RESPONSIVE
+   ============================================================================= */
+
+@media (max-width: 768px) {
+  .playback-bar {
+    border-radius: 0 0 12px 12px;
+  }
+  
+  .playback-controls-row {
+    flex-wrap: nowrap;
+  }
+}
+
+/* =============================================================================
+   SCOREBOARD - RESPONSIVE  
+   ============================================================================= */
+
+@media (max-width: 480px) {
+  .scoreboard-container {
+    border-radius: 10px !important;
+  }
+}
+
+/* =============================================================================
+   TOUCH DEVICE OPTIMIZATIONS
+   ============================================================================= */
+
+@media (hover: none) and (pointer: coarse) {
+  /* Larger touch targets on touch devices */
+  .room-nav-button,
+  .room-theme-toggle {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  
+  /* Disable hover effects that don't work well on touch */
+  button:not(:disabled):hover {
+    filter: none;
+  }
+}
