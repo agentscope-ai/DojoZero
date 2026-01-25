@@ -65,7 +65,6 @@ scenario:
     event_id: '401772976'  # ESPN event ID
     hub:
       persistence_file: outputs/nfl_events.jsonl
-      enable_persistence: true
 ```
 
 ### Optional Parameters
@@ -77,7 +76,6 @@ scenario:
     event_id: '401772976'
     hub:
       persistence_file: outputs/nfl_events.jsonl
-      enable_persistence: true
     # Polling intervals (seconds)
     scoreboard_poll_interval: 60
     summary_poll_interval: 30

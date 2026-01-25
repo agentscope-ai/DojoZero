@@ -4,7 +4,7 @@ import logging
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from dojozero.core import (
     RuntimeContext,
@@ -13,6 +13,7 @@ from dojozero.core import (
     register_trial_builder,
     TrialSpec,
 )
+from dojozero.data._config import DataStreamConfig, HubConfig
 from dojozero.data._factory import build_runtime_context
 
 # Import factories to ensure they are registered
@@ -43,6 +44,7 @@ from dojozero.data.nba._utils import get_game_info_by_id_async
 from dojozero.betting import (
     BrokerOperator,
     BrokerOperatorConfig,
+    TrialBrokerConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,40 +73,6 @@ SYNTHETIC_EVENT_TYPE_MAP: dict[str, list[str]] = {
 }
 
 
-class HubConfig(BaseModel):
-    """Hub configuration."""
-
-    persistence_file: str = Field(default="outputs/nba_events.jsonl")
-    enable_persistence: bool = Field(default=True)
-
-
-class DataStreamConfig(BaseModel):
-    """Data stream configuration."""
-
-    id: str
-    event_type: str
-    initializer: dict[str, Any] | None = Field(default=None)
-
-
-class OperatorConfig(BaseModel):
-    """Operator configuration."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    id: str
-    class_name: str = Field(alias="class", description="Operator class name")
-    data_streams: list[str] = Field(
-        default_factory=list, description="DataStream actor IDs to subscribe to"
-    )
-    initial_balance: str | None = Field(
-        default=None, description="Initial balance for broker (if applicable)"
-    )
-    allowed_tools: list[str] | None = Field(
-        default=None,
-        description="List of allowed agent tool names (default: all tools). Available: get_balance, get_quote, place_bet, place_bet_spread, place_bet_total, cancel_bet, get_active_bets, get_pending_orders, get_bet_history, get_statistics, get_available_events",
-    )
-
-
 class NBATrialParams(BaseModel):
     """Trial parameters for NBA scenario."""
 
@@ -119,11 +87,9 @@ class NBATrialParams(BaseModel):
         ),
     )
 
-    # Hub configuration (optional, can be nested or flat)
-    hub: HubConfig | None = Field(default=None)
+    # Hub configuration (required)
+    hub: HubConfig = Field(..., description="Hub configuration with persistence file")
     hub_id: str = Field(default="nba_hub")
-    persistence_file: str = Field(default="outputs/nba_events.jsonl")
-    enable_persistence: bool = Field(default=True)
 
     # Store configuration
     websearch_store_id: str = Field(default="websearch_store")
@@ -144,7 +110,7 @@ class NBATrialParams(BaseModel):
     )
 
     # Operators configuration (optional, hierarchical)
-    operators: list[OperatorConfig] | None = Field(default=None)
+    operators: list[TrialBrokerConfig] | None = Field(default=None)
 
     # Agent configuration
     agents: list[dict[str, Any]] = Field(
@@ -225,29 +191,25 @@ async def _build_trial_spec(
             f"Could not find game info for espn_game_id={params.espn_game_id}."
         )
 
+    # Validate that persistence_file is set (required for building trial)
+    if not params.hub.persistence_file:
+        raise ValueError(
+            "hub.persistence_file is required. For auto-scheduled trials, ensure "
+            "data_dir is set in the trial source config so the scheduler can "
+            "populate this field."
+        )
+    persistence_file = params.hub.persistence_file
+
     # Fallback: extract game_date from persistence_file path if still not available
     # Path format: data/nba-betting/YYYY-MM-DD/espn_game_id.jsonl
     if not game_date:
-        persistence_path = (
-            params.hub.persistence_file if params.hub else params.persistence_file
-        )
-        if persistence_path:
-            # Look for date pattern in path
-            date_match = re.search(r"(\d{4}-\d{2}-\d{2})", persistence_path)
-            if date_match:
-                game_date = date_match.group(1)
-                logger.info(
-                    "Extracted game_date from persistence_file path: %s", game_date
-                )
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", persistence_file)
+        if date_match:
+            game_date = date_match.group(1)
+            logger.info("Extracted game_date from persistence_file path: %s", game_date)
 
-    # Extract hub configuration (support both hierarchical and flat)
+    # Extract hub configuration
     hub_id = params.hub_id
-    if params.hub:
-        persistence_file = params.hub.persistence_file
-        enable_persistence = params.hub.enable_persistence
-    else:
-        persistence_file = params.persistence_file
-        enable_persistence = params.enable_persistence
 
     # Extract event_types from data_streams if provided, otherwise use event_types field
     if params.data_streams:
@@ -282,7 +244,6 @@ async def _build_trial_spec(
                 "actor_id": ds_config.id,
                 "hub_id": hub_id,
                 "persistence_file": persistence_file,
-                "enable_persistence": enable_persistence,
                 "event_type": ds_config.event_type,
                 "event_types": actual_event_types,
             }
@@ -325,7 +286,6 @@ async def _build_trial_spec(
                 "actor_id": f"{event_type}_stream",
                 "hub_id": hub_id,
                 "persistence_file": persistence_file,
-                "enable_persistence": enable_persistence,
                 "event_type": event_type,
                 "event_types": [event_type],
             }
@@ -469,7 +429,6 @@ async def _build_trial_spec(
         "espn_game_id": params.espn_game_id,
         "hub_id": hub_id,
         "persistence_file": persistence_file,
-        "enable_persistence": enable_persistence,
         "event_types": params.event_types,
         # Store types to create (used by build_runtime_context)
         "store_types": ["nba", "websearch", "polymarket"],
@@ -518,12 +477,9 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
     hub_id = str(hub_id_raw) if hub_id_raw else "nba_hub"
 
     persistence_file_raw = metadata.get("persistence_file")
-    persistence_file = str(persistence_file_raw) if persistence_file_raw else None
-
-    enable_persistence_raw = metadata.get("enable_persistence", True)
-    enable_persistence = (
-        bool(enable_persistence_raw) if enable_persistence_raw is not None else True
-    )
+    if not persistence_file_raw:
+        raise ValueError("persistence_file is required in metadata")
+    persistence_file = str(persistence_file_raw)
 
     # Get store types from metadata (defaults to NBA + websearch + polymarket)
     store_types_raw = metadata.get("store_types", ["nba", "websearch", "polymarket"])
@@ -537,7 +493,6 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
         trial_id=spec.trial_id,
         hub_id=hub_id,
         persistence_file=persistence_file,
-        enable_persistence=enable_persistence,
         metadata=metadata,
         store_types=store_types,
         sport_type="nba",
@@ -554,7 +509,6 @@ register_trial_builder(
         "espn_game_id": "401810490",
         "hub": {
             "persistence_file": "outputs/nba_events.jsonl",
-            "enable_persistence": True,
         },
         "data_streams": [
             {

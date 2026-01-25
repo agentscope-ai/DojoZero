@@ -39,20 +39,10 @@ def temp_persistence_file():
 
 @pytest.fixture
 def hub(temp_persistence_file):
-    """Create a DataHub instance with persistence enabled."""
+    """Create a DataHub instance for testing."""
     return DataHub(
         hub_id="test_hub",
         persistence_file=temp_persistence_file,
-        enable_persistence=True,
-    )
-
-
-@pytest.fixture
-def hub_no_persistence():
-    """Create a DataHub instance without persistence."""
-    return DataHub(
-        hub_id="test_hub_no_persist",
-        enable_persistence=False,
     )
 
 
@@ -228,19 +218,6 @@ class TestDataHubPersistence:
 
         assert len(lines) == 3
 
-    @pytest.mark.asyncio
-    async def test_persistence_disabled(self, hub_no_persistence, tmp_path):
-        """Test that events are not persisted when disabled."""
-        # Set persistence file to a temp location to verify nothing is written
-        test_file = tmp_path / "test_no_persist.jsonl"
-        hub_no_persistence.persistence_file = test_file
-
-        event = make_test_event("no_persist")
-        await hub_no_persistence.receive_event(event)
-
-        # File should not exist since persistence is disabled
-        assert not test_file.exists()
-
 
 class TestDataHubBacktest:
     """Tests for backtest mode."""
@@ -253,8 +230,10 @@ class TestDataHubBacktest:
             event = make_test_event(f"backtest_{i}")
             await hub.receive_event(event)
 
-        # Create new hub and start backtest
-        backtest_hub = DataHub(hub_id="backtest_hub", enable_persistence=False)
+        # Create new hub and start backtest (uses same file for consistency)
+        backtest_hub = DataHub(
+            hub_id="backtest_hub", persistence_file=temp_persistence_file
+        )
         await backtest_hub.start_backtest(temp_persistence_file)
 
         assert len(backtest_hub._backtest_events) == 3
@@ -270,8 +249,10 @@ class TestDataHubBacktest:
             event = make_test_event(f"order_{i}")
             await hub.receive_event(event)
 
-        # Backtest
-        backtest_hub = DataHub(hub_id="backtest_hub", enable_persistence=False)
+        # Backtest (uses same file for consistency)
+        backtest_hub = DataHub(
+            hub_id="backtest_hub", persistence_file=temp_persistence_file
+        )
         await backtest_hub.start_backtest(temp_persistence_file)
 
         event1 = await backtest_hub.backtest_next()
@@ -292,8 +273,10 @@ class TestDataHubBacktest:
             event = make_test_event(f"all_{i}")
             await hub.receive_event(event)
 
-        # Setup backtest hub with callback
-        backtest_hub = DataHub(hub_id="backtest_hub", enable_persistence=False)
+        # Setup backtest hub with callback (uses same file for consistency)
+        backtest_hub = DataHub(
+            hub_id="backtest_hub", persistence_file=temp_persistence_file
+        )
         callback = MagicMock()
         backtest_hub.subscribe_agent(
             agent_id="agent1", event_types=["test_event"], callback=callback
@@ -310,8 +293,10 @@ class TestDataHubBacktest:
         # Persist event
         await hub.receive_event(make_test_event("stop_test"))
 
-        # Start and stop backtest
-        backtest_hub = DataHub(hub_id="backtest_hub", enable_persistence=False)
+        # Start and stop backtest (uses same file for consistency)
+        backtest_hub = DataHub(
+            hub_id="backtest_hub", persistence_file=temp_persistence_file
+        )
         await backtest_hub.start_backtest(temp_persistence_file)
         backtest_hub.stop_backtest()
 

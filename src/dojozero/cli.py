@@ -31,6 +31,7 @@ from dojozero.data.espn import get_espn_game_url
 from dojozero.data.polymarket import PolymarketAPI
 from dojozero.utils import utc_iso_to_local
 from dojozero.core import TrialBuilderNotFoundError as _TrialBuilderNotFoundError
+from dojozero.dashboard_server import InitialTrialSourceDict
 
 try:  # Optional Ray dependency
     from dojozero.ray_runtime import RayActorRuntimeProvider
@@ -1130,11 +1131,10 @@ async def _backtest_single_file(
         hub_id = str(hub_id_raw) if hub_id_raw else "data_hub"
     hub_id = str(hub_id)
 
-    # Create DataHub in backtest mode
+    # Create DataHub in backtest mode (uses event_file path for consistency)
     hub = DataHub(
         hub_id=hub_id,
-        persistence_file=None,
-        enable_persistence=False,
+        persistence_file=str(event_file),
     )
 
     # Create BacktestCoordinator
@@ -1445,14 +1445,14 @@ def _get_builder_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_trial_source_from_yaml(path: Path) -> dict[str, Any]:
+def _load_trial_source_from_yaml(path: Path) -> InitialTrialSourceDict:
     """Load a trial source configuration from a YAML file.
 
     Args:
         path: Path to the YAML file
 
     Returns:
-        Dictionary with trial source configuration
+        InitialTrialSourceDict with trial source configuration
 
     Raises:
         DojoZeroCLIError: If file doesn't exist or is invalid
@@ -1479,7 +1479,12 @@ def _load_trial_source_from_yaml(path: Path) -> dict[str, Any]:
                 f"Trial source file {path} missing required field: {field}"
             )
 
-    return data
+    # Cast to typed dict after validation
+    return InitialTrialSourceDict(
+        source_id=data["source_id"],
+        sport_type=data["sport_type"],
+        config=data["config"],
+    )
 
 
 async def _serve_command(args: argparse.Namespace) -> int:
@@ -1517,7 +1522,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
     # Expand glob patterns and load trial source configurations
     import glob as glob_module
 
-    initial_trial_sources: list[dict[str, Any]] = []
+    initial_trial_sources: list[InitialTrialSourceDict] = []
     for source_pattern in trial_source_files:
         # Expand glob pattern
         matched_files = sorted(glob_module.glob(str(source_pattern)))
@@ -1570,7 +1575,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
 
 
 def _print_trial_links(
-    metadata: dict,
+    metadata: Mapping[str, Any],
     event_id: str,
     sport_type: str,
     event_time_str: str = "",
@@ -1578,14 +1583,15 @@ def _print_trial_links(
     """Print ESPN and Polymarket links for a trial.
 
     Args:
-        metadata: Trial metadata dict containing tricode and date info
+        metadata: Trial metadata dict containing GameMetadata keys
+            (home_tricode, away_tricode, game_date, game_short_name)
         event_id: ESPN event ID
         sport_type: Sport type (e.g., "nba", "nfl")
         event_time_str: Optional event time string for date fallback
     """
-    home_tricode = metadata.get("home_tricode", "")
-    away_tricode = metadata.get("away_tricode", "")
-    game_date = metadata.get("game_date", "")
+    home_tricode = str(metadata.get("home_tricode", ""))
+    away_tricode = str(metadata.get("away_tricode", ""))
+    game_date = str(metadata.get("game_date", ""))
 
     # Fallback: extract tricodes from game_short_name (e.g., "LAL @ BOS")
     if not (home_tricode and away_tricode):

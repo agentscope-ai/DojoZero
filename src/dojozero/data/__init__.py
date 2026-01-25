@@ -18,6 +18,7 @@ from dojozero.data._factory import (
     list_store_factories,
     build_runtime_context,
 )
+from dojozero.data._config import DataStreamConfig, HubConfig, TrialDataStreamConfig
 
 # Domain-specific implementations
 # Import all event classes to trigger auto-registration
@@ -66,6 +67,10 @@ __all__ = [
     "get_store_factory",
     "list_store_factories",
     "build_runtime_context",
+    # Shared configuration models for trial params
+    "DataStreamConfig",  # Alias for TrialDataStreamConfig
+    "HubConfig",
+    "TrialDataStreamConfig",
     # NBA
     "PlayByPlayEvent",
     "NBAExternalAPI",

@@ -30,6 +30,9 @@ from dojozero.betting._agent import (
     BettingAgentConfig,
     EventFormatter,
 )
+from dojozero.betting._config import (
+    TrialBrokerConfig,
+)
 from dojozero.betting._broker import (
     Account,
     Bet,
@@ -56,6 +59,8 @@ __all__ = [
     "BettingAgent",
     "BettingAgentConfig",
     "EventFormatter",
+    # Broker config for trial params (Pydantic)
+    "TrialBrokerConfig",
     # Broker
     "BrokerOperator",
     "BrokerOperatorConfig",
