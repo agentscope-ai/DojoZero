@@ -157,17 +157,25 @@ def _build_trial_spec(
         espn_game_id,
     )
 
+    # Validate that persistence_file is set (required for building trial)
+    if not params.hub.persistence_file:
+        raise ValueError(
+            "hub.persistence_file is required. For auto-scheduled trials, ensure "
+            "data_dir is set in the trial source config so the scheduler can "
+            "populate this field."
+        )
+    persistence_file = params.hub.persistence_file
+
     # Fallback: extract game_date from persistence_file path if not available
     # Path format: data/nfl-betting/YYYY-MM-DD/espn_game_id.jsonl
     if not game_date:
-        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", params.hub.persistence_file)
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", persistence_file)
         if date_match:
             game_date = date_match.group(1)
             logger.info("Extracted game_date from persistence_file path: %s", game_date)
 
     # Extract hub configuration
     hub_id = params.hub_id
-    persistence_file = params.hub.persistence_file
 
     # Extract event_types from data_streams if provided, otherwise use event_types field
     if params.data_streams:

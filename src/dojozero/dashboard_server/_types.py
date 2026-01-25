@@ -21,10 +21,10 @@ from typing import Any, TypedDict
 
 
 class GameMetadata(TypedDict, total=False):
-    """Metadata for game-related trials.
+    """Core game information metadata.
 
-    These fields are populated when scheduling trials for specific games
-    via the ScheduleManager.
+    These fields describe the game itself (teams, date, etc.) and are
+    populated when scheduling trials for specific games.
     """
 
     game_short_name: str  # e.g., "LAL @ BOS"
@@ -33,6 +33,15 @@ class GameMetadata(TypedDict, total=False):
     home_tricode: str  # Team abbreviation, e.g., "BOS"
     away_tricode: str  # Team abbreviation, e.g., "LAL"
     game_date: str  # YYYY-MM-DD format
+
+
+class ScheduledGameMetadata(GameMetadata, total=False):
+    """Extended metadata for trials scheduled from a trial source.
+
+    Inherits all fields from GameMetadata and adds scheduling-related
+    fields that link the trial back to its source and event.
+    """
+
     source_id: str  # Trial source that scheduled this trial
     event_id: str  # ESPN event ID
     sport_type: str  # "nba" or "nfl"
@@ -203,6 +212,7 @@ __all__ = [
     "BacktestMetadata",
     "GameMetadata",
     "HubMetadata",
+    "ScheduledGameMetadata",
     "ScheduledMetadata",
     # API Responses
     "ErrorResponse",

@@ -45,6 +45,7 @@ from ._types import (
     HubMetadata,
     InitialTrialSourceDict,
     OddsDataDict,
+    ScheduledGameMetadata,
     ScheduledMetadata,
     ScheduledTrialResponse,
     TeamDataDict,
@@ -84,6 +85,7 @@ __all__ = [
     "BacktestMetadata",
     "GameMetadata",
     "HubMetadata",
+    "ScheduledGameMetadata",
     "ScheduledMetadata",
     # TypedDicts for API responses
     "ErrorResponse",

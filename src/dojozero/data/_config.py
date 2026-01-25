@@ -21,11 +21,18 @@ class HubConfig(BaseModel):
     Used by trial builders to configure event persistence to JSONL files.
     This is for the `hub:` field in trial params YAML.
 
-    Note: Persistence is always enabled. The persistence_file field is required.
+    Note: Persistence is always enabled. The persistence_file is optional here
+    because for auto-scheduled trials, it gets populated dynamically by the
+    scheduler based on data_dir. Trial builders should validate that it's set
+    before building the trial spec.
     """
 
-    persistence_file: str = Field(
-        ..., description="Path to JSONL file for event persistence"
+    persistence_file: str | None = Field(
+        default=None,
+        description=(
+            "Path to JSONL file for event persistence. Required for live trials. "
+            "For auto-scheduled trials, this is populated by the scheduler."
+        ),
     )
 
 

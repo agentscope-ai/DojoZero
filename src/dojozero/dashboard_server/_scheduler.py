@@ -33,7 +33,7 @@ from dojozero.utils import utc_to_us_date
 
 from ._game_discovery import GameInfo, NBAGameFetcher, NFLGameFetcher
 from ._trial_manager import TrialManager
-from ._types import GameMetadata
+from ._types import GameMetadata, ScheduledGameMetadata
 
 LOGGER = logging.getLogger("dojozero.scheduler")
 
@@ -875,7 +875,7 @@ class ScheduleManager:
                 game_config["hub"]["persistence_file"] = persistence_file
 
             # Metadata for the trial using typed structure
-            trial_metadata: GameMetadata = {
+            trial_metadata: ScheduledGameMetadata = {
                 "source_id": source.source_id,
                 "game_short_name": game.short_name,
                 "home_team": game.home_team.name,
