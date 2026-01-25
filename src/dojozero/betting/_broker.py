@@ -1553,33 +1553,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # Bet Management
     # =========================================================================
 
-    async def get_quote(self, event_id: str) -> Dict[str, Any]:
-        """Get current odds for an event.
-
-        Returns a dictionary with event information for easy parsing by agents.
-
-        Returns:
-            Dictionary with event details:
-            {
-                "event_id": str,
-                "home_team": str,
-                "away_team": str,
-                "game_time": str (ISO format),
-                "status": str,
-                "home_odds": str (Decimal as string),
-                "away_odds": str (Decimal as string),
-                "last_odds_update": str (ISO format),
-                "betting_closed_at": str (ISO format) or None
-            }
-
-        Raises:
-            ValueError: If event not found
-        """
-        async with self._event_locks[event_id]:
-            if event_id not in self._events:
-                raise ValueError(f"Event {event_id} not found")
-            return self._events[event_id].to_dict()
-
     async def place_bet(self, agent_id: str, bet_request: BetRequest) -> str:
         """Place a new bet (synchronous confirmation).
 
@@ -1896,13 +1869,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             roi=roi,
         )
 
-    async def get_available_events(self) -> List[BettingEvent]:
-        """Get all events currently accepting bets"""
-        return [
-            event
-            for event in self._events.values()
-            if event.status in [EventStatus.SCHEDULED, EventStatus.LIVE]
-        ]
+    async def get_available_event(self) -> BettingEvent | None:
+        """Get the current event if it's accepting bets.
+
+        The broker handles one event at a time. Returns the event if it's SCHEDULED or LIVE,
+        otherwise returns None.
+        """
+        for event in self._events.values():
+            if event.status in [EventStatus.SCHEDULED, EventStatus.LIVE]:
+                return event
+        return None
 
     async def get_account(self, agent_id: str) -> Account:
         """Get account information for an agent"""
@@ -2020,156 +1996,225 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         @tool
         async def get_balance() -> str:
-            """Get current account balance.
+            """Get your current account balance.
 
             Returns:
-                Current balance as string (e.g., "1000.00")
+                Balance as string (e.g., "1000.00")
             """
             balance = await target.get_balance(agent_id)
             return str(balance)
 
         @tool
-        async def get_quote(event_id: str) -> str:
-            """Get current odds for an event.
+        async def get_event() -> str:
+            """Get current game information and all available betting options.
 
-            Args:
-                event_id: The event to get odds for
+            Call this first before placing any bets. The broker handles one event at a time.
 
             Returns:
-                JSON string with event details including odds, teams, status
+                JSON string (parse with JSON) or "null" if no event available. When event exists, returns object with:
+
+                Required fields (always present):
+                - event_id: Unique event identifier
+                - home_team: Home team name (string)
+                - away_team: Away team name (string)
+                - game_time: Scheduled game time (ISO format string)
+                - status: "SCHEDULED" (pre-game, can bet), "LIVE" (in-game, can bet), "CLOSED" (ended, cannot bet), or "SETTLED" (bets settled)
+
+                Moneyline betting (may be None if odds not set yet):
+                - home_odds: Decimal odds for home team as string (e.g., "1.85") or null
+                - away_odds: Decimal odds for away team as string (e.g., "2.10") or null
+                Use with place_bet_moneyline(selection="home" or "away")
+
+                Spread betting (empty dict {} if not available):
+                - spread_lines: Dict mapping spread values to odds
+                  Format: {"-3.5": {"home_odds": "1.90", "away_odds": "1.90"}, "+3.5": {...}, ...}}
+                  Keys are spread values as strings (e.g., "-3.5", "+3.5")
+                  Use with place_bet_spread(spread_value must match a key from spread_lines)
+
+                Total betting (empty dict {} if not available):
+                - total_lines: Dict mapping total values to odds
+                  Format: {"220.5": {"over_odds": "1.88", "under_odds": "1.88"}, "225.5": {...}, ...}
+                  Keys are total point values as strings (e.g., "220.5")
+                  Use with place_bet_total(total_value must match a key from total_lines, selection="over" or "under")
+
+                Metadata:
+                - last_odds_update: Last odds update time (ISO format string) or null
+                - betting_closed_at: When betting closed (ISO format string) or null if still open
+
+
             """
             import json
 
-            quote = await target.get_quote(event_id)
-            return json.dumps(quote)
+            event = await target.get_available_event()
+            if not event:
+                return json.dumps(None)
+            return json.dumps(event.to_dict())
 
         @tool
-        async def place_bet(
+        async def place_bet_moneyline(
             amount: str,
             selection: Literal["home", "away"],
-            event_id: str,
-            order_type: str = OrderType.MARKET.value,
-            betting_phase: str = BettingPhase.PRE_GAME.value,
+            betting_phase: Literal["PRE_GAME", "IN_GAME"],
+            order_type: Literal["MARKET", "LIMIT"] = "MARKET",
             limit_odds: str | None = None,
         ) -> str:
-            """Place a moneyline bet on an event.
+            """Bet on which team will win (moneyline).
 
             Args:
-                amount: Bet amount (e.g., "100.00")
+                amount: Bet amount as string
                 selection: "home" or "away"
-                event_id: Event to bet on
-                order_type: "MARKET" (immediate) or "LIMIT" (conditional), default "MARKET"
-                betting_phase: "PRE_GAME" or "IN_GAME", default "PRE_GAME"
-                limit_odds: Minimum odds for LIMIT orders (e.g., "2.00"), required for LIMIT
+                betting_phase: "PRE_GAME" or "IN_GAME" (depends on the current event status, if the event status is SCHEDULED, you can only place a PRE_GAME bet, if the event status is LIVE, you can only place a IN_GAME bet)
+                order_type: "MARKET" (execute immediately at current odds) or "LIMIT" (wait for odds to reach your minimum)
+                limit_odds: For LIMIT only - minimum odds as string. Order executes when current odds >= this value.
 
             Returns:
-                "bet_placed" if successful, "bet_invalid" if rejected
+                "bet_placed" or "bet_invalid: <reason>"
             """
+            try:
+                # Get the current event
+                event = await target.get_available_event()
+                if not event:
+                    return "bet_invalid: No event available"
 
-            bet_request = BetRequestMoneyline(
-                amount=Decimal(amount),
-                selection=selection,
-                event_id=event_id,
-                order_type=OrderType[order_type],
-                betting_phase=BettingPhase[betting_phase],
-                limit_odds=Decimal(limit_odds) if limit_odds else None,
-            )
-            result = await target.place_bet(agent_id, bet_request)
-            return result
+                bet_request = BetRequestMoneyline(
+                    amount=Decimal(amount),
+                    selection=selection,
+                    event_id=event.event_id,
+                    order_type=OrderType[order_type],
+                    betting_phase=BettingPhase[betting_phase],
+                    limit_odds=Decimal(limit_odds) if limit_odds else None,
+                )
+                result = await target.place_bet(agent_id, bet_request)
+                return result
+            except (ValueError, KeyError, TypeError) as e:
+                return f"bet_invalid: {str(e)}"
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in place_bet_moneyline: %s", e, exc_info=True
+                )
+                return f"bet_invalid: Unexpected error - {str(e)}"
 
         @tool
         async def place_bet_spread(
             amount: str,
             selection: Literal["home", "away"],
-            event_id: str,
             spread_value: str,
-            order_type: str = OrderType.MARKET.value,
-            betting_phase: str = BettingPhase.PRE_GAME.value,
+            betting_phase: Literal["PRE_GAME", "IN_GAME"],
+            order_type: Literal["MARKET", "LIMIT"] = "MARKET",
             limit_odds: str | None = None,
         ) -> str:
-            """Place a spread bet on an event.
+            """Bet on point spread (team must win by more than spread or lose by less).
 
             Args:
-                amount: Bet amount (e.g., "100.00")
+                amount: Bet amount as string
                 selection: "home" or "away"
-                event_id: Event to bet on
-                spread_value: Spread value (e.g., "-3.5" or "+3.5")
-                order_type: "MARKET" (immediate) or "LIMIT" (conditional), default "MARKET"
-                betting_phase: "PRE_GAME" or "IN_GAME", default "PRE_GAME"
-                limit_odds: Minimum odds for LIMIT orders (e.g., "2.00"), required for LIMIT
+                spread_value: Must match a key from spread_lines in get_event(). Negative values (e.g., "-3.5") mean home team is favored; positive values (e.g., "+3.5") mean away team is favored.
+                betting_phase: "PRE_GAME" or "IN_GAME" (depends on the current event status, if the event status is SCHEDULED, you can only place a PRE_GAME bet, if the event status is LIVE, you can only place a IN_GAME bet)
+                order_type: "MARKET" (execute immediately) or "LIMIT" (wait for odds to reach your minimum)
+                limit_odds: For LIMIT only - minimum odds as string. Order executes when current odds >= this value.
 
             Returns:
-                "bet_placed" if successful, "bet_invalid" if rejected
+                "bet_placed" or "bet_invalid: <reason>"
             """
+            try:
+                # Get the current event
+                event = await target.get_available_event()
+                if not event:
+                    return "bet_invalid: No event available"
 
-            bet_request = BetRequestSpread(
-                amount=Decimal(amount),
-                selection=selection,
-                event_id=event_id,
-                spread_value=Decimal(spread_value),
-                order_type=OrderType[order_type],
-                betting_phase=BettingPhase[betting_phase],
-                limit_odds=Decimal(limit_odds) if limit_odds else None,
-            )
-            result = await target.place_bet(agent_id, bet_request)
-            return result
+                bet_request = BetRequestSpread(
+                    amount=Decimal(amount),
+                    selection=selection,
+                    event_id=event.event_id,
+                    spread_value=Decimal(spread_value),
+                    order_type=OrderType[order_type],
+                    betting_phase=BettingPhase[betting_phase],
+                    limit_odds=Decimal(limit_odds) if limit_odds else None,
+                )
+                result = await target.place_bet(agent_id, bet_request)
+                return result
+            except (ValueError, KeyError, TypeError) as e:
+                return f"bet_invalid: {str(e)}"
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in place_bet_spread: %s", e, exc_info=True
+                )
+                return f"bet_invalid: Unexpected error - {str(e)}"
 
         @tool
         async def place_bet_total(
             amount: str,
             selection: Literal["over", "under"],
-            event_id: str,
             total_value: str,
-            order_type: str = OrderType.MARKET.value,
-            betting_phase: str = BettingPhase.PRE_GAME.value,
+            betting_phase: Literal["PRE_GAME", "IN_GAME"],
+            order_type: Literal["MARKET", "LIMIT"] = "MARKET",
             limit_odds: str | None = None,
         ) -> str:
-            """Place a total (over/under) bet on an event.
+            """Bet on total points scored (over/under).
 
             Args:
-                amount: Bet amount (e.g., "100.00")
+                amount: Bet amount as string
                 selection: "over" or "under"
-                event_id: Event to bet on
-                total_value: Total points value (e.g., "220.5")
-                order_type: "MARKET" (immediate) or "LIMIT" (conditional), default "MARKET"
-                betting_phase: "PRE_GAME" or "IN_GAME", default "PRE_GAME"
-                limit_odds: Minimum odds for LIMIT orders (e.g., "2.00"), required for LIMIT
+                total_value: Must match a key from total_lines in get_event(). This is the combined points both teams will score; bet "over" if you think total will exceed this, "under" if it will be less.
+                betting_phase: "PRE_GAME" or "IN_GAME" (depends on the current event status, if the event status is SCHEDULED, you can only place a PRE_GAME bet, if the event status is LIVE, you can only place a IN_GAME bet)
+                order_type: "MARKET" or "LIMIT"
+                limit_odds: For LIMIT only - minimum odds as string
 
             Returns:
-                "bet_placed" if successful, "bet_invalid" if rejected
+                "bet_placed" or "bet_invalid: <reason>"
             """
+            try:
+                # Get the current event
+                event = await target.get_available_event()
+                if not event:
+                    return "bet_invalid: No event available"
 
-            bet_request = BetRequestTotal(
-                amount=Decimal(amount),
-                selection=selection,
-                event_id=event_id,
-                total_value=Decimal(total_value),
-                order_type=OrderType[order_type],
-                betting_phase=BettingPhase[betting_phase],
-                limit_odds=Decimal(limit_odds) if limit_odds else None,
-            )
-            result = await target.place_bet(agent_id, bet_request)
-            return result
+                bet_request = BetRequestTotal(
+                    amount=Decimal(amount),
+                    selection=selection,
+                    event_id=event.event_id,
+                    total_value=Decimal(total_value),
+                    order_type=OrderType[order_type],
+                    betting_phase=BettingPhase[betting_phase],
+                    limit_odds=Decimal(limit_odds) if limit_odds else None,
+                )
+                result = await target.place_bet(agent_id, bet_request)
+                return result
+            except (ValueError, KeyError, TypeError) as e:
+                return f"bet_invalid: {str(e)}"
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in place_bet_total: %s", e, exc_info=True
+                )
+                return f"bet_invalid: Unexpected error - {str(e)}"
 
         @tool
-        async def cancel_bet(bet_id: str) -> str:
+        async def cancel_bet(bet_index: int) -> str:
             """Cancel a pending limit order.
 
+            Must be a limit order. Must call get_pending_orders() first to get the bet_index.
+
             Args:
-                bet_id: ID of the bet to cancel
+                bet_index: 0-based index from get_pending_orders()
 
             Returns:
-                "bet_cancelled" if successful, "cancel_failed" if failed
+                "bet_cancelled" or "cancel_failed"
             """
-            result = await target.cancel_bet(agent_id, bet_id)
+            # Get pending orders to find the bet_id from index
+            orders = await target.get_pending_orders(agent_id)
+            if bet_index < 0 or bet_index >= len(orders):
+                return "cancel_failed: Invalid bet_index"
+
+            bet = orders[bet_index]
+            result = await target.cancel_bet(agent_id, bet.bet_id)
             return result
 
         @tool
         async def get_active_bets() -> str:
-            """Get all active bets (executed, waiting for settlement).
+            """Get your active bets (executed, waiting for game result).
 
             Returns:
-                JSON string with list of active bets
+                JSON array of bets with: bet_id, amount, selection, odds, bet_type, status="ACTIVE"
             """
             import json
 
@@ -2178,10 +2223,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         @tool
         async def get_pending_orders() -> str:
-            """Get all pending limit orders (not yet executed).
+            """Get your pending limit orders (waiting for odds to reach your specified minimum).
+
+            Use bet_index (0-based position) with cancel_bet() to cancel an order.
 
             Returns:
-                JSON string with list of pending orders
+                JSON array of orders with: bet_id, amount, selection, limit_odds, bet_type, status="PENDING"
             """
             import json
 
@@ -2190,13 +2237,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         @tool
         async def get_bet_history(limit: int = 20) -> str:
-            """Get bet history (settled bets).
+            """Get your settled bet history.
 
             Args:
-                limit: Maximum number of bets to return (default 20)
+                limit: Max number of bets to return (default: 20)
 
             Returns:
-                JSON string with list of historical bets
+                JSON array of settled bets with: bet_id, amount, outcome, payout, status="SETTLED"
             """
             import json
 
@@ -2205,33 +2252,21 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         @tool
         async def get_statistics() -> str:
-            """Get performance statistics.
+            """Get your betting performance stats.
 
             Returns:
-                JSON string with stats: total_bets, wins, losses, win_rate, net_profit, roi
+                JSON object with: total_bets, wins, losses, win_rate, net_profit, roi
             """
             import json
 
             stats = await target.get_statistics(agent_id)
             return json.dumps(stats.to_dict())
 
-        @tool
-        async def get_available_events() -> str:
-            """Get all events currently accepting bets.
-
-            Returns:
-                JSON string with list of available events
-            """
-            import json
-
-            events = await target.get_available_events()
-            return json.dumps([event.to_dict() for event in events])
-
         # Build mapping of tool names to tool functions
         all_tools_map = {
             "get_balance": get_balance,
-            "get_quote": get_quote,
-            "place_bet": place_bet,
+            "get_event": get_event,
+            "place_bet_moneyline": place_bet_moneyline,
             "place_bet_spread": place_bet_spread,
             "place_bet_total": place_bet_total,
             "cancel_bet": cancel_bet,
@@ -2239,7 +2274,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             "get_pending_orders": get_pending_orders,
             "get_bet_history": get_bet_history,
             "get_statistics": get_statistics,
-            "get_available_events": get_available_events,
         }
 
         # Filter tools based on allowed_tools configuration

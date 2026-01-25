@@ -39,14 +39,13 @@ scenario:
       initial_balance: "1000.00"
       allowed_tools:
       - get_balance
-      - get_quote
-      - place_bet
+      - get_event
+      - place_bet_moneyline
       - cancel_bet
       - get_active_bets
       - get_pending_orders
       - get_bet_history
       - get_statistics
-      - get_available_events
       data_streams:
       - nfl_game_status_change_stream
       - nfl_odds_update_stream

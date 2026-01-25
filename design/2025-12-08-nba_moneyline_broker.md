@@ -34,6 +34,10 @@ The Betting Broker is the central operator that coordinates betting activities b
          └────────┘    └────────┘ 
 ```
 
+## 3.1. Single Event Model
+
+The broker handles **one event at a time**. `get_event()` returns the current available event (SCHEDULED or LIVE) or `None`. All game context is embedded in tool outputs - agents call `get_event()` first and never provide event_id or team names. Critical parameters like `betting_phase` are required (no defaults) and use `Literal` types to prevent invalid values.
+
 ## 4. Event Lifecycle
 
 **Pre-game Phase**
@@ -102,11 +106,12 @@ All bet types support both market and limit orders, and odds can be updated dyna
 ## 6. Key Workflows
 
 ### Bet Placement
-1. Agent sends bet request
-2. Broker validates (balance, event status, betting phase)
-3. Funds are locked from agent balance
-4. Market orders → immediate execution
-5. Limit orders → added to order book, executed when odds match
+1. Agent calls `get_event()` to get current game context and available betting options
+2. Agent sends bet request (no event_id needed - broker uses current event)
+3. Broker validates (balance, event status, betting phase match)
+4. Funds are locked from agent balance
+5. Market orders → immediate execution
+6. Limit orders → added to order book, executed when odds match
 
 ### Odds Update
 1. Datastream sends new odds
@@ -135,16 +140,16 @@ All bet types support both market and limit orders, and odds can be updated dyna
 
 **From Broker to Agents:**
 - StreamEvent notifications: bet_executed, bet_settled
-- Synchronous responses: bet confirmations, balance queries, quote requests
+- Synchronous responses: bet confirmations ("bet_placed" or "bet_invalid: <reason>"), balance queries, event information (JSON)
 
 **Agent to Broker:**
 - Account operations: create_account, deposit, withdraw, get_balance
-- Bet operations: place_bet, cancel_bet
-- Query operations: get_quote, get_active_bets, get_pending_orders, get_bet_history, get_statistics
+- Bet operations: place_bet_moneyline, place_bet_spread, place_bet_total, cancel_bet
+- Query operations: get_event, get_active_bets, get_pending_orders, get_bet_history, get_statistics
 
 ## 9. Agent Tool Configuration
 
-The broker supports configurable tool exposure via `allowed_tools` in the operator configuration:
+The broker supports configurable tool exposure via `allowed_tools` in the operator configuration.
 
 ```yaml
 operators:
@@ -153,8 +158,8 @@ operators:
     initial_balance: "1000.00"
     allowed_tools:
       - get_balance
-      - get_quote
-      - place_bet
+      - get_event
+      - place_bet_moneyline
       - place_bet_spread
       - place_bet_total
       - cancel_bet
@@ -162,20 +167,18 @@ operators:
       - get_pending_orders
       - get_bet_history
       - get_statistics
-      - get_available_events
 ```
 
 **Available Tools:**
-- `get_balance` - Get account balance
-- `get_quote` - Get current odds for an event
-- `place_bet` - Place moneyline bet
-- `place_bet_spread` - Place spread bet
-- `place_bet_total` - Place total (over/under) bet
-- `cancel_bet` - Cancel pending limit order
-- `get_active_bets` - Get active bets
-- `get_pending_orders` - Get pending orders
-- `get_bet_history` - Get bet history
-- `get_statistics` - Get performance statistics
-- `get_available_events` - Get available events
+- `get_balance()` - Get account balance
+- `get_event()` - Get current game info and betting options (call first). Returns JSON or "null"
+- `place_bet_moneyline(amount, selection, betting_phase, order_type="MARKET", limit_odds=None)` - Bet on winner. `betting_phase` required: "PRE_GAME" for SCHEDULED, "IN_GAME" for LIVE
+- `place_bet_spread(amount, selection, spread_value, betting_phase, ...)` - Bet on spread. `spread_value` from `get_event().spread_lines`
+- `place_bet_total(amount, selection, total_value, betting_phase, ...)` - Bet over/under. `total_value` from `get_event().total_lines`
+- `cancel_bet(bet_index)` - Cancel pending order (index from `get_pending_orders()`)
+- `get_active_bets()` - Get active bets
+- `get_pending_orders()` - Get pending limit orders
+- `get_bet_history(limit=20)` - Get settled bet history
+- `get_statistics()` - Get performance stats
 
 If `allowed_tools` is omitted or `None`, all tools are enabled by default.
