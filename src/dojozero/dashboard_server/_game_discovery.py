@@ -470,35 +470,35 @@ class NBAGameFetcher:
             Tuple of (status_code, status_text) or None if not found.
             Status codes: 1=scheduled, 2=in_progress, 3=finished, 4=postponed, 5=cancelled
         """
-        # Use ESPN API to get detailed status info
-        games = await self.fetch_games_for_date(game_date)
-        for g in games:
-            if g.event_id == game_id:
-                # Map status text to our internal codes
-                status_text = g.status_text.lower()
-                if "postponed" in status_text:
-                    return (4, g.status_text)  # STATUS_POSTPONED
-                if "canceled" in status_text or "cancelled" in status_text:
-                    return (5, g.status_text)  # STATUS_CANCELLED
-                return (g.status, g.status_text)
 
-        # If not found with date, try today and yesterday
-        if game_date is None:
+        def _map_status(game: GameInfo) -> tuple[int, str]:
+            """Maps game status text to internal status codes."""
+            status_text = game.status_text.lower()
+            if "postponed" in status_text:
+                return (4, game.status_text)
+            if "canceled" in status_text or "cancelled" in status_text:
+                return (5, game.status_text)
+            return (game.status, game.status_text)
+
+        # Build list of dates to check
+        dates_to_check: list[str | None] = []
+        if game_date:
+            dates_to_check.append(game_date)
+        else:
+            # If no date, check today and yesterday
             today = datetime.now()
-            dates_to_check = [
-                today.strftime("%Y-%m-%d"),
-                (today - timedelta(days=1)).strftime("%Y-%m-%d"),
-            ]
-            for date in dates_to_check:
-                games = await self.fetch_games_for_date(date)
-                for g in games:
-                    if g.event_id == game_id:
-                        status_text = g.status_text.lower()
-                        if "postponed" in status_text:
-                            return (4, g.status_text)
-                        if "canceled" in status_text or "cancelled" in status_text:
-                            return (5, g.status_text)
-                        return (g.status, g.status_text)
+            dates_to_check.extend(
+                [
+                    today.strftime("%Y-%m-%d"),
+                    (today - timedelta(days=1)).strftime("%Y-%m-%d"),
+                ]
+            )
+
+        for date in dates_to_check:
+            games = await self.fetch_games_for_date(date)
+            for g in games:
+                if g.event_id == game_id:
+                    return _map_status(g)
 
         return None
 

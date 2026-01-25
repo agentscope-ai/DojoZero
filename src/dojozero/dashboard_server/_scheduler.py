@@ -1074,29 +1074,27 @@ class ScheduleManager:
                                 self._grace_period_seconds,
                             )
 
-                    # Handle postponed games - stop immediately
-                    if game_status == STATUS_POSTPONED:
+                    # Handle postponed or cancelled games - stop immediately
+                    if game_status in (STATUS_POSTPONED, STATUS_CANCELLED):
+                        state_str = (
+                            "POSTPONED"
+                            if game_status == STATUS_POSTPONED
+                            else "CANCELLED"
+                        )
+                        error_str = (
+                            "postponed"
+                            if game_status == STATUS_POSTPONED
+                            else "cancelled"
+                        )
                         LOGGER.warning(
-                            "Game %s (schedule %s) has been POSTPONED (%s). "
+                            "Game %s (schedule %s) has been %s (%s). "
                             "Stopping trial immediately.",
                             scheduled.event_id,
                             scheduled.schedule_id,
+                            state_str,
                             status_text,
                         )
-                        scheduled.error = f"Game postponed: {status_text}"
-                        await self._stop_trial(scheduled)
-                        continue
-
-                    # Handle cancelled games - stop immediately
-                    if game_status == STATUS_CANCELLED:
-                        LOGGER.warning(
-                            "Game %s (schedule %s) has been CANCELLED (%s). "
-                            "Stopping trial immediately.",
-                            scheduled.event_id,
-                            scheduled.schedule_id,
-                            status_text,
-                        )
-                        scheduled.error = f"Game cancelled: {status_text}"
+                        scheduled.error = f"Game {error_str}: {status_text}"
                         await self._stop_trial(scheduled)
                         continue
 
