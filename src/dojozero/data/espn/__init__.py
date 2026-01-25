@@ -40,6 +40,13 @@ from dojozero.data.espn._events import (
 from dojozero.data.espn._state_tracker import ESPNStateTracker
 from dojozero.data.espn._store import ESPNStore
 
+# Game status constants (re-exported from ESPNStateTracker for convenience)
+STATUS_SCHEDULED = ESPNStateTracker.STATUS_SCHEDULED
+STATUS_IN_PROGRESS = ESPNStateTracker.STATUS_IN_PROGRESS
+STATUS_FINAL = ESPNStateTracker.STATUS_FINAL
+STATUS_POSTPONED = ESPNStateTracker.STATUS_POSTPONED
+STATUS_CANCELLED = ESPNStateTracker.STATUS_CANCELLED
+
 __all__ = [
     # API
     "ESPNExternalAPI",
@@ -49,6 +56,12 @@ __all__ = [
     "ESPNStore",
     # State Tracker
     "ESPNStateTracker",
+    # Status Constants
+    "STATUS_SCHEDULED",
+    "STATUS_IN_PROGRESS",
+    "STATUS_FINAL",
+    "STATUS_POSTPONED",
+    "STATUS_CANCELLED",
     # Events
     "ESPNGameInitializeEvent",
     "ESPNGameStartEvent",

@@ -24,6 +24,11 @@ from dojozero.core._registry import (
     TrialBuilderNotFoundError,
     get_trial_builder_definition,
 )
+from dojozero.data.espn import (
+    STATUS_CANCELLED,
+    STATUS_FINAL,
+    STATUS_POSTPONED,
+)
 from dojozero.utils import utc_to_us_date
 
 from ._game_discovery import GameInfo, NBAGameFetcher, NFLGameFetcher
@@ -840,9 +845,11 @@ class ScheduleManager:
             # Add game-specific config (both NBA and NFL use espn_game_id)
             game_config["espn_game_id"] = game.event_id
 
+            # Convert game time to US Eastern date for consistent date handling
+            game_date = utc_to_us_date(game.game_time_utc)
+
             # Add data_dir to hub config if specified
             if config.data_dir:
-                game_date = utc_to_us_date(game.game_time_utc)
                 if "hub" not in game_config:
                     game_config["hub"] = {}
                 persistence_file = (
@@ -852,7 +859,6 @@ class ScheduleManager:
                 game_config["hub"]["enable_persistence"] = True
 
             # Metadata for the trial
-            game_date = utc_to_us_date(game.game_time_utc)
             metadata = {
                 "source_id": source.source_id,
                 "game_short_name": game.short_name,
@@ -1031,11 +1037,6 @@ class ScheduleManager:
         Also handles abnormal game states (postponed, cancelled) by stopping
         trials immediately with appropriate logging.
         """
-        # Status codes
-        STATUS_FINISHED = 3
-        STATUS_POSTPONED = 4
-        STATUS_CANCELLED = 5
-
         while not self._shutdown_event.is_set():
             try:
                 now = datetime.now(timezone.utc)
@@ -1064,7 +1065,7 @@ class ScheduleManager:
                         scheduled.phase = ScheduledTrialPhase.MONITORING
                         self._persist()
 
-                        if game_status == STATUS_FINISHED:
+                        if game_status == STATUS_FINAL:
                             LOGGER.info(
                                 "Game %s (schedule %s) was already finished at "
                                 "monitoring start. Will allow %.0f second grace "
@@ -1098,9 +1099,9 @@ class ScheduleManager:
                         await self._stop_trial(scheduled)
                         continue
 
-                    if game_status == STATUS_FINISHED:
+                    if game_status == STATUS_FINAL:
                         # Check if game was already finished when monitoring started
-                        if scheduled.initial_game_status == STATUS_FINISHED:
+                        if scheduled.initial_game_status == STATUS_FINAL:
                             # Apply grace period before stopping
                             elapsed = (
                                 now - scheduled.monitoring_started_at
@@ -1233,11 +1234,20 @@ class ScheduleManager:
                     scheduled.event_id,
                     scheduled.game_date,
                 )
+            else:
+                LOGGER.warning(
+                    "Unknown sport type '%s' for schedule %s",
+                    scheduled.sport_type,
+                    scheduled.schedule_id,
+                )
         except Exception as e:
-            LOGGER.warning(
-                "Error getting game status for %s: %s",
+            LOGGER.error(
+                "Failed to get game status for %s (event %s, sport %s): %s",
                 scheduled.schedule_id,
+                scheduled.event_id,
+                scheduled.sport_type,
                 e,
+                exc_info=True,
             )
         return None
 

@@ -1569,6 +1569,49 @@ async def _serve_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_trial_links(
+    metadata: dict,
+    event_id: str,
+    sport_type: str,
+    event_time_str: str = "",
+) -> None:
+    """Print ESPN and Polymarket links for a trial.
+
+    Args:
+        metadata: Trial metadata dict containing tricode and date info
+        event_id: ESPN event ID
+        sport_type: Sport type (e.g., "nba", "nfl")
+        event_time_str: Optional event time string for date fallback
+    """
+    home_tricode = metadata.get("home_tricode", "")
+    away_tricode = metadata.get("away_tricode", "")
+    game_date = metadata.get("game_date", "")
+
+    # Fallback: extract tricodes from game_short_name (e.g., "LAL @ BOS")
+    if not (home_tricode and away_tricode):
+        short_name = metadata.get("game_short_name", "")
+        if " @ " in short_name:
+            parts = short_name.split(" @ ")
+            if len(parts) == 2:
+                away_tricode = parts[0].strip()
+                home_tricode = parts[1].strip()
+
+    # Fallback: extract game_date from event_time
+    if not game_date and event_time_str:
+        game_date = event_time_str[:10]  # Extract YYYY-MM-DD
+
+    # ESPN link
+    if event_id:
+        print(f"    ESPN: {get_espn_game_url(event_id, sport_type)}")
+
+    # Polymarket link
+    if home_tricode and away_tricode and game_date:
+        polymarket_url = PolymarketAPI.get_event_url(
+            away_tricode, home_tricode, game_date, sport_type
+        )
+        print(f"    Polymarket: {polymarket_url}")
+
+
 async def _list_trials_command(args: argparse.Namespace) -> int:
     """Handle list-trials command - list trials from Dashboard Server.
 
@@ -1689,37 +1732,12 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
 
             # Show links if requested
             if show_links:
-                sport_type = trial.get("sport_type", "nba")
-                full_event_id = trial.get("event_id", "")
-                home_tricode = metadata.get("home_tricode", "")
-                away_tricode = metadata.get("away_tricode", "")
-                game_date = metadata.get("game_date", "")
-
-                # Fallback: extract tricodes from game_short_name (e.g., "LAL @ BOS")
-                if not (home_tricode and away_tricode):
-                    short_name = metadata.get("game_short_name", "")
-                    if " @ " in short_name:
-                        parts = short_name.split(" @ ")
-                        if len(parts) == 2:
-                            away_tricode = parts[0].strip()
-                            home_tricode = parts[1].strip()
-
-                # Fallback: extract game_date from event_time
-                if not game_date:
-                    event_time_str = trial.get("event_time", "")
-                    if event_time_str:
-                        game_date = event_time_str[:10]  # Extract YYYY-MM-DD
-
-                # ESPN link
-                if full_event_id:
-                    print(f"    ESPN: {get_espn_game_url(full_event_id, sport_type)}")
-
-                # Polymarket link
-                if home_tricode and away_tricode and game_date:
-                    polymarket_url = PolymarketAPI.get_event_url(
-                        away_tricode, home_tricode, game_date, sport_type
-                    )
-                    print(f"    Polymarket: {polymarket_url}")
+                _print_trial_links(
+                    metadata=metadata,
+                    event_id=trial.get("event_id", ""),
+                    sport_type=trial.get("sport_type", "nba"),
+                    event_time_str=trial.get("event_time", ""),
+                )
 
             # Show error if present
             if trial.get("error"):
@@ -1770,31 +1788,11 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
 
             # Show links if requested
             if show_links:
-                sport_type = metadata.get("sport_type", "nba")
-                full_event_id = metadata.get("event_id", "")
-                home_tricode = metadata.get("home_tricode", "")
-                away_tricode = metadata.get("away_tricode", "")
-                game_date = metadata.get("game_date", "")
-
-                # Fallback: extract tricodes from game_short_name (e.g., "LAL @ BOS")
-                if not (home_tricode and away_tricode):
-                    short_name = metadata.get("game_short_name", "")
-                    if " @ " in short_name:
-                        parts = short_name.split(" @ ")
-                        if len(parts) == 2:
-                            away_tricode = parts[0].strip()
-                            home_tricode = parts[1].strip()
-
-                # ESPN link
-                if full_event_id:
-                    print(f"    ESPN: {get_espn_game_url(full_event_id, sport_type)}")
-
-                # Polymarket link
-                if home_tricode and away_tricode and game_date:
-                    polymarket_url = PolymarketAPI.get_event_url(
-                        away_tricode, home_tricode, game_date, sport_type
-                    )
-                    print(f"    Polymarket: {polymarket_url}")
+                _print_trial_links(
+                    metadata=metadata,
+                    event_id=metadata.get("event_id", ""),
+                    sport_type=metadata.get("sport_type", "nba"),
+                )
 
             # Show error if present
             if trial.get("error"):

@@ -15,11 +15,14 @@ def utc_to_us_date(dt: datetime) -> str:
     ensures consistent date handling across the codebase.
 
     Args:
-        dt: A datetime object (should be in UTC or timezone-aware)
+        dt: A datetime object (assumed UTC if naive, otherwise uses its timezone)
 
     Returns:
         Date string in YYYY-MM-DD format, in US Eastern time
     """
+    # Handle naive datetimes by assuming they are UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(US_EASTERN_TZ).strftime("%Y-%m-%d")
 
 
