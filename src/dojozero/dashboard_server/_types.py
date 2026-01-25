@@ -141,6 +141,12 @@ class TrialSourceConfigDict(TypedDict, total=False):
     """Dictionary shape for trial source configuration.
 
     Used when loading trial source config from initial_trial_sources or storage.
+
+    Note: scenario_config is kept as dict[str, Any] because:
+    1. It's loaded from YAML and modified dynamically (adding espn_game_id, etc.)
+    2. It's validated by Pydantic models (NBATrialParams, NFLTrialParams) when
+       the trial is built, so type safety is enforced at that point.
+    3. The structure varies by scenario (NBA vs NFL have different fields).
     """
 
     scenario_name: str
