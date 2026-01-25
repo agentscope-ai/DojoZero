@@ -278,3 +278,16 @@ class ESPNExternalAPI(ExternalAPI):
         except Exception as e:
             logger.error("Error fetching teams: %s", e)
             return {"teams": []}
+
+
+def get_espn_game_url(event_id: str, sport: str = "nba") -> str:
+    """Generate ESPN game page URL.
+
+    Args:
+        event_id: ESPN event ID
+        sport: Sport type (e.g., "nba", "nfl")
+
+    Returns:
+        ESPN game page URL (e.g., "https://www.espn.com/nba/game/_/gameId/401585123")
+    """
+    return f"https://www.espn.com/{sport.lower()}/game/_/gameId/{event_id}"

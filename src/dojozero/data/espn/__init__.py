@@ -26,7 +26,7 @@ Example:
     scoreboard = await api.fetch("scoreboard")
 """
 
-from dojozero.data.espn._api import ESPNExternalAPI, get_proxy
+from dojozero.data.espn._api import ESPNExternalAPI, get_espn_game_url, get_proxy
 from dojozero.data.espn._events import (
     ESPNCompetitor,
     ESPNGameEndEvent,
@@ -44,6 +44,7 @@ __all__ = [
     # API
     "ESPNExternalAPI",
     "get_proxy",
+    "get_espn_game_url",
     # Store
     "ESPNStore",
     # State Tracker

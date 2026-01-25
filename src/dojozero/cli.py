@@ -27,6 +27,9 @@ from dojozero.core import (
     list_trial_builders,
 )
 from dojozero.data import DataHub
+from dojozero.data.espn import get_espn_game_url
+from dojozero.data.polymarket import PolymarketAPI
+from dojozero.utils import utc_iso_to_local
 from dojozero.core import TrialBuilderNotFoundError as _TrialBuilderNotFoundError
 
 try:  # Optional Ray dependency
@@ -391,8 +394,8 @@ def _build_parser() -> argparse.ArgumentParser:
     list_trials_parser = subparsers.add_parser(
         "list-trials",
         help="List trials from a running Dashboard Server",
-        description="Fetch and display trials from a Dashboard Server. "
-        "Use --scheduled to list auto-scheduled trials from trial sources.",
+        description="Fetch and display all trials (scheduled and running) from a Dashboard Server. "
+        "Use --running-only to show only running trials, or --scheduled-only for scheduled trials.",
     )
     list_trials_parser.add_argument(
         "--server",
@@ -401,14 +404,26 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     list_trials_parser.add_argument(
         "--scheduled",
+        "--scheduled-only",
         action="store_true",
-        help="List auto-scheduled trials (from trial sources) instead of running/queued trials.",
+        dest="scheduled_only",
+        help="List only auto-scheduled trials (from trial sources).",
+    )
+    list_trials_parser.add_argument(
+        "--running-only",
+        action="store_true",
+        help="List only running/queued trials.",
     )
     list_trials_parser.add_argument(
         "--json",
         dest="output_json",
         action="store_true",
         help="Output as raw JSON instead of pretty-printed table.",
+    )
+    list_trials_parser.add_argument(
+        "--show-links",
+        action="store_true",
+        help="Show ESPN and Polymarket links for each game.",
     )
 
     # List trial sources command
@@ -1555,112 +1570,238 @@ async def _serve_command(args: argparse.Namespace) -> int:
 
 
 async def _list_trials_command(args: argparse.Namespace) -> int:
-    """Handle list-trials command - list trials from Dashboard Server."""
+    """Handle list-trials command - list trials from Dashboard Server.
+
+    By default shows both scheduled and running trials with user-friendly info.
+    """
     import json
 
     import httpx
 
     server = args.server.rstrip("/")
-    scheduled = args.scheduled
+    scheduled_only = getattr(args, "scheduled_only", False)
+    running_only = getattr(args, "running_only", False)
     output_json = args.output_json
+    show_links = getattr(args, "show_links", False)
 
-    # Choose endpoint based on --scheduled flag
-    if scheduled:
-        url = f"{server}/api/scheduled-trials"
-    else:
-        url = f"{server}/api/trials"
+    # Fetch data from both endpoints by default
+    scheduled_trials: list[dict] = []
+    running_trials: list[dict] = []
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            data = response.json()
+            # Fetch scheduled trials unless --running-only
+            if not running_only:
+                try:
+                    resp = await client.get(f"{server}/api/scheduled-trials")
+                    resp.raise_for_status()
+                    data = resp.json()
+                    scheduled_trials = data.get("scheduled_trials", [])
+                except httpx.HTTPStatusError:
+                    # Scheduling may not be enabled, ignore
+                    pass
+
+            # Fetch running trials unless --scheduled-only
+            if not scheduled_only:
+                resp = await client.get(f"{server}/api/trials")
+                resp.raise_for_status()
+                data = resp.json()
+                running_trials = (
+                    data if isinstance(data, list) else data.get("trials", [])
+                )
+
     except httpx.HTTPStatusError as e:
         body = e.response.text
         raise DojoZeroCLIError(
             f"Server returned error {e.response.status_code}: {body}"
         )
     except httpx.RequestError as e:
-        # httpx exceptions can have empty str() representations
         error_detail = str(e) or type(e).__name__
         raise DojoZeroCLIError(
             f"Failed to connect to server at {server}: {error_detail}"
         )
 
     if output_json:
-        print(json.dumps(data, indent=2))
+        combined = {
+            "scheduled_trials": scheduled_trials,
+            "running_trials": running_trials,
+        }
+        if scheduled_only:
+            combined = {"scheduled_trials": scheduled_trials}
+        elif running_only:
+            combined = {"running_trials": running_trials}
+        print(json.dumps(combined, indent=2))
         return 0
 
-    # Pretty print
-    if scheduled:
-        trials = data.get("scheduled_trials", [])
-        count = data.get("count", len(trials))
-        print(f"Scheduled Trials ({count}):")
-        print("-" * 100)
-        if not trials:
-            print("  No scheduled trials found.")
-        else:
-            # Header
-            print(
-                f"  {'ID':<40} {'Phase':<12} {'Event':<15} {'Sport':<6} {'Start Time':<25}"
-            )
-            print("  " + "-" * 96)
-            for trial in trials:
-                schedule_id = trial.get("schedule_id", "")[:38]
-                phase = trial.get("phase", "")
-                event_id = trial.get("event_id", "")[:13]
-                sport = trial.get("sport_type", "")
-                # Convert UTC time to local timezone for display
-                start_time_str = trial.get("scheduled_start_time", "")
-                if start_time_str:
-                    from datetime import datetime, timezone
+    # Pretty print with user-friendly info
+    total_count = len(scheduled_trials) + len(running_trials)
+    print(f"Trials ({total_count} total)")
+    print("=" * 110)
 
-                    try:
-                        # Parse ISO format UTC time
-                        utc_time = datetime.fromisoformat(
-                            start_time_str.replace("Z", "+00:00")
-                        )
-                        if utc_time.tzinfo is None:
-                            utc_time = utc_time.replace(tzinfo=timezone.utc)
-                        # Convert to local timezone
-                        local_time = utc_time.astimezone()
-                        start_time = local_time.strftime("%Y-%m-%d %H:%M:%S %Z")
-                    except (ValueError, TypeError):
-                        start_time = start_time_str[:23]
+    # Print scheduled trials
+    if scheduled_trials and not running_only:
+        print(f"\n📅 Scheduled Trials ({len(scheduled_trials)}):")
+        print("-" * 110)
+        # Header
+        print(
+            f"  {'Status':<12} {'Game':<35} {'Game Time':<14} {'Trial Start':<14} {'Event ID':<12}"
+        )
+        print("  " + "-" * 106)
+
+        for trial in scheduled_trials:
+            phase = trial.get("phase", "")
+            metadata = trial.get("metadata", {})
+
+            # Get user-friendly game name from metadata
+            game_name = metadata.get("game_short_name", "")
+            if not game_name:
+                home = metadata.get("home_team", "")
+                away = metadata.get("away_team", "")
+                if home and away:
+                    game_name = f"{away} @ {home}"
                 else:
-                    start_time = ""
-                print(
-                    f"  {schedule_id:<40} {phase:<12} {event_id:<15} {sport:<6} {start_time:<25}"
-                )
-    else:
-        # Regular trials - API returns a list directly
-        trials = data if isinstance(data, list) else data.get("trials", [])
-        count = len(trials)
-        print(f"Trials ({count}):")
-        print("-" * 100)
-        if not trials:
-            print("  No trials found.")
-        else:
-            # Header
-            print(f"  {'Trial ID':<36} {'Phase':<12} {'Source':<12} {'Metadata':<30}")
-            print("  " + "-" * 88)
-            for trial in trials:
-                trial_id = trial.get("id", trial.get("trial_id", ""))[:34]
-                phase = trial.get("phase", "")
-                source = trial.get("source", "")
-                # Extract meaningful metadata
-                metadata = trial.get("metadata", {})
-                meta_str = ""
-                if metadata.get("game_id"):
-                    meta_str = f"game:{metadata['game_id']}"
-                elif metadata.get("event_id"):
-                    meta_str = f"event:{metadata['event_id']}"
-                elif metadata:
-                    # Show first key-value pair
-                    for k, v in metadata.items():
-                        meta_str = f"{k}:{v}"[:28]
-                        break
-                print(f"  {trial_id:<36} {phase:<12} {source:<12} {meta_str:<30}")
+                    game_name = trial.get("scenario_name", "")
+
+            # Truncate game name if too long
+            if len(game_name) > 33:
+                game_name = game_name[:30] + "..."
+
+            # Get times in local timezone
+            event_time = utc_iso_to_local(trial.get("event_time", ""))
+            start_time = utc_iso_to_local(trial.get("scheduled_start_time", ""))
+            event_id = trial.get("event_id", "")[:10]
+
+            # Status emoji based on phase
+            status_icon = {
+                "waiting": "⏳",
+                "launching": "🚀",
+                "running": "▶️",
+                "monitoring": "👁️",
+                "completed": "✅",
+                "failed": "❌",
+                "cancelled": "🚫",
+            }.get(phase, "")
+            status = f"{status_icon} {phase}"
+
+            print(
+                f"  {status:<12} {game_name:<35} {event_time:<14} {start_time:<14} {event_id:<12}"
+            )
+
+            # Show links if requested
+            if show_links:
+                sport_type = trial.get("sport_type", "nba")
+                full_event_id = trial.get("event_id", "")
+                home_tricode = metadata.get("home_tricode", "")
+                away_tricode = metadata.get("away_tricode", "")
+                game_date = metadata.get("game_date", "")
+
+                # Fallback: extract tricodes from game_short_name (e.g., "LAL @ BOS")
+                if not (home_tricode and away_tricode):
+                    short_name = metadata.get("game_short_name", "")
+                    if " @ " in short_name:
+                        parts = short_name.split(" @ ")
+                        if len(parts) == 2:
+                            away_tricode = parts[0].strip()
+                            home_tricode = parts[1].strip()
+
+                # Fallback: extract game_date from event_time
+                if not game_date:
+                    event_time_str = trial.get("event_time", "")
+                    if event_time_str:
+                        game_date = event_time_str[:10]  # Extract YYYY-MM-DD
+
+                # ESPN link
+                if full_event_id:
+                    print(f"    ESPN: {get_espn_game_url(full_event_id, sport_type)}")
+
+                # Polymarket link
+                if home_tricode and away_tricode and game_date:
+                    polymarket_url = PolymarketAPI.get_event_url(
+                        away_tricode, home_tricode, game_date, sport_type
+                    )
+                    print(f"    Polymarket: {polymarket_url}")
+
+            # Show error if present
+            if trial.get("error"):
+                print(f"    └─ Error: {trial['error'][:80]}")
+
+    # Print running trials
+    if running_trials and not scheduled_only:
+        print(f"\n🏃 Running Trials ({len(running_trials)}):")
+        print("-" * 110)
+        # Header
+        print(f"  {'Status':<12} {'Trial ID':<38} {'Game Info':<40}")
+        print("  " + "-" * 88)
+
+        for trial in running_trials:
+            trial_id = trial.get("id", trial.get("trial_id", ""))
+            phase = trial.get("phase", "")
+            metadata = trial.get("metadata", {})
+
+            # Get game info from metadata
+            game_info = ""
+            if metadata.get("game_short_name"):
+                game_info = metadata["game_short_name"]
+            elif metadata.get("home_team") and metadata.get("away_team"):
+                game_info = f"{metadata['away_team']} @ {metadata['home_team']}"
+            elif metadata.get("espn_game_id"):
+                game_info = f"ESPN: {metadata['espn_game_id']}"
+            elif metadata.get("event_id"):
+                game_info = f"Event: {metadata['event_id']}"
+
+            # Truncate if needed
+            if len(trial_id) > 36:
+                trial_id = trial_id[:33] + "..."
+            if len(game_info) > 38:
+                game_info = game_info[:35] + "..."
+
+            # Status emoji
+            status_icon = {
+                "pending": "⏳",
+                "starting": "🚀",
+                "running": "▶️",
+                "stopping": "⏹️",
+                "stopped": "⏹️",
+                "failed": "❌",
+            }.get(phase, "")
+            status = f"{status_icon} {phase}"
+
+            print(f"  {status:<12} {trial_id:<38} {game_info:<40}")
+
+            # Show links if requested
+            if show_links:
+                sport_type = metadata.get("sport_type", "nba")
+                full_event_id = metadata.get("event_id", "")
+                home_tricode = metadata.get("home_tricode", "")
+                away_tricode = metadata.get("away_tricode", "")
+                game_date = metadata.get("game_date", "")
+
+                # Fallback: extract tricodes from game_short_name (e.g., "LAL @ BOS")
+                if not (home_tricode and away_tricode):
+                    short_name = metadata.get("game_short_name", "")
+                    if " @ " in short_name:
+                        parts = short_name.split(" @ ")
+                        if len(parts) == 2:
+                            away_tricode = parts[0].strip()
+                            home_tricode = parts[1].strip()
+
+                # ESPN link
+                if full_event_id:
+                    print(f"    ESPN: {get_espn_game_url(full_event_id, sport_type)}")
+
+                # Polymarket link
+                if home_tricode and away_tricode and game_date:
+                    polymarket_url = PolymarketAPI.get_event_url(
+                        away_tricode, home_tricode, game_date, sport_type
+                    )
+                    print(f"    Polymarket: {polymarket_url}")
+
+            # Show error if present
+            if trial.get("error"):
+                print(f"    └─ Error: {trial['error'][:80]}")
+
+    if total_count == 0:
+        print("\n  No trials found.")
 
     return 0
 
@@ -1716,9 +1857,9 @@ async def _list_sources_command(args: argparse.Namespace) -> int:
             config = source.get("config", {})
             scenario = config.get("scenario_name", "")[:23]
             enabled = "Yes" if source.get("enabled", False) else "No"
-            last_sync = source.get("last_sync_at", "Never")
-            if last_sync and last_sync != "Never":
-                last_sync = last_sync[:18]
+            last_sync = source.get("last_sync_at", "")
+            if last_sync:
+                last_sync = utc_iso_to_local(last_sync, "%Y-%m-%d %H:%M")
             else:
                 last_sync = "Never"
             print(

@@ -7,35 +7,6 @@ from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.polymarket._api import PolymarketAPI
 from dojozero.data.polymarket._events import OddsUpdateEvent
 
-# Mapping from ESPN team abbreviations to Polymarket slug abbreviations
-# ESPN uses inconsistent abbreviation lengths (2-4 chars), Polymarket uses 3-letter codes
-_ESPN_TO_POLYMARKET_TRICODE: dict[str, str] = {
-    # Teams where ESPN uses different abbreviation than Polymarket
-    "GS": "gsw",  # Golden State Warriors
-    "NO": "nop",  # New Orleans Pelicans
-    "NY": "nyk",  # New York Knicks
-    "SA": "sas",  # San Antonio Spurs
-    "UTAH": "uta",  # Utah Jazz
-    "PHX": "phx",  # Phoenix Suns (already 3 letters but ensure lowercase)
-    "WSH": "was",  # Washington Wizards (ESPN sometimes uses WSH)
-}
-
-
-def _normalize_tricode_for_polymarket(tricode: str) -> str:
-    """Normalize ESPN team tricode to Polymarket format.
-
-    Args:
-        tricode: ESPN team abbreviation (e.g., "GS", "UTAH", "LAL")
-
-    Returns:
-        Polymarket-compatible 3-letter lowercase code (e.g., "gsw", "uta", "lal")
-    """
-    upper = tricode.upper()
-    if upper in _ESPN_TO_POLYMARKET_TRICODE:
-        return _ESPN_TO_POLYMARKET_TRICODE[upper]
-    # Default: lowercase and take first 3 characters
-    return tricode.lower()[:3]
-
 
 class PolymarketStore(DataStore):
     """Polymarket data store for polling Polymarket API and emitting events.
@@ -178,11 +149,11 @@ class PolymarketStore(DataStore):
                 and "game_date" in identifier
             ):
                 # Normalize ESPN tricodes to Polymarket format
-                away_tricode = _normalize_tricode_for_polymarket(
-                    identifier["away_tricode"]
+                away_tricode = PolymarketAPI.normalize_tricode(
+                    identifier["away_tricode"], self._sport
                 )
-                home_tricode = _normalize_tricode_for_polymarket(
-                    identifier["home_tricode"]
+                home_tricode = PolymarketAPI.normalize_tricode(
+                    identifier["home_tricode"], self._sport
                 )
                 game_date = identifier["game_date"]  # Expected format: YYYY-MM-DD
                 # Use sport prefix (nba or nfl)

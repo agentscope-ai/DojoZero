@@ -570,6 +570,9 @@ class ScheduleManager:
             game_metadata["game_short_name"] = game.short_name
             game_metadata["home_team"] = game.home_team.name
             game_metadata["away_team"] = game.away_team.name
+            game_metadata["home_tricode"] = game.home_team.tricode
+            game_metadata["away_tricode"] = game.away_team.tricode
+            game_metadata["game_date"] = game_date
 
             try:
                 schedule_id = await self.schedule_trial(
@@ -849,11 +852,15 @@ class ScheduleManager:
                 game_config["hub"]["enable_persistence"] = True
 
             # Metadata for the trial
+            game_date = utc_to_us_date(game.game_time_utc)
             metadata = {
                 "source_id": source.source_id,
                 "game_short_name": game.short_name,
                 "home_team": game.home_team.name,
                 "away_team": game.away_team.name,
+                "home_tricode": game.home_team.tricode,
+                "away_tricode": game.away_team.tricode,
+                "game_date": game_date,
             }
 
             try:
