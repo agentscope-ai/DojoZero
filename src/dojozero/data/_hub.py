@@ -29,38 +29,30 @@ class DataHub:
 
     def __init__(
         self,
-        hub_id: str = "data_hub",
-        persistence_file: Path | str | None = None,
-        enable_persistence: bool = True,
+        hub_id: str,
+        persistence_file: Path | str,
         trial_id: str | None = None,
     ):
         """Initialize DataHub.
 
         Args:
             hub_id: Unique identifier for this hub
-            persistence_file: Path to file for event persistence
-            enable_persistence: Whether to persist events to file
+            persistence_file: Path to file for event persistence (required)
             trial_id: Trial identifier for trace emission (optional)
         """
         self.hub_id = hub_id
-        self.enable_persistence = enable_persistence
         self.trial_id = trial_id
+        self.persistence_file = Path(persistence_file)
 
         logger.info(
-            "DataHub initialized: hub_id=%s, trial_id=%s, persistence=%s",
+            "DataHub initialized: hub_id=%s, trial_id=%s, persistence_file=%s",
             hub_id,
             trial_id,
-            enable_persistence,
+            self.persistence_file,
         )
 
-        if persistence_file:
-            self.persistence_file = Path(persistence_file)
-        else:
-            self.persistence_file = Path("data/events.jsonl")
-
         # Ensure persistence directory exists
-        if self.enable_persistence:
-            self.persistence_file.parent.mkdir(parents=True, exist_ok=True)
+        self.persistence_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Agent subscriptions: agent_id -> list of stream_ids or event_types
         self._agent_subscriptions: dict[str, set[str]] = defaultdict(set)
@@ -125,8 +117,8 @@ class DataHub:
         # Cache event for late-joining subscribers
         self._cache_event(event)
 
-        # Persist event if enabled
-        if self.enable_persistence and not self._backtest_mode:
+        # Persist event (skip during backtest mode)
+        if not self._backtest_mode:
             await self._persist_event(event)
 
         # Emit to trace backend if trial_id is set

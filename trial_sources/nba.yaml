@@ -27,8 +27,7 @@ sport_type: nba
 config:
   scenario_name: nba
   scenario_config:
-    hub:
-      enable_persistence: true
+    hub: {}
 
     data_streams:
     - id: raw_web_search_stream

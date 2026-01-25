@@ -424,7 +424,6 @@ class NFLGameTrialManager:
         if "hub" not in config["scenario"]["config"]:
             config["scenario"]["config"]["hub"] = {}
         config["scenario"]["config"]["hub"]["persistence_file"] = str(events_file)
-        config["scenario"]["config"]["hub"]["enable_persistence"] = True
 
         # Create directory structure
         config_file.parent.mkdir(parents=True, exist_ok=True)

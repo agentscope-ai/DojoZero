@@ -140,8 +140,7 @@ config:
   scenario_config:
     # Same structure as trial params, but without game_id
     # (game_id is filled in automatically for each discovered game)
-    hub:
-      enable_persistence: true
+    hub: {}
     data_streams:
       # ... stream definitions
     operators:
@@ -266,8 +265,7 @@ In backtest mode, events are replayed from the JSONL file rather than fetched li
 
 **Ignored fields:**
 - `game_id` / `event_id` - Events come from the file, not live sources
-- `hub.persistence_file` - Backtest uses an in-memory hub (no persistence)
-- `hub.enable_persistence` - Always disabled in backtest
+- `hub.persistence_file` - Backtest uses the event file for hub configuration
 - Data stream `initializer` configs - No live data fetching occurs
 
 **Used fields:**

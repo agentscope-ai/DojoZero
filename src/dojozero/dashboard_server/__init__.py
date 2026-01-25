@@ -36,6 +36,23 @@ from ._trial_manager import (
     QueuedTrialPhase,
     TrialManager,
 )
+from ._types import (
+    BacktestMetadata,
+    BroadcastDataDict,
+    ErrorResponse,
+    GameMetadata,
+    HealthResponse,
+    HubMetadata,
+    InitialTrialSourceDict,
+    OddsDataDict,
+    ScheduledMetadata,
+    ScheduledTrialResponse,
+    TeamDataDict,
+    TrialInfoResponse,
+    TrialSourceConfigDict,
+    TrialSourceResponse,
+    VenueDataDict,
+)
 
 __all__ = [
     # Server
@@ -63,4 +80,23 @@ __all__ = [
     "VenueInfo",
     "NBAGameFetcher",
     "NFLGameFetcher",
+    # TypedDicts for metadata
+    "BacktestMetadata",
+    "GameMetadata",
+    "HubMetadata",
+    "ScheduledMetadata",
+    # TypedDicts for API responses
+    "ErrorResponse",
+    "HealthResponse",
+    "ScheduledTrialResponse",
+    "TrialInfoResponse",
+    "TrialSourceResponse",
+    # TypedDicts for configuration
+    "InitialTrialSourceDict",
+    "TrialSourceConfigDict",
+    # TypedDicts for game discovery
+    "BroadcastDataDict",
+    "OddsDataDict",
+    "TeamDataDict",
+    "VenueDataDict",
 ]
