@@ -19,8 +19,13 @@ class ESPNStateTracker:
     STATUS_SCHEDULED = 1
     STATUS_IN_PROGRESS = 2
     STATUS_FINAL = 3
+    # Special status codes for abnormal game states
+    STATUS_POSTPONED = 4
+    STATUS_CANCELLED = 5
 
     # ESPN status name to code mapping
+    # Note: Postponed/Cancelled are mapped to their specific codes (4, 5)
+    # so the scheduler can detect and handle these abnormal states
     STATUS_NAME_MAP = {
         "STATUS_SCHEDULED": STATUS_SCHEDULED,
         "STATUS_IN_PROGRESS": STATUS_IN_PROGRESS,
@@ -31,8 +36,8 @@ class ESPNStateTracker:
         "STATUS_SUSPENDED": STATUS_IN_PROGRESS,
         "STATUS_FINAL": STATUS_FINAL,
         "STATUS_FINAL_OVERTIME": STATUS_FINAL,
-        "STATUS_POSTPONED": STATUS_SCHEDULED,
-        "STATUS_CANCELED": STATUS_FINAL,
+        "STATUS_POSTPONED": STATUS_POSTPONED,
+        "STATUS_CANCELED": STATUS_CANCELLED,
     }
 
     def __init__(self):

@@ -4,7 +4,6 @@ Provides unified interfaces for fetching game information from
 NBA API and ESPN API (for NFL).
 """
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,7 +11,6 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from dojozero.data.espn._api import ESPNExternalAPI
-from dojozero.data.nba._utils import get_games_for_date
 from dojozero.data.nfl._api import NFLExternalAPI
 
 LOGGER = logging.getLogger("dojozero.game_discovery")
@@ -453,29 +451,54 @@ class NBAGameFetcher:
             game_date: Date of the game (YYYY-MM-DD). If None, searches recent dates.
 
         Returns:
-            Game status (1=scheduled, 2=in_progress, 3=finished) or None if not found.
+            Game status (1=scheduled, 2=in_progress, 3=finished, 4=postponed, 5=cancelled)
+            or None if not found.
         """
-        if game_date:
-            dates_to_check = [game_date]
-        else:
-            # Check today and yesterday
+        result = await self.get_game_status_info(game_id, game_date)
+        return result[0] if result else None
+
+    async def get_game_status_info(
+        self, game_id: str, game_date: str | None = None
+    ) -> tuple[int, str] | None:
+        """Get current status and status text of a game.
+
+        Args:
+            game_id: ESPN event ID
+            game_date: Date of the game (YYYY-MM-DD). If None, searches recent dates.
+
+        Returns:
+            Tuple of (status_code, status_text) or None if not found.
+            Status codes: 1=scheduled, 2=in_progress, 3=finished, 4=postponed, 5=cancelled
+        """
+        # Use ESPN API to get detailed status info
+        games = await self.fetch_games_for_date(game_date)
+        for g in games:
+            if g.event_id == game_id:
+                # Map status text to our internal codes
+                status_text = g.status_text.lower()
+                if "postponed" in status_text:
+                    return (4, g.status_text)  # STATUS_POSTPONED
+                if "canceled" in status_text or "cancelled" in status_text:
+                    return (5, g.status_text)  # STATUS_CANCELLED
+                return (g.status, g.status_text)
+
+        # If not found with date, try today and yesterday
+        if game_date is None:
             today = datetime.now()
             dates_to_check = [
                 today.strftime("%Y-%m-%d"),
                 (today - timedelta(days=1)).strftime("%Y-%m-%d"),
             ]
-
-        for date in dates_to_check:
-            try:
-                # Run in thread pool to avoid blocking the event loop
-                games = await asyncio.to_thread(get_games_for_date, date, False)
+            for date in dates_to_check:
+                games = await self.fetch_games_for_date(date)
                 for g in games:
-                    if str(g.get("gameId")) == game_id:
-                        return g.get("gameStatus")
-            except Exception as e:
-                LOGGER.warning(
-                    "Error checking game status for %s on %s: %s", game_id, date, e
-                )
+                    if g.event_id == game_id:
+                        status_text = g.status_text.lower()
+                        if "postponed" in status_text:
+                            return (4, g.status_text)
+                        if "canceled" in status_text or "cancelled" in status_text:
+                            return (5, g.status_text)
+                        return (g.status, g.status_text)
 
         return None
 
@@ -549,13 +572,39 @@ class NFLGameFetcher:
             game_date: Date of the game (YYYY-MM-DD).
 
         Returns:
-            Game status (1=scheduled, 2=in_progress, 3=finished) or None if not found.
+            Game status (1=scheduled, 2=in_progress, 3=finished, 4=postponed, 5=cancelled)
+            or None if not found.
         """
+        result = await self.get_game_status_info(event_id, game_date)
+        return result[0] if result else None
+
+    async def get_game_status_info(
+        self, event_id: str, game_date: str | None = None
+    ) -> tuple[int, str] | None:
+        """Get current status and status text of a game.
+
+        Args:
+            event_id: ESPN event ID
+            game_date: Date of the game (YYYY-MM-DD).
+
+        Returns:
+            Tuple of (status_code, status_text) or None if not found.
+            Status codes: 1=scheduled, 2=in_progress, 3=finished, 4=postponed, 5=cancelled
+        """
+
+        def _map_status(game: GameInfo) -> tuple[int, str]:
+            status_text = game.status_text.lower()
+            if "postponed" in status_text:
+                return (4, game.status_text)  # STATUS_POSTPONED
+            if "canceled" in status_text or "cancelled" in status_text:
+                return (5, game.status_text)  # STATUS_CANCELLED
+            return (game.status, game.status_text)
+
         if game_date:
             games = await self.fetch_games_for_date(game_date)
             for g in games:
                 if g.event_id == event_id:
-                    return g.status
+                    return _map_status(g)
 
         # If no date provided or not found, try current scoreboard
         api = NFLExternalAPI()
@@ -564,7 +613,7 @@ class NFLGameFetcher:
             games = _parse_espn_scoreboard(data, "nfl")
             for g in games:
                 if g.event_id == event_id:
-                    return g.status
+                    return _map_status(g)
         except Exception as e:
             LOGGER.warning("Error checking game status for %s: %s", event_id, e)
         finally:

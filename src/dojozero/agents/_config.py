@@ -125,9 +125,16 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
     base_url = get_base_url(llm_config)
 
     if model_type == "openai":
-        client_args = {"base_url": base_url} if base_url else None
+        client_kwargs: dict[str, Any] | None = (
+            {"base_url": base_url} if base_url else None
+        )
+        # max_tokens is required by some providers (e.g., Bedrock via OpenAI-compatible API)
+        generate_kwargs: dict[str, Any] = {"max_tokens": 16384}
         return OpenAIChatModel(
-            model_name=model_name, api_key=api_key, client_args=client_args
+            model_name=model_name,
+            api_key=api_key,
+            client_kwargs=client_kwargs,
+            generate_kwargs=generate_kwargs,
         )
     elif model_type == "dashscope":
         return DashScopeChatModel(model_name=model_name, api_key=api_key)

@@ -24,6 +24,7 @@ from dojozero.core._registry import (
     TrialBuilderNotFoundError,
     get_trial_builder_definition,
 )
+from dojozero.utils import utc_to_us_date
 
 from ._game_discovery import GameInfo, NBAGameFetcher, NFLGameFetcher
 from ._trial_manager import TrialManager
@@ -463,8 +464,8 @@ class ScheduleManager:
         hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         schedule_id = f"sched-{sport_type}-{event_id}-{hash_suffix}"
 
-        # Extract game_date from event_time
-        game_date = event_time.strftime("%Y-%m-%d")
+        # Extract game_date from event_time in US Eastern time
+        game_date = utc_to_us_date(event_time)
 
         scheduled = ScheduledTrial(
             schedule_id=schedule_id,
@@ -557,7 +558,7 @@ class ScheduleManager:
 
             # Add data_dir to hub config if specified
             if data_dir:
-                game_date = game.game_time_utc.strftime("%Y-%m-%d")
+                game_date = utc_to_us_date(game.game_time_utc)
                 if "hub" not in config:
                     config["hub"] = {}
                 persistence_file = f"{data_dir}/{game_date}/{game.event_id}.jsonl"
@@ -807,6 +808,25 @@ class ScheduleManager:
             if game.status == 3:
                 continue
 
+            # Skip postponed or cancelled games
+            status_text_lower = game.status_text.lower()
+            if "postponed" in status_text_lower:
+                LOGGER.debug(
+                    "Skipping postponed game %s (%s): %s",
+                    game.event_id,
+                    game.short_name,
+                    game.status_text,
+                )
+                continue
+            if "canceled" in status_text_lower or "cancelled" in status_text_lower:
+                LOGGER.debug(
+                    "Skipping cancelled game %s (%s): %s",
+                    game.event_id,
+                    game.short_name,
+                    game.status_text,
+                )
+                continue
+
             # Skip if already scheduled for this source
             if (source.source_id, game.event_id) in self._scheduled_events:
                 continue
@@ -819,7 +839,7 @@ class ScheduleManager:
 
             # Add data_dir to hub config if specified
             if config.data_dir:
-                game_date = game.game_time_utc.strftime("%Y-%m-%d")
+                game_date = utc_to_us_date(game.game_time_utc)
                 if "hub" not in game_config:
                     game_config["hub"] = {}
                 persistence_file = (
@@ -1000,7 +1020,15 @@ class ScheduleManager:
         Implements grace period handling for games that are already finished when
         monitoring starts. This allows time for final data collection before
         stopping the trial.
+
+        Also handles abnormal game states (postponed, cancelled) by stopping
+        trials immediately with appropriate logging.
         """
+        # Status codes
+        STATUS_FINISHED = 3
+        STATUS_POSTPONED = 4
+        STATUS_CANCELLED = 5
+
         while not self._shutdown_event.is_set():
             try:
                 now = datetime.now(timezone.utc)
@@ -1015,8 +1043,12 @@ class ScheduleManager:
                     if not scheduled.auto_stop_on_completion:
                         continue
 
-                    # Check game status
-                    game_status = await self._get_game_status(scheduled)
+                    # Check game status with text for better logging
+                    status_info = await self._get_game_status_info(scheduled)
+                    if status_info is None:
+                        continue
+
+                    game_status, status_text = status_info
 
                     # Initialize monitoring state on first check
                     if scheduled.monitoring_started_at is None:
@@ -1025,7 +1057,7 @@ class ScheduleManager:
                         scheduled.phase = ScheduledTrialPhase.MONITORING
                         self._persist()
 
-                        if game_status == 3:
+                        if game_status == STATUS_FINISHED:
                             LOGGER.info(
                                 "Game %s (schedule %s) was already finished at "
                                 "monitoring start. Will allow %.0f second grace "
@@ -1035,9 +1067,35 @@ class ScheduleManager:
                                 self._grace_period_seconds,
                             )
 
-                    if game_status == 3:  # Finished
+                    # Handle postponed games - stop immediately
+                    if game_status == STATUS_POSTPONED:
+                        LOGGER.warning(
+                            "Game %s (schedule %s) has been POSTPONED (%s). "
+                            "Stopping trial immediately.",
+                            scheduled.event_id,
+                            scheduled.schedule_id,
+                            status_text,
+                        )
+                        scheduled.error = f"Game postponed: {status_text}"
+                        await self._stop_trial(scheduled)
+                        continue
+
+                    # Handle cancelled games - stop immediately
+                    if game_status == STATUS_CANCELLED:
+                        LOGGER.warning(
+                            "Game %s (schedule %s) has been CANCELLED (%s). "
+                            "Stopping trial immediately.",
+                            scheduled.event_id,
+                            scheduled.schedule_id,
+                            status_text,
+                        )
+                        scheduled.error = f"Game cancelled: {status_text}"
+                        await self._stop_trial(scheduled)
+                        continue
+
+                    if game_status == STATUS_FINISHED:
                         # Check if game was already finished when monitoring started
-                        if scheduled.initial_game_status == 3:
+                        if scheduled.initial_game_status == STATUS_FINISHED:
                             # Apply grace period before stopping
                             elapsed = (
                                 now - scheduled.monitoring_started_at
@@ -1147,14 +1205,26 @@ class ScheduleManager:
 
     async def _get_game_status(self, scheduled: ScheduledTrial) -> int | None:
         """Get current game status for a scheduled trial."""
+        result = await self._get_game_status_info(scheduled)
+        return result[0] if result else None
+
+    async def _get_game_status_info(
+        self, scheduled: ScheduledTrial
+    ) -> tuple[int, str] | None:
+        """Get current game status and status text for a scheduled trial.
+
+        Returns:
+            Tuple of (status_code, status_text) or None if not found.
+            Status codes: 1=scheduled, 2=in_progress, 3=finished, 4=postponed, 5=cancelled
+        """
         try:
             if scheduled.sport_type == "nba":
-                return await self._nba_fetcher.get_game_status(
+                return await self._nba_fetcher.get_game_status_info(
                     scheduled.event_id,
                     scheduled.game_date,
                 )
             elif scheduled.sport_type == "nfl":
-                return await self._nfl_fetcher.get_game_status(
+                return await self._nfl_fetcher.get_game_status_info(
                     scheduled.event_id,
                     scheduled.game_date,
                 )
