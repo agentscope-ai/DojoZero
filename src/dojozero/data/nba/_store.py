@@ -249,6 +249,9 @@ class NBAStore(DataStore):
         # 2. All play-by-play events (no filtering - agents decide what to use)
         if "play_by_play" in data:
             play_by_play_data = data["play_by_play"]
+            if not isinstance(play_by_play_data, dict):
+                return events
+
             game_id = play_by_play_data.get("gameId", "")
             actions = play_by_play_data.get("actions", [])
 

@@ -22,6 +22,7 @@ class LLMConfig(TypedDict, total=False):
     model_name: str
     api_key_env: str
     base_url_env: str
+    max_tokens: int  # Max tokens for response generation (default: 16384)
 
 
 class AgentConfig(TypedDict):
@@ -56,6 +57,8 @@ def _parse_llm_config(llm_data: dict[str, Any]) -> LLMConfig:
         llm_config["api_key_env"] = llm_data["api_key_env"]
     if "base_url_env" in llm_data:
         llm_config["base_url_env"] = llm_data["base_url_env"]
+    if "max_tokens" in llm_data:
+        llm_config["max_tokens"] = llm_data["max_tokens"]
     return llm_config
 
 
@@ -123,11 +126,19 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
     model_name = llm_config.get("model_name", "qwen3-max")
     api_key = get_api_key(llm_config)
     base_url = get_base_url(llm_config)
+    # Default max_tokens to 16384, required by some providers (e.g., Bedrock)
+    max_tokens = llm_config.get("max_tokens", 16384)
 
     if model_type == "openai":
-        client_args = {"base_url": base_url} if base_url else None
+        client_kwargs: dict[str, Any] | None = (
+            {"base_url": base_url} if base_url else None
+        )
+        generate_kwargs: dict[str, Any] = {"max_tokens": max_tokens}
         return OpenAIChatModel(
-            model_name=model_name, api_key=api_key, client_args=client_args
+            model_name=model_name,
+            api_key=api_key,
+            client_kwargs=client_kwargs,
+            generate_kwargs=generate_kwargs,
         )
     elif model_type == "dashscope":
         return DashScopeChatModel(model_name=model_name, api_key=api_key)

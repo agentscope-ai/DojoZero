@@ -106,18 +106,18 @@ class NBAExternalAPI(ExternalAPI):
             return {}
 
     def _convert_summary_to_boxscore(
-        self, summary: dict[str, Any], event_id: str
+        self, summary: dict[str, Any] | None, event_id: str
     ) -> dict[str, Any]:
         """Convert ESPN summary response to boxscore format.
 
         Args:
-            summary: ESPN summary response
+            summary: ESPN summary response (may be None if API returns null)
             event_id: The event ID
 
         Returns:
             Boxscore dict in legacy format expected by _store.py
         """
-        if not summary or "boxscore" not in summary:
+        if not summary or not isinstance(summary, dict) or "boxscore" not in summary:
             return {"boxscore": {"gameId": event_id}}
 
         espn_boxscore = summary.get("boxscore", {})
@@ -249,18 +249,25 @@ class NBAExternalAPI(ExternalAPI):
         }
 
     def _convert_plays_to_play_by_play(
-        self, plays: dict[str, Any], event_id: str
+        self, plays: dict[str, Any] | None, event_id: str
     ) -> dict[str, Any]:
         """Convert ESPN plays response to play_by_play format.
 
         Args:
-            plays: ESPN plays response
+            plays: ESPN plays response (may be None if API returns null)
             event_id: The event ID
 
         Returns:
             play_by_play dict in legacy format expected by _store.py
         """
         actions = []
+        if not plays or not isinstance(plays, dict):
+            return {
+                "play_by_play": {
+                    "gameId": event_id,
+                    "actions": actions,
+                }
+            }
         items = plays.get("items", [])
 
         for i, item in enumerate(items):

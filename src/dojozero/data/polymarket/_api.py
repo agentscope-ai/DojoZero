@@ -1,4 +1,12 @@
-"""Polymarket ExternalAPI implementation."""
+"""Polymarket ExternalAPI implementation.
+
+Polymarket API documentation: https://docs.polymarket.com/quickstart/overview
+
+Team abbreviation mappings are sourced from Polymarket's Teams API:
+- API docs: https://docs.polymarket.com/api-reference/sports/list-teams
+- NBA teams: https://gamma-api.polymarket.com/teams?league=nba
+- NFL teams: https://gamma-api.polymarket.com/teams?league=nfl
+"""
 
 import json
 import logging
@@ -14,6 +22,116 @@ logger = logging.getLogger("dojozero.data.polymarket._api")
 
 class PolymarketAPI(ExternalAPI):
     """Polymarket API implementation using Gamma API and CLOB API."""
+
+    # Complete mappings from ESPN team abbreviations to Polymarket slug abbreviations
+    # Source: https://gamma-api.polymarket.com/teams?league=nba and ?league=nfl
+
+    # NBA: All 30 teams - ESPN tricode -> Polymarket abbreviation
+    # Most ESPN tricodes match Polymarket (lowercase), only mismatches listed here
+    ESPN_TO_POLYMARKET_TRICODE_NBA: dict[str, str] = {
+        # ESPN uses shorter codes than Polymarket
+        "GS": "gsw",  # Golden State Warriors
+        "NO": "nop",  # New Orleans Pelicans
+        "NY": "nyk",  # New York Knicks
+        "SA": "sas",  # San Antonio Spurs
+        # ESPN uses longer/different codes
+        "UTAH": "uta",  # Utah Jazz
+        "PHX": "phx",  # Phoenix Suns (ESPN sometimes uses PHO)
+        "PHO": "phx",  # Phoenix Suns alternate
+        "WSH": "was",  # Washington Wizards
+        "BKN": "bkn",  # Brooklyn Nets (ensure consistency)
+        # Standard 3-letter codes that match (lowercase conversion handles these)
+        # ATL->atl, BOS->bos, CHA->cha, CHI->chi, CLE->cle, DAL->dal, DEN->den,
+        # DET->det, HOU->hou, IND->ind, LAC->lac, LAL->lal, MEM->mem, MIA->mia,
+        # MIL->mil, MIN->min, OKC->okc, ORL->orl, PHI->phi, POR->por, SAC->sac,
+        # TOR->tor
+    }
+
+    # NFL: All 32 teams - ESPN tricode -> Polymarket abbreviation
+    # Many ESPN tricodes are 2-3 letters that need specific mapping
+    ESPN_TO_POLYMARKET_TRICODE_NFL: dict[str, str] = {
+        # ESPN uses 3-letter codes, Polymarket uses 2-letter
+        "LAR": "la",  # Los Angeles Rams
+        "LVR": "lv",  # Las Vegas Raiders (alternate)
+        "LV": "lv",  # Las Vegas Raiders
+        "KAN": "kc",  # Kansas City Chiefs (alternate)
+        "KC": "kc",  # Kansas City Chiefs
+        "TAM": "tb",  # Tampa Bay Buccaneers (alternate)
+        "TB": "tb",  # Tampa Bay Buccaneers
+        "GNB": "gb",  # Green Bay Packers (alternate)
+        "GB": "gb",  # Green Bay Packers
+        "NOR": "no",  # New Orleans Saints (alternate)
+        "NO": "no",  # New Orleans Saints
+        "SFO": "sf",  # San Francisco 49ers (alternate)
+        "SF": "sf",  # San Francisco 49ers
+        "NWE": "ne",  # New England Patriots (alternate)
+        "NE": "ne",  # New England Patriots
+        "JAX": "jax",  # Jacksonville Jaguars
+        "JAC": "jax",  # Jacksonville Jaguars (alternate)
+        "WSH": "was",  # Washington Commanders
+        "WAS": "was",  # Washington Commanders (alternate)
+        "NYJ": "nyj",  # New York Jets
+        "NYG": "nyg",  # New York Giants
+        "LAC": "lac",  # Los Angeles Chargers
+        "ARI": "ari",  # Arizona Cardinals
+        "ARZ": "ari",  # Arizona Cardinals (alternate)
+        "CAR": "car",  # Carolina Panthers
+        # Standard codes that match (lowercase conversion handles these)
+        # ATL->atl, BAL->bal, BUF->buf, CHI->chi, CIN->cin, CLE->cle, DAL->dal,
+        # DEN->den, DET->det, HOU->hou, IND->ind, MIA->mia, MIN->min, PHI->phi,
+        # PIT->pit, SEA->sea, TEN->ten
+    }
+
+    @staticmethod
+    def normalize_tricode(tricode: str, sport: str = "nba") -> str:
+        """Normalize ESPN team tricode to Polymarket format.
+
+        Uses hardcoded mappings for known mismatches, falls back to lowercase first 3 chars.
+
+        Args:
+            tricode: ESPN team abbreviation (e.g., "GS", "UTAH", "LAL", "LAR")
+            sport: Sport type ("nba" or "nfl") for sport-specific mappings
+
+        Returns:
+            Polymarket-compatible lowercase code (e.g., "gsw", "uta", "lal", "la")
+        """
+        upper = tricode.upper()
+        sport_lower = sport.lower()
+
+        # Check sport-specific mapping first
+        if (
+            sport_lower == "nba"
+            and upper in PolymarketAPI.ESPN_TO_POLYMARKET_TRICODE_NBA
+        ):
+            return PolymarketAPI.ESPN_TO_POLYMARKET_TRICODE_NBA[upper]
+        if (
+            sport_lower == "nfl"
+            and upper in PolymarketAPI.ESPN_TO_POLYMARKET_TRICODE_NFL
+        ):
+            return PolymarketAPI.ESPN_TO_POLYMARKET_TRICODE_NFL[upper]
+
+        # Default: lowercase and take first 3 characters
+        return tricode.lower()[:3]
+
+    @staticmethod
+    def get_event_url(
+        away_tricode: str, home_tricode: str, game_date: str, sport: str = "nba"
+    ) -> str:
+        """Generate Polymarket event page URL.
+
+        Args:
+            away_tricode: Away team ESPN tricode (e.g., "LAL", "LAR")
+            home_tricode: Home team ESPN tricode (e.g., "BOS", "SEA")
+            game_date: Game date in YYYY-MM-DD format
+            sport: Sport type ("nba" or "nfl")
+
+        Returns:
+            Polymarket event URL (e.g., "https://polymarket.com/event/nba-lal-bos-2025-01-25")
+        """
+        away_code = PolymarketAPI.normalize_tricode(away_tricode, sport)
+        home_code = PolymarketAPI.normalize_tricode(home_tricode, sport)
+        slug = f"{sport.lower()}-{away_code}-{home_code}-{game_date}"
+        return f"https://polymarket.com/event/{slug}"
 
     def __init__(self, api_key: str | None = None):
         """Initialize Polymarket API.

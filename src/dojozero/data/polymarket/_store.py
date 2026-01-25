@@ -148,8 +148,13 @@ class PolymarketStore(DataStore):
                 and "home_tricode" in identifier
                 and "game_date" in identifier
             ):
-                away_tricode = identifier["away_tricode"].lower()
-                home_tricode = identifier["home_tricode"].lower()
+                # Normalize ESPN tricodes to Polymarket format
+                away_tricode = PolymarketAPI.normalize_tricode(
+                    identifier["away_tricode"], self._sport
+                )
+                home_tricode = PolymarketAPI.normalize_tricode(
+                    identifier["home_tricode"], self._sport
+                )
                 game_date = identifier["game_date"]  # Expected format: YYYY-MM-DD
                 # Use sport prefix (nba or nfl)
                 params["slug"] = (

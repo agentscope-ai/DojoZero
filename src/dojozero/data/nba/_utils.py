@@ -8,6 +8,8 @@ from typing import Any
 
 import aiohttp
 
+from dojozero.utils import utc_to_us_date
+
 logger = logging.getLogger(__name__)
 
 
@@ -748,6 +750,8 @@ def _extract_game_info_from_summary(
             away_team_tricode = team_tricode
 
     # Get game date/time
+    # Convert to US Eastern time for the date since NBA games are scheduled in local time
+    # and Polymarket slugs use the US date, not UTC date
     game_time_utc = comp.get("date", "")
     game_date = ""
     if game_time_utc:
@@ -755,7 +759,7 @@ def _extract_game_info_from_summary(
             from dateutil import parser
 
             dt = parser.parse(game_time_utc)
-            game_date = dt.strftime("%Y-%m-%d")
+            game_date = utc_to_us_date(dt)
         except Exception:
             pass
 
