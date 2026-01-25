@@ -2189,24 +2189,18 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 return f"bet_invalid: Unexpected error - {str(e)}"
 
         @tool
-        async def cancel_bet(bet_index: int) -> str:
+        async def cancel_bet(bet_id: str) -> str:
             """Cancel a pending limit order.
 
-            Must be a limit order. Must call get_pending_orders() first to get the bet_index.
+            Must be a limit order. Call get_pending_orders() to get the bet_id.
 
             Args:
-                bet_index: 0-based index from get_pending_orders()
+                bet_id: Unique bet identifier from get_pending_orders()
 
             Returns:
                 "bet_cancelled" or "cancel_failed"
             """
-            # Get pending orders to find the bet_id from index
-            orders = await target.get_pending_orders(agent_id)
-            if bet_index < 0 or bet_index >= len(orders):
-                return "cancel_failed: Invalid bet_index"
-
-            bet = orders[bet_index]
-            result = await target.cancel_bet(agent_id, bet.bet_id)
+            result = await target.cancel_bet(agent_id, bet_id)
             return result
 
         @tool
@@ -2225,7 +2219,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         async def get_pending_orders() -> str:
             """Get your pending limit orders (waiting for odds to reach your specified minimum).
 
-            Use bet_index (0-based position) with cancel_bet() to cancel an order.
+            Use bet_id with cancel_bet() to cancel an order.
 
             Returns:
                 JSON array of orders with: bet_id, amount, selection, limit_odds, bet_type, status="PENDING"

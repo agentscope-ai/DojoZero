@@ -175,7 +175,7 @@ operators:
 - `place_bet_moneyline(amount, selection, betting_phase, order_type="MARKET", limit_odds=None)` - Bet on winner. `betting_phase` required: "PRE_GAME" for SCHEDULED, "IN_GAME" for LIVE
 - `place_bet_spread(amount, selection, spread_value, betting_phase, ...)` - Bet on spread. `spread_value` from `get_event().spread_lines`
 - `place_bet_total(amount, selection, total_value, betting_phase, ...)` - Bet over/under. `total_value` from `get_event().total_lines`
-- `cancel_bet(bet_index)` - Cancel pending order (index from `get_pending_orders()`)
+- `cancel_bet(bet_id)` - Cancel pending order using bet_id from `get_pending_orders()`
 - `get_active_bets()` - Get active bets
 - `get_pending_orders()` - Get pending limit orders
 - `get_bet_history(limit=20)` - Get settled bet history
