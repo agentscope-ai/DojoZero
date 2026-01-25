@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ChevronLeft,
@@ -7,7 +8,8 @@ import {
   Trophy,
   TrendingUp,
   Clock,
-  Filter
+  Filter,
+  Play
 } from "lucide-react";
 import { useDataSource } from "../hooks/useDataSource.jsx";
 import { agents } from "../data/mockData";
@@ -356,6 +358,8 @@ function LiveActionsTicker({ agentActions }) {
 }
 
 function LiveGameCard({ game, index }) {
+  const navigate = useNavigate();
+  
   // Simulate live score changes
   const [homeScore, setHomeScore] = useState(game.homeScore);
   const [awayScore, setAwayScore] = useState(game.awayScore);
@@ -363,6 +367,14 @@ function LiveGameCard({ game, index }) {
   const [bets, setBets] = useState(game.bets);
   const [scoreFlash, setScoreFlash] = useState(null); // 'home' | 'away' | null
   const [newBetFlash, setNewBetFlash] = useState(null);
+  const [isHovered, setIsHovered] = useState(false);
+  
+  // Navigate to room on click
+  const handleCardClick = () => {
+    // Use game.id or game.trialId depending on your data structure
+    const roomId = game.trialId || game.id;
+    navigate(`/games/${roomId}`);
+  };
 
   // Simulate clock countdown
   useEffect(() => {
@@ -435,12 +447,36 @@ function LiveGameCard({ game, index }) {
 
   return (
     <motion.div
-      style={styles.liveGameCard}
+      style={{
+        ...styles.liveGameCard,
+        ...(isHovered ? styles.liveGameCardHover : {}),
+      }}
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.3, delay: index * 0.1 }}
       className="hover-lift"
+      onClick={handleCardClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
     >
+      {/* Enter Room Overlay */}
+      <AnimatePresence>
+        {isHovered && (
+          <motion.div
+            style={styles.enterRoomOverlay}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div style={styles.enterRoomContent}>
+              <Play size={32} fill="white" />
+              <span style={styles.enterRoomText}>ENTER ROOM</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Top badges row */}
       <div style={styles.cardBadges}>
         {/* League badge */}
@@ -658,6 +694,8 @@ function AllGamesSection({ allGames }) {
 }
 
 function GameRow({ game, index }) {
+  const navigate = useNavigate();
+  
   const getStatusBadge = () => {
     switch (game.status) {
       case "live":
@@ -684,12 +722,26 @@ function GameRow({ game, index }) {
     }
   };
 
+  // Navigate to room for live and completed games
+  const handleRowClick = () => {
+    if (game.status === "upcoming") return; // Can't enter upcoming games
+    const roomId = game.trialId || game.id;
+    navigate(`/games/${roomId}`);
+  };
+
+  const isClickable = game.status === "live" || game.status === "completed";
+
   return (
     <motion.div
-      style={styles.gameRow}
+      style={{
+        ...styles.gameRow,
+        ...(isClickable ? styles.gameRowClickable : {}),
+      }}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, delay: index * 0.05 }}
+      onClick={handleRowClick}
+      whileHover={isClickable ? { scale: 1.01, x: 4 } : {}}
     >
       <div style={styles.gameRowStatus}>
         {getStatusBadge()}
@@ -969,6 +1021,36 @@ const styles = {
     borderRadius: 16,
     padding: 20,
     position: "relative",
+    cursor: "pointer",
+    transition: "all 0.3s ease",
+    overflow: "hidden",
+  },
+  liveGameCardHover: {
+    borderColor: "var(--accent-primary)",
+    boxShadow: "0 0 0 1px var(--accent-primary), 0 8px 24px rgba(59, 130, 246, 0.15)",
+  },
+  enterRoomOverlay: {
+    position: "absolute",
+    inset: 0,
+    background: "rgba(0, 0, 0, 0.75)",
+    backdropFilter: "blur(4px)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10,
+    borderRadius: 15,
+  },
+  enterRoomContent: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 8,
+    color: "white",
+  },
+  enterRoomText: {
+    fontSize: 14,
+    fontWeight: 700,
+    letterSpacing: "0.15em",
   },
   cardBadges: {
     display: "flex",
@@ -1285,6 +1367,9 @@ const styles = {
     border: "1px solid var(--border-subtle)",
     borderRadius: 12,
     transition: "all 0.2s ease",
+  },
+  gameRowClickable: {
+    cursor: "pointer",
   },
   gameRowStatus: {},
   gameRowTeams: {
