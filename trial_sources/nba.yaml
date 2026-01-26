@@ -128,7 +128,7 @@ config:
       - play_by_play_stream
 
   # Schedule options (these are TrialSourceConfig fields, not scenario_config)
-  pre_start_hours: 2.0           # Start trial 2 hours before game time
+  pre_start_hours: 0.1           # Start trial 0.1 hours before game time
   check_interval_seconds: 60.0   # Check game status every 60 seconds
   auto_stop_on_completion: true  # Stop trial when game finishes
   data_dir: outputs              # Output directory for persistence files
