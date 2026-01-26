@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from dojozero.data._game_info import GameInfo
 from dojozero.data.nba._events import (
     GameInitializeEvent,
     GameResultEvent,
@@ -142,13 +143,26 @@ class TestNBAStoreParseBoxscore:
 
         # Mock get_game_info_by_id to avoid real API call
         # The function is imported inside _parse_api_response, so patch at source module
+        mock_game_info = GameInfo.model_validate(
+            {
+                "gameId": "0022400001",
+                "sport_type": "nba",
+                "homeTeam": {
+                    "teamId": "1610612747",
+                    "displayName": "Los Angeles Lakers",
+                    "teamTricode": "LAL",
+                },
+                "awayTeam": {
+                    "teamId": "1610612744",
+                    "displayName": "Golden State Warriors",
+                    "teamTricode": "GSW",
+                },
+                "gameTimeUTC": "2024-01-15T03:00:00Z",
+            }
+        )
         with patch(
             "dojozero.data.nba._utils.get_game_info_by_id",
-            return_value={
-                "home_team": "Los Angeles Lakers",
-                "away_team": "Golden State Warriors",
-                "game_time_utc": "2024-01-15T03:00:00Z",
-            },
+            return_value=mock_game_info,
         ):
             events = nba_store._parse_api_response(boxscore_data)
 
@@ -173,9 +187,26 @@ class TestNBAStoreParseBoxscore:
 
     def test_game_initialize_emitted_once(self, nba_store, sample_boxscore_data):
         """Test that GameInitializeEvent is emitted only once per game."""
+        mock_game_info = GameInfo.model_validate(
+            {
+                "gameId": "0022400001",
+                "sport_type": "nba",
+                "homeTeam": {
+                    "teamId": "1",
+                    "displayName": "Team A",
+                    "teamTricode": "TA",
+                },
+                "awayTeam": {
+                    "teamId": "2",
+                    "displayName": "Team B",
+                    "teamTricode": "TB",
+                },
+                "gameTimeUTC": "2024-01-15T03:00:00Z",
+            }
+        )
         with patch(
             "dojozero.data.nba._utils.get_game_info_by_id",
-            return_value={"game_time_utc": "2024-01-15T03:00:00Z"},
+            return_value=mock_game_info,
         ):
             # First call should emit GameInitializeEvent
             events1 = nba_store._parse_api_response(sample_boxscore_data)
@@ -639,33 +670,24 @@ class TestGetGameInfoByIdIntegration:
             result = get_game_info_by_id(recent_id)
 
             assert result is not None, f"Recent game {recent_id} should be found"
-            assert result["game_id"] == recent_id
-            assert result["home_team_tricode"] != ""
-            assert result["away_team_tricode"] != ""
-            assert result["home_team"] != ""
-            assert result["away_team"] != ""
+            assert result.event_id == recent_id
+            assert result.home_team.tricode != ""
+            assert result.away_team.tricode != ""
+            assert result.home_team.name != ""
+            assert result.away_team.name != ""
 
-            # Validate structure
-            required_keys = [
-                "game_id",
-                "home_team",
-                "away_team",
-                "home_team_tricode",
-                "away_team_tricode",
-                "game_date",
-                "game_time_utc",
-            ]
-            for key in required_keys:
-                assert key in result, f"Result should contain '{key}' field"
+            # Validate structure - GameInfo is a Pydantic model with these attributes
+            assert hasattr(result, "event_id")
+            assert hasattr(result, "home_team")
+            assert hasattr(result, "away_team")
+            assert hasattr(result, "game_time_utc")
 
             # Check types
-            assert isinstance(result["game_id"], str)
-            assert isinstance(result["home_team"], str)
-            assert isinstance(result["away_team"], str)
-            assert isinstance(result["home_team_tricode"], str)
-            assert isinstance(result["away_team_tricode"], str)
-            assert isinstance(result["game_date"], str)
-            assert isinstance(result["game_time_utc"], str)
+            assert isinstance(result.event_id, str)
+            assert isinstance(result.home_team.name, str)
+            assert isinstance(result.away_team.name, str)
+            assert isinstance(result.home_team.tricode, str)
+            assert isinstance(result.away_team.tricode, str)
 
         # Test older historical game
         if "historical" in test_game_ids:
@@ -673,9 +695,9 @@ class TestGetGameInfoByIdIntegration:
             result = get_game_info_by_id(hist_id)
 
             assert result is not None, f"Historical game {hist_id} should be found"
-            assert result["game_id"] == hist_id
-            assert result["home_team_tricode"] != ""
-            assert result["away_team_tricode"] != ""
+            assert result.event_id == hist_id
+            assert result.home_team.tricode != ""
+            assert result.away_team.tricode != ""
 
         # Test very old game
         if "old" in test_game_ids:
@@ -683,9 +705,9 @@ class TestGetGameInfoByIdIntegration:
             result = get_game_info_by_id(old_id)
 
             assert result is not None, f"Old game {old_id} should be found"
-            assert result["game_id"] == old_id
-            assert result["home_team_tricode"] != ""
-            assert result["away_team_tricode"] != ""
+            assert result.event_id == old_id
+            assert result.home_team.tricode != ""
+            assert result.away_team.tricode != ""
 
         # Ensure at least one game was tested
         assert len(test_game_ids) > 0, "Should have at least one test game ID"
@@ -702,13 +724,13 @@ class TestGetGameInfoByIdIntegration:
         result = get_game_info_by_id(future_id)
 
         assert result is not None, f"Game {future_id} should be found"
-        assert result["game_id"] == future_id
-        assert result["home_team_tricode"] != ""
-        assert result["away_team_tricode"] != ""
-        assert result["home_team"] != ""
-        assert result["away_team"] != ""
-        # Future games should have a date from Scoreboard
-        assert result["game_date"] != ""
+        assert result.event_id == future_id
+        assert result.home_team.tricode != ""
+        assert result.away_team.tricode != ""
+        assert result.home_team.name != ""
+        assert result.away_team.name != ""
+        # Future games should have a game time from Scoreboard
+        assert result.game_time_utc is not None
 
     def test_invalid_and_malformed_game_ids(self):
         """Test that invalid and malformed game IDs return None.
@@ -742,7 +764,7 @@ class TestGetGameInfoByIdIntegration:
         result = get_game_info_by_id(game_id, proxy=proxy)
 
         assert result is not None, f"Game {game_id} should be found with proxy"
-        assert result["game_id"] == game_id
+        assert result.event_id == game_id
 
     def test_consistency_across_calls(self, test_game_ids):
         """Test that multiple calls return consistent data."""
@@ -759,11 +781,11 @@ class TestGetGameInfoByIdIntegration:
         assert result2 is not None
 
         # Results should be identical
-        assert result1["game_id"] == result2["game_id"]
-        assert result1["home_team"] == result2["home_team"]
-        assert result1["away_team"] == result2["away_team"]
-        assert result1["home_team_tricode"] == result2["home_team_tricode"]
-        assert result1["away_team_tricode"] == result2["away_team_tricode"]
+        assert result1.event_id == result2.event_id
+        assert result1.home_team.name == result2.home_team.name
+        assert result1.away_team.name == result2.away_team.name
+        assert result1.home_team.tricode == result2.home_team.tricode
+        assert result1.away_team.tricode == result2.away_team.tricode
 
 
 # =============================================================================

@@ -163,26 +163,8 @@ async def _build_trial_spec(
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
     # Get game information from espn_game_id to extract team tricodes and names
     game_info = await get_game_info_by_id_async(params.espn_game_id)
-    home_team_tricode: str | None = None
-    away_team_tricode: str | None = None
-    home_team_name: str | None = None
-    away_team_name: str | None = None
-    game_date: str | None = params.game_date  # Use provided game_date if available
 
-    if game_info:
-        home_team_tricode = game_info.get("home_team_tricode")
-        away_team_tricode = game_info.get("away_team_tricode")
-        home_team_name = game_info.get("home_team")
-        away_team_name = game_info.get("away_team")
-        # Only use game_info date if not already provided in params
-        if not game_date:
-            game_date = game_info.get("game_date")
-        logger.info(
-            "Found game info: %s on %s",
-            f"{away_team_tricode} @ {home_team_tricode}",
-            game_date,
-        )
-    else:
+    if not game_info:
         logger.error(
             "Could not find game info for espn_game_id=%s. Exiting.",
             params.espn_game_id,
@@ -190,6 +172,20 @@ async def _build_trial_spec(
         raise ValueError(
             f"Could not find game info for espn_game_id={params.espn_game_id}."
         )
+
+    # Extract typed fields from GameInfo
+    home_tricode = game_info.home_team.tricode
+    away_tricode = game_info.away_team.tricode
+    home_team_name = game_info.home_team.name
+    away_team_name = game_info.away_team.name
+    # Use provided game_date if available, otherwise use from game_info
+    game_date = params.game_date or game_info.get_game_date_us()
+
+    logger.info(
+        "Found game info: %s on %s",
+        f"{away_tricode} @ {home_tricode}",
+        game_date,
+    )
 
     # Validate that persistence_file is set (required for building trial)
     if not params.hub.persistence_file:
@@ -249,18 +245,18 @@ async def _build_trial_spec(
             }
 
             # Add optional fields
-            if home_team_tricode:
-                ds_stream_config["home_team_tricode"] = home_team_tricode
-            if away_team_tricode:
-                ds_stream_config["away_team_tricode"] = away_team_tricode
+            if home_tricode:
+                ds_stream_config["home_team_tricode"] = home_tricode
+            if away_tricode:
+                ds_stream_config["away_team_tricode"] = away_tricode
 
             # Handle initializer config for raw_web_search stream
             if ds_config.event_type == "raw_web_search":
                 ds_stream_config["websearch_store_id"] = params.websearch_store_id
-                if home_team_tricode:
-                    ds_stream_config["home_team_tricode"] = home_team_tricode
-                if away_team_tricode:
-                    ds_stream_config["away_team_tricode"] = away_team_tricode
+                if home_tricode:
+                    ds_stream_config["home_team_tricode"] = home_tricode
+                if away_tricode:
+                    ds_stream_config["away_team_tricode"] = away_tricode
                 if home_team_name:
                     ds_stream_config["home_team_name"] = home_team_name
                 if away_team_name:
@@ -291,18 +287,18 @@ async def _build_trial_spec(
             }
 
             # Add optional fields
-            if home_team_tricode:
-                flat_stream_config["home_team_tricode"] = home_team_tricode
-            if away_team_tricode:
-                flat_stream_config["away_team_tricode"] = away_team_tricode
+            if home_tricode:
+                flat_stream_config["home_team_tricode"] = home_tricode
+            if away_tricode:
+                flat_stream_config["away_team_tricode"] = away_tricode
 
             # Handle initializer config for raw_web_search stream
             if event_type == "raw_web_search":
                 flat_stream_config["websearch_store_id"] = params.websearch_store_id
-                if home_team_tricode:
-                    flat_stream_config["home_team_tricode"] = home_team_tricode
-                if away_team_tricode:
-                    flat_stream_config["away_team_tricode"] = away_team_tricode
+                if home_tricode:
+                    flat_stream_config["home_team_tricode"] = home_tricode
+                if away_tricode:
+                    flat_stream_config["away_team_tricode"] = away_tricode
                 if home_team_name:
                     flat_stream_config["home_team_name"] = home_team_name
                 if away_team_name:
@@ -426,6 +422,7 @@ async def _build_trial_spec(
     # This metadata is used by build_runtime_context and store factories
     metadata: dict[str, Any] = {
         "sample": "nba",
+        "sport_type": "nba",
         "espn_game_id": params.espn_game_id,
         "hub_id": hub_id,
         "persistence_file": persistence_file,
@@ -439,9 +436,9 @@ async def _build_trial_spec(
         metadata["market_url"] = params.market_url
 
     # Add team information if available (used by polymarket factory)
-    if home_team_tricode and away_team_tricode:
-        metadata["home_team_tricode"] = home_team_tricode
-        metadata["away_team_tricode"] = away_team_tricode
+    if home_tricode and away_tricode:
+        metadata["home_tricode"] = home_tricode
+        metadata["away_tricode"] = away_tricode
         if home_team_name:
             metadata["home_team_name"] = home_team_name
         if away_team_name:

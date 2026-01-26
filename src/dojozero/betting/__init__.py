@@ -33,6 +33,11 @@ from dojozero.betting._agent import (
 from dojozero.betting._config import (
     TrialBrokerConfig,
 )
+from dojozero.betting._metadata import (
+    BaseBettingTrialMetadata,
+    REQUIRED_METADATA_KEYS,
+    TEAM_INFO_KEYS,
+)
 from dojozero.betting._broker import (
     Account,
     Bet,
@@ -61,6 +66,10 @@ __all__ = [
     "EventFormatter",
     # Broker config for trial params (Pydantic)
     "TrialBrokerConfig",
+    # Metadata types
+    "BaseBettingTrialMetadata",
+    "REQUIRED_METADATA_KEYS",
+    "TEAM_INFO_KEYS",
     # Broker
     "BrokerOperator",
     "BrokerOperatorConfig",

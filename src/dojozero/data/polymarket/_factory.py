@@ -13,21 +13,24 @@ from dojozero.data.polymarket._store import PolymarketStore
 class PolymarketStoreFactory(StoreFactory):
     """Factory for creating PolymarketStore instances.
 
+    Reads metadata from BaseBettingTrialMetadata (defined in dojozero.betting).
+
+    Required metadata:
+        - sport_type: Sport type ("nba" or "nfl")
+
     Optional metadata:
         - market_url: Direct Polymarket market URL
-        - game_id: Game identifier for NBA (used as event_id in odds events)
-        - event_id: Event identifier for NFL (used as event_id in odds events)
-        - away_team_tricode/away_team_abbreviation/away_tricode: Away team code (for slug)
-        - home_team_tricode/home_team_abbreviation/home_tricode: Home team code (for slug)
-        - game_date: Game date string (for slug construction)
+        - espn_game_id: ESPN game/event ID (used as game_id for polling)
+        - home_tricode: Home team code (e.g., "LAL", "KC")
+        - away_tricode: Away team code (e.g., "BOS", "SF")
+        - game_date: Game date string (YYYY-MM-DD) for slug construction
         - polymarket_poll_intervals: Custom poll intervals
           Default: {"odds": 300.0} (5 minutes)
-        - sample: Trial sample name (used to determine sport type: "nba-*" or "nfl-*")
     """
 
     def get_required_metadata_keys(self) -> list[str]:
         """Return required metadata keys."""
-        return []  # All optional, but needs either market_url or team info
+        return ["sport_type"]
 
     def create_store(
         self,
@@ -54,12 +57,14 @@ class PolymarketStoreFactory(StoreFactory):
         # Get poll intervals
         poll_intervals = metadata.get("polymarket_poll_intervals")
 
-        # Determine sport type from sample name
-        sample = str(metadata.get("sample", "nba"))
-        if sample.startswith("nfl"):
-            sport = "nfl"
-        else:
-            sport = "nba"  # Default to NBA
+        # Get sport type (required)
+        sport_type_raw = metadata.get("sport_type")
+        if not sport_type_raw:
+            raise ValueError(
+                "PolymarketStoreFactory requires 'sport_type' in metadata "
+                "(expected 'nba' or 'nfl')"
+            )
+        sport = str(sport_type_raw)
 
         api = PolymarketAPI()
 
@@ -81,35 +86,15 @@ class PolymarketStoreFactory(StoreFactory):
             )
 
         # Build identifier for polling
-        # Support both NBA (game_id) and NFL (event_id/espn_game_id) patterns
         identifier: dict[str, Any] = {}
 
-        # Use game_id, event_id, or espn_game_id as the primary identifier
-        if metadata.get("game_id"):
-            identifier["game_id"] = metadata["game_id"]
-        elif metadata.get("event_id"):
-            identifier["game_id"] = metadata["event_id"]  # Use event_id as game_id
-        elif metadata.get("espn_game_id"):
-            identifier["game_id"] = metadata[
-                "espn_game_id"
-            ]  # Use espn_game_id as game_id
+        if metadata.get("espn_game_id"):
+            identifier["espn_game_id"] = metadata["espn_game_id"]
 
         # Add team info for slug construction if market_url not provided
-        # Support multiple naming conventions for team codes:
-        # - away_team_tricode/home_team_tricode (NBA trial builder)
-        # - away_team_abbreviation/home_team_abbreviation (NFL trial builder)
-        # - away_tricode/home_tricode (scheduler metadata)
         if not market_url:
-            away_tricode = (
-                metadata.get("away_team_tricode")
-                or metadata.get("away_team_abbreviation")
-                or metadata.get("away_tricode")
-            )
-            home_tricode = (
-                metadata.get("home_team_tricode")
-                or metadata.get("home_team_abbreviation")
-                or metadata.get("home_tricode")
-            )
+            away_tricode = metadata.get("away_tricode")
+            home_tricode = metadata.get("home_tricode")
             game_date = metadata.get("game_date")
 
             if away_tricode and isinstance(away_tricode, str):

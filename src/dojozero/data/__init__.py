@@ -2,6 +2,7 @@
 
 # Core base classes
 from dojozero.data._models import DataEvent, DataEventFactory, DataFact, register_event
+from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data._processors import CompositeProcessor, DataProcessor
 from dojozero.data._backtest import BacktestCoordinator, ReplayCoordinator
 from dojozero.data._stores import DataStore, ExternalAPI
@@ -51,6 +52,10 @@ __all__ = [
     "DataEventFactory",
     "DataFact",
     "register_event",
+    # Game info models
+    "GameInfo",
+    "TeamInfo",
+    "VenueInfo",
     "DataStore",
     "ExternalAPI",
     "DataProcessor",
