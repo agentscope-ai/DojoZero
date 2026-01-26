@@ -542,6 +542,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             list
         )
 
+        # Pending odds that arrived before GameInitializeEvent
+        # Maps event_id -> {"home_odds": Decimal, "away_odds": Decimal, ...}
+        self._pending_odds: Dict[str, Dict[str, Any]] = {}
+
         # Bet management
         self._bets: Dict[str, Bet] = {}
 
@@ -728,6 +732,41 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             # Apply any pending status events that arrived before this GameInitializeEvent
             await self._apply_pending_status_events(event_id)
 
+            # Apply any pending odds that arrived before this GameInitializeEvent
+            await self._apply_pending_odds(event_id)
+
+    async def _apply_pending_odds(self, event_id: str) -> None:
+        """Apply any buffered odds for a newly registered event.
+
+        This handles the race condition where OddsUpdateEvent arrives before
+        GameInitializeEvent due to different API polling intervals.
+        """
+        if event_id not in self._pending_odds:
+            return
+
+        pending = self._pending_odds.pop(event_id)
+        logger.info(
+            "Applying pending odds for event %s: home_odds=%s, away_odds=%s",
+            event_id,
+            pending.get("home_odds"),
+            pending.get("away_odds"),
+        )
+
+        try:
+            await self._update_odds(
+                event_id=event_id,
+                home_odds=pending.get("home_odds"),
+                away_odds=pending.get("away_odds"),
+                spread_updates=pending.get("spread_updates", []),
+                total_updates=pending.get("total_updates", []),
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to apply pending odds for event %s: %s",
+                event_id,
+                e,
+            )
+
     async def _apply_pending_status_events(self, event_id: str) -> None:
         """Apply any buffered status events for a newly registered event.
 
@@ -863,13 +902,19 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             # Clear pending team info
             del self._pending_team_info[event_id]
         else:
-            # No team info yet - ignore this odds update
-            logger.debug(
-                "Ignoring OddsUpdateEvent (no team info available yet): event_id=%s, home_odds=%s, away_odds=%s",
+            # No team info yet - store odds for later when event is initialized
+            logger.info(
+                "Storing pending odds (waiting for event initialization): event_id=%s, home_odds=%s, away_odds=%s",
                 event_id,
                 home_odds,
                 away_odds,
             )
+            self._pending_odds[event_id] = {
+                "home_odds": Decimal(str(home_odds)) if home_odds else None,
+                "away_odds": Decimal(str(away_odds)) if away_odds else None,
+                "spread_updates": spread_updates,
+                "total_updates": total_updates,
+            }
 
     async def _handle_game_update(self, data_event: Any, event_id: str) -> None:
         """Handle game update event."""

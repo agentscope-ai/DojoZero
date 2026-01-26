@@ -67,7 +67,10 @@ SYNTHETIC_EVENT_TYPE_MAP: dict[str, list[str]] = {
         "nfl_game_result",
         "nfl_game_initialize",
     ],
-    # Other event types (nfl_game_update, nfl_odds_update) are direct mappings
+    # Map nfl_odds_update to odds_update (Polymarket event type) since ESPN doesn't provide odds
+    "nfl_odds_update": [
+        "odds_update",
+    ],
 }
 
 
