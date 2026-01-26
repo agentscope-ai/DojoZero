@@ -1195,12 +1195,9 @@ class ScheduleManager:
                 self._persist()
                 return
 
-            # Add metadata from scheduled trial
-            spec.metadata.update(scheduled.metadata)
-            # Add schedule-specific metadata using typed keys
-            spec.metadata["schedule_id"] = scheduled.schedule_id
-            spec.metadata["sport_type"] = scheduled.sport_type
-            spec.metadata["event_id"] = scheduled.event_id
+            # Note: spec.metadata is a frozen dataclass (e.g., BettingTrialMetadata)
+            # with sport_type and espn_game_id already populated by the builder.
+            # No need to add schedule_id/event_id - they're tracked in ScheduledTrial.
 
             # Submit to trial manager
             await self._trial_manager.submit(spec)

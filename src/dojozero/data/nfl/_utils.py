@@ -284,14 +284,17 @@ def _extract_game_info_from_summary(
     """
     try:
         # Extract header for basic game info
-        header = summary.get("header", {})
-        competitions = header.get("competitions", [])
+        header = summary.get("header", {}) or {}
+        competitions = header.get("competitions", []) or []
         if not competitions:
             logger.debug("No competitions in summary for game_id=%s", game_id)
             return None
 
         competition = competitions[0]
-        competitors = competition.get("competitors", [])
+        if not competition or not isinstance(competition, dict):
+            logger.debug("Invalid competition data for game_id=%s", game_id)
+            return None
+        competitors = competition.get("competitors", []) or []
         if len(competitors) < 2:
             logger.debug("Insufficient competitors for game_id=%s", game_id)
             return None
@@ -300,6 +303,8 @@ def _extract_game_info_from_summary(
         home_data = None
         away_data = None
         for comp in competitors:
+            if not comp or not isinstance(comp, dict):
+                continue
             if comp.get("homeAway") == "home":
                 home_data = comp
             else:
@@ -310,8 +315,8 @@ def _extract_game_info_from_summary(
             return None
 
         # Build TeamInfo objects
-        home_team_raw = home_data.get("team", {})
-        away_team_raw = away_data.get("team", {})
+        home_team_raw = home_data.get("team", {}) or {}
+        away_team_raw = away_data.get("team", {}) or {}
 
         home_team_id = str(home_team_raw.get("id", ""))
         away_team_id = str(away_team_raw.get("id", ""))
@@ -368,8 +373,8 @@ def _extract_game_info_from_summary(
                 pass
 
         # Extract status
-        status_data = competition.get("status", {})
-        status_type = status_data.get("type", {})
+        status_data = competition.get("status", {}) or {}
+        status_type = status_data.get("type", {}) or {}
         status = status_type.get("id", 1)
         status_text = status_type.get("shortDetail", "") or status_type.get(
             "detail", ""

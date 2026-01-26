@@ -120,15 +120,17 @@ class NBAExternalAPI(ExternalAPI):
         if not summary or not isinstance(summary, dict) or "boxscore" not in summary:
             return {"boxscore": {"gameId": event_id}}
 
-        espn_boxscore = summary.get("boxscore", {})
-        teams = espn_boxscore.get("teams", [])
+        espn_boxscore = summary.get("boxscore", {}) or {}
+        teams = espn_boxscore.get("teams", []) or []
 
         # Find home and away teams
         home_team_data: dict[str, Any] = {}
         away_team_data: dict[str, Any] = {}
 
         for team in teams:
-            team_info = team.get("team", {})
+            if not team or not isinstance(team, dict):
+                continue
+            team_info = team.get("team", {}) or {}
             # ESPN uses homeAway field to identify home/away
             if team.get("homeAway") == "home":
                 home_team_data = self._extract_team_data(team, team_info)
@@ -136,11 +138,13 @@ class NBAExternalAPI(ExternalAPI):
                 away_team_data = self._extract_team_data(team, team_info)
 
         # Also check header for additional info
-        header = summary.get("header", {})
-        competitions = header.get("competitions", [])
-        if competitions:
+        header = summary.get("header", {}) or {}
+        competitions = header.get("competitions", []) or []
+        if competitions and competitions[0] and isinstance(competitions[0], dict):
             comp = competitions[0]
-            for competitor in comp.get("competitors", []):
+            for competitor in comp.get("competitors", []) or []:
+                if not competitor or not isinstance(competitor, dict):
+                    continue
                 if competitor.get("homeAway") == "home" and not home_team_data:
                     home_team_data = self._extract_competitor_data(competitor)
                 elif competitor.get("homeAway") == "away" and not away_team_data:
@@ -167,9 +171,11 @@ class NBAExternalAPI(ExternalAPI):
     ) -> dict[str, Any]:
         """Extract team data from ESPN boxscore team entry."""
         # Extract statistics
-        stats_list = team.get("statistics", [])
+        stats_list = team.get("statistics", []) or []
         statistics: dict[str, Any] = {}
         for stat in stats_list:
+            if not stat or not isinstance(stat, dict):
+                continue
             stat_name = stat.get("name", "")
             stat_value = stat.get("displayValue", "0")
             try:
@@ -183,9 +189,15 @@ class NBAExternalAPI(ExternalAPI):
 
         # Extract players
         players = []
-        for player_entry in team.get("players", []):
-            for stat_entry in player_entry.get("statistics", []):
-                for athlete in stat_entry.get("athletes", []):
+        for player_entry in team.get("players", []) or []:
+            if not player_entry or not isinstance(player_entry, dict):
+                continue
+            for stat_entry in player_entry.get("statistics", []) or []:
+                if not stat_entry or not isinstance(stat_entry, dict):
+                    continue
+                for athlete in stat_entry.get("athletes", []) or []:
+                    if not athlete or not isinstance(athlete, dict):
+                        continue
                     player_data = self._extract_player_data(athlete, stat_entry)
                     if player_data:
                         players.append(player_data)
@@ -201,7 +213,7 @@ class NBAExternalAPI(ExternalAPI):
 
     def _extract_competitor_data(self, competitor: dict[str, Any]) -> dict[str, Any]:
         """Extract team data from ESPN header competitor."""
-        team_info = competitor.get("team", {})
+        team_info = competitor.get("team", {}) or {}
         score = competitor.get("score", "0")
 
         return {
@@ -268,7 +280,7 @@ class NBAExternalAPI(ExternalAPI):
                     "actions": actions,
                 }
             }
-        items = plays.get("items", [])
+        items = plays.get("items", []) or []
 
         for i, item in enumerate(items):
             action = self._convert_play_to_action(item, i)
@@ -286,11 +298,11 @@ class NBAExternalAPI(ExternalAPI):
         self, play: dict[str, Any], index: int
     ) -> dict[str, Any] | None:
         """Convert a single ESPN play to action format."""
-        if not play:
+        if not play or not isinstance(play, dict):
             return None
 
         # Extract play type
-        play_type = play.get("type", {})
+        play_type = play.get("type", {}) or {}
         action_type = play_type.get("text", "") if isinstance(play_type, dict) else ""
 
         # Extract team info
@@ -311,11 +323,11 @@ class NBAExternalAPI(ExternalAPI):
         description = play.get("text", "")
 
         # Extract participant (player)
-        participants = play.get("participants", [])
+        participants = play.get("participants", []) or []
         person_id = 0
         player_name = ""
-        if participants:
-            athlete = participants[0].get("athlete", {})
+        if participants and participants[0] and isinstance(participants[0], dict):
+            athlete = participants[0].get("athlete", {}) or {}
             person_id = athlete.get("id", 0) if athlete else 0
             player_name = athlete.get("displayName", "") if athlete else ""
 
