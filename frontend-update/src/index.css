@@ -229,6 +229,7 @@ button:focus {
     opacity: 1;
     transform: translateY(0);
 }
+}
 
 .animate-slide-in {
   animation: slideIn 0.3s ease-out;

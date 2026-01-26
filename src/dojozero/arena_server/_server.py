@@ -296,12 +296,22 @@ class LandingPageCache:
         # Fetch outside lock to avoid blocking
         data = await fetcher()
 
-        async with self._lock:
-            self._trials_list = CacheEntry(
-                data=data,
-                expires_at=time.time() + self.TRIALS_LIST_TTL,
-            )
-        LOGGER.debug("Cache miss: trials_list, fetched %d trials", len(data))
+        # Only cache non-empty results to avoid caching transient errors
+        if data:
+            async with self._lock:
+                self._trials_list = CacheEntry(
+                    data=data,
+                    expires_at=time.time() + self.TRIALS_LIST_TTL,
+                )
+            LOGGER.debug("Cache miss: trials_list, fetched %d trials", len(data))
+        else:
+            LOGGER.warning("Fetcher returned empty trials list, not caching")
+            # Use stale cache if available (stale-while-revalidate pattern)
+            async with self._lock:
+                if self._trials_list is not None:
+                    LOGGER.info("Using stale cache data due to empty fetch result")
+                    return self._trials_list.data
+
         return data
 
     async def get_trial_info(
@@ -339,12 +349,22 @@ class LandingPageCache:
 
         data = await fetcher()
 
-        async with self._lock:
-            self._stats = CacheEntry(
-                data=data,
-                expires_at=time.time() + self.STATS_TTL,
-            )
-        LOGGER.debug("Cache miss: stats")
+        # Only cache non-empty results
+        if data and any(data.values()):
+            async with self._lock:
+                self._stats = CacheEntry(
+                    data=data,
+                    expires_at=time.time() + self.STATS_TTL,
+                )
+            LOGGER.debug("Cache miss: stats")
+        else:
+            LOGGER.warning("Fetcher returned empty stats, not caching")
+            # Use stale cache if available
+            async with self._lock:
+                if self._stats is not None:
+                    LOGGER.info("Using stale stats cache due to empty fetch result")
+                    return self._stats.data
+
         return data
 
     async def get_leaderboard(
@@ -359,12 +379,24 @@ class LandingPageCache:
 
         data = await fetcher()
 
-        async with self._lock:
-            self._leaderboard = CacheEntry(
-                data=data,
-                expires_at=time.time() + self.LEADERBOARD_TTL,
-            )
-        LOGGER.debug("Cache miss: leaderboard")
+        # Only cache non-empty results
+        if data:
+            async with self._lock:
+                self._leaderboard = CacheEntry(
+                    data=data,
+                    expires_at=time.time() + self.LEADERBOARD_TTL,
+                )
+            LOGGER.debug("Cache miss: leaderboard")
+        else:
+            LOGGER.warning("Fetcher returned empty leaderboard, not caching")
+            # Use stale cache if available
+            async with self._lock:
+                if self._leaderboard is not None:
+                    LOGGER.info(
+                        "Using stale leaderboard cache due to empty fetch result"
+                    )
+                    return self._leaderboard.data
+
         return data
 
     async def get_agent_actions(
@@ -379,12 +411,24 @@ class LandingPageCache:
 
         data = await fetcher()
 
-        async with self._lock:
-            self._agent_actions = CacheEntry(
-                data=data,
-                expires_at=time.time() + self.AGENT_ACTIONS_TTL,
-            )
-        LOGGER.debug("Cache miss: agent_actions")
+        # Only cache non-empty results
+        if data:
+            async with self._lock:
+                self._agent_actions = CacheEntry(
+                    data=data,
+                    expires_at=time.time() + self.AGENT_ACTIONS_TTL,
+                )
+            LOGGER.debug("Cache miss: agent_actions")
+        else:
+            LOGGER.warning("Fetcher returned empty agent actions, not caching")
+            # Use stale cache if available
+            async with self._lock:
+                if self._agent_actions is not None:
+                    LOGGER.info(
+                        "Using stale agent_actions cache due to empty fetch result"
+                    )
+                    return self._agent_actions.data
+
         return data
 
     async def get_games(
@@ -399,12 +443,25 @@ class LandingPageCache:
 
         data = await fetcher()
 
-        async with self._lock:
-            self._games = CacheEntry(
-                data=data,
-                expires_at=time.time() + self.GAMES_TTL,
-            )
-        LOGGER.debug("Cache miss: games")
+        # Only cache non-empty results (check if any game lists have data)
+        has_data = data and any(
+            data.get(key) for key in ["liveGames", "upcomingGames", "completedGames"]
+        )
+        if has_data:
+            async with self._lock:
+                self._games = CacheEntry(
+                    data=data,
+                    expires_at=time.time() + self.GAMES_TTL,
+                )
+            LOGGER.debug("Cache miss: games")
+        else:
+            LOGGER.warning("Fetcher returned empty games data, not caching")
+            # Use stale cache if available
+            async with self._lock:
+                if self._games is not None:
+                    LOGGER.info("Using stale games cache due to empty fetch result")
+                    return self._games.data
+
         return data
 
     def invalidate_trial(self, trial_id: str) -> None:
