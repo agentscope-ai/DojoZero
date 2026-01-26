@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from dojozero.utils import utc_to_us_date
+
 
 class TeamInfo(BaseModel):
     """Team information from ESPN API.
@@ -197,8 +199,6 @@ class GameInfo(BaseModel):
         """
         if self.game_time_utc is None:
             return ""
-        from dojozero.utils import utc_to_us_date
-
         return utc_to_us_date(self.game_time_utc)
 
 

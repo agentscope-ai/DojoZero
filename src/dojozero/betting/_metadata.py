@@ -17,7 +17,7 @@ Usage:
     }
 """
 
-from typing import TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 
 class BaseBettingTrialMetadata(TypedDict, total=False):
@@ -51,7 +51,7 @@ class BaseBettingTrialMetadata(TypedDict, total=False):
 
     # Trial type and builder info
     sample: str
-    sport_type: str
+    sport_type: Literal["nba", "nfl"]
     builder_name: str
 
     # Game identification
@@ -71,7 +71,7 @@ class BaseBettingTrialMetadata(TypedDict, total=False):
     store_types: list[str]
 
     # Polymarket
-    market_url: str
+    market_url: NotRequired[str]
 
 
 # Keys that consumers can expect in metadata
