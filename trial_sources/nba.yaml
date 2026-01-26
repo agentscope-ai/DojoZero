@@ -61,14 +61,13 @@ config:
       initial_balance: "1000.00"
       allowed_tools:
       - get_balance
-      - get_quote
-      - place_bet
+      - get_event
+      - place_bet_moneyline
       - cancel_bet
       - get_active_bets
       - get_pending_orders
       - get_bet_history
       - get_statistics
-      - get_available_events
       data_streams:
       - game_status_change_stream
       - odds_update_stream
@@ -129,7 +128,7 @@ config:
       - play_by_play_stream
 
   # Schedule options (these are TrialSourceConfig fields, not scenario_config)
-  pre_start_hours: 0.1           # Start trial 0.1 hours before game time
+  pre_start_hours: 2.0           # Start trial 2 hours before game time
   check_interval_seconds: 60.0   # Check game status every 60 seconds
   auto_stop_on_completion: true  # Stop trial when game finishes
   data_dir: outputs              # Output directory for persistence files
