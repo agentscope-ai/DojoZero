@@ -262,10 +262,14 @@ async def test_polymarket_store_logic(market_url: str):
                 print("✓ Broker handled OddsUpdateEvent successfully")
 
                 # Verify odds were updated
-                quote = await broker.get_quote(test_event_id)
-                print("  Current odds in broker:")
-                print(f"    Home: {quote['home_odds']}")
-                print(f"    Away: {quote['away_odds']}")
+                event = await broker.get_available_event()
+                if event:
+                    quote = event.to_dict()
+                    print("  Current odds in broker:")
+                    print(f"    Home: {quote['home_odds']}")
+                    print(f"    Away: {quote['away_odds']}")
+                else:
+                    print("  No event available in broker")
             else:
                 print("  No OddsUpdateEvent found to test broker integration")
         else:

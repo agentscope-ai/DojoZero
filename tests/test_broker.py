@@ -232,7 +232,9 @@ class TestEventManagement:
         )
         await broker.handle_stream_event(odds_event)
 
-        quote = await broker.get_quote("game1")
+        event = await broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
         assert quote["event_id"] == "game1"
         assert quote["home_team"] == "Lakers"
         assert quote["away_team"] == "Warriors"
@@ -273,11 +275,13 @@ class TestEventManagement:
                 initial_away_odds=Decimal("2.10"),
             )
 
-    async def test_get_quote(self, initialized_event):
-        """Test getting odds quote for an event"""
+    async def test_get_available_event_with_initialized(self, initialized_event):
+        """Test getting the current event from initialized event"""
         broker, event_id = initialized_event
 
-        quote = await broker.get_quote(event_id)
+        event = await broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
 
         assert quote["event_id"] == event_id
         assert quote["home_team"] == "Lakers"
@@ -286,10 +290,10 @@ class TestEventManagement:
         assert Decimal(quote["home_odds"]) == Decimal("1.95")
         assert Decimal(quote["away_odds"]) == Decimal("2.10")
 
-    async def test_get_quote_nonexistent_event_raises_error(self, broker):
-        """Test that getting quote for nonexistent event raises error"""
-        with pytest.raises(ValueError, match="not found"):
-            await broker.get_quote("nonexistent_event")
+    async def test_get_available_event_nonexistent_returns_none(self, broker):
+        """Test that getting event when none exists returns None"""
+        event = await broker.get_available_event()
+        assert event is None
 
     async def test_update_odds(self, initialized_event):
         """Test updating event odds via OddsUpdateEvent"""
@@ -307,7 +311,9 @@ class TestEventManagement:
         )
         await broker.handle_stream_event(odds_event)
 
-        quote = await broker.get_quote(event_id)
+        event = await broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
         assert Decimal(quote["home_odds"]) == Decimal("2.00")
         assert Decimal(quote["away_odds"]) == Decimal("2.20")
 
@@ -333,7 +339,9 @@ class TestEventManagement:
         )
         await broker.handle_stream_event(game_start)
 
-        quote = await broker.get_quote(event_id)
+        event = await broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
         assert quote["status"] == "LIVE"
 
     async def test_update_event_status_to_closed(self, initialized_event):
@@ -360,12 +368,12 @@ class TestEventManagement:
         )
         await broker.handle_stream_event(game_result)
 
-        quote = await broker.get_quote(event_id)
-        # After settlement, status is SETTLED not CLOSED
-        assert quote["status"] == "SETTLED"
+        event = await broker.get_available_event()
+        # After settlement, event is no longer available (status is SETTLED)
+        assert event is None
 
-    async def test_get_available_events(self, broker):
-        """Test getting list of events accepting bets"""
+    async def test_get_available_event(self, broker):
+        """Test getting the current event accepting bets"""
         # Create first event
         game1_init = StreamEvent(
             stream_id="nba_game_stream",
@@ -433,10 +441,10 @@ class TestEventManagement:
         )
         await broker.handle_stream_event(game_result)
 
-        available = await broker.get_available_events()
+        available = await broker.get_available_event()
 
-        assert len(available) == 1
-        assert available[0].event_id == "game1"
+        assert available is not None
+        assert available.event_id == "game1"
 
 
 # =============================================================================
@@ -1275,7 +1283,9 @@ class TestStateManagement:
         active_bets = await new_broker.get_active_bets(agent.actor_id)
         assert len(active_bets) == 1
 
-        quote = await new_broker.get_quote("test_event")
+        event = await new_broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
         assert quote["event_id"] == "test_event"
 
 
@@ -1640,7 +1650,9 @@ class TestSpreadBetting:
         await broker.handle_stream_event(odds_event)
 
         # Verify initial odds
-        quote = await broker.get_quote("test_event")
+        event = await broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
         assert "spread_lines" in quote
         assert "-3.5" in quote["spread_lines"]
         assert Decimal(quote["spread_lines"]["-3.5"]["home_odds"]) == Decimal("1.90")
@@ -1658,7 +1670,9 @@ class TestSpreadBetting:
         await broker.handle_stream_event(updated_odds_event)
 
         # Verify odds were updated
-        updated_quote = await broker.get_quote("test_event")
+        updated_event = await broker.get_available_event()
+        assert updated_event is not None
+        updated_quote = updated_event.to_dict()
         assert Decimal(updated_quote["spread_lines"]["-3.5"]["home_odds"]) == Decimal(
             "1.95"
         )
@@ -1948,7 +1962,9 @@ class TestTotalBetting:
         await broker.handle_stream_event(odds_event)
 
         # Verify initial odds
-        quote = await broker.get_quote("test_event")
+        event = await broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
         assert "total_lines" in quote
         assert "220.5" in quote["total_lines"]
         assert Decimal(quote["total_lines"]["220.5"]["over_odds"]) == Decimal("1.88")
@@ -1966,7 +1982,9 @@ class TestTotalBetting:
         await broker.handle_stream_event(updated_odds_event)
 
         # Verify odds were updated
-        updated_quote = await broker.get_quote("test_event")
+        updated_event = await broker.get_available_event()
+        assert updated_event is not None
+        updated_quote = updated_event.to_dict()
         assert Decimal(updated_quote["total_lines"]["220.5"]["over_odds"]) == Decimal(
             "1.92"
         )
@@ -2186,7 +2204,7 @@ class TestAllowedTools:
         config: BrokerOperatorConfig = {
             "actor_id": "test_broker",
             "initial_balance": "1000.00",
-            "allowed_tools": ["get_balance", "get_quote", "place_bet"],
+            "allowed_tools": ["get_balance", "get_event", "place_bet_moneyline"],
         }
         context = RuntimeContext(
             trial_id="test-trial",
@@ -2210,8 +2228,8 @@ class TestAllowedTools:
 
         # Should only have the allowed tools
         assert "get_balance" in tool_names
-        assert "get_quote" in tool_names
-        assert "place_bet" in tool_names
+        assert "get_event" in tool_names
+        assert "place_bet_moneyline" in tool_names
 
         # Should NOT have the restricted tools
         assert "place_bet_spread" not in tool_names
@@ -2229,8 +2247,8 @@ class TestAllowedTools:
         # Should have all tools
         expected_tools = [
             "get_balance",
-            "get_quote",
-            "place_bet",
+            "get_event",
+            "place_bet_moneyline",
             "place_bet_spread",
             "place_bet_total",
             "cancel_bet",
@@ -2238,7 +2256,6 @@ class TestAllowedTools:
             "get_pending_orders",
             "get_bet_history",
             "get_statistics",
-            "get_available_events",
         ]
 
         for tool_name in expected_tools:
@@ -2272,8 +2289,8 @@ class TestEventOrdering:
         await broker.handle_stream_event(game_start)
 
         # Event should not exist yet (GameStartEvent was buffered)
-        with pytest.raises(ValueError, match="not found"):
-            await broker.get_quote(event_id)
+        event = await broker.get_available_event()
+        assert event is None
 
         # 2. GameInitializeEvent arrives (normal order would be first)
         game_init = StreamEvent(
@@ -2289,7 +2306,9 @@ class TestEventOrdering:
         await broker.handle_stream_event(game_init)
 
         # 3. Verify status is LIVE (buffered GameStartEvent was applied)
-        quote = await broker.get_quote(event_id)
+        event = await broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
         assert quote["status"] == "LIVE"
 
     async def test_game_result_before_game_initialize(self, broker):
@@ -2321,8 +2340,8 @@ class TestEventOrdering:
         await broker.handle_stream_event(game_result)
 
         # Event should not exist yet
-        with pytest.raises(ValueError, match="not found"):
-            await broker.get_quote(event_id)
+        event = await broker.get_available_event()
+        assert event is None
 
         # 3. GameInitializeEvent arrives last
         game_init = StreamEvent(
@@ -2338,8 +2357,9 @@ class TestEventOrdering:
         await broker.handle_stream_event(game_init)
 
         # 4. Verify status is SETTLED (both buffered events were applied in order)
-        quote = await broker.get_quote(event_id)
-        assert quote["status"] == "SETTLED"
+        # After settlement, event is no longer available
+        event = await broker.get_available_event()
+        assert event is None
 
     async def test_normal_order_still_works(self, broker):
         """Test that normal event ordering (initialize → start → result) still works."""
@@ -2358,7 +2378,9 @@ class TestEventOrdering:
         )
         await broker.handle_stream_event(game_init)
 
-        quote = await broker.get_quote(event_id)
+        event = await broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
         assert quote["status"] == "SCHEDULED"
 
         # 2. GameStartEvent second
@@ -2369,7 +2391,9 @@ class TestEventOrdering:
         )
         await broker.handle_stream_event(game_start)
 
-        quote = await broker.get_quote(event_id)
+        event = await broker.get_available_event()
+        assert event is not None
+        quote = event.to_dict()
         assert quote["status"] == "LIVE"
 
         # 3. GameResultEvent third
@@ -2384,8 +2408,9 @@ class TestEventOrdering:
         )
         await broker.handle_stream_event(game_result)
 
-        quote = await broker.get_quote(event_id)
-        assert quote["status"] == "SETTLED"
+        # After settlement, event is no longer available
+        event = await broker.get_available_event()
+        assert event is None
 
 
 if __name__ == "__main__":
