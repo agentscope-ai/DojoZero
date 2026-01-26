@@ -157,10 +157,10 @@ config:
 
 Manage trial sources via CLI:
 ```bash
-dojo0 list-sources --server http://localhost:8000
-dojo0 list-trials --scheduled --server http://localhost:8000
-dojo0 remove-source <source_id> --server http://localhost:8000
-dojo0 clear-schedules --server http://localhost:8000
+dojo0 list-sources
+dojo0 list-trials
+dojo0 remove-source <source_id>
+dojo0 clear-schedules
 ```
 
 ### Auto-Resume of Interrupted Trials
@@ -186,6 +186,22 @@ export DOJOZERO_SLS_LOGSTORE="dojozero-traces"
 ```
 
 Credentials are resolved via env vars, `~/.alibabacloud/credentials`, or ECS RAM role.
+
+### Proxy Configuration
+
+To route ESPN API requests through a proxy (useful for geo-restricted access or corporate networks), set the `DOJOZERO_PROXY_URL` environment variable:
+
+```bash
+export DOJOZERO_PROXY_URL="http://proxy.example.com:8080"
+
+# With authentication
+export DOJOZERO_PROXY_URL="http://user:password@proxy.example.com:8080"
+
+# SOCKS5 proxy
+export DOJOZERO_PROXY_URL="socks5://proxy.example.com:1080"
+```
+
+This proxy is used by both NBA and NFL data stores when fetching game data from ESPN APIs.
 
 ## Arena
 
