@@ -159,8 +159,8 @@ def _build_trial_spec(
     # For NFL, we'll use the espn_game_id directly since NFL data comes from ESPN
     # Team info will be filled in from the store when the game initializes
     espn_game_id = params.espn_game_id
-    home_team_abbreviation: str | None = None
-    away_team_abbreviation: str | None = None
+    home_tricode: str | None = None
+    away_tricode: str | None = None
     home_team_name: str | None = None
     away_team_name: str | None = None
     game_date: str | None = None
@@ -228,18 +228,18 @@ def _build_trial_spec(
             }
 
             # Add optional fields
-            if home_team_abbreviation:
-                ds_stream_config["home_team_abbreviation"] = home_team_abbreviation
-            if away_team_abbreviation:
-                ds_stream_config["away_team_abbreviation"] = away_team_abbreviation
+            if home_tricode:
+                ds_stream_config["home_team_abbreviation"] = home_tricode
+            if away_tricode:
+                ds_stream_config["away_team_abbreviation"] = away_tricode
 
             # Handle initializer config for raw_web_search stream
             if ds_config.event_type == "raw_web_search":
                 ds_stream_config["websearch_store_id"] = params.websearch_store_id
-                if home_team_abbreviation:
-                    ds_stream_config["home_team_abbreviation"] = home_team_abbreviation
-                if away_team_abbreviation:
-                    ds_stream_config["away_team_abbreviation"] = away_team_abbreviation
+                if home_tricode:
+                    ds_stream_config["home_team_abbreviation"] = home_tricode
+                if away_tricode:
+                    ds_stream_config["away_team_abbreviation"] = away_tricode
                 if home_team_name:
                     ds_stream_config["home_team_name"] = home_team_name
                 if away_team_name:
@@ -270,22 +270,18 @@ def _build_trial_spec(
             }
 
             # Add optional fields
-            if home_team_abbreviation:
-                flat_stream_config["home_team_abbreviation"] = home_team_abbreviation
-            if away_team_abbreviation:
-                flat_stream_config["away_team_abbreviation"] = away_team_abbreviation
+            if home_tricode:
+                flat_stream_config["home_team_abbreviation"] = home_tricode
+            if away_tricode:
+                flat_stream_config["away_team_abbreviation"] = away_tricode
 
             # Handle initializer config for raw_web_search stream
             if event_type == "raw_web_search":
                 flat_stream_config["websearch_store_id"] = params.websearch_store_id
-                if home_team_abbreviation:
-                    flat_stream_config["home_team_abbreviation"] = (
-                        home_team_abbreviation
-                    )
-                if away_team_abbreviation:
-                    flat_stream_config["away_team_abbreviation"] = (
-                        away_team_abbreviation
-                    )
+                if home_tricode:
+                    flat_stream_config["home_team_abbreviation"] = home_tricode
+                if away_tricode:
+                    flat_stream_config["away_team_abbreviation"] = away_tricode
                 if home_team_name:
                     flat_stream_config["home_team_name"] = home_team_name
                 if away_team_name:
@@ -409,6 +405,7 @@ def _build_trial_spec(
     # This metadata is used by build_runtime_context and store factories
     metadata: dict[str, Any] = {
         "sample": "nfl-moneyline",
+        "sport_type": "nfl",
         "espn_game_id": params.espn_game_id,
         "hub_id": hub_id,
         "persistence_file": persistence_file,
@@ -422,9 +419,9 @@ def _build_trial_spec(
         metadata["market_url"] = params.market_url
 
     # Add team information if available
-    if home_team_abbreviation and away_team_abbreviation:
-        metadata["home_team_abbreviation"] = home_team_abbreviation
-        metadata["away_team_abbreviation"] = away_team_abbreviation
+    if home_tricode and away_tricode:
+        metadata["home_tricode"] = home_tricode
+        metadata["away_tricode"] = away_tricode
         if game_date:
             metadata["game_date"] = game_date
 

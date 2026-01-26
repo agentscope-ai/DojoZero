@@ -8,7 +8,7 @@ from typing import Any
 
 import aiohttp
 
-from dojozero.utils import utc_to_us_date
+from dojozero.data._game_info import GameInfo
 
 logger = logging.getLogger(__name__)
 
@@ -719,8 +719,12 @@ def _is_nba_game_id(game_id: str) -> bool:
 
 def _extract_game_info_from_summary(
     summary: dict[str, Any], game_id: str
-) -> dict[str, Any] | None:
-    """Extract game info from ESPN summary response."""
+) -> GameInfo | None:
+    """Extract game info from ESPN summary response.
+
+    Returns:
+        GameInfo with team info and game date, or None if extraction fails.
+    """
     header = summary.get("header", {})
     competitions = header.get("competitions", [])
 
@@ -730,78 +734,59 @@ def _extract_game_info_from_summary(
     comp = competitions[0]
     competitors = comp.get("competitors", [])
 
-    home_team_name = ""
-    away_team_name = ""
-    home_team_tricode = ""
-    away_team_tricode = ""
+    home_team_data: dict[str, Any] | None = None
+    away_team_data: dict[str, Any] | None = None
 
     for competitor in competitors:
-        team_info = competitor.get("team", {})
-        team_name = (
-            f"{team_info.get('location', '')} {team_info.get('name', '')}".strip()
-        )
-        team_tricode = team_info.get("abbreviation", "")
+        team = competitor.get("team", {})
+        # Build team data dict with aliases that TeamInfo expects
+        team_data = {
+            "teamId": str(team.get("id", "")),
+            "displayName": f"{team.get('location', '')} {team.get('name', '')}".strip(),
+            "teamTricode": team.get("abbreviation", ""),
+            "teamCity": team.get("location", ""),
+            "shortDisplayName": team.get("name", ""),
+            "color": team.get("color", ""),
+            "alternateColor": team.get("alternateColor", ""),
+            "logo": team.get("logo", ""),
+        }
 
         if competitor.get("homeAway") == "home":
-            home_team_name = team_name
-            home_team_tricode = team_tricode
+            home_team_data = team_data
         else:
-            away_team_name = team_name
-            away_team_tricode = team_tricode
+            away_team_data = team_data
 
-    # Get game date/time
-    # Convert to US Eastern time for the date since NBA games are scheduled in local time
-    # and Polymarket slugs use the US date, not UTC date
-    game_time_utc = comp.get("date", "")
-    game_date = ""
-    if game_time_utc:
-        try:
-            from dateutil import parser
-
-            dt = parser.parse(game_time_utc)
-            game_date = utc_to_us_date(dt)
-        except Exception:
-            pass
-
-    if not home_team_name or not away_team_name:
+    if not home_team_data or not away_team_data:
         return None
 
-    return {
-        "game_id": game_id,
-        "home_team": home_team_name,
-        "away_team": away_team_name,
-        "home_team_tricode": home_team_tricode,
-        "away_team_tricode": away_team_tricode,
-        "game_date": game_date,
-        "game_time_utc": game_time_utc,
+    # Get game date/time
+    game_time_utc_str = comp.get("date", "")
+
+    # Build GameInfo using dict with aliases for Pydantic validation
+    game_data = {
+        "gameId": game_id,
+        "sport_type": "nba",
+        "homeTeam": home_team_data,
+        "awayTeam": away_team_data,
+        "gameTimeUTC": game_time_utc_str,
     }
 
+    return GameInfo.model_validate(game_data)
 
-def get_game_info_by_id(
-    game_id: str, proxy: str | None = None
-) -> dict[str, Any] | None:
+
+def get_game_info_by_id(game_id: str, proxy: str | None = None) -> GameInfo | None:
     """Get team names and game date for a given game/event ID using ESPN API.
 
     Supports both ESPN event IDs (e.g., '401584701') and legacy NBA.com game IDs
-    (e.g., '0022500640'). For NBA.com IDs, this function will search recent dates
-    to find a matching game.
+    (e.g., '0022500640'). For NBA.com IDs, this function will log a warning
+    as ESPN uses different event IDs.
 
     Args:
         game_id: ESPN event ID or NBA.com game ID
         proxy: Optional proxy URL
 
     Returns:
-        Dictionary with game information:
-        {
-            'game_id': str,
-            'home_team': str,  # Full team name (e.g., "Los Angeles Lakers")
-            'away_team': str,  # Full team name (e.g., "San Antonio Spurs")
-            'home_team_tricode': str,  # Team tricode (e.g., "LAL")
-            'away_team_tricode': str,  # Team tricode (e.g., "SAS")
-            'game_date': str,  # Date in YYYY-MM-DD format
-            'game_time_utc': str,  # Game time in UTC (ISO format)
-        }
-        Returns None if game not found or is invalid
+        GameInfo with game information, or None if not found.
     """
     logger.debug(f"Looking up game_id={game_id}")
 
@@ -813,7 +798,7 @@ def get_game_info_by_id(
             result = _extract_game_info_from_summary(summary, game_id)
             if result:
                 logger.debug(
-                    f"Found game via ESPN: {result['away_team_tricode']} @ {result['home_team_tricode']}"
+                    f"Found game via ESPN: {result.away_team.tricode} @ {result.home_team.tricode}"
                 )
                 return result
     except Exception as e:
@@ -835,7 +820,7 @@ def get_game_info_by_id(
 
 async def get_game_info_by_id_async(
     game_id: str, proxy: str | None = None
-) -> dict[str, Any] | None:
+) -> GameInfo | None:
     """Async version of get_game_info_by_id using ESPN API.
 
     Supports both ESPN event IDs (e.g., '401584701') and legacy NBA.com game IDs
@@ -847,7 +832,7 @@ async def get_game_info_by_id_async(
         proxy: Optional proxy URL
 
     Returns:
-        Dictionary with game information or None if not found
+        GameInfo with game information, or None if not found.
     """
     logger.debug(f"Looking up game_id={game_id}")
 
@@ -859,7 +844,7 @@ async def get_game_info_by_id_async(
             result = _extract_game_info_from_summary(summary, game_id)
             if result:
                 logger.debug(
-                    f"Found game via ESPN: {result['away_team_tricode']} @ {result['home_team_tricode']}"
+                    f"Found game via ESPN: {result.away_team.tricode} @ {result.home_team.tricode}"
                 )
                 return result
     except Exception as e:

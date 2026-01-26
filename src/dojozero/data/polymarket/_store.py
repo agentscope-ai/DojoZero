@@ -85,8 +85,8 @@ class PolymarketStore(DataStore):
 
         Args:
             data: API response data
-            identifier: Optional identifier dict (e.g., {"game_id": "0022500001"})
-                       Used to ensure event_id matches game_id for consistency
+            identifier: Optional identifier dict (e.g., {"espn_game_id": "401810490"})
+                       Used to ensure event_id matches espn_game_id for consistency
         """
         from datetime import datetime, timezone
 
@@ -97,14 +97,11 @@ class PolymarketStore(DataStore):
             odds_data = data["odds_update"]
             timestamp = datetime.now(timezone.utc)
 
-            # Prioritize game_id from identifier to ensure consistency with NBA events
-            # This ensures odds_update, game_update, and game_initialize all use the same event_id
-            if identifier and "game_id" in identifier:
-                event_id = identifier["game_id"]
-            elif identifier and "event_id" in identifier:
-                event_id = identifier["event_id"]
+            # Use espn_game_id from identifier to ensure consistency with game events
+            if identifier and "espn_game_id" in identifier:
+                event_id = identifier["espn_game_id"]
             else:
-                # Fallback to API response data (for backward compatibility)
+                # Fallback to API response data
                 event_id = odds_data.get("event_id") or odds_data.get("market_id", "")
 
             events.append(
@@ -160,11 +157,8 @@ class PolymarketStore(DataStore):
                 params["slug"] = (
                     f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
                 )
-            elif "game_id" in identifier:
-                # Use game_id for API params (API may use "event_id" parameter name)
-                params["event_id"] = identifier["game_id"]
-            elif "event_id" in identifier:
-                params["event_id"] = identifier["event_id"]
+            elif "espn_game_id" in identifier:
+                params["event_id"] = identifier["espn_game_id"]
 
         # Fetch odds from API
         data = await self._api.fetch("odds", params if params else None)

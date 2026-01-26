@@ -304,6 +304,10 @@ class TrialManager:
 
     def _log_status(self) -> None:
         """Log current trial manager status."""
+        # Clean up completed tasks before reporting status
+        # This ensures cancelled/completed tasks are removed even when below max capacity
+        self._cleanup_completed_tasks()
+
         running_ids = list(self._running_tasks.keys())
         pending_count = self._pending.qsize()
 

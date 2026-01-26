@@ -770,7 +770,7 @@ async def run_trial_for_game(
         return []
 
     # Extract the date from game_info
-    game_date_str = game_info.get("game_date")
+    game_date_str = game_info.get_game_date_us()
     if not game_date_str:
         logger.error("Game found but missing date information")
         return []

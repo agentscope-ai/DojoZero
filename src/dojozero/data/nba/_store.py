@@ -108,19 +108,10 @@ class NBAStore(DataStore):
 
                     game_info = get_game_info_by_id(game_id)
                     if game_info:
-                        home_team_str = game_info.get("home_team", "")
-                        away_team_str = game_info.get("away_team", "")
-                        game_time_utc_str = game_info.get("game_time_utc", "")
-
-                        # Parse game time
-                        game_time_dt = timestamp  # Default to current time
-                        if game_time_utc_str:
-                            try:
-                                from dojozero.data.nba._utils import parse_iso_datetime
-
-                                game_time_dt = parse_iso_datetime(game_time_utc_str)
-                            except (ValueError, AttributeError):
-                                pass
+                        home_team_str = game_info.home_team.name
+                        away_team_str = game_info.away_team.name
+                        # GameInfo.game_time_utc is already a datetime or None
+                        game_time_dt = game_info.game_time_utc or timestamp
 
                         if home_team_str and away_team_str:
                             events.append(
@@ -219,16 +210,11 @@ class NBAStore(DataStore):
                         # Try to get game time from game info
                         game_time_dt = timestamp  # Default to current time
                         try:
-                            from dojozero.data.nba._utils import (
-                                get_game_info_by_id,
-                                parse_iso_datetime,
-                            )
+                            from dojozero.data.nba._utils import get_game_info_by_id
 
                             game_info = get_game_info_by_id(game_id)
-                            if game_info and game_info.get("game_time_utc"):
-                                game_time_dt = parse_iso_datetime(
-                                    game_info["game_time_utc"]
-                                )
+                            if game_info and game_info.game_time_utc:
+                                game_time_dt = game_info.game_time_utc
                         except (KeyError, TypeError, ValueError, AttributeError):
                             pass  # Use timestamp as fallback
 
