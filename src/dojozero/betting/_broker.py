@@ -157,6 +157,10 @@ class BettingEvent:
         spread_lines = self.spread_lines if self.spread_lines is not None else {}
         total_lines = self.total_lines if self.total_lines is not None else {}
 
+        # Determine which betting phases are available based on status
+        can_bet_pregame = self.status == EventStatus.SCHEDULED
+        can_bet_ingame = self.status == EventStatus.LIVE
+
         return {
             "event_id": self.event_id,
             "home_team": self.home_team,
@@ -182,6 +186,12 @@ class BettingEvent:
             "last_odds_update": (
                 self.last_odds_update.isoformat() if self.last_odds_update else None
             ),
+            # Clarify what betting is available:
+            # - can_bet_pregame: True if PRE_GAME betting is allowed (status=SCHEDULED)
+            # - can_bet_ingame: True if IN_GAME betting is allowed (status=LIVE)
+            # - betting_closed_at: When pre-game betting closed (informational only)
+            "can_bet_pregame": can_bet_pregame,
+            "can_bet_ingame": can_bet_ingame,
             "betting_closed_at": (
                 self.betting_closed_at.isoformat() if self.betting_closed_at else None
             ),
@@ -1245,6 +1255,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         betting_event = self._events[event_id]
 
+        # No-op if already in target status (important for checkpoint resume)
+        if betting_event.status == status:
+            logger.debug(
+                "Event %s already in status %s, skipping transition",
+                event_id,
+                status.value,
+            )
+            return
+
         # Validate status transition
         valid_transitions = VALID_STATUS_TRANSITIONS.get(betting_event.status, set())
         if status not in valid_transitions:
@@ -2054,12 +2073,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         ) -> str:
             """Place a moneyline bet on an event.
 
+            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
+            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+
             Args:
                 amount: Bet amount (e.g., "100.00")
                 selection: "home" or "away"
                 event_id: Event to bet on
                 order_type: "MARKET" (immediate) or "LIMIT" (conditional), default "MARKET"
-                betting_phase: "PRE_GAME" or "IN_GAME", default "PRE_GAME"
+                betting_phase: "PRE_GAME" for scheduled games, "IN_GAME" for live games
                 limit_odds: Minimum odds for LIMIT orders (e.g., "2.00"), required for LIMIT
 
             Returns:
@@ -2089,13 +2111,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         ) -> str:
             """Place a spread bet on an event.
 
+            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
+            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+
             Args:
                 amount: Bet amount (e.g., "100.00")
                 selection: "home" or "away"
                 event_id: Event to bet on
                 spread_value: Spread value (e.g., "-3.5" or "+3.5")
                 order_type: "MARKET" (immediate) or "LIMIT" (conditional), default "MARKET"
-                betting_phase: "PRE_GAME" or "IN_GAME", default "PRE_GAME"
+                betting_phase: "PRE_GAME" for scheduled games, "IN_GAME" for live games
                 limit_odds: Minimum odds for LIMIT orders (e.g., "2.00"), required for LIMIT
 
             Returns:
@@ -2126,13 +2151,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         ) -> str:
             """Place a total (over/under) bet on an event.
 
+            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
+            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+
             Args:
                 amount: Bet amount (e.g., "100.00")
                 selection: "over" or "under"
                 event_id: Event to bet on
                 total_value: Total points value (e.g., "220.5")
                 order_type: "MARKET" (immediate) or "LIMIT" (conditional), default "MARKET"
-                betting_phase: "PRE_GAME" or "IN_GAME", default "PRE_GAME"
+                betting_phase: "PRE_GAME" for scheduled games, "IN_GAME" for live games
                 limit_odds: Minimum odds for LIMIT orders (e.g., "2.00"), required for LIMIT
 
             Returns:

@@ -877,6 +877,7 @@ async def _run_command(args: argparse.Namespace) -> int:
             otel_exporter = OTelSpanExporter(
                 otlp_endpoint, service_name=service_name, headers=headers
             )
+            otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info(
                 "OTel exporter configured: %s (backend: sls, service_name: %s)",
@@ -888,6 +889,7 @@ async def _run_command(args: argparse.Namespace) -> int:
             otel_exporter = OTelSpanExporter(
                 otlp_endpoint, service_name=service_name, headers=None
             )
+            otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info(
                 "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
@@ -1310,6 +1312,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
             otel_exporter = OTelSpanExporter(
                 otlp_endpoint, service_name=service_name, headers=headers
             )
+            otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info(
                 "OTel exporter configured: %s (backend: sls, service_name: %s)",
@@ -1321,6 +1324,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
             otel_exporter = OTelSpanExporter(
                 otlp_endpoint, service_name=service_name, headers=None
             )
+            otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info(
                 "OTel exporter configured: %s (backend: jaeger, service_name: %s)",

@@ -19,6 +19,7 @@ from dojozero.data._factory import build_runtime_context
 # Import factories to ensure they are registered
 import dojozero.data.nfl._factory  # noqa: F401
 import dojozero.data.websearch._factory  # noqa: F401
+import dojozero.data.polymarket._factory  # noqa: F401
 from dojozero.data.websearch._processors import (
     ExpertPredictionProcessor,
     InjurySummaryProcessor,
@@ -111,6 +112,15 @@ class NFLTrialParams(BaseModel):
             "  - 'operators': list[str] (optional) - Operator IDs to register\n"
             "  - 'data_streams': list[str] (optional) - DataStream actor IDs to subscribe to\n"
             "  - 'agent_config_path': str (optional) - Path to agent YAML config file"
+        ),
+    )
+
+    # Polymarket configuration
+    market_url: str | None = Field(
+        default=None,
+        description=(
+            "Optional Polymarket market URL (e.g., 'https://polymarket.com/sports/nfl/games/week/3/nfl-kc-sf-2025-01-25'). "
+            "If not provided, will auto-construct slug from game info (away_abbrev, home_abbrev, game_date)."
         ),
     )
 
@@ -401,8 +411,12 @@ def _build_trial_spec(
         "persistence_file": persistence_file,
         "event_types": params.event_types,
         # Store types to create (used by build_runtime_context)
-        "store_types": ["nfl", "websearch"],
+        "store_types": ["nfl", "websearch", "polymarket"],
     }
+
+    # Add market_url if provided
+    if params.market_url:
+        metadata["market_url"] = params.market_url
 
     # Add team information if available
     if home_team_abbreviation and away_team_abbreviation:
@@ -443,12 +457,12 @@ def _build_nfl_runtime_context(spec: TrialSpec) -> RuntimeContext:
         raise ValueError("persistence_file is required in metadata")
     persistence_file = str(persistence_file_raw)
 
-    # Get store types from metadata (defaults to NFL + websearch)
-    store_types_raw = metadata.get("store_types", ["nfl", "websearch"])
+    # Get store types from metadata (defaults to NFL + websearch + polymarket)
+    store_types_raw = metadata.get("store_types", ["nfl", "websearch", "polymarket"])
     if isinstance(store_types_raw, list):
         store_types = [str(s) for s in store_types_raw]
     else:
-        store_types = ["nfl", "websearch"]
+        store_types = ["nfl", "websearch", "polymarket"]
 
     # Build and return RuntimeContext directly
     return build_runtime_context(
