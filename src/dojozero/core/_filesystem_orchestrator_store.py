@@ -2,14 +2,16 @@
 
 import json
 import shutil
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Mapping, Sequence, Type, cast
+from typing import Any, Mapping, Sequence, Type, cast, get_type_hints
 from urllib.parse import quote
 from uuid import uuid4
 
 from ._actors import Actor
+from ._metadata import BaseTrialMetadata
 from ._trial_orchestrator import (
     ActorPhase,
     ActorRole,
@@ -174,10 +176,15 @@ class FileSystemOrchestratorStore(OrchestratorStore):
 
     # JSON (de-)serialization -------------------------------------------------
 
-    def _serialize_spec(self, spec: TrialSpec) -> dict[str, Any]:
-        return {
+    def _serialize_spec(self, spec: TrialSpec[Any]) -> dict[str, Any]:
+        # Serialize typed dataclass metadata with class path for reconstruction
+        metadata_dict = asdict(spec.metadata)
+        metadata_cls = type(spec.metadata)
+        metadata_cls_path = f"{metadata_cls.__module__}:{metadata_cls.__qualname__}"
+        result: dict[str, Any] = {
             "trial_id": spec.trial_id,
-            "metadata": dict(spec.metadata),
+            "metadata": metadata_dict,
+            "metadata_cls": metadata_cls_path,
             "operators": [
                 self._serialize_operator_spec(actor) for actor in spec.operators
             ],
@@ -186,12 +193,26 @@ class FileSystemOrchestratorStore(OrchestratorStore):
                 self._serialize_data_stream_spec(stream) for stream in spec.data_streams
             ],
         }
+        if spec.builder_name is not None:
+            result["builder_name"] = spec.builder_name
+        return result
 
-    def _read_spec(self, path: Path) -> TrialSpec:
+    def _read_spec(self, path: Path) -> TrialSpec[Any]:
         payload = self._read_json(path)
+        # Reconstruct typed metadata from class path and data
+        metadata_data = dict(payload.get("metadata", {}))
+        metadata_cls_path = payload.get("metadata_cls")
+        if metadata_cls_path:
+            metadata_cls = self._resolve_metadata_cls(metadata_cls_path)
+            metadata = self._reconstruct_metadata(metadata_cls, metadata_data)
+        else:
+            # Fallback for legacy specs without metadata_cls - use BaseTrialMetadata
+            metadata = self._reconstruct_metadata(BaseTrialMetadata, metadata_data)
+        # Extract builder_name if present
+        builder_name = payload.get("builder_name")
         return TrialSpec(
             trial_id=str(payload["trial_id"]),
-            metadata=dict(payload.get("metadata", {})),
+            metadata=metadata,
             operators=tuple(
                 self._deserialize_operator_spec(item)
                 for item in payload.get("operators", [])
@@ -203,6 +224,7 @@ class FileSystemOrchestratorStore(OrchestratorStore):
                 self._deserialize_data_stream_spec(item)
                 for item in payload.get("data_streams", [])
             ),
+            builder_name=str(builder_name) if builder_name is not None else None,
         )
 
     def _serialize_operator_spec(self, spec: OperatorSpec[Any]) -> dict[str, Any]:
@@ -382,6 +404,55 @@ class FileSystemOrchestratorStore(OrchestratorStore):
         if not isinstance(obj, type):
             raise TypeError(f"Resolved object '{path}' is not a class")
         return cast(Type[Actor], obj)
+
+    @staticmethod
+    def _resolve_metadata_cls(path: str) -> Type[BaseTrialMetadata]:
+        """Resolve a metadata class from its module:qualname path."""
+        module_name, _, qualname = path.partition(":")
+        if not module_name or not qualname:
+            raise ValueError(f"Invalid metadata class path '{path}'")
+        module = import_module(module_name)
+        obj: Any = module
+        for attr in qualname.split("."):
+            obj = getattr(obj, attr)
+        if not isinstance(obj, type) or not issubclass(obj, BaseTrialMetadata):
+            raise TypeError(
+                f"Resolved object '{path}' is not a BaseTrialMetadata subclass"
+            )
+        return obj
+
+    @staticmethod
+    def _reconstruct_metadata(
+        metadata_cls: Type[BaseTrialMetadata], data: dict[str, Any]
+    ) -> BaseTrialMetadata:
+        """Reconstruct a metadata dataclass from serialized dict.
+
+        Handles conversion of JSON lists back to tuples for tuple-typed fields.
+        """
+        # Get field types from the dataclass
+        field_types: dict[str, Any] = {}
+        try:
+            field_types = get_type_hints(metadata_cls)
+        except Exception:
+            # Fallback: examine fields directly
+            pass
+
+        # Convert lists to tuples for tuple-typed fields
+        converted_data: dict[str, Any] = {}
+        for field_info in fields(metadata_cls):
+            field_name = field_info.name
+            if field_name not in data:
+                continue
+            value = data[field_name]
+            # Check if field type is tuple (from type hints or field type)
+            field_type = field_types.get(field_name, field_info.type)
+            type_str = str(field_type)
+            if isinstance(value, list) and "tuple" in type_str:
+                converted_data[field_name] = tuple(value)
+            else:
+                converted_data[field_name] = value
+
+        return metadata_cls(**converted_data)
 
     def _read_json(self, path: Path) -> Any:
         with path.open("r", encoding="utf-8") as handle:

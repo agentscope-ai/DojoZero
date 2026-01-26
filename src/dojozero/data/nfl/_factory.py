@@ -1,7 +1,6 @@
 """NFL Store Factory: Creates NFLStore instances for trial contexts."""
 
-from typing import Any
-
+from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.data._factory import StoreFactory, register_store_factory
 from dojozero.data._hub import DataHub
 from dojozero.data._stores import DataStore
@@ -13,38 +12,30 @@ from dojozero.data.nfl._store import NFLStore
 class NFLStoreFactory(StoreFactory):
     """Factory for creating NFLStore instances.
 
-    Required metadata:
+    Uses BettingTrialMetadata for type-safe access to:
         - espn_game_id: ESPN game ID (e.g., "401671827")
-
-    Optional metadata:
-        - poll_intervals: Dict of endpoint -> interval in seconds
-          Default: {"scoreboard": 60.0, "summary": 30.0, "plays": 10.0}
+        - nfl_poll_intervals: Optional poll intervals dict
     """
-
-    def get_required_metadata_keys(self) -> list[str]:
-        """Return required metadata keys."""
-        return ["espn_game_id"]
 
     def create_store(
         self,
         store_id: str,
-        metadata: dict[str, Any],
+        metadata: BettingTrialMetadata,
         hub: DataHub,
     ) -> DataStore:
         """Create and configure an NFLStore instance.
 
         Args:
             store_id: Unique identifier for the store
-            metadata: Trial metadata containing:
-                - espn_game_id: ESPN game ID
-                - poll_intervals: Optional custom poll intervals
+            metadata: Typed trial metadata with espn_game_id and optional poll intervals
             hub: DataHub to connect the store to
 
         Returns:
             Configured NFLStore connected to hub
         """
-        espn_game_id = metadata.get("espn_game_id", "")
-        poll_intervals = metadata.get("nfl_poll_intervals")
+        # Direct attribute access - type-safe
+        espn_game_id = metadata.espn_game_id
+        poll_intervals = metadata.nfl_poll_intervals
 
         api = NFLExternalAPI()
 

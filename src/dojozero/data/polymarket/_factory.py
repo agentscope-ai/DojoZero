@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.data._factory import StoreFactory, register_store_factory
 from dojozero.data._hub import DataHub
 from dojozero.data._stores import DataStore
@@ -13,58 +14,36 @@ from dojozero.data.polymarket._store import PolymarketStore
 class PolymarketStoreFactory(StoreFactory):
     """Factory for creating PolymarketStore instances.
 
-    Reads metadata from BaseBettingTrialMetadata (defined in dojozero.betting).
-
-    Required metadata:
-        - sport_type: Sport type ("nba" or "nfl")
-
-    Optional metadata:
-        - market_url: Direct Polymarket market URL
+    Uses BettingTrialMetadata for type-safe access to:
+        - sport_type: Sport type ("nba" or "nfl") - required
+        - market_url: Direct Polymarket market URL (optional)
         - espn_game_id: ESPN game/event ID (used as game_id for polling)
         - home_tricode: Home team code (e.g., "LAL", "KC")
         - away_tricode: Away team code (e.g., "BOS", "SF")
         - game_date: Game date string (YYYY-MM-DD) for slug construction
-        - polymarket_poll_intervals: Custom poll intervals
-          Default: {"odds": 300.0} (5 minutes)
+        - polymarket_poll_intervals: Custom poll intervals (optional)
     """
-
-    def get_required_metadata_keys(self) -> list[str]:
-        """Return required metadata keys."""
-        return ["sport_type"]
 
     def create_store(
         self,
         store_id: str,
-        metadata: dict[str, Any],
+        metadata: BettingTrialMetadata,
         hub: DataHub,
     ) -> DataStore:
         """Create and configure a PolymarketStore instance.
 
         Args:
             store_id: Unique identifier for the store
-            metadata: Trial metadata containing market info
+            metadata: Typed trial metadata containing market info
             hub: DataHub to connect the store to
 
         Returns:
             Configured PolymarketStore connected to hub
         """
-        # Get market URL if provided
-        market_url_raw = metadata.get("market_url")
-        market_url: str | None = (
-            market_url_raw if isinstance(market_url_raw, str) else None
-        )
-
-        # Get poll intervals
-        poll_intervals = metadata.get("polymarket_poll_intervals")
-
-        # Get sport type (required)
-        sport_type_raw = metadata.get("sport_type")
-        if not sport_type_raw:
-            raise ValueError(
-                "PolymarketStoreFactory requires 'sport_type' in metadata "
-                "(expected 'nba' or 'nfl')"
-            )
-        sport = str(sport_type_raw)
+        # Direct attribute access - type-safe
+        market_url = metadata.market_url
+        poll_intervals = metadata.polymarket_poll_intervals
+        sport = metadata.sport_type
 
         api = PolymarketAPI()
 
@@ -88,21 +67,16 @@ class PolymarketStoreFactory(StoreFactory):
         # Build identifier for polling
         identifier: dict[str, Any] = {}
 
-        if metadata.get("espn_game_id"):
-            identifier["espn_game_id"] = metadata["espn_game_id"]
+        identifier["espn_game_id"] = metadata.espn_game_id
 
         # Add team info for slug construction if market_url not provided
         if not market_url:
-            away_tricode = metadata.get("away_tricode")
-            home_tricode = metadata.get("home_tricode")
-            game_date = metadata.get("game_date")
-
-            if away_tricode and isinstance(away_tricode, str):
-                identifier["away_tricode"] = away_tricode
-            if home_tricode and isinstance(home_tricode, str):
-                identifier["home_tricode"] = home_tricode
-            if game_date and isinstance(game_date, str):
-                identifier["game_date"] = game_date
+            if metadata.away_tricode:
+                identifier["away_tricode"] = metadata.away_tricode
+            if metadata.home_tricode:
+                identifier["home_tricode"] = metadata.home_tricode
+            if metadata.game_date:
+                identifier["game_date"] = metadata.game_date
 
         store.set_poll_identifier(identifier)
 

@@ -41,12 +41,13 @@ list-builders` to see registered scenarios, then run `dojo0 get-builder
 <name> --create-example-params` (or author the params file directly):
 
 ```yaml
-# trial_params/sample.yaml
+# trial_params/nba_trial.yaml
 scenario:
-  name: samples.bounded-random
+  name: nba
   config:
-    total_events: 5
-    interval_seconds: 0.0
+    espn_game_id: "401810490"
+    hub:
+      persistence_file: "outputs/nba_events.jsonl"
 ```
 
 Launch the trial by pointing `dojo0 run` at the params file (add `--trial-id`
@@ -362,7 +363,7 @@ dojo0 get-builder myenv.prices --create-example-params
 
 ### Loading Custom Scenarios
 
-DojoZero automatically imports built-in scenarios (`dojozero.samples`, `dojozero.nba`, `dojozero.nfl`). For custom scenarios in external modules, add the `imports` key to your params file:
+DojoZero automatically imports built-in scenarios (`dojozero.nba`, `dojozero.nfl`). For custom scenarios in external modules, add the `imports` key to your params file:
 
 ```yaml
 # my_trial.yaml

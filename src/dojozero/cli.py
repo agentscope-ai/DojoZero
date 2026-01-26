@@ -39,7 +39,6 @@ except ImportError:  # pragma: no cover - ray is optional
     RayActorRuntimeProvider = None  # type: ignore[assignment]
 
 DEFAULT_IMPORTS: tuple[str, ...] = (
-    "dojozero.samples",
     "dojozero.nba",
     "dojozero.nfl",
 )

@@ -7,6 +7,7 @@ from dojozero.core import (
     Agent,
     AgentBase,
     AgentSpec,
+    BaseTrialMetadata,
     TrialOrchestrator,
     DataStream,
     DataStreamBase,
@@ -279,13 +280,19 @@ def _build_trial_spec(
     trial_id: str,
     *,
     resume_states: Mapping[str, Mapping[str, Any]] | None = None,
-) -> TrialSpec:
+) -> TrialSpec[BaseTrialMetadata]:
     resume_states = resume_states or {}
     operator_config: DummyOperatorConfig = {"actor_id": "op-1"}
     agent_config: DummyAgentConfig = {"actor_id": "agent-1"}
     stream_config: DummyStreamConfig = {"actor_id": "stream-1"}
+    metadata = BaseTrialMetadata(
+        hub_id="test_hub",
+        persistence_file="/tmp/test.jsonl",
+        store_types=(),
+    )
     return TrialSpec(
         trial_id=trial_id,
+        metadata=metadata,
         operators=(
             OperatorSpec(
                 actor_id="op-1",
@@ -313,7 +320,6 @@ def _build_trial_spec(
                 consumer_ids=("op-1", "agent-1"),
             ),
         ),
-        metadata={"env": "test"},
     )
 
 

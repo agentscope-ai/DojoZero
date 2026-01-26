@@ -9,7 +9,7 @@ checkpoint, resume).
 import asyncio
 import inspect
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import (
@@ -40,6 +40,7 @@ from ._runtime import (
     ActorRuntimeProvider,
     LocalActorRuntimeProvider,
 )
+from ._metadata import BaseTrialMetadata, MetadataT
 from ._types import RuntimeContext, JSONDict
 
 LOGGER = logging.getLogger("dojozero.orchestrator")
@@ -168,16 +169,32 @@ class DataStreamSpec(ActorSpec[ConfigSpecT]):
 
 
 @dataclass(slots=True)
-class TrialSpec:
-    """High-level description of a trial."""
+class TrialSpec(Generic[MetadataT]):
+    """High-level description of a trial with typed metadata.
+
+    The metadata type parameter allows type-safe access to trial-specific
+    configuration. For example, TrialSpec[BettingTrialMetadata] ensures
+    that metadata fields like espn_game_id are properly typed.
+
+    Attributes:
+        trial_id: Unique identifier for the trial
+        metadata: Domain-specific metadata (e.g., BettingTrialMetadata)
+        data_streams: Specifications for data stream actors
+        operators: Specifications for operator actors
+        agents: Specifications for agent actors
+        resume_from_checkpoint_id: Optional checkpoint ID to resume from
+        resume_from_latest: Whether to resume from the latest checkpoint
+        builder_name: Name of the trial builder (for looking up context_builder)
+    """
 
     trial_id: str
+    metadata: MetadataT
     data_streams: Sequence[DataStreamSpec[Any]] = ()
     operators: Sequence[OperatorSpec[Any]] = ()
     agents: Sequence[AgentSpec[Any]] = ()
-    metadata: JSONDict = field(default_factory=dict)
     resume_from_checkpoint_id: str | None = None
     resume_from_latest: bool = False
+    builder_name: str | None = None
 
     def __post_init__(self) -> None:
         if not self.trial_id:
@@ -185,7 +202,6 @@ class TrialSpec:
         self.data_streams = tuple(self.data_streams)
         self.operators = tuple(self.operators)
         self.agents = tuple(self.agents)
-        self.metadata = dict(self.metadata)
 
 
 @dataclass(slots=True)
@@ -443,7 +459,7 @@ class TrialOrchestrator:
         self._emit_trial_lifecycle_span(
             trial_id=spec.trial_id,
             phase="started",
-            metadata=dict(spec.metadata) if spec.metadata else None,
+            metadata=asdict(spec.metadata),
         )
 
         LOGGER.info(
@@ -776,15 +792,11 @@ class TrialOrchestrator:
         Returns:
             RuntimeContext with trial_id and optionally data_hubs/stores
         """
-        # Try to get context builder from trial builder registry
-        # Extract builder name from spec metadata
-        builder_name = spec.metadata.get("builder_name")
-
-        if builder_name and isinstance(builder_name, str):
+        if spec.builder_name:
             try:
                 from ._registry import get_trial_builder_definition
 
-                builder_def = get_trial_builder_definition(builder_name)
+                builder_def = get_trial_builder_definition(spec.builder_name)
                 if builder_def.context_builder:
                     return builder_def.context_builder(spec)
             except Exception:
@@ -1212,7 +1224,7 @@ class TrialOrchestrator:
             trial_id=runtime.spec.trial_id,
             phase=runtime.phase,
             actors=actors,
-            metadata=dict(runtime.spec.metadata),
+            metadata=asdict(runtime.spec.metadata),
             last_error=str(runtime.last_error) if runtime.last_error else None,
         )
 
@@ -1228,13 +1240,14 @@ class TrialOrchestrator:
             trial_id=record.trial_id,
             phase=TrialPhase.INITIALIZED,
             actors=tuple(),
-            metadata=dict(record.spec.metadata),
+            metadata=asdict(record.spec.metadata),
             last_error=None,
         )
 
-    def _normalize_spec(self, spec: TrialSpec) -> TrialSpec:
+    def _normalize_spec(self, spec: TrialSpec[MetadataT]) -> TrialSpec[MetadataT]:
         return TrialSpec(
             trial_id=spec.trial_id,
+            metadata=spec.metadata,  # Immutable dataclass, no copy needed
             operators=tuple(
                 replace(operator, resume_state=None) for operator in spec.operators
             ),
@@ -1242,19 +1255,19 @@ class TrialOrchestrator:
             data_streams=tuple(
                 replace(stream, resume_state=None) for stream in spec.data_streams
             ),
-            metadata=dict(spec.metadata),
             resume_from_checkpoint_id=None,
             resume_from_latest=False,
         )
 
     def _spec_with_resume_state(
-        self, spec: TrialSpec, checkpoint: TrialCheckpoint | None
-    ) -> TrialSpec:
+        self, spec: TrialSpec[MetadataT], checkpoint: TrialCheckpoint | None
+    ) -> TrialSpec[MetadataT]:
         if checkpoint is None:
             return spec
         state_map = checkpoint.actor_states
         return TrialSpec(
             trial_id=spec.trial_id,
+            metadata=spec.metadata,  # Immutable dataclass, no copy needed
             operators=tuple(
                 replace(operator, resume_state=state_map.get(operator.actor_id))
                 for operator in spec.operators
@@ -1267,7 +1280,6 @@ class TrialOrchestrator:
                 replace(stream, resume_state=state_map.get(stream.actor_id))
                 for stream in spec.data_streams
             ),
-            metadata=dict(spec.metadata),
             resume_from_checkpoint_id=None,
             resume_from_latest=False,
         )
@@ -1406,6 +1418,7 @@ class TrialOrchestrator:
 
 
 __all__ = [
+    "BaseTrialMetadata",
     "CheckpointNotFoundError",
     "CheckpointSummary",
     "ActorPhase",
@@ -1414,6 +1427,7 @@ __all__ = [
     "AgentSpec",
     "ActorStatus",
     "ActorLifecycleError",
+    "MetadataT",
     "TrialOrchestrator",
     "OrchestratorError",
     "OrchestratorStore",

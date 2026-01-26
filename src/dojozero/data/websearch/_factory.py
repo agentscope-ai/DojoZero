@@ -3,6 +3,7 @@
 import logging
 from typing import Any
 
+from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.data._factory import StoreFactory, register_store_factory
 from dojozero.data._hub import DataHub
 from dojozero.data._stores import DataStore
@@ -33,30 +34,22 @@ DEFAULT_PROCESSOR_MAP: dict[str, tuple[type[Any] | None, list[str]]] = {
 class WebSearchStoreFactory(StoreFactory):
     """Factory for creating WebSearchStore instances.
 
-    Optional metadata:
-        - websearch_event_types: List of event types to register processors for
-          Default: ["injury_summary", "power_ranking", "expert_prediction"]
-        - websearch_processor_map: Custom processor mapping (overrides defaults)
-          Format: {event_type: (processor_class, source_event_types)}
+    Uses BettingTrialMetadata for type-safe access to trial configuration.
+    The WebSearchStore does not require specific metadata fields from the
+    betting metadata - it uses default processor mappings.
     """
-
-    def get_required_metadata_keys(self) -> list[str]:
-        """Return required metadata keys."""
-        return []  # No required keys
 
     def create_store(
         self,
         store_id: str,
-        metadata: dict[str, Any],
+        metadata: BettingTrialMetadata,
         hub: DataHub,
     ) -> DataStore:
         """Create and configure a WebSearchStore instance.
 
         Args:
             store_id: Unique identifier for the store
-            metadata: Trial metadata containing:
-                - websearch_event_types: Optional list of event types to register
-                - websearch_processor_map: Optional custom processor mapping
+            metadata: Typed trial metadata (used for consistency, store uses defaults)
             hub: DataHub to connect the store to
 
         Returns:
@@ -68,17 +61,12 @@ class WebSearchStoreFactory(StoreFactory):
             api=api,
         )
 
-        # Get event types to register (from metadata or defaults)
-        event_types = metadata.get(
-            "websearch_event_types",
-            ["injury_summary", "power_ranking", "expert_prediction"],
-        )
-
-        # Get processor map (from metadata or defaults)
-        processor_map = metadata.get("websearch_processor_map", DEFAULT_PROCESSOR_MAP)
+        # Use default event types and processor map
+        event_types = ["injury_summary", "power_ranking", "expert_prediction"]
+        processor_map = DEFAULT_PROCESSOR_MAP
 
         # Register processors for requested event types
-        registered = set()
+        registered: set[str] = set()
         for event_type in event_types:
             if event_type in processor_map and event_type not in registered:
                 processor_class, source_event_types = processor_map[event_type]

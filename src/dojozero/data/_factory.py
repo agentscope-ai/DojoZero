@@ -15,8 +15,8 @@ Usage:
     context = build_runtime_context(
         trial_id=spec.trial_id,
         hub_id=hub_id,
+        metadata=metadata,
         store_types=["nba", "websearch", "polymarket"],
-        ...
     )
 """
 
@@ -24,6 +24,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
+from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.core._types import RuntimeContext
 from dojozero.data._hub import DataHub
 from dojozero.data._stores import DataStore
@@ -36,38 +37,30 @@ class StoreFactory(ABC):
 
     Each domain (NBA, NFL, WebSearch, Polymarket) should implement this interface
     to create its specific store type with proper configuration.
+
+    The metadata parameter is typed as BettingTrialMetadata, providing type-safe
+    access to trial configuration fields.
     """
 
     @abstractmethod
     def create_store(
         self,
         store_id: str,
-        metadata: dict[str, Any],
+        metadata: BettingTrialMetadata,
         hub: DataHub,
     ) -> DataStore:
         """Create and configure a DataStore instance.
 
         Args:
             store_id: Unique identifier for the store
-            metadata: Trial metadata containing domain-specific config
-                     (e.g., game_id, event_id, market_url)
+            metadata: Typed trial metadata containing domain-specific config
+                     (e.g., espn_game_id, market_url, home_tricode)
             hub: DataHub to connect the store to
 
         Returns:
             Configured DataStore instance (already connected to hub)
         """
         ...
-
-    def get_required_metadata_keys(self) -> list[str]:
-        """Return list of required metadata keys for this factory.
-
-        Override this to specify required configuration keys.
-        Default returns empty list (no required keys).
-
-        Returns:
-            List of required metadata key names
-        """
-        return []
 
 
 # Global registry of store factories
@@ -124,7 +117,7 @@ def build_runtime_context(
     trial_id: str,
     hub_id: str,
     persistence_file: str,
-    metadata: dict[str, Any],
+    metadata: BettingTrialMetadata,
     store_types: list[str],
     sport_type: str = "",
 ) -> RuntimeContext:
@@ -138,8 +131,9 @@ def build_runtime_context(
         trial_id: Trial identifier for the context
         hub_id: Unique identifier for the DataHub
         persistence_file: Path to persistence file (required)
-        metadata: Trial metadata passed to store factories
+        metadata: Typed trial metadata passed to store factories
         store_types: List of store type names to create (e.g., ["nba", "websearch"])
+        sport_type: Sport type identifier (e.g., "nba", "nfl")
 
     Returns:
         RuntimeContext with trial_id, data_hubs, stores, startup, and cleanup callbacks
@@ -165,16 +159,6 @@ def build_runtime_context(
             raise ValueError(
                 f"No store factory registered for type '{store_type}'. "
                 f"Available factories: {list_store_factories()}"
-            )
-
-        # Validate required metadata
-        required_keys = factory.get_required_metadata_keys()
-        missing_keys = [k for k in required_keys if k not in metadata]
-        if missing_keys:
-            logger.warning(
-                "Store factory '%s' missing metadata keys: %s",
-                store_type,
-                missing_keys,
             )
 
         # Create store with standard naming: {type}_store

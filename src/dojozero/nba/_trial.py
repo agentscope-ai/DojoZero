@@ -40,8 +40,9 @@ from dojozero.nba._datastream import (
 from dojozero.data._models import EventTypes
 from dojozero.data.nba._utils import get_game_info_by_id_async
 
-# Import shared operators from betting module
+# Import shared operators and metadata from betting module
 from dojozero.betting import (
+    BettingTrialMetadata,
     BrokerOperator,
     BrokerOperatorConfig,
     TrialBrokerConfig,
@@ -159,7 +160,7 @@ class NBATrialParams(BaseModel):
 async def _build_trial_spec(
     trial_id: str,
     params: NBATrialParams,
-) -> TrialSpec:
+) -> TrialSpec[BettingTrialMetadata]:
     """Return a :class:`TrialSpec` that wires DataHub, streams, and agents together."""
     # Get game information from espn_game_id to extract team tricodes and names
     game_info = await get_game_info_by_id_async(params.espn_game_id)
@@ -418,72 +419,57 @@ async def _build_trial_spec(
         config_cache=config_cache,
     )
 
-    # Build metadata with game information and hub config
+    # Build typed metadata with game information and hub config
     # This metadata is used by build_runtime_context and store factories
-    metadata: dict[str, Any] = {
-        "sample": "nba",
-        "sport_type": "nba",
-        "espn_game_id": params.espn_game_id,
-        "hub_id": hub_id,
-        "persistence_file": persistence_file,
-        "event_types": params.event_types,
-        # Store types to create (used by build_runtime_context)
-        "store_types": ["nba", "websearch", "polymarket"],
-    }
-
-    # Add market_url if provided
-    if params.market_url:
-        metadata["market_url"] = params.market_url
-
-    # Add team information if available (used by polymarket factory)
-    if home_tricode and away_tricode:
-        metadata["home_tricode"] = home_tricode
-        metadata["away_tricode"] = away_tricode
-        if home_team_name:
-            metadata["home_team_name"] = home_team_name
-        if away_team_name:
-            metadata["away_team_name"] = away_team_name
-        if game_date:
-            metadata["game_date"] = game_date
+    metadata = BettingTrialMetadata(
+        # Base fields
+        hub_id=hub_id,
+        persistence_file=persistence_file,
+        store_types=("nba", "websearch", "polymarket"),
+        # Betting fields
+        sample="nba",
+        sport_type="nba",
+        espn_game_id=params.espn_game_id,
+        event_types=tuple(params.event_types),
+        # Team info
+        home_tricode=home_tricode,
+        away_tricode=away_tricode,
+        home_team_name=home_team_name,
+        away_team_name=away_team_name,
+        game_date=game_date,
+        # Market URL (optional)
+        market_url=params.market_url,
+    )
 
     return TrialSpec(
         trial_id=trial_id,
+        metadata=metadata,
         data_streams=tuple(stream_specs),
         operators=tuple(operator_specs),
         agents=tuple(agent_specs),
-        metadata=metadata,
     )
 
 
-def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
+def _build_nba_runtime_context(
+    spec: TrialSpec[BettingTrialMetadata],
+) -> RuntimeContext:
     """Build runtime context for NBA betting trial.
 
     Uses the generic build_runtime_context with registered store factories
     to create DataHub and store instances.
 
     Args:
-        spec: Trial specification
+        spec: Trial specification with typed BettingTrialMetadata
 
     Returns:
         RuntimeContext with trial_id, data_hubs, stores, and startup callback
     """
-    metadata = dict(spec.metadata)  # Convert to regular dict for type compatibility
+    metadata = spec.metadata  # Already typed!
 
-    # Get hub configuration from metadata
-    hub_id_raw = metadata.get("hub_id", "nba_hub")
-    hub_id = str(hub_id_raw) if hub_id_raw else "nba_hub"
-
-    persistence_file_raw = metadata.get("persistence_file")
-    if not persistence_file_raw:
-        raise ValueError("persistence_file is required in metadata")
-    persistence_file = str(persistence_file_raw)
-
-    # Get store types from metadata (defaults to NBA + websearch + polymarket)
-    store_types_raw = metadata.get("store_types", ["nba", "websearch", "polymarket"])
-    if isinstance(store_types_raw, list):
-        store_types = [str(s) for s in store_types_raw]
-    else:
-        store_types = ["nba", "websearch", "polymarket"]
+    # Direct attribute access - type-safe
+    hub_id = metadata.hub_id
+    persistence_file = metadata.persistence_file
+    store_types = list(metadata.store_types)
 
     # Build and return RuntimeContext directly
     return build_runtime_context(
@@ -492,7 +478,7 @@ def _build_nba_runtime_context(spec: TrialSpec) -> RuntimeContext:
         persistence_file=persistence_file,
         metadata=metadata,
         store_types=store_types,
-        sport_type="nba",
+        sport_type=metadata.sport_type,
     )
 
 
