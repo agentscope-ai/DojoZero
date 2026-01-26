@@ -1148,38 +1148,39 @@ def load_spans_from_checkpoint(
 
 
 class OTelSpanExporter:
-    """OpenTelemetry span exporter with async producer pattern.
+    """OpenTelemetry span exporter using SDK BatchSpanProcessor.
 
     This class wraps the OpenTelemetry SDK to export DojoZero spans to an OTLP
-    endpoint (e.g., Jaeger, Alibaba Cloud SLS). Uses a background thread with
-    batching for non-blocking, high-throughput ingestion:
-    - export_span() is non-blocking (puts on queue, returns immediately)
-    - Background worker drains queue, batches items, exports via OTel SDK
+    endpoint (e.g., Jaeger, Alibaba Cloud SLS). Uses BatchSpanProcessor for
+    efficient batched HTTP exports.
 
     Usage:
         exporter = OTelSpanExporter(
             otlp_endpoint="http://localhost:4318",
             service_name="dojozero",
         )
-        exporter.start()  # Start background worker
-        exporter.export_span(span_data)  # Non-blocking
+        exporter.start()  # Initialize SDK
+        exporter.export_span(span_data)  # Non-blocking (queued by SDK)
         exporter.shutdown()  # Flush remaining and stop
     """
 
     # Class-level counters for progress logging
     _export_count: int = 0
     _export_error_count: int = 0
-    _emit_count: int = 0
-    _drop_count: int = 0
+
+    # Cached OTel imports (initialized once)
+    _SpanKind: Any = None
+    _Status: Any = None
+    _StatusCode: Any = None
 
     def __init__(
         self,
         otlp_endpoint: str,
         service_name: str = "dojozero",
         headers: dict[str, str] | None = None,
-        batch_size: int = 50,
-        linger_ms: int = 200,
-        queue_max_size: int = 10000,
+        batch_size: int = 512,
+        export_timeout_ms: int = 30000,
+        schedule_delay_ms: int = 5000,
     ) -> None:
         """Initialize the OTLP exporter.
 
@@ -1187,26 +1188,19 @@ class OTelSpanExporter:
             otlp_endpoint: OTLP HTTP endpoint URL (e.g., http://localhost:4318)
             service_name: Service name for trace attribution
             headers: Optional headers for authentication (e.g., SLS auth headers)
-            batch_size: Max spans per batch export
-            linger_ms: Max wait time before flushing a partial batch
-            queue_max_size: Max queue depth (drops oldest on overflow)
+            batch_size: Max spans per batch export (BatchSpanProcessor config)
+            export_timeout_ms: Timeout for each export request
+            schedule_delay_ms: Delay between batch exports
         """
-        import queue
-        import threading
-
         self._endpoint = otlp_endpoint.rstrip("/")
         self._service_name = service_name
         self._headers = headers
         self._batch_size = batch_size
-        self._linger_s = linger_ms / 1000.0
+        self._export_timeout_ms = export_timeout_ms
+        self._schedule_delay_ms = schedule_delay_ms
         self._tracer: Any = None
         self._provider: Any = None
         self._initialized = False
-
-        # Producer queue and worker
-        self._queue: queue.Queue[SpanData] = queue.Queue(maxsize=queue_max_size)
-        self._stop_event = threading.Event()
-        self._worker_thread: threading.Thread | None = None
 
     def _ensure_initialized(self) -> None:
         """Lazy initialization of OpenTelemetry components."""
@@ -1220,7 +1214,13 @@ class OTelSpanExporter:
             )
             from opentelemetry.sdk.resources import Resource
             from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+            from opentelemetry.trace import SpanKind, Status, StatusCode
+
+            # Cache imports at class level for reuse
+            OTelSpanExporter._SpanKind = SpanKind
+            OTelSpanExporter._Status = Status
+            OTelSpanExporter._StatusCode = StatusCode
 
             # Create resource with service name
             resource = Resource.create({"service.name": self._service_name})
@@ -1241,8 +1241,15 @@ class OTelSpanExporter:
                 headers=self._headers,
             )
 
-            # Use SimpleSpanProcessor for real-time export
-            self._provider.add_span_processor(SimpleSpanProcessor(otlp_exporter))
+            # Use BatchSpanProcessor for efficient batched HTTP exports
+            batch_processor = BatchSpanProcessor(
+                otlp_exporter,
+                max_queue_size=2048,
+                max_export_batch_size=self._batch_size,
+                export_timeout_millis=self._export_timeout_ms,
+                schedule_delay_millis=self._schedule_delay_ms,
+            )
+            self._provider.add_span_processor(batch_processor)
 
             # Set as global tracer provider
             trace.set_tracer_provider(self._provider)
@@ -1252,10 +1259,12 @@ class OTelSpanExporter:
             self._initialized = True
 
             LOGGER.info(
-                "OTel exporter initialized: endpoint=%s service=%s headers=%s",
+                "OTel exporter initialized: endpoint=%s service=%s headers=%s "
+                "batch_size=%d",
                 traces_endpoint,
                 self._service_name,
                 "present" if self._headers else "none",
+                self._batch_size,
             )
         except ImportError as e:
             LOGGER.warning(
@@ -1264,144 +1273,49 @@ class OTelSpanExporter:
             self._initialized = True  # Mark as initialized to avoid retrying
 
     def start(self) -> None:
-        """Start the background flush worker thread."""
-        import threading
-
+        """Initialize the OTel SDK (BatchSpanProcessor starts automatically)."""
         self._ensure_initialized()
-        if self._tracer is None:
-            return
-        if self._worker_thread is not None and self._worker_thread.is_alive():
-            return
+        if self._tracer is not None:
+            LOGGER.info("OTel exporter started with BatchSpanProcessor")
 
-        self._stop_event.clear()
-        self._worker_thread = threading.Thread(
-            target=self._flush_loop,
-            name="otel-span-producer",
-            daemon=True,
-        )
-        self._worker_thread.start()
-        LOGGER.info(
-            "OTel producer started: batch_size=%d linger_ms=%d queue_max=%d",
-            self._batch_size,
-            int(self._linger_s * 1000),
-            self._queue.maxsize,
-        )
+    def export_span(self, span_data: SpanData) -> None:
+        """Export a SpanData to the OTLP endpoint.
 
-    def _flush_loop(self) -> None:
-        """Background worker: streaming flush with opportunistic batching."""
-        import queue
-        import time
+        Creates an OTel span which is automatically queued by BatchSpanProcessor
+        and exported in batches.
 
-        while not self._stop_event.is_set():
-            # Block until first item arrives (or stop is requested)
-            try:
-                first = self._queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
-
-            batch: list[SpanData] = [first]
-            deadline = time.monotonic() + self._linger_s
-
-            # Drain any additional items within linger window
-            while len(batch) < self._batch_size:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    item = self._queue.get(timeout=remaining)
-                    batch.append(item)
-                except queue.Empty:
-                    break
-
-            self._send_batch(batch)
-
-        # Final drain on shutdown
-        self._flush_remaining()
-
-    def _flush_remaining(self) -> None:
-        """Flush any remaining items in the queue."""
-        batch: list[SpanData] = []
-        while not self._queue.empty():
-            try:
-                batch.append(self._queue.get_nowait())
-                if len(batch) >= self._batch_size:
-                    self._send_batch(batch)
-                    batch = []
-            except Exception:
-                break
-        if batch:
-            self._send_batch(batch)
-
-    def _send_batch(self, batch: list[SpanData]) -> None:
-        """Send a batch of spans via OTel SDK."""
+        Args:
+            span_data: The span to export
+        """
         if self._tracer is None:
             return
 
         try:
-            from opentelemetry.trace import SpanKind, Status, StatusCode
+            with self._tracer.start_as_current_span(
+                span_data.operation_name,
+                kind=OTelSpanExporter._SpanKind.INTERNAL,
+            ) as span:
+                for key, value in span_data.tags.items():
+                    if value is not None:
+                        if isinstance(value, (str, int, float, bool)):
+                            span.set_attribute(key, value)
+                        else:
+                            span.set_attribute(key, str(value))
+                span.set_status(
+                    OTelSpanExporter._Status(OTelSpanExporter._StatusCode.OK)
+                )
+            OTelSpanExporter._export_count += 1
 
-            for span_data in batch:
-                try:
-                    with self._tracer.start_as_current_span(
-                        span_data.operation_name,
-                        kind=SpanKind.INTERNAL,
-                    ) as span:
-                        for key, value in span_data.tags.items():
-                            if value is not None:
-                                if isinstance(value, (str, int, float, bool)):
-                                    span.set_attribute(key, value)
-                                else:
-                                    span.set_attribute(key, str(value))
-                        span.set_status(Status(StatusCode.OK))
-                    OTelSpanExporter._export_count += 1
-                except (ValueError, TypeError, AttributeError) as e:
-                    OTelSpanExporter._export_error_count += 1
-                    if OTelSpanExporter._export_error_count <= 5:
-                        LOGGER.warning("Failed to export span: %s", e)
-
-            if OTelSpanExporter._export_count % 50 == 0:
+            if OTelSpanExporter._export_count % 100 == 0:
                 LOGGER.info(
                     "OTel export progress: %d spans (%d errors)",
                     OTelSpanExporter._export_count,
                     OTelSpanExporter._export_error_count,
                 )
-        except ImportError as e:
-            LOGGER.warning("OpenTelemetry import error: %s", e)
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError) as e:
             OTelSpanExporter._export_error_count += 1
-            if OTelSpanExporter._export_error_count <= 5 or (
-                OTelSpanExporter._export_error_count % 50 == 0
-            ):
-                LOGGER.warning(
-                    "OTel batch export error (#%d): %s",
-                    OTelSpanExporter._export_error_count,
-                    e,
-                )
-
-    def export_span(self, span_data: SpanData) -> None:
-        """Export a SpanData to the OTLP endpoint (non-blocking).
-
-        Puts the span on the producer queue. The background worker
-        will batch and export via OTel SDK.
-
-        Args:
-            span_data: The span to export
-        """
-        import queue
-
-        # Non-blocking put on queue
-        try:
-            self._queue.put_nowait(span_data)
-            OTelSpanExporter._emit_count += 1
-        except queue.Full:
-            OTelSpanExporter._drop_count += 1
-            if OTelSpanExporter._drop_count <= 3 or (
-                OTelSpanExporter._drop_count % 100 == 0
-            ):
-                LOGGER.warning(
-                    "OTel producer queue full, dropping span (%d dropped total)",
-                    OTelSpanExporter._drop_count,
-                )
+            if OTelSpanExporter._export_error_count <= 5:
+                LOGGER.warning("Failed to export span: %s", e)
 
     def export_registration_span(
         self,
@@ -1448,13 +1362,7 @@ class OTelSpanExporter:
         self.export_span(span)
 
     def shutdown(self) -> None:
-        """Stop the background worker and flush remaining spans."""
-        self._stop_event.set()
-        if self._worker_thread is not None and self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=5.0)
-            if self._worker_thread.is_alive():
-                LOGGER.warning("OTel producer thread did not stop within timeout")
-
+        """Flush remaining spans and shutdown the OTel provider."""
         if self._provider is not None:
             try:
                 self._provider.shutdown()
@@ -1462,12 +1370,9 @@ class OTelSpanExporter:
                 LOGGER.warning("Error during OTel provider shutdown: %s", e)
 
         LOGGER.info(
-            "OTel exporter shutdown: %d spans exported, %d emitted, "
-            "%d errors, %d dropped",
+            "OTel exporter shutdown: %d spans exported, %d errors",
             OTelSpanExporter._export_count,
-            OTelSpanExporter._emit_count,
             OTelSpanExporter._export_error_count,
-            OTelSpanExporter._drop_count,
         )
 
 
