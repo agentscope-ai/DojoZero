@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field, field_validator
 from dojozero.data.espn._api import ESPNExternalAPI
 from dojozero.data.nfl._api import NFLExternalAPI
 
+from ._types import BroadcastDataDict, OddsDataDict, TeamDataDict, VenueDataDict
+
 LOGGER = logging.getLogger("dojozero.game_discovery")
 
 
@@ -184,55 +186,55 @@ class GameInfo(BaseModel):
         return result
 
 
-def _parse_team_data(competitor: dict[str, Any]) -> dict[str, Any]:
+def _parse_team_data(competitor: dict[str, Any]) -> TeamDataDict:
     """Parse team data from ESPN competitor object.
 
     Args:
         competitor: ESPN competitor dict from competition.competitors
 
     Returns:
-        Dict with team data formatted for TeamInfo model.
+        TeamDataDict with team data formatted for TeamInfo model.
     """
     team = competitor.get("team", {})
     records = competitor.get("records", [])
     record = records[0].get("summary", "") if records else ""
 
-    return {
-        "teamId": team.get("id", ""),
-        "displayName": team.get("displayName", ""),
-        "teamTricode": team.get("abbreviation", ""),
-        "score": competitor.get("score", "0"),
-        "teamCity": team.get("location", ""),
-        "shortDisplayName": team.get("shortDisplayName", ""),
-        "color": team.get("color", ""),
-        "alternateColor": team.get("alternateColor", ""),
-        "logo": team.get("logo", ""),
-        "record": record,
-    }
+    return TeamDataDict(
+        teamId=team.get("id", ""),
+        displayName=team.get("displayName", ""),
+        teamTricode=team.get("abbreviation", ""),
+        score=competitor.get("score", "0"),
+        teamCity=team.get("location", ""),
+        shortDisplayName=team.get("shortDisplayName", ""),
+        color=team.get("color", ""),
+        alternateColor=team.get("alternateColor", ""),
+        logo=team.get("logo", ""),
+        record=record,
+    )
 
 
-def _parse_venue_data(venue_data: dict[str, Any]) -> dict[str, Any]:
+def _parse_venue_data(venue_data: dict[str, Any]) -> VenueDataDict:
     """Parse venue data from ESPN venue object.
 
     Args:
         venue_data: ESPN venue dict from competition.venue
 
     Returns:
-        Dict with venue data formatted for VenueInfo model.
+        VenueDataDict with venue data formatted for VenueInfo model.
     """
     venue_address = venue_data.get("address", {})
-    return {
-        "venueId": str(venue_data.get("id", "")),
-        "name": venue_data.get("fullName", ""),
-        "city": venue_address.get("city", ""),
-        "state": venue_address.get("state", ""),
-        "indoor": venue_data.get("indoor", True),
-    }
+    return VenueDataDict(
+        venueId=str(venue_data.get("id", "")),
+        name=venue_data.get("fullName", ""),
+        city=venue_address.get("city", ""),
+        state=venue_address.get("state", ""),
+        indoor=venue_data.get("indoor", True),
+    )
 
 
 def _parse_broadcast_data(
     broadcasts_raw: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], str]:
+) -> tuple[list[BroadcastDataDict], str]:
     """Parse broadcast data from ESPN broadcasts array.
 
     Args:
@@ -241,37 +243,37 @@ def _parse_broadcast_data(
     Returns:
         Tuple of (broadcasts list, broadcast summary string).
     """
-    broadcasts: list[dict[str, Any]] = []
+    broadcasts: list[BroadcastDataDict] = []
     broadcast_names: list[str] = []
     for b in broadcasts_raw:
         market = b.get("market", "")
         names = b.get("names", [])
-        broadcasts.append({"market": market, "names": names})
+        broadcasts.append(BroadcastDataDict(market=market, names=names))
         if names:
             broadcast_names.extend(names)
     broadcast = ", ".join(broadcast_names) if broadcast_names else ""
     return broadcasts, broadcast
 
 
-def _parse_odds_data(odds_list: list[dict[str, Any]]) -> dict[str, Any]:
+def _parse_odds_data(odds_list: list[dict[str, Any]]) -> OddsDataDict:
     """Parse odds data from ESPN odds array.
 
     Args:
         odds_list: ESPN odds list from competition.odds
 
     Returns:
-        Dict with odds data.
+        OddsDataDict with odds data.
     """
     if not odds_list:
-        return {}
+        return OddsDataDict()
     o = odds_list[0]
-    return {
-        "provider": o.get("provider", {}).get("name", ""),
-        "spread": o.get("spread", 0),
-        "overUnder": o.get("overUnder", 0),
-        "homeMoneyLine": o.get("homeTeamOdds", {}).get("moneyLine", 0),
-        "awayMoneyLine": o.get("awayTeamOdds", {}).get("moneyLine", 0),
-    }
+    return OddsDataDict(
+        provider=o.get("provider", {}).get("name", ""),
+        spread=o.get("spread", 0),
+        overUnder=o.get("overUnder", 0),
+        homeMoneyLine=o.get("homeTeamOdds", {}).get("moneyLine", 0),
+        awayMoneyLine=o.get("awayTeamOdds", {}).get("moneyLine", 0),
+    )
 
 
 # Mapping from ESPN season type ID to readable string
@@ -303,8 +305,8 @@ def _parse_espn_event(event: dict[str, Any], sport_type: str) -> GameInfo | None
 
     # Parse competitors into home/away team data
     competitors = comp.get("competitors", [])
-    home_team_data: dict[str, Any] = {}
-    away_team_data: dict[str, Any] = {}
+    home_team_data: TeamDataDict = TeamDataDict()
+    away_team_data: TeamDataDict = TeamDataDict()
     for c in competitors:
         team_data = _parse_team_data(c)
         if c.get("homeAway") == "home":

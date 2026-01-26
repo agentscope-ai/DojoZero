@@ -5,7 +5,6 @@ scenario:
 
     hub:
       persistence_file: outputs/nfl_betting_events.jsonl
-      enable_persistence: true
 
     data_streams:
     - id: raw_web_search_stream

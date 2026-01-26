@@ -33,6 +33,7 @@ from dojozero.utils import utc_to_us_date
 
 from ._game_discovery import GameInfo, NBAGameFetcher, NFLGameFetcher
 from ._trial_manager import TrialManager
+from ._types import GameMetadata, ScheduledGameMetadata
 
 LOGGER = logging.getLogger("dojozero.scheduler")
 
@@ -43,7 +44,20 @@ LOGGER = logging.getLogger("dojozero.scheduler")
 
 
 class TrialSourceConfig(BaseModel):
-    """Configuration for a trial source."""
+    """Configuration for a trial source.
+
+    Attributes:
+        scenario_name: Name of the trial builder (e.g., "nba", "nfl")
+        scenario_config: Base configuration passed to the trial builder.
+            Game-specific fields (espn_game_id, hub.persistence_file) are
+            added automatically when scheduling individual games.
+        pre_start_hours: Hours before game start to launch the trial
+        check_interval_seconds: Interval for checking game status
+        auto_stop_on_completion: Whether to stop trial when game finishes
+        data_dir: Base directory for persistence files. If set, files are
+            created at {data_dir}/{game_date}/{event_id}.jsonl
+        sync_interval_seconds: How often to sync with ESPN API for new games
+    """
 
     scenario_name: str
     scenario_config: dict[str, Any] = {}
@@ -568,16 +582,19 @@ class ScheduleManager:
                     config["hub"] = {}
                 persistence_file = f"{data_dir}/{game_date}/{game.event_id}.jsonl"
                 config["hub"]["persistence_file"] = persistence_file
-                config["hub"]["enable_persistence"] = True
 
-            # Add game info to metadata
-            game_metadata = dict(metadata or {})
-            game_metadata["game_short_name"] = game.short_name
-            game_metadata["home_team"] = game.home_team.name
-            game_metadata["away_team"] = game.away_team.name
-            game_metadata["home_tricode"] = game.home_team.tricode
-            game_metadata["away_tricode"] = game.away_team.tricode
-            game_metadata["game_date"] = game_date
+            # Add game info to metadata using typed structure
+            game_metadata: dict[str, Any] = dict(metadata) if metadata else {}
+            # Use typed keys for game metadata
+            typed_game_meta: GameMetadata = {
+                "game_short_name": game.short_name,
+                "home_team": game.home_team.name,
+                "away_team": game.away_team.name,
+                "home_tricode": game.home_team.tricode,
+                "away_tricode": game.away_team.tricode,
+                "game_date": game_date,
+            }
+            game_metadata.update(typed_game_meta)
 
             try:
                 schedule_id = await self.schedule_trial(
@@ -856,10 +873,9 @@ class ScheduleManager:
                     f"{config.data_dir}/{game_date}/{game.event_id}.jsonl"
                 )
                 game_config["hub"]["persistence_file"] = persistence_file
-                game_config["hub"]["enable_persistence"] = True
 
-            # Metadata for the trial
-            metadata = {
+            # Metadata for the trial using typed structure
+            trial_metadata: ScheduledGameMetadata = {
                 "source_id": source.source_id,
                 "game_short_name": game.short_name,
                 "home_team": game.home_team.name,
@@ -879,7 +895,7 @@ class ScheduleManager:
                     pre_start_hours=config.pre_start_hours,
                     check_interval_seconds=config.check_interval_seconds,
                     auto_stop_on_completion=config.auto_stop_on_completion,
-                    metadata=metadata,
+                    metadata=dict(trial_metadata),
                 )
 
                 # Track this event as scheduled for this source
@@ -1179,8 +1195,9 @@ class ScheduleManager:
                 self._persist()
                 return
 
-            # Add metadata
+            # Add metadata from scheduled trial
             spec.metadata.update(scheduled.metadata)
+            # Add schedule-specific metadata using typed keys
             spec.metadata["schedule_id"] = scheduled.schedule_id
             spec.metadata["sport_type"] = scheduled.sport_type
             spec.metadata["event_id"] = scheduled.event_id

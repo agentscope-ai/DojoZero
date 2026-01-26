@@ -31,6 +31,7 @@ from dojozero.data.espn import get_espn_game_url
 from dojozero.data.polymarket import PolymarketAPI
 from dojozero.utils import utc_iso_to_local
 from dojozero.core import TrialBuilderNotFoundError as _TrialBuilderNotFoundError
+from dojozero.dashboard_server import InitialTrialSourceDict
 
 try:  # Optional Ray dependency
     from dojozero.ray_runtime import RayActorRuntimeProvider
@@ -636,6 +637,81 @@ def _create_runtime_provider(
     raise DojoZeroCLIError(f"unsupported runtime provider '{runtime_provider}'")
 
 
+def _setup_otel_exporter(
+    trace_backend: str | None,
+    trace_ingest_endpoint: str | None,
+    service_name: str = "dojozero",
+) -> Any:
+    """Set up OTel exporter based on trace backend configuration.
+
+    Args:
+        trace_backend: Backend type ("sls" or "jaeger") or None to disable
+        trace_ingest_endpoint: OTLP endpoint for jaeger backend
+        service_name: Service name for trace attribution
+
+    Returns:
+        Configured OTelSpanExporter instance, or None if disabled
+    """
+    if not trace_backend:
+        LOGGER.info("No trace backend configured - traces will not be exported")
+        return None
+
+    from dojozero.core._tracing import (
+        OTelSpanExporter,
+        get_sls_exporter_headers,
+        set_otel_exporter,
+    )
+
+    if trace_backend == "sls":
+        import os
+
+        # Construct SLS OTLP endpoint from environment variables
+        sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
+        sls_endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
+        if not sls_project or not sls_endpoint:
+            raise DojoZeroCLIError(
+                "SLS trace backend requires DOJOZERO_SLS_PROJECT and "
+                "DOJOZERO_SLS_ENDPOINT environment variables"
+            )
+        otlp_endpoint = f"https://{sls_project}.{sls_endpoint}"
+        headers = get_sls_exporter_headers()
+        otel_exporter = OTelSpanExporter(
+            otlp_endpoint, service_name=service_name, headers=headers
+        )
+        otel_exporter.start()
+        set_otel_exporter(otel_exporter)
+        LOGGER.info(
+            "OTel exporter configured: %s (backend: sls, service_name: %s)",
+            otlp_endpoint,
+            service_name,
+        )
+        return otel_exporter
+    elif trace_backend == "jaeger":
+        otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
+        otel_exporter = OTelSpanExporter(
+            otlp_endpoint, service_name=service_name, headers=None
+        )
+        otel_exporter.start()
+        set_otel_exporter(otel_exporter)
+        LOGGER.info(
+            "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
+            otlp_endpoint,
+            service_name,
+        )
+        return otel_exporter
+    else:
+        raise DojoZeroCLIError(f"Unsupported trace backend: {trace_backend}")
+
+
+def _shutdown_otel_exporter(otel_exporter: Any) -> None:
+    """Shutdown OTel exporter and clear global reference.
+
+    Args:
+        otel_exporter: The OTelSpanExporter instance to shutdown
+    """
+    _shutdown_otel_exporter(otel_exporter)
+
+
 def _default_example_filename(builder_name: str) -> str:
     return f"{builder_name.replace('.', '_')}_example.yaml"
 
@@ -848,53 +924,11 @@ async def _run_command(args: argparse.Namespace) -> int:
     # Local execution mode
 
     # Initialize OTLP exporter if trace backend is configured
-    trace_backend = getattr(args, "trace_backend", None)
-    trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
-    service_name = getattr(args, "service_name", "dojozero")
-    otel_exporter = None
-
-    if trace_backend:
-        from dojozero.core._tracing import (
-            OTelSpanExporter,
-            get_sls_exporter_headers,
-            set_otel_exporter,
-        )
-
-        if trace_backend == "sls":
-            import os
-
-            # Construct SLS OTLP endpoint from environment variables
-            sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
-            sls_endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
-            if not sls_project or not sls_endpoint:
-                raise DojoZeroCLIError(
-                    "SLS trace backend requires DOJOZERO_SLS_PROJECT and "
-                    "DOJOZERO_SLS_ENDPOINT environment variables"
-                )
-            otlp_endpoint = f"https://{sls_project}.{sls_endpoint}"
-            headers = get_sls_exporter_headers()
-            otel_exporter = OTelSpanExporter(
-                otlp_endpoint, service_name=service_name, headers=headers
-            )
-            set_otel_exporter(otel_exporter)
-            LOGGER.info(
-                "OTel exporter configured: %s (backend: sls, service_name: %s)",
-                otlp_endpoint,
-                service_name,
-            )
-        elif trace_backend == "jaeger":
-            otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
-            otel_exporter = OTelSpanExporter(
-                otlp_endpoint, service_name=service_name, headers=None
-            )
-            set_otel_exporter(otel_exporter)
-            LOGGER.info(
-                "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
-                otlp_endpoint,
-                service_name,
-            )
-    else:
-        LOGGER.info("No trace backend configured - traces will not be exported")
+    otel_exporter = _setup_otel_exporter(
+        trace_backend=getattr(args, "trace_backend", None),
+        trace_ingest_endpoint=getattr(args, "trace_ingest_endpoint", None),
+        service_name=getattr(args, "service_name", "dojozero"),
+    )
 
     # Imports: default imports + imports from params file
     params_imports = _gather_imports(params_payload)
@@ -1130,11 +1164,10 @@ async def _backtest_single_file(
         hub_id = str(hub_id_raw) if hub_id_raw else "data_hub"
     hub_id = str(hub_id)
 
-    # Create DataHub in backtest mode
+    # Create DataHub in backtest mode (uses event_file path for consistency)
     hub = DataHub(
         hub_id=hub_id,
-        persistence_file=None,
-        enable_persistence=False,
+        persistence_file=str(event_file),
     )
 
     # Create BacktestCoordinator
@@ -1282,53 +1315,11 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     # Local execution mode
 
     # Initialize OTLP exporter if trace backend is configured
-    trace_backend = getattr(args, "trace_backend", None)
-    trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
-    service_name = getattr(args, "service_name", "dojozero")
-    otel_exporter = None
-
-    if trace_backend:
-        from dojozero.core._tracing import (
-            OTelSpanExporter,
-            get_sls_exporter_headers,
-            set_otel_exporter,
-        )
-
-        if trace_backend == "sls":
-            import os
-
-            # Construct SLS OTLP endpoint from environment variables
-            sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
-            sls_endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
-            if not sls_project or not sls_endpoint:
-                raise DojoZeroCLIError(
-                    "SLS trace backend requires DOJOZERO_SLS_PROJECT and "
-                    "DOJOZERO_SLS_ENDPOINT environment variables"
-                )
-            otlp_endpoint = f"https://{sls_project}.{sls_endpoint}"
-            headers = get_sls_exporter_headers()
-            otel_exporter = OTelSpanExporter(
-                otlp_endpoint, service_name=service_name, headers=headers
-            )
-            set_otel_exporter(otel_exporter)
-            LOGGER.info(
-                "OTel exporter configured: %s (backend: sls, service_name: %s)",
-                otlp_endpoint,
-                service_name,
-            )
-        elif trace_backend == "jaeger":
-            otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
-            otel_exporter = OTelSpanExporter(
-                otlp_endpoint, service_name=service_name, headers=None
-            )
-            set_otel_exporter(otel_exporter)
-            LOGGER.info(
-                "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
-                otlp_endpoint,
-                service_name,
-            )
-    else:
-        LOGGER.info("No trace backend configured - traces will not be exported")
+    otel_exporter = _setup_otel_exporter(
+        trace_backend=getattr(args, "trace_backend", None),
+        trace_ingest_endpoint=getattr(args, "trace_ingest_endpoint", None),
+        service_name=getattr(args, "service_name", "dojozero"),
+    )
 
     # Imports: default imports + imports from params file
     params_imports = _gather_imports(params_payload)
@@ -1445,14 +1436,14 @@ def _get_builder_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_trial_source_from_yaml(path: Path) -> dict[str, Any]:
+def _load_trial_source_from_yaml(path: Path) -> InitialTrialSourceDict:
     """Load a trial source configuration from a YAML file.
 
     Args:
         path: Path to the YAML file
 
     Returns:
-        Dictionary with trial source configuration
+        InitialTrialSourceDict with trial source configuration
 
     Raises:
         DojoZeroCLIError: If file doesn't exist or is invalid
@@ -1479,7 +1470,12 @@ def _load_trial_source_from_yaml(path: Path) -> dict[str, Any]:
                 f"Trial source file {path} missing required field: {field}"
             )
 
-    return data
+    # Cast to typed dict after validation
+    return InitialTrialSourceDict(
+        source_id=data["source_id"],
+        sport_type=data["sport_type"],
+        config=data["config"],
+    )
 
 
 async def _serve_command(args: argparse.Namespace) -> int:
@@ -1517,7 +1513,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
     # Expand glob patterns and load trial source configurations
     import glob as glob_module
 
-    initial_trial_sources: list[dict[str, Any]] = []
+    initial_trial_sources: list[InitialTrialSourceDict] = []
     for source_pattern in trial_source_files:
         # Expand glob pattern
         matched_files = sorted(glob_module.glob(str(source_pattern)))
@@ -1570,7 +1566,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
 
 
 def _print_trial_links(
-    metadata: dict,
+    metadata: Mapping[str, Any],
     event_id: str,
     sport_type: str,
     event_time_str: str = "",
@@ -1578,14 +1574,15 @@ def _print_trial_links(
     """Print ESPN and Polymarket links for a trial.
 
     Args:
-        metadata: Trial metadata dict containing tricode and date info
+        metadata: Trial metadata dict containing GameMetadata keys
+            (home_tricode, away_tricode, game_date, game_short_name)
         event_id: ESPN event ID
         sport_type: Sport type (e.g., "nba", "nfl")
         event_time_str: Optional event time string for date fallback
     """
-    home_tricode = metadata.get("home_tricode", "")
-    away_tricode = metadata.get("away_tricode", "")
-    game_date = metadata.get("game_date", "")
+    home_tricode = str(metadata.get("home_tricode", ""))
+    away_tricode = str(metadata.get("away_tricode", ""))
+    game_date = str(metadata.get("game_date", ""))
 
     # Fallback: extract tricodes from game_short_name (e.g., "LAL @ BOS")
     if not (home_tricode and away_tricode):

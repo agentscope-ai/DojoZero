@@ -47,6 +47,7 @@ from dojozero.core._types import RuntimeContext
 
 from ._scheduler import SchedulerStore
 from ._trial_manager import TrialManager
+from ._types import InitialTrialSourceDict
 
 LOGGER = logging.getLogger("dojozero.dashboard_server")
 
@@ -171,11 +172,10 @@ async def _launch_backtest_trial(
     if not hub_id:
         hub_id = str(spec.metadata.get("hub_id", "data_hub"))
 
-    # Create DataHub in backtest mode
+    # Create DataHub in backtest mode (uses event_file path for consistency)
     hub = DataHub(
         hub_id=hub_id,
-        persistence_file=None,
-        enable_persistence=False,
+        persistence_file=str(event_file),
     )
 
     # Create BacktestCoordinator
@@ -247,7 +247,7 @@ def create_dashboard_app(
     oss_backup: bool = False,
     max_concurrent_trials: int = 20,
     service_name: str = "dojozero",
-    initial_trial_sources: list[dict[str, Any]] | None = None,
+    initial_trial_sources: list[InitialTrialSourceDict] | None = None,
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
 ) -> FastAPI:
@@ -373,6 +373,7 @@ def create_dashboard_app(
                 )
 
             otel_exporter = OTelSpanExporter(otlp_endpoint, headers=headers)
+            otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info("OTel exporter configured: %s (backend: sls)", otlp_endpoint)
 
@@ -401,6 +402,7 @@ def create_dashboard_app(
             otel_exporter = OTelSpanExporter(
                 otlp_endpoint, service_name=service_name, headers=None
             )
+            otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info(
                 "OTel exporter configured: %s (backend: jaeger or sls, service_name: %s)",
@@ -1221,7 +1223,7 @@ async def run_dashboard_server(
     oss_backup: bool = False,
     max_concurrent_trials: int = 20,
     service_name: str = "dojozero",
-    initial_trial_sources: list[dict[str, Any]] | None = None,
+    initial_trial_sources: list[InitialTrialSourceDict] | None = None,
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
 ) -> None:

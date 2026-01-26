@@ -123,8 +123,7 @@ def list_store_factories() -> list[str]:
 def build_runtime_context(
     trial_id: str,
     hub_id: str,
-    persistence_file: str | None,
-    enable_persistence: bool,
+    persistence_file: str,
     metadata: dict[str, Any],
     store_types: list[str],
     sport_type: str = "",
@@ -138,8 +137,7 @@ def build_runtime_context(
     Args:
         trial_id: Trial identifier for the context
         hub_id: Unique identifier for the DataHub
-        persistence_file: Path to persistence file (or None to disable)
-        enable_persistence: Whether to enable event persistence
+        persistence_file: Path to persistence file (required)
         metadata: Trial metadata passed to store factories
         store_types: List of store type names to create (e.g., ["nba", "websearch"])
 
@@ -156,7 +154,6 @@ def build_runtime_context(
     hub = DataHub(
         hub_id=hub_id,
         persistence_file=persistence_file,
-        enable_persistence=enable_persistence,
         trial_id=trial_id,
     )
     data_hubs[hub_id] = hub

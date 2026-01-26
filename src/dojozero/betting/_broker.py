@@ -157,6 +157,10 @@ class BettingEvent:
         spread_lines = self.spread_lines if self.spread_lines is not None else {}
         total_lines = self.total_lines if self.total_lines is not None else {}
 
+        # Determine which betting phases are available based on status
+        can_bet_pregame = self.status == EventStatus.SCHEDULED
+        can_bet_ingame = self.status == EventStatus.LIVE
+
         return {
             "event_id": self.event_id,
             "home_team": self.home_team,
@@ -182,6 +186,12 @@ class BettingEvent:
             "last_odds_update": (
                 self.last_odds_update.isoformat() if self.last_odds_update else None
             ),
+            # Clarify what betting is available:
+            # - can_bet_pregame: True if PRE_GAME betting is allowed (status=SCHEDULED)
+            # - can_bet_ingame: True if IN_GAME betting is allowed (status=LIVE)
+            # - betting_closed_at: When pre-game betting closed (informational only)
+            "can_bet_pregame": can_bet_pregame,
+            "can_bet_ingame": can_bet_ingame,
             "betting_closed_at": (
                 self.betting_closed_at.isoformat() if self.betting_closed_at else None
             ),
@@ -532,6 +542,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             list
         )
 
+        # Pending odds that arrived before GameInitializeEvent
+        # Maps event_id -> {"home_odds": Decimal, "away_odds": Decimal, ...}
+        self._pending_odds: Dict[str, Dict[str, Any]] = {}
+
         # Bet management
         self._bets: Dict[str, Bet] = {}
 
@@ -718,6 +732,41 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             # Apply any pending status events that arrived before this GameInitializeEvent
             await self._apply_pending_status_events(event_id)
 
+            # Apply any pending odds that arrived before this GameInitializeEvent
+            await self._apply_pending_odds(event_id)
+
+    async def _apply_pending_odds(self, event_id: str) -> None:
+        """Apply any buffered odds for a newly registered event.
+
+        This handles the race condition where OddsUpdateEvent arrives before
+        GameInitializeEvent due to different API polling intervals.
+        """
+        if event_id not in self._pending_odds:
+            return
+
+        pending = self._pending_odds.pop(event_id)
+        logger.info(
+            "Applying pending odds for event %s: home_odds=%s, away_odds=%s",
+            event_id,
+            pending.get("home_odds"),
+            pending.get("away_odds"),
+        )
+
+        try:
+            await self._update_odds(
+                event_id=event_id,
+                home_odds=pending.get("home_odds"),
+                away_odds=pending.get("away_odds"),
+                spread_updates=pending.get("spread_updates", []),
+                total_updates=pending.get("total_updates", []),
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to apply pending odds for event %s: %s",
+                event_id,
+                e,
+            )
+
     async def _apply_pending_status_events(self, event_id: str) -> None:
         """Apply any buffered status events for a newly registered event.
 
@@ -853,13 +902,19 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             # Clear pending team info
             del self._pending_team_info[event_id]
         else:
-            # No team info yet - ignore this odds update
-            logger.debug(
-                "Ignoring OddsUpdateEvent (no team info available yet): event_id=%s, home_odds=%s, away_odds=%s",
+            # No team info yet - store odds for later when event is initialized
+            logger.info(
+                "Storing pending odds (waiting for event initialization): event_id=%s, home_odds=%s, away_odds=%s",
                 event_id,
                 home_odds,
                 away_odds,
             )
+            self._pending_odds[event_id] = {
+                "home_odds": Decimal(str(home_odds)) if home_odds else None,
+                "away_odds": Decimal(str(away_odds)) if away_odds else None,
+                "spread_updates": spread_updates,
+                "total_updates": total_updates,
+            }
 
     async def _handle_game_update(self, data_event: Any, event_id: str) -> None:
         """Handle game update event."""
@@ -1244,6 +1299,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             raise ValueError(f"Event {event_id} not found")
 
         betting_event = self._events[event_id]
+
+        # No-op if already in target status (important for checkpoint resume)
+        if betting_event.status == status:
+            logger.debug(
+                "Event %s already in status %s, skipping transition",
+                event_id,
+                status.value,
+            )
+            return
 
         # Validate status transition
         valid_transitions = VALID_STATUS_TRANSITIONS.get(betting_event.status, set())
@@ -2060,6 +2124,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         ) -> str:
             """Bet on which team will win (moneyline).
 
+            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
+            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+
             Args:
                 amount: Bet amount as string
                 selection: "home" or "away"
@@ -2104,6 +2171,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             limit_odds: str | None = None,
         ) -> str:
             """Bet on point spread (team must win by more than spread or lose by less).
+
+            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
+            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
 
             Args:
                 amount: Bet amount as string
@@ -2151,6 +2221,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             limit_odds: str | None = None,
         ) -> str:
             """Bet on total points scored (over/under).
+
+            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
+            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
 
             Args:
                 amount: Bet amount as string

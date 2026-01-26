@@ -26,8 +26,7 @@ sport_type: nfl
 config:
   scenario_name: nfl
   scenario_config:
-    hub:
-      enable_persistence: true
+    hub: {}
 
     data_streams:
     - id: raw_web_search_stream

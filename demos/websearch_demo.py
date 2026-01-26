@@ -56,7 +56,6 @@ async def demo_websearch_stack():
     hub = DataHub(
         hub_id="demo_hub",
         persistence_file="outputs/demo_events.jsonl",
-        enable_persistence=True,
     )
     print(f"✓ DataHub: {hub.hub_id} (persist: {hub.persistence_file})")
 
@@ -165,7 +164,6 @@ async def demo_websearch_stack():
         replay_hub = DataHub(
             hub_id="replay_hub",
             persistence_file=hub.persistence_file,
-            enable_persistence=False,  # Don't persist during replay
         )
         await replay_hub.start_replay(str(hub.persistence_file))
         replay_agent_1 = DemoAgent("ReplayAgent1")
