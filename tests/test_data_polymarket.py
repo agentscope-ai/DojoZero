@@ -1,7 +1,7 @@
 """Tests for Polymarket data infrastructure.
 
 Tests cover:
-- PolymarketStoreFactory: metadata validation and store creation
+- PolymarketStoreFactory: store creation with typed metadata
 - PolymarketStore: parsing API responses with espn_game_id
 - Metadata flow from factory to store
 """
@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.data._hub import DataHub
 from dojozero.data.polymarket._events import OddsUpdateEvent
 from dojozero.data.polymarket._factory import PolymarketStoreFactory
@@ -46,37 +47,48 @@ def factory():
 # =============================================================================
 
 
+def _make_metadata(
+    sport_type: str = "nba",
+    espn_game_id: str = "401810490",
+    home_tricode: str = "LAL",
+    away_tricode: str = "BOS",
+    home_team_name: str = "Los Angeles Lakers",
+    away_team_name: str = "Boston Celtics",
+    game_date: str = "2025-01-15",
+    market_url: str | None = None,
+    polymarket_poll_intervals: dict[str, float] | None = None,
+) -> BettingTrialMetadata:
+    """Create a BettingTrialMetadata for tests."""
+    return BettingTrialMetadata(
+        hub_id="test_hub",
+        persistence_file="/tmp/test.jsonl",
+        store_types=("polymarket",),
+        sample="test",
+        sport_type=sport_type,  # type: ignore[arg-type]
+        espn_game_id=espn_game_id,
+        event_types=("odds",),
+        home_tricode=home_tricode,
+        away_tricode=away_tricode,
+        home_team_name=home_team_name,
+        away_team_name=away_team_name,
+        game_date=game_date,
+        market_url=market_url,
+        polymarket_poll_intervals=polymarket_poll_intervals,
+    )
+
+
 class TestPolymarketStoreFactory:
     """Tests for PolymarketStoreFactory."""
 
-    def test_get_required_metadata_keys(self, factory):
-        """Test that factory requires sport_type in metadata."""
-        required_keys = factory.get_required_metadata_keys()
-        assert "sport_type" in required_keys
-
-    def test_create_store_raises_without_sport_type(self, factory, mock_hub):
-        """Test that create_store raises ValueError when sport_type is missing."""
-        metadata = {
-            "espn_game_id": "401810490",
-            "home_tricode": "LAL",
-            "away_tricode": "BOS",
-        }
-
-        with pytest.raises(ValueError) as exc_info:
-            factory.create_store("test_store", metadata, mock_hub)
-
-        assert "sport_type" in str(exc_info.value)
-        assert "nba" in str(exc_info.value) or "nfl" in str(exc_info.value)
-
     def test_create_store_with_nba_sport_type(self, factory, mock_hub):
         """Test that create_store succeeds with sport_type='nba'."""
-        metadata = {
-            "sport_type": "nba",
-            "espn_game_id": "401810490",
-            "home_tricode": "LAL",
-            "away_tricode": "BOS",
-            "game_date": "2025-01-15",
-        }
+        metadata = _make_metadata(
+            sport_type="nba",
+            espn_game_id="401810490",
+            home_tricode="LAL",
+            away_tricode="BOS",
+            game_date="2025-01-15",
+        )
 
         store = factory.create_store("test_store", metadata, mock_hub)
 
@@ -86,13 +98,13 @@ class TestPolymarketStoreFactory:
 
     def test_create_store_with_nfl_sport_type(self, factory, mock_hub):
         """Test that create_store succeeds with sport_type='nfl'."""
-        metadata = {
-            "sport_type": "nfl",
-            "espn_game_id": "401671827",
-            "home_tricode": "KC",
-            "away_tricode": "SF",
-            "game_date": "2025-02-09",
-        }
+        metadata = _make_metadata(
+            sport_type="nfl",
+            espn_game_id="401671827",
+            home_tricode="KC",
+            away_tricode="SF",
+            game_date="2025-02-09",
+        )
 
         store = factory.create_store("test_store", metadata, mock_hub)
 
@@ -101,10 +113,10 @@ class TestPolymarketStoreFactory:
 
     def test_create_store_sets_espn_game_id_in_identifier(self, factory, mock_hub):
         """Test that espn_game_id is passed to store identifier."""
-        metadata = {
-            "sport_type": "nba",
-            "espn_game_id": "401810490",
-        }
+        metadata = _make_metadata(
+            sport_type="nba",
+            espn_game_id="401810490",
+        )
 
         store = factory.create_store("test_store", metadata, mock_hub)
 
@@ -116,13 +128,13 @@ class TestPolymarketStoreFactory:
         self, factory, mock_hub
     ):
         """Test that team tricodes are passed to identifier when market_url not provided."""
-        metadata = {
-            "sport_type": "nba",
-            "espn_game_id": "401810490",
-            "home_tricode": "LAL",
-            "away_tricode": "BOS",
-            "game_date": "2025-01-15",
-        }
+        metadata = _make_metadata(
+            sport_type="nba",
+            espn_game_id="401810490",
+            home_tricode="LAL",
+            away_tricode="BOS",
+            game_date="2025-01-15",
+        )
 
         store = factory.create_store("test_store", metadata, mock_hub)
 
@@ -132,14 +144,14 @@ class TestPolymarketStoreFactory:
 
     def test_create_store_with_market_url_skips_tricodes(self, factory, mock_hub):
         """Test that team tricodes are not added when market_url is provided."""
-        metadata = {
-            "sport_type": "nba",
-            "market_url": "https://polymarket.com/sports/nba/games/nba-bos-lal-2025-01-15",
-            "espn_game_id": "401810490",
-            "home_tricode": "LAL",
-            "away_tricode": "BOS",
-            "game_date": "2025-01-15",
-        }
+        metadata = _make_metadata(
+            sport_type="nba",
+            espn_game_id="401810490",
+            home_tricode="LAL",
+            away_tricode="BOS",
+            game_date="2025-01-15",
+            market_url="https://polymarket.com/sports/nba/games/nba-bos-lal-2025-01-15",
+        )
 
         store = factory.create_store("test_store", metadata, mock_hub)
 
@@ -151,11 +163,11 @@ class TestPolymarketStoreFactory:
 
     def test_create_store_with_custom_poll_intervals(self, factory, mock_hub):
         """Test that custom poll intervals are passed to store."""
-        metadata = {
-            "sport_type": "nba",
-            "espn_game_id": "401810490",
-            "polymarket_poll_intervals": {"odds": 10.0},
-        }
+        metadata = _make_metadata(
+            sport_type="nba",
+            espn_game_id="401810490",
+            polymarket_poll_intervals={"odds": 10.0},
+        )
 
         store = factory.create_store("test_store", metadata, mock_hub)
 
@@ -306,19 +318,13 @@ class TestMetadataFlow:
 
     def test_full_metadata_flow_nba(self, factory, mock_hub):
         """Test complete metadata flow for NBA trial."""
-        # Simulate metadata from NBA trial builder
-        metadata = {
-            "sample": "nba",
-            "sport_type": "nba",
-            "espn_game_id": "401810490",
-            "hub_id": "nba_hub",
-            "persistence_file": "/tmp/test.jsonl",
-            "home_tricode": "LAL",
-            "away_tricode": "BOS",
-            "home_team_name": "Los Angeles Lakers",
-            "away_team_name": "Boston Celtics",
-            "game_date": "2025-01-15",
-        }
+        metadata = _make_metadata(
+            sport_type="nba",
+            espn_game_id="401810490",
+            home_tricode="LAL",
+            away_tricode="BOS",
+            game_date="2025-01-15",
+        )
 
         store = factory.create_store("polymarket_store", metadata, mock_hub)
 
@@ -343,19 +349,13 @@ class TestMetadataFlow:
 
     def test_full_metadata_flow_nfl(self, factory, mock_hub):
         """Test complete metadata flow for NFL trial."""
-        # Simulate metadata from NFL trial builder
-        metadata = {
-            "sample": "nfl-moneyline",
-            "sport_type": "nfl",
-            "espn_game_id": "401671827",
-            "hub_id": "nfl_hub",
-            "persistence_file": "/tmp/test.jsonl",
-            "home_tricode": "KC",
-            "away_tricode": "SF",
-            "home_team_name": "Kansas City Chiefs",
-            "away_team_name": "San Francisco 49ers",
-            "game_date": "2025-02-09",
-        }
+        metadata = _make_metadata(
+            sport_type="nfl",
+            espn_game_id="401671827",
+            home_tricode="KC",
+            away_tricode="SF",
+            game_date="2025-02-09",
+        )
 
         store = factory.create_store("polymarket_store", metadata, mock_hub)
 

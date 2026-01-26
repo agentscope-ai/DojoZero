@@ -1,103 +1,82 @@
 """Typed metadata definitions for betting trials.
 
-This module provides TypedDict classes for type-safe trial metadata,
+This module provides dataclass-based metadata for type-safe trial configuration,
 reducing the risk of key name mismatches between producers (trial builders)
 and consumers (store factories, context builders).
 
 Usage:
-    from dojozero.betting import BaseBettingTrialMetadata
+    from dojozero.betting import BettingTrialMetadata
 
-    # In trial builder
-    metadata: BaseBettingTrialMetadata = {
-        "sample": "nba",
-        "sport_type": "nba",
-        "espn_game_id": "401810490",
-        "hub_id": "nba_hub",
-        ...
-    }
+    # In trial builder - IDE will catch missing required fields
+    metadata = BettingTrialMetadata(
+        sample="nba",
+        sport_type="nba",
+        espn_game_id="401810490",
+        hub_id="nba_hub",
+        persistence_file="outputs/events.jsonl",
+        store_types=("nba", "websearch", "polymarket"),
+        event_types=("game_update", "odds_update"),
+    )
 """
 
-from typing import Literal, NotRequired, TypedDict
+from dataclasses import dataclass
+from typing import Literal
+
+from dojozero.core._metadata import BaseTrialMetadata
 
 
-class BaseBettingTrialMetadata(TypedDict, total=False):
-    """Common metadata fields for all betting trials.
+@dataclass(slots=True, frozen=True)
+class BettingTrialMetadata(BaseTrialMetadata):
+    """Typed metadata for betting trials (NBA, NFL).
 
-    This TypedDict defines the contract between trial builders and consumers
-    (store factories, context builders). Using TypedDict provides:
-    - IDE autocomplete for metadata keys
-    - Type checker catches typos and missing keys
-    - Self-documenting interface
+    This dataclass defines the contract between trial builders and consumers
+    (store factories, context builders). Using dataclass provides:
+    - IDE autocomplete for metadata fields
+    - Type checker catches typos and missing required fields
+    - Constructor validation for required fields
+    - Immutability (frozen=True)
 
-    Fields:
+    Attributes:
         sample: Trial type identifier (e.g., "nba", "nfl-moneyline")
         sport_type: Sport type ("nba" or "nfl")
-        builder_name: Trial builder name (auto-added by registry)
         espn_game_id: ESPN event/game ID
-        game_date: Game date in YYYY-MM-DD format
+        event_types: Tuple of event types for the trial
 
         home_tricode: Home team code (e.g., "LAL", "KC")
         away_tricode: Away team code (e.g., "BOS", "SF")
         home_team_name: Full home team name (e.g., "Los Angeles Lakers")
         away_team_name: Full away team name (e.g., "Boston Celtics")
-
-        hub_id: DataHub identifier
-        persistence_file: Path to event persistence JSONL file
-        event_types: List of event types for the trial
-        store_types: List of store types to create (e.g., ["nba", "websearch", "polymarket"])
+        game_date: Game date in YYYY-MM-DD format
 
         market_url: Optional Polymarket market URL
+
+        nba_poll_intervals: Optional NBA store poll intervals
+        nfl_poll_intervals: Optional NFL store poll intervals
+        polymarket_poll_intervals: Optional Polymarket store poll intervals
     """
 
-    # Trial type and builder info
+    # Required fields (in addition to base class fields)
     sample: str
     sport_type: Literal["nba", "nfl"]
-    builder_name: str
-
-    # Game identification
     espn_game_id: str
-    game_date: str
+    event_types: tuple[str, ...]
 
-    # Team info (unified naming - always use "tricode")
+    # Team info (required - populated from ESPN API via get_game_info_by_id_async)
     home_tricode: str
     away_tricode: str
     home_team_name: str
     away_team_name: str
+    game_date: str
 
-    # Hub configuration
-    hub_id: str
-    persistence_file: str
-    event_types: list[str]
-    store_types: list[str]
+    # Polymarket (optional)
+    market_url: str | None = None
 
-    # Polymarket
-    market_url: NotRequired[str]
-
-
-# Keys that consumers can expect in metadata
-# Useful for validation and documentation
-REQUIRED_METADATA_KEYS = frozenset(
-    [
-        "sample",
-        "espn_game_id",
-        "hub_id",
-        "persistence_file",
-    ]
-)
-
-TEAM_INFO_KEYS = frozenset(
-    [
-        "home_tricode",
-        "away_tricode",
-        "home_team_name",
-        "away_team_name",
-        "game_date",
-    ]
-)
+    # Poll interval overrides (optional)
+    nba_poll_intervals: dict[str, float] | None = None
+    nfl_poll_intervals: dict[str, float] | None = None
+    polymarket_poll_intervals: dict[str, float] | None = None
 
 
 __all__ = [
-    "BaseBettingTrialMetadata",
-    "REQUIRED_METADATA_KEYS",
-    "TEAM_INFO_KEYS",
+    "BettingTrialMetadata",
 ]

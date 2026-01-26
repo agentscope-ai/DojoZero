@@ -1,7 +1,13 @@
 """NFL utility functions and constants."""
 
+import logging
 import os
 from datetime import datetime, timezone
+from typing import Any
+
+from dojozero.data._game_info import GameInfo, TeamInfo
+
+logger = logging.getLogger(__name__)
 
 # ESPN NFL Team IDs to abbreviations
 TEAM_ID_TO_ABBREV: dict[str, str] = {
@@ -227,3 +233,164 @@ def spread_to_favorite(spread: float, home_team: str, away_team: str) -> str:
     elif spread < 0:
         return away_team
     return "Pick"
+
+
+async def get_game_info_by_id_async(game_id: str) -> GameInfo | None:
+    """Async fetch of NFL game info by ESPN game ID.
+
+    Args:
+        game_id: ESPN event ID (e.g., '401671827')
+
+    Returns:
+        GameInfo with game information, or None if not found.
+    """
+    from dojozero.data.nfl._api import NFLExternalAPI
+
+    logger.debug("Looking up NFL game_id=%s", game_id)
+
+    api = NFLExternalAPI()
+    try:
+        summary = await api.fetch("summary", {"event": game_id})
+        if not summary:
+            logger.debug("No summary data for game_id=%s", game_id)
+            return None
+
+        game_info = _extract_game_info_from_summary(summary, game_id)
+        if game_info:
+            logger.debug(
+                "Found NFL game: %s @ %s",
+                game_info.away_team.tricode,
+                game_info.home_team.tricode,
+            )
+        return game_info
+    except Exception as e:
+        logger.error("Failed to fetch NFL game info for game_id=%s: %s", game_id, e)
+        return None
+    finally:
+        await api.close()
+
+
+def _extract_game_info_from_summary(
+    summary: dict[str, Any], game_id: str
+) -> GameInfo | None:
+    """Extract GameInfo from ESPN summary response.
+
+    Args:
+        summary: ESPN summary API response
+        game_id: ESPN game ID for logging
+
+    Returns:
+        GameInfo or None if extraction fails
+    """
+    try:
+        # Extract header for basic game info
+        header = summary.get("header", {}) or {}
+        competitions = header.get("competitions", []) or []
+        if not competitions:
+            logger.debug("No competitions in summary for game_id=%s", game_id)
+            return None
+
+        competition = competitions[0]
+        if not competition or not isinstance(competition, dict):
+            logger.debug("Invalid competition data for game_id=%s", game_id)
+            return None
+        competitors = competition.get("competitors", []) or []
+        if len(competitors) < 2:
+            logger.debug("Insufficient competitors for game_id=%s", game_id)
+            return None
+
+        # Extract teams (home has homeAway="home")
+        home_data = None
+        away_data = None
+        for comp in competitors:
+            if not comp or not isinstance(comp, dict):
+                continue
+            if comp.get("homeAway") == "home":
+                home_data = comp
+            else:
+                away_data = comp
+
+        if not home_data or not away_data:
+            logger.debug("Could not identify home/away teams for game_id=%s", game_id)
+            return None
+
+        # Build TeamInfo objects
+        home_team_raw = home_data.get("team", {}) or {}
+        away_team_raw = away_data.get("team", {}) or {}
+
+        home_team_id = str(home_team_raw.get("id", ""))
+        away_team_id = str(away_team_raw.get("id", ""))
+
+        # Get abbreviation from our mapping or fall back to API data
+        home_abbrev = get_team_abbreviation(home_team_id) or home_team_raw.get(
+            "abbreviation", ""
+        )
+        away_abbrev = get_team_abbreviation(away_team_id) or away_team_raw.get(
+            "abbreviation", ""
+        )
+
+        # Get full team names from our mapping or API
+        home_name = (
+            get_team_name(home_abbrev)
+            or home_team_raw.get("displayName", "")
+            or f"{home_team_raw.get('location', '')} {home_team_raw.get('name', '')}".strip()
+        )
+        away_name = (
+            get_team_name(away_abbrev)
+            or away_team_raw.get("displayName", "")
+            or f"{away_team_raw.get('location', '')} {away_team_raw.get('name', '')}".strip()
+        )
+
+        home_team = TeamInfo.model_validate(
+            {
+                "teamId": home_team_id,
+                "displayName": home_name,
+                "teamTricode": home_abbrev,
+                "score": int(home_data.get("score", 0) or 0),
+                "teamCity": home_team_raw.get("location", ""),
+                "shortDisplayName": home_team_raw.get("shortDisplayName", ""),
+            }
+        )
+
+        away_team = TeamInfo.model_validate(
+            {
+                "teamId": away_team_id,
+                "displayName": away_name,
+                "teamTricode": away_abbrev,
+                "score": int(away_data.get("score", 0) or 0),
+                "teamCity": away_team_raw.get("location", ""),
+                "shortDisplayName": away_team_raw.get("shortDisplayName", ""),
+            }
+        )
+
+        # Extract game time
+        game_time_str = competition.get("date", "")
+        game_time_utc = None
+        if game_time_str:
+            try:
+                game_time_utc = parse_iso_datetime(game_time_str)
+            except Exception:
+                pass
+
+        # Extract status
+        status_data = competition.get("status", {}) or {}
+        status_type = status_data.get("type", {}) or {}
+        status = status_type.get("id", 1)
+        status_text = status_type.get("shortDetail", "") or status_type.get(
+            "detail", ""
+        )
+
+        return GameInfo.model_validate(
+            {
+                "gameId": game_id,
+                "sport_type": "nfl",
+                "gameStatus": int(status),
+                "gameStatusText": status_text,
+                "gameTimeUTC": game_time_utc,
+                "homeTeam": home_team,
+                "awayTeam": away_team,
+            }
+        )
+    except Exception as e:
+        logger.error("Error extracting game info for game_id=%s: %s", game_id, e)
+        return None

@@ -1,7 +1,7 @@
 """Registry utilities for discovering trial-spec builders at runtime."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import (
     Any,
     Awaitable,
@@ -22,12 +22,12 @@ from ._types import RuntimeContext
 
 ParamModelT = TypeVar("ParamModelT", bound=BaseModel)
 # Build function can be sync or async
-TrialBuilderFn = Callable[[str, ParamModelT], TrialSpec]  # trial_id, params (sync)
+TrialBuilderFn = Callable[[str, ParamModelT], TrialSpec[Any]]  # trial_id, params (sync)
 AsyncTrialBuilderFn = Callable[
-    [str, ParamModelT], Awaitable[TrialSpec]
+    [str, ParamModelT], Awaitable[TrialSpec[Any]]
 ]  # trial_id, params (async)
 AnyTrialBuilderFn = Union[TrialBuilderFn, AsyncTrialBuilderFn]
-RuntimeContextBuilder = Callable[["TrialSpec"], RuntimeContext]
+RuntimeContextBuilder = Callable[["TrialSpec[Any]"], RuntimeContext]
 
 
 @dataclass(slots=True)
@@ -46,7 +46,7 @@ class TrialBuilderDefinition(Generic[ParamModelT]):
         """Check if the build function is async."""
         return asyncio.iscoroutinefunction(self.build_fn)
 
-    def build(self, trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
+    def build(self, trial_id: str, payload: Mapping[str, Any]) -> TrialSpec[Any]:
         """Build a TrialSpec synchronously.
 
         If the build function is async, this will raise an error.
@@ -58,11 +58,12 @@ class TrialBuilderDefinition(Generic[ParamModelT]):
             )
         config = self.param_model.model_validate(payload)
         spec = cast(TrialBuilderFn, self.build_fn)(trial_id, config)
-        # Automatically add builder_name to metadata
-        spec.metadata["builder_name"] = self.name
-        return spec
+        # Set builder_name for looking up context_builder during runtime
+        return replace(spec, builder_name=self.name)
 
-    async def build_async(self, trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
+    async def build_async(
+        self, trial_id: str, payload: Mapping[str, Any]
+    ) -> TrialSpec[Any]:
         """Build a TrialSpec asynchronously.
 
         Works with both sync and async build functions.
@@ -77,9 +78,8 @@ class TrialBuilderDefinition(Generic[ParamModelT]):
             spec = await asyncio.to_thread(
                 cast(TrialBuilderFn, self.build_fn), trial_id, config
             )
-        # Automatically add builder_name to metadata
-        spec.metadata["builder_name"] = self.name
-        return spec
+        # Set builder_name for looking up context_builder during runtime
+        return replace(spec, builder_name=self.name)
 
     def schema(self) -> Mapping[str, Any]:
         return self.param_model.model_json_schema()

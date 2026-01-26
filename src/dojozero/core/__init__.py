@@ -9,6 +9,10 @@ from ._actors import (
     Operator,
 )
 from ._base import ActorBase, AgentBase, DataStreamBase, OperatorBase
+from ._metadata import (
+    BaseTrialMetadata,
+    MetadataT,
+)
 from ._trial_orchestrator import (
     ActorLifecycleError,
     ActorPhase,
@@ -134,4 +138,7 @@ __all__ = [
     "JSONValue",
     "QueryResult",
     "StreamEvent",
+    # Metadata
+    "BaseTrialMetadata",
+    "MetadataT",
 ]

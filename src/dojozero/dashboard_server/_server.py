@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Coroutine
 
@@ -507,7 +507,7 @@ def create_dashboard_app(
             trial_info = {
                 "id": queued.trial_id,
                 "phase": queued.phase.value,
-                "metadata": dict(queued.spec.metadata),
+                "metadata": asdict(queued.spec.metadata),
                 "error": queued.error,
                 "source": "queue",
             }
@@ -733,7 +733,7 @@ def create_dashboard_app(
                 content={
                     "id": queued.trial_id,
                     "phase": queued.phase.value,
-                    "metadata": dict(queued.spec.metadata),
+                    "metadata": asdict(queued.spec.metadata),
                     "error": queued.error,
                     "source": "queue",
                 }

@@ -104,9 +104,9 @@ class NFLStore(DataStore):
         """
         events: list[DataEvent] = []
 
-        scoreboard_events = data.get("events", [])
+        scoreboard_events = data.get("events", []) or []
         for game in scoreboard_events:
-            if not isinstance(game, dict):
+            if not game or not isinstance(game, dict):
                 continue
 
             event_id = str(game.get("id", ""))
@@ -118,13 +118,13 @@ class NFLStore(DataStore):
                 continue
 
             # Get competition data
-            competitions = game.get("competitions", [])
-            if not competitions:
+            competitions = game.get("competitions", []) or []
+            if not competitions or not isinstance(competitions[0], dict):
                 continue
             competition = competitions[0]
 
             # Get competitors (teams)
-            competitors = competition.get("competitors", [])
+            competitors = competition.get("competitors", []) or []
             if len(competitors) < 2:
                 continue
 
@@ -132,6 +132,8 @@ class NFLStore(DataStore):
             home_team_data = None
             away_team_data = None
             for comp in competitors:
+                if not comp or not isinstance(comp, dict):
+                    continue
                 if comp.get("homeAway") == "home":
                     home_team_data = comp
                 elif comp.get("homeAway") == "away":
@@ -140,8 +142,8 @@ class NFLStore(DataStore):
             if not home_team_data or not away_team_data:
                 continue
 
-            home_team_info = home_team_data.get("team", {})
-            away_team_info = away_team_data.get("team", {})
+            home_team_info = home_team_data.get("team", {}) or {}
+            away_team_info = away_team_data.get("team", {}) or {}
 
             # Emit GameInitializeEvent for new games
             if not self._state.is_game_initialized(event_id):
@@ -188,17 +190,18 @@ class NFLStore(DataStore):
 
             # Handle odds updates from ESPN scoreboard
             # ESPN provides sportsbook odds from providers like DraftKings, FanDuel
-            odds_list = competition.get("odds", [])
-            if odds_list:
+            odds_list = competition.get("odds", []) or []
+            if odds_list and odds_list[0] and isinstance(odds_list[0], dict):
                 odds = odds_list[0]  # Use first provider
                 if self._state.odds_changed(event_id, odds):
                     # Extract odds data
-                    provider = odds.get("provider", {}).get("name", "")
+                    provider_data = odds.get("provider", {}) or {}
+                    provider = provider_data.get("name", "")
                     spread = float(odds.get("spread", 0) or 0)
 
                     # Get team-specific odds
-                    home_odds = odds.get("homeTeamOdds", {})
-                    away_odds = odds.get("awayTeamOdds", {})
+                    home_odds = odds.get("homeTeamOdds", {}) or {}
+                    away_odds = odds.get("awayTeamOdds", {}) or {}
 
                     events.append(
                         NFLOddsUpdateEvent(
@@ -224,7 +227,8 @@ class NFLStore(DataStore):
                     self._state.set_last_odds(event_id, odds)
 
             # Handle game status transitions
-            status = competition.get("status", {}).get("type", {})
+            status_data = competition.get("status", {}) or {}
+            status = status_data.get("type", {}) or {}
             status_name = status.get("name", "")
             status_code = self._status_name_to_code(status_name)
             previous_status = self._state.get_previous_status(event_id)
@@ -290,22 +294,26 @@ class NFLStore(DataStore):
         should_emit_update = not (game_concluded and final_update_emitted)
 
         # Parse boxscore
-        boxscore = data.get("boxscore", {})
+        boxscore = data.get("boxscore", {}) or {}
         if boxscore:
-            teams = boxscore.get("teams", [])
+            teams = boxscore.get("teams", []) or []
             if len(teams) >= 2:
                 # Get header info for current game state
-                header = data.get("header", {})
-                competitions = header.get("competitions", [])
-                competition = competitions[0] if competitions else {}
-                status = competition.get("status", {})
+                header = data.get("header", {}) or {}
+                competitions = header.get("competitions", []) or []
+                competition = (
+                    competitions[0]
+                    if competitions and isinstance(competitions[0], dict)
+                    else {}
+                )
+                status = competition.get("status", {}) or {}
 
                 # Extract game state from status
                 quarter = int(status.get("period", 0) or 0)
                 game_clock = status.get("displayClock", "")
 
                 # Get possession and down info from situation
-                situation = data.get("situation", {})
+                situation = data.get("situation", {}) or {}
                 possession_team = situation.get("possession", "")
                 down = int(situation.get("down", 0) or 0)
                 distance = int(situation.get("distance", 0) or 0)
@@ -314,13 +322,15 @@ class NFLStore(DataStore):
                 # Get line scores from header competitors
                 home_line_scores: list[int] = []
                 away_line_scores: list[int] = []
-                competitors = competition.get("competitors", [])
+                competitors = competition.get("competitors", []) or []
                 for comp in competitors:
-                    line_scores = comp.get("linescores", [])
+                    if not comp or not isinstance(comp, dict):
+                        continue
+                    line_scores = comp.get("linescores", []) or []
                     scores = [
                         int(ls.get("value", 0) or 0)
                         for ls in line_scores
-                        if isinstance(ls, dict)
+                        if ls and isinstance(ls, dict)
                     ]
                     if comp.get("homeAway") == "home":
                         home_line_scores = scores
@@ -331,7 +341,9 @@ class NFLStore(DataStore):
                 home_team_dict: dict[str, Any] = {}
                 away_team_dict: dict[str, Any] = {}
                 for team in teams:
-                    team_info = team.get("team", {})
+                    if not team or not isinstance(team, dict):
+                        continue
+                    team_info = team.get("team", {}) or {}
                     home_away = team.get("homeAway", "")
                     team_dict = {
                         "team": team_info,
@@ -345,6 +357,8 @@ class NFLStore(DataStore):
 
                 # Get scores from competitors
                 for comp in competitors:
+                    if not comp or not isinstance(comp, dict):
+                        continue
                     score = int(comp.get("score", 0) or 0)
                     if comp.get("homeAway") == "home":
                         home_team_dict["score"] = score
@@ -374,11 +388,13 @@ class NFLStore(DataStore):
                         self._state.mark_final_update_emitted(event_id)
 
         # Parse drives
-        drives = data.get("drives", {})
-        previous_drives = drives.get("previous", [])
+        drives = data.get("drives", {}) or {}
+        previous_drives = drives.get("previous", []) or []
         if previous_drives:
             new_drives = self._state.filter_new_drives(event_id, previous_drives)
             for drive in new_drives:
+                if not drive or not isinstance(drive, dict):
+                    continue
                 drive_events = self._parse_drive(event_id, drive, timestamp)
                 events.extend(drive_events)
 
@@ -395,13 +411,13 @@ class NFLStore(DataStore):
             return events
 
         # Get team info
-        team = drive.get("team", {})
+        team = drive.get("team", {}) or {}
         team_id = str(team.get("id", ""))
         team_abbreviation = team.get("abbreviation", "")
 
         # Get drive start/end info
-        start = drive.get("start", {})
-        end = drive.get("end", {})
+        start = drive.get("start", {}) or {}
+        end = drive.get("end", {}) or {}
 
         events.append(
             NFLDriveEvent(
@@ -417,15 +433,19 @@ class NFLStore(DataStore):
                 ),
                 team_id=team_id,
                 team_abbreviation=team_abbreviation,
-                start_quarter=int(start.get("period", {}).get("number", 0) or 0),
-                start_clock=start.get("clock", {}).get("displayValue", ""),
+                start_quarter=int(
+                    (start.get("period", {}) or {}).get("number", 0) or 0
+                ),
+                start_clock=(start.get("clock", {}) or {}).get("displayValue", ""),
                 start_yard_line=int(start.get("yardLine", 0) or 0),
-                end_quarter=int(end.get("period", {}).get("number", 0) or 0),
-                end_clock=end.get("clock", {}).get("displayValue", ""),
+                end_quarter=int((end.get("period", {}) or {}).get("number", 0) or 0),
+                end_clock=(end.get("clock", {}) or {}).get("displayValue", ""),
                 end_yard_line=int(end.get("yardLine", 0) or 0),
                 plays=int(drive.get("offensivePlays", 0) or 0),
                 yards=int(drive.get("yards", 0) or 0),
-                time_elapsed=drive.get("timeElapsed", {}).get("displayValue", ""),
+                time_elapsed=(drive.get("timeElapsed", {}) or {}).get(
+                    "displayValue", ""
+                ),
                 result=drive.get("result", ""),
                 is_score=bool(drive.get("isScore", False)),
                 points_scored=self._result_to_points(drive.get("result", "")),
@@ -449,12 +469,13 @@ class NFLStore(DataStore):
         if not event_id:
             return events
 
-        items = data.get("items", [])
+        items = data.get("items", []) or []
         if not items:
             return events
 
-        # Filter to new plays
-        new_plays = self._state.filter_new_plays(event_id, items)
+        # Filter to new plays (filter out None items first)
+        valid_items = [item for item in items if item and isinstance(item, dict)]
+        new_plays = self._state.filter_new_plays(event_id, valid_items)
 
         # Detect game start
         if new_plays and not self._state.has_game_started(event_id):
