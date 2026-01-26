@@ -6,7 +6,7 @@ from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Mapping, Sequence, Type, cast, get_type_hints
+from typing import Any, Mapping, Sequence, Type, cast, get_origin, get_type_hints
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -446,8 +446,8 @@ class FileSystemOrchestratorStore(OrchestratorStore):
             value = data[field_name]
             # Check if field type is tuple (from type hints or field type)
             field_type = field_types.get(field_name, field_info.type)
-            type_str = str(field_type)
-            if isinstance(value, list) and "tuple" in type_str:
+            origin = get_origin(field_type)
+            if isinstance(value, list) and origin is tuple:
                 converted_data[field_name] = tuple(value)
             else:
                 converted_data[field_name] = value
