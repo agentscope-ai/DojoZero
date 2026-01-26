@@ -442,11 +442,17 @@ class PolymarketAPI(ExternalAPI):
                         }
                     }
 
-            # Do not fall back to mock odds; surface an explicit error instead
+            # No market found - log warning and return empty (don't crash poll loop)
+            # This is expected for games without Polymarket markets
             event_id = params.get("event_id") if params else None
-            raise RuntimeError(
-                f"Failed to fetch Polymarket odds for event_id={event_id!r}, "
-                "no market found for given market_url/slug"
+            slug = params.get("slug") if params else None
+            market_url = params.get("market_url") if params else None
+            logger.warning(
+                "No Polymarket market found for event_id=%r (market_url=%r, slug=%r). "
+                "This is normal if the market doesn't exist yet or team info is missing.",
+                event_id,
+                market_url,
+                slug,
             )
         return {}
 

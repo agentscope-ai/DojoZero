@@ -373,6 +373,7 @@ def create_dashboard_app(
                 )
 
             otel_exporter = OTelSpanExporter(otlp_endpoint, headers=headers)
+            otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info("OTel exporter configured: %s (backend: sls)", otlp_endpoint)
 
@@ -401,6 +402,7 @@ def create_dashboard_app(
             otel_exporter = OTelSpanExporter(
                 otlp_endpoint, service_name=service_name, headers=None
             )
+            otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info(
                 "OTel exporter configured: %s (backend: jaeger or sls, service_name: %s)",

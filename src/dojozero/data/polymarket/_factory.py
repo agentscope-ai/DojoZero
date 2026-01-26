@@ -17,8 +17,8 @@ class PolymarketStoreFactory(StoreFactory):
         - market_url: Direct Polymarket market URL
         - game_id: Game identifier for NBA (used as event_id in odds events)
         - event_id: Event identifier for NFL (used as event_id in odds events)
-        - away_team_tricode: Away team abbreviation (for slug construction)
-        - home_team_tricode: Home team abbreviation (for slug construction)
+        - away_team_tricode/away_team_abbreviation/away_tricode: Away team code (for slug)
+        - home_team_tricode/home_team_abbreviation/home_tricode: Home team code (for slug)
         - game_date: Game date string (for slug construction)
         - polymarket_poll_intervals: Custom poll intervals
           Default: {"odds": 300.0} (5 minutes)
@@ -81,19 +81,35 @@ class PolymarketStoreFactory(StoreFactory):
             )
 
         # Build identifier for polling
-        # Support both NBA (game_id) and NFL (event_id) patterns
+        # Support both NBA (game_id) and NFL (event_id/espn_game_id) patterns
         identifier: dict[str, Any] = {}
 
-        # Use game_id or event_id as the primary identifier
+        # Use game_id, event_id, or espn_game_id as the primary identifier
         if metadata.get("game_id"):
             identifier["game_id"] = metadata["game_id"]
         elif metadata.get("event_id"):
             identifier["game_id"] = metadata["event_id"]  # Use event_id as game_id
+        elif metadata.get("espn_game_id"):
+            identifier["game_id"] = metadata[
+                "espn_game_id"
+            ]  # Use espn_game_id as game_id
 
         # Add team info for slug construction if market_url not provided
+        # Support multiple naming conventions for team codes:
+        # - away_team_tricode/home_team_tricode (NBA trial builder)
+        # - away_team_abbreviation/home_team_abbreviation (NFL trial builder)
+        # - away_tricode/home_tricode (scheduler metadata)
         if not market_url:
-            away_tricode = metadata.get("away_team_tricode")
-            home_tricode = metadata.get("home_team_tricode")
+            away_tricode = (
+                metadata.get("away_team_tricode")
+                or metadata.get("away_team_abbreviation")
+                or metadata.get("away_tricode")
+            )
+            home_tricode = (
+                metadata.get("home_team_tricode")
+                or metadata.get("home_team_abbreviation")
+                or metadata.get("home_tricode")
+            )
             game_date = metadata.get("game_date")
 
             if away_tricode and isinstance(away_tricode, str):

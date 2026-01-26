@@ -75,6 +75,7 @@ class TrialManager:
         oss_backup: bool = False,
         auto_resume: bool = True,
         stale_threshold_hours: float = 24.0,
+        checkpoint_interval_seconds: float = 300.0,
     ):
         """Initialize the TrialManager.
 
@@ -84,12 +85,14 @@ class TrialManager:
             oss_backup: Enable OSS backup when trials complete
             auto_resume: Automatically resume interrupted trials on startup
             stale_threshold_hours: Skip resuming trials older than this (hours)
+            checkpoint_interval_seconds: Interval for periodic checkpointing (default 5 min)
         """
         self._orchestrator = orchestrator
         self._max_concurrent = max_concurrent
         self._oss_backup = oss_backup
         self._auto_resume = auto_resume
         self._stale_threshold_hours = stale_threshold_hours
+        self._checkpoint_interval_seconds = checkpoint_interval_seconds
 
         # Queue for pending trials
         self._pending: asyncio.Queue[QueuedTrial] = asyncio.Queue()
@@ -103,6 +106,7 @@ class TrialManager:
         # Background worker task
         self._worker_task: asyncio.Task[None] | None = None
         self._status_task: asyncio.Task[None] | None = None
+        self._checkpoint_task: asyncio.Task[None] | None = None
         self._shutdown_event = asyncio.Event()
 
         self._logger = logging.getLogger("dojozero.trial_manager")
@@ -119,10 +123,12 @@ class TrialManager:
         self._shutdown_event.clear()
         self._worker_task = asyncio.create_task(self._worker_loop())
         self._status_task = asyncio.create_task(self._status_loop())
+        self._checkpoint_task = asyncio.create_task(self._checkpoint_loop())
         self._logger.info(
-            "TrialManager started (max_concurrent=%d, auto_resume=%s)",
+            "TrialManager started (max_concurrent=%d, auto_resume=%s, checkpoint_interval=%.0fs)",
             self._max_concurrent,
             self._auto_resume,
+            self._checkpoint_interval_seconds,
         )
 
         # Resume interrupted trials if enabled
@@ -251,6 +257,51 @@ class TrialManager:
             except Exception as e:
                 self._logger.error("Status loop error: %s", e)
 
+    async def _checkpoint_loop(self) -> None:
+        """Periodic checkpoint loop for all running trials."""
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.sleep(self._checkpoint_interval_seconds)
+                await self._checkpoint_all_running_trials()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self._logger.error("Checkpoint loop error: %s", e)
+
+    async def _checkpoint_all_running_trials(self) -> None:
+        """Create checkpoints for all currently running trials."""
+        # Get list of running trial IDs from orchestrator
+        running_trial_ids = list(self._running_tasks.keys())
+        if not running_trial_ids:
+            return
+
+        checkpoint_count = 0
+        for trial_id in running_trial_ids:
+            try:
+                # Check if trial is still running in orchestrator
+                status = self._orchestrator.get_trial_status(trial_id)
+                if status.phase != TrialPhase.RUNNING:
+                    continue
+
+                # Create checkpoint
+                checkpoint_id = await self._orchestrator.checkpoint_trial(trial_id)
+                checkpoint_count += 1
+                self._logger.debug(
+                    "Checkpoint created for trial '%s': %s", trial_id, checkpoint_id
+                )
+            except TrialNotFoundError:
+                # Trial no longer exists, skip
+                continue
+            except Exception as e:
+                self._logger.warning("Failed to checkpoint trial '%s': %s", trial_id, e)
+
+        if checkpoint_count > 0:
+            self._logger.info(
+                "Periodic checkpoint: saved %d/%d running trials",
+                checkpoint_count,
+                len(running_trial_ids),
+            )
+
     def _log_status(self) -> None:
         """Log current trial manager status."""
         running_ids = list(self._running_tasks.keys())
@@ -288,6 +339,15 @@ class TrialManager:
             except asyncio.CancelledError:
                 pass
             self._status_task = None
+
+        # Cancel checkpoint task
+        if self._checkpoint_task is not None:
+            self._checkpoint_task.cancel()
+            try:
+                await self._checkpoint_task
+            except asyncio.CancelledError:
+                pass
+            self._checkpoint_task = None
 
         # Cancel worker
         if self._worker_task is not None:
