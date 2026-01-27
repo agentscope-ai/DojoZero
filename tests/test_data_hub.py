@@ -2,9 +2,10 @@
 
 import json
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -27,6 +28,36 @@ class TestEvent(DataEvent):
     @property
     def event_type(self) -> str:
         return "test_event"
+
+
+@register_event
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TestEventWithGameTime(DataEvent):
+    """Event with game_time field for testing game_date extraction."""
+
+    __test__ = False
+
+    event_id: str = ""
+    game_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def event_type(self) -> str:
+        return "test_event_with_game_time"
+
+
+@register_event
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TestEventWithGameTimeUtc(DataEvent):
+    """Event with game_time_utc string field for testing fallback."""
+
+    __test__ = False
+
+    event_id: str = ""
+    game_time_utc: str = ""
+
+    @property
+    def event_type(self) -> str:
+        return "test_event_with_game_time_utc"
 
 
 @pytest.fixture
@@ -392,3 +423,137 @@ class TestDataHubLifecycle:
 
         mock_store1.stop_polling.assert_called_once()
         mock_store2.stop_polling.assert_called_once()
+
+
+class TestDataHubSpanEmission:
+    """Tests for SLS span emission and tag extraction."""
+
+    @pytest.fixture
+    def hub_with_trial_id(self, temp_persistence_file):
+        """Create a DataHub with trial_id set for span emission."""
+        return DataHub(
+            hub_id="test_hub",
+            persistence_file=temp_persistence_file,
+            trial_id="test-trial-123",
+        )
+
+    @patch("dojozero.core._tracing.emit_span")
+    @patch("dojozero.core._tracing.create_span_from_event")
+    def test_game_date_extracted_from_game_time_datetime(
+        self, mock_create_span, mock_emit_span, hub_with_trial_id
+    ):
+        """Test game_date is extracted from game_time datetime field."""
+        mock_create_span.return_value = MagicMock()
+        game_time = datetime(2025, 1, 21, 19, 30, 0, tzinfo=timezone.utc)
+        event = TestEventWithGameTime(event_id="test_1", game_time=game_time)
+
+        hub_with_trial_id._emit_event_span(
+            event, actor_id="test_actor", sport_type="nba"
+        )
+
+        # Verify create_span_from_event was called with correct tags
+        call_args = mock_create_span.call_args
+        tags = call_args.kwargs["extra_tags"]
+        assert tags["dojozero.game.date"] == "2025-01-21"
+
+    @patch("dojozero.core._tracing.emit_span")
+    @patch("dojozero.core._tracing.create_span_from_event")
+    def test_game_date_extracted_from_game_time_iso_string(
+        self, mock_create_span, mock_emit_span, hub_with_trial_id
+    ):
+        """Test game_date is extracted from game_time ISO string field."""
+        mock_create_span.return_value = MagicMock()
+
+        # Create event with game_time as string (simulating serialized datetime)
+        @register_event
+        @dataclass(slots=True, frozen=True, kw_only=True)
+        class TestEventWithGameTimeStr(DataEvent):
+            __test__ = False
+            event_id: str = ""
+            game_time: str = ""
+
+            @property
+            def event_type(self) -> str:
+                return "test_event_game_time_str"
+
+        event = TestEventWithGameTimeStr(
+            event_id="test_2", game_time="2025-02-15T20:00:00+00:00"
+        )
+
+        hub_with_trial_id._emit_event_span(
+            event, actor_id="test_actor", sport_type="nba"
+        )
+
+        call_args = mock_create_span.call_args
+        tags = call_args.kwargs["extra_tags"]
+        assert tags["dojozero.game.date"] == "2025-02-15"
+
+    @patch("dojozero.core._tracing.emit_span")
+    @patch("dojozero.core._tracing.create_span_from_event")
+    def test_game_date_fallback_to_game_time_utc(
+        self, mock_create_span, mock_emit_span, hub_with_trial_id
+    ):
+        """Test game_date falls back to game_time_utc string field."""
+        mock_create_span.return_value = MagicMock()
+        event = TestEventWithGameTimeUtc(
+            event_id="test_3", game_time_utc="2025-03-10T18:00:00Z"
+        )
+
+        hub_with_trial_id._emit_event_span(
+            event, actor_id="test_actor", sport_type="nfl"
+        )
+
+        call_args = mock_create_span.call_args
+        tags = call_args.kwargs["extra_tags"]
+        assert tags["dojozero.game.date"] == "2025-03-10"
+
+    @patch("dojozero.core._tracing.emit_span")
+    @patch("dojozero.core._tracing.create_span_from_event")
+    def test_no_game_date_when_no_game_time_fields(
+        self, mock_create_span, mock_emit_span, hub_with_trial_id
+    ):
+        """Test no game_date tag when event has no game_time fields."""
+        mock_create_span.return_value = MagicMock()
+        event = TestEvent(event_id="test_4", value="no_game_time")
+
+        hub_with_trial_id._emit_event_span(
+            event, actor_id="test_actor", sport_type="nba"
+        )
+
+        call_args = mock_create_span.call_args
+        tags = call_args.kwargs["extra_tags"]
+        assert "dojozero.game.date" not in tags
+
+    @patch("dojozero.core._tracing.emit_span")
+    @patch("dojozero.core._tracing.create_span_from_event")
+    def test_game_id_extracted_from_event(
+        self, mock_create_span, mock_emit_span, hub_with_trial_id
+    ):
+        """Test game_id is extracted as top-level tag."""
+        mock_create_span.return_value = MagicMock()
+        event = TestEvent(event_id="401810490", value="test")
+
+        hub_with_trial_id._emit_event_span(
+            event, actor_id="test_actor", sport_type="nba"
+        )
+
+        call_args = mock_create_span.call_args
+        tags = call_args.kwargs["extra_tags"]
+        assert tags["dojozero.game.id"] == "401810490"
+
+    @patch("dojozero.core._tracing.emit_span")
+    @patch("dojozero.core._tracing.create_span_from_event")
+    def test_game_id_extracted_from_pbp_event_id(
+        self, mock_create_span, mock_emit_span, hub_with_trial_id
+    ):
+        """Test game_id extracted from PBP-style event_id like '0022400608_pbp_188'."""
+        mock_create_span.return_value = MagicMock()
+        event = TestEvent(event_id="0022400608_pbp_188", value="pbp_test")
+
+        hub_with_trial_id._emit_event_span(
+            event, actor_id="test_actor", sport_type="nba"
+        )
+
+        call_args = mock_create_span.call_args
+        tags = call_args.kwargs["extra_tags"]
+        assert tags["dojozero.game.id"] == "0022400608"
