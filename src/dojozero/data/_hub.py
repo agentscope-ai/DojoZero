@@ -216,7 +216,7 @@ class DataHub:
             if not game_date and "game_time_utc" in event_dict:
                 game_time_utc = event_dict["game_time_utc"]
                 if isinstance(game_time_utc, str) and len(game_time_utc) >= 10:
-                    game_date = game_time_utc[:10]
+                    game_date = game_time_utc[:10]  # YYYY-MM-DD
             if game_date:
                 tags["game.date"] = game_date
 

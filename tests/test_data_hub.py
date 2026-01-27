@@ -60,6 +60,21 @@ class TestEventWithGameTimeUtc(DataEvent):
         return "test_event_with_game_time_utc"
 
 
+@register_event
+@dataclass(slots=True, frozen=True, kw_only=True)
+class TestEventWithGameTimeStr(DataEvent):
+    """Event with game_time as string field for testing ISO string extraction."""
+
+    __test__ = False
+
+    event_id: str = ""
+    game_time: str = ""
+
+    @property
+    def event_type(self) -> str:
+        return "test_event_game_time_str"
+
+
 @pytest.fixture
 def temp_persistence_file():
     """Create a temporary file for event persistence."""
@@ -463,19 +478,6 @@ class TestDataHubSpanEmission:
     ):
         """Test game_date is extracted from game_time ISO string field."""
         mock_create_span.return_value = MagicMock()
-
-        # Create event with game_time as string (simulating serialized datetime)
-        @register_event
-        @dataclass(slots=True, frozen=True, kw_only=True)
-        class TestEventWithGameTimeStr(DataEvent):
-            __test__ = False
-            event_id: str = ""
-            game_time: str = ""
-
-            @property
-            def event_type(self) -> str:
-                return "test_event_game_time_str"
-
         event = TestEventWithGameTimeStr(
             event_id="test_2", game_time="2025-02-15T20:00:00+00:00"
         )
