@@ -610,6 +610,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         if not event_type:
             return None
 
+        # Handle event.* prefix (new format)
+        # e.g., "event.nfl_game_initialize" -> "nfl_game_initialize"
+        if event_type.startswith("event."):
+            event_type = event_type[6:]  # Strip "event." prefix
+
         # Handle sport-specific prefixes (e.g., "nfl_game_initialize" -> "game_initialize")
         # This allows the broker to work with any sport's events
         for prefix in ["nba_", "nfl_", "mlb_", "nhl_"]:

@@ -41,7 +41,7 @@ class ESPNGameInitializeEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_game_initialize"
+        return "event.espn_game_initialize"
 
 
 @register_event
@@ -58,7 +58,7 @@ class ESPNGameStartEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_game_start"
+        return "event.espn_game_start"
 
 
 @register_event
@@ -80,7 +80,7 @@ class ESPNGameEndEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_game_end"
+        return "event.espn_game_end"
 
 
 @register_event
@@ -107,7 +107,7 @@ class ESPNGameUpdateEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_game_update"
+        return "event.espn_game_update"
 
 
 # =============================================================================
@@ -144,7 +144,7 @@ class ESPNPlayEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_play"
+        return "event.espn_play"
 
 
 # =============================================================================
@@ -181,7 +181,7 @@ class ESPNOddsUpdateEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_odds_update"
+        return "event.espn_odds_update"
 
 
 # =============================================================================

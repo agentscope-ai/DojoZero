@@ -496,7 +496,7 @@ register_trial_builder(
         "data_streams": [
             {
                 "id": "raw_web_search_stream",
-                "event_type": "raw_web_search",
+                "event_type": "event.raw_web_search",
                 "initializer": {
                     "search_queries": [
                         {
@@ -513,31 +513,31 @@ register_trial_builder(
             },
             {
                 "id": "injury_summary_stream",
-                "event_type": "injury_summary",
+                "event_type": "event.injury_summary",
             },
             {
                 "id": "power_ranking_stream",
-                "event_type": "power_ranking",
+                "event_type": "event.power_ranking",
             },
             {
                 "id": "expert_prediction_stream",
-                "event_type": "expert_prediction",
+                "event_type": "event.expert_prediction",
             },
             {
                 "id": "game_status_change_stream",
-                "event_type": "game_status_change",
+                "event_type": "event.game_status_change",
             },
             {
                 "id": "game_update_stream",
-                "event_type": "game_update",
+                "event_type": "event.game_update",
             },
             {
                 "id": "odds_update_stream",
-                "event_type": "odds_update",
+                "event_type": "event.odds_update",
             },
             {
                 "id": "play_by_play_stream",
-                "event_type": "play_by_play",
+                "event_type": "event.play_by_play",
             },
         ],
         "operators": [

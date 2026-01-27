@@ -266,7 +266,7 @@ class NFLGameInitializeEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_game_initialize"
+        return "event.nfl_game_initialize"
 
 
 @register_event
@@ -278,7 +278,7 @@ class NFLGameStartEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_game_start"
+        return "event.nfl_game_start"
 
 
 @register_event
@@ -296,7 +296,7 @@ class NFLGameResultEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_game_result"
+        return "event.nfl_game_result"
 
 
 @register_event
@@ -322,7 +322,7 @@ class NFLGameUpdateEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_game_update"
+        return "event.nfl_game_update"
 
     @property
     def home_team_stats(self) -> NFLTeamStats:
@@ -369,7 +369,7 @@ class NFLPlayEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_play"
+        return "event.nfl_play"
 
 
 @register_event
@@ -406,7 +406,7 @@ class NFLDriveEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_drive"
+        return "event.nfl_drive"
 
 
 # =============================================================================
@@ -441,4 +441,4 @@ class NFLOddsUpdateEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_odds_update"
+        return "event.nfl_odds_update"

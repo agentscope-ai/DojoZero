@@ -245,7 +245,7 @@ class TestNFLEvents:
         assert event.game_id == "401671827"
         assert event.home_team == "Kansas City Chiefs"
         assert event.away_team == "San Francisco 49ers"
-        assert event.event_type == "nfl_game_initialize"
+        assert event.event_type == "event.nfl_game_initialize"
 
     def test_game_result_event(self):
         """Test NFLGameResultEvent creation."""
@@ -259,7 +259,7 @@ class TestNFLEvents:
 
         assert event.winner == "home"
         assert event.final_score["home"] == 25
-        assert event.event_type == "nfl_game_result"
+        assert event.event_type == "event.nfl_game_result"
 
     def test_play_event(self):
         """Test NFLPlayEvent creation."""
@@ -281,7 +281,7 @@ class TestNFLEvents:
 
         assert event.play_type == "Pass"
         assert event.yards_gained == 15
-        assert event.event_type == "nfl_play"
+        assert event.event_type == "event.nfl_play"
 
     def test_drive_event(self):
         """Test NFLDriveEvent creation."""
@@ -306,7 +306,7 @@ class TestNFLEvents:
 
         assert event.result == "Touchdown"
         assert event.is_score is True
-        assert event.event_type == "nfl_drive"
+        assert event.event_type == "event.nfl_drive"
 
     def test_odds_update_event(self):
         """Test NFLOddsUpdateEvent creation."""
@@ -323,7 +323,7 @@ class TestNFLEvents:
 
         assert event.spread == -3.5
         assert event.over_under == 47.5
-        assert event.event_type == "nfl_odds_update"
+        assert event.event_type == "event.nfl_odds_update"
 
 
 # =============================================================================

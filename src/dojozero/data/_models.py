@@ -28,40 +28,38 @@ class EventTypes(str, Enum):
     # =========================================================================
     # Polymarket / Betting
     # =========================================================================
-    ODDS_UPDATE = "odds_update"
+    ODDS_UPDATE = "event.odds_update"
 
     # =========================================================================
     # NBA Game Lifecycle
     # =========================================================================
-    GAME_INITIALIZE = (
-        "game_initialize"  # Game initialization event with team info (no odds)
-    )
-    GAME_START = "game_start"
-    GAME_RESULT = "game_result"
-    GAME_UPDATE = "game_update"
-    PLAY_BY_PLAY = "play_by_play"
+    GAME_INITIALIZE = "event.game_initialize"
+    GAME_START = "event.game_start"
+    GAME_RESULT = "event.game_result"
+    GAME_UPDATE = "event.game_update"
+    PLAY_BY_PLAY = "event.play_by_play"
 
     # =========================================================================
     # Web Search
     # =========================================================================
     # Raw search results from API
-    RAW_WEB_SEARCH = "raw_web_search"
+    RAW_WEB_SEARCH = "event.raw_web_search"
 
     # Processed summaries (generated from raw_web_search)
-    INJURY_SUMMARY = "injury_summary"
-    POWER_RANKING = "power_ranking"
-    EXPERT_PREDICTION = "expert_prediction"
+    INJURY_SUMMARY = "event.injury_summary"
+    POWER_RANKING = "event.power_ranking"
+    EXPERT_PREDICTION = "event.expert_prediction"
 
     # =========================================================================
     # NFL Game Lifecycle
     # =========================================================================
-    NFL_GAME_INITIALIZE = "nfl_game_initialize"
-    NFL_GAME_START = "nfl_game_start"
-    NFL_GAME_RESULT = "nfl_game_result"
-    NFL_GAME_UPDATE = "nfl_game_update"
-    NFL_PLAY = "nfl_play"
-    NFL_DRIVE = "nfl_drive"
-    NFL_ODDS_UPDATE = "nfl_odds_update"
+    NFL_GAME_INITIALIZE = "event.nfl_game_initialize"
+    NFL_GAME_START = "event.nfl_game_start"
+    NFL_GAME_RESULT = "event.nfl_game_result"
+    NFL_GAME_UPDATE = "event.nfl_game_update"
+    NFL_PLAY = "event.nfl_play"
+    NFL_DRIVE = "event.nfl_drive"
+    NFL_ODDS_UPDATE = "event.nfl_odds_update"
 
 
 @overload

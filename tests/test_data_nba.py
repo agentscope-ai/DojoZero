@@ -881,7 +881,7 @@ class TestNBAEvents:
         assert event.event_id == "401810001_pbp_10"
         assert event.action_type == "2pt"
         assert event.player_name == "LeBron James"
-        assert event.event_type == "play_by_play"
+        assert event.event_type == "event.play_by_play"
 
     def test_game_initialize_event_creation(self):
         """Test GameInitializeEvent creation and properties."""
@@ -897,14 +897,14 @@ class TestNBAEvents:
         assert event.game_id == "401810001"
         assert event.home_team == "Los Angeles Lakers"
         assert event.away_team == "Golden State Warriors"
-        assert event.event_type == "game_initialize"
+        assert event.event_type == "event.game_initialize"
 
     def test_game_start_event_creation(self):
         """Test GameStartEvent creation and properties."""
         event = GameStartEvent(game_id="401810001")
 
         assert event.game_id == "401810001"
-        assert event.event_type == "game_start"
+        assert event.event_type == "event.game_start"
 
     def test_game_result_event_creation(self):
         """Test GameResultEvent creation and properties."""
@@ -917,4 +917,4 @@ class TestNBAEvents:
         assert event.game_id == "401810001"
         assert event.winner == "home"
         assert event.final_score["home"] == 110
-        assert event.event_type == "game_result"
+        assert event.event_type == "event.game_result"
