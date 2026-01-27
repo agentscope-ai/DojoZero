@@ -1574,27 +1574,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """
         # Acquire global lock to ensure atomic snapshot
         async with self._state_snapshot_lock:
-            # Serialize accounts: only balance and last_updated
-            accounts_dict = {
-                agent_id: {
-                    "balance": str(account.balance),
-                    "last_updated": account.last_updated.isoformat(),
-                }
-                for agent_id, account in self._accounts.items()
-            }
+            # Serialize accounts and bets using Pydantic TypeAdapter
+            # TypeAdapter can handle Pydantic models directly, no need for model_dump()
+            accounts_adapter = TypeAdapter(Dict[str, Account])
+            bets_adapter = TypeAdapter(Dict[str, Bet])
 
-            # Serialize all bets using Pydantic Bet model
-            bets_dict = {
-                bet_id: bet.model_dump(mode="json")
-                for bet_id, bet in self._bets.items()
-            }
-
-            # Use Pydantic TypeAdapter for JSON serialization
-            accounts_adapter = TypeAdapter(Dict[str, Dict[str, str]])
-            bets_adapter = TypeAdapter(Dict[str, Dict[str, Any]])
-
-            accounts_json = accounts_adapter.dump_json(accounts_dict).decode()
-            bets_json = bets_adapter.dump_json(bets_dict).decode()
+            accounts_json = accounts_adapter.dump_json(self._accounts).decode()
+            bets_json = bets_adapter.dump_json(self._bets).decode()
 
             # Create span with all the data
             tags = {

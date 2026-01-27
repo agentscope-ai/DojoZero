@@ -211,8 +211,8 @@ Logs are emitted as OpenTelemetry spans with the following structure:
 - `broker.change_type` - Type of change that triggered the log (see Change Types below)
 - `broker.accounts_count` - Total number of accounts (integer)
 - `broker.bets_count` - Total number of bets (integer)
-- `broker.accounts` - JSON string containing all account balances (serialized via Pydantic TypeAdapter)
-- `broker.bets` - JSON string containing all bets keyed by bet_id (serialized via Pydantic model_dump)
+- `broker.accounts` - JSON string containing all account information (serialized via Pydantic TypeAdapter directly from Account models, includes all fields: `agent_id`, `balance`, `created_at`, `last_updated`)
+- `broker.bets` - JSON string containing all bets keyed by bet_id (serialized via Pydantic TypeAdapter directly from Bet models, includes all 18 bet fields)
 
 ### 10.3. Change Types
 
@@ -232,24 +232,30 @@ The `broker.change_type` tag indicates what operation triggered the log:
 
 #### Accounts Data (`broker.accounts`)
 
-JSON string containing a map of agent IDs to account information:
+JSON string containing a map of agent IDs to complete account information. All fields from the `Account` Pydantic model are included:
 
 ```json
 {
   "agent1": {
+    "agent_id": "agent1",
     "balance": "1000.00",
+    "created_at": "2024-01-01T10:00:00",
     "last_updated": "2024-01-01T12:00:00"
   },
   "agent2": {
+    "agent_id": "agent2",
     "balance": "500.00",
+    "created_at": "2024-01-01T10:00:00",
     "last_updated": "2024-01-01T12:05:00"
   }
 }
 ```
 
+**Note:** Accounts are serialized directly using Pydantic `TypeAdapter(Dict[str, Account])`, which handles all Account model fields automatically.
+
 #### Bets Data (`broker.bets`)
 
-JSON string containing a flat map of bet IDs to complete bet information. All bets are serialized using Pydantic's `model_dump(mode="json")`, which provides full type safety and automatic serialization of all bet fields.
+JSON string containing a flat map of bet IDs to complete bet information. All bets are serialized directly using Pydantic `TypeAdapter(Dict[str, Bet])`, which handles all Bet model fields automatically with full type safety.
 
 ```json
 {
