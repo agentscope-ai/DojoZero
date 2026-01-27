@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -191,6 +192,24 @@ class DataHub:
                 if "_" in str(game_id) and str(game_id).startswith("00"):
                     game_id = str(game_id).split("_")[0]
                 tags["dojozero.game.id"] = str(game_id)
+
+            # Extract game_date as top-level tag (YYYY-MM-DD format)
+            game_date = None
+            # Try game_time field (datetime) - used by NBA/NFL events
+            if "game_time" in event_dict:
+                game_time = event_dict["game_time"]
+                if isinstance(game_time, datetime):
+                    game_date = game_time.strftime("%Y-%m-%d")
+                elif isinstance(game_time, str) and game_time:
+                    # ISO format string - extract date portion
+                    game_date = game_time[:10] if len(game_time) >= 10 else None
+            # Fallback to game_time_utc (string) - used by some NBA events
+            if not game_date and "game_time_utc" in event_dict:
+                game_time_utc = event_dict["game_time_utc"]
+                if isinstance(game_time_utc, str) and len(game_time_utc) >= 10:
+                    game_date = game_time_utc[:10]
+            if game_date:
+                tags["dojozero.game.date"] = game_date
 
             # trial_id is guaranteed non-None here because _emit_event_span is only
             # called when self.trial_id is truthy (checked in receive_event)
