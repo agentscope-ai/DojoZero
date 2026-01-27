@@ -147,8 +147,8 @@ class GameTrialManager:
         with open(self.base_config, "r") as f:
             config = yaml.safe_load(f)
 
-        # Update game_id
-        config["scenario"]["config"]["game_id"] = self.game_id
+        # Update espn_game_id (the actual game identifier used by the trial)
+        config["scenario"]["config"]["espn_game_id"] = self.game_id
 
         # Determine file paths
         if self.data_dir:
