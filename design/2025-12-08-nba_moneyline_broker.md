@@ -182,3 +182,119 @@ operators:
 - `get_statistics()` - Get performance stats
 
 If `allowed_tools` is omitted or `None`, all tools are enabled by default.
+
+## 10. Logging and Observability
+
+The broker emits logs to SLS (Simple Log Service) whenever account balances or bet statuses change. 
+
+### 10.1. When Logs Are Emitted
+
+Logs are automatically emitted whenever `self._accounts` or `self._bets` are modified:
+
+- **Account Operations**: `account_created`, `deposit`, `withdraw`
+- **Bet Operations**: `bet_placed`, `bet_executed`, `bet_settled`, `bet_cancelled`
+
+Each log contains a snapshot of **all** agents' current balances and bet statuses, not just the agent that triggered the change.
+
+### 10.2. Log Format
+
+Logs are emitted as OpenTelemetry spans with the following structure:
+
+**Operation Name:** `broker.state_update`
+
+**Standard Tags:**
+- `dojozero.trial.id` - Trial identifier
+- `dojozero.actor.id` - Broker actor identifier
+- `dojozero.event.type` - `"broker.state_update"`
+
+**Broker-Specific Tags:**
+- `broker.change_type` - Type of change that triggered the log (see Change Types below)
+- `broker.accounts_count` - Total number of accounts (integer)
+- `broker.bets_count` - Total number of bets (integer)
+- `broker.accounts` - JSON string containing all account balances
+- `broker.bets` - JSON string containing all bet statuses per agent
+
+### 10.3. Change Types
+
+The `broker.change_type` tag indicates what operation triggered the log:
+
+| Change Type | Description | When Emitted |
+|------------|-------------|--------------|
+| `account_created` | New agent account created | `create_account()` called |
+| `deposit` | Funds added to account | `deposit()` called |
+| `withdraw` | Funds removed from account | `withdraw()` called |
+| `bet_placed` | New bet placed (funds locked) | `place_bet()` called |
+| `bet_executed` | Limit order executed | `_match_bet()` called (limit order filled) |
+| `bet_settled` | Bet settled with outcome | `_settle_bet()` called (game ended) |
+| `bet_cancelled` | Pending order cancelled | `_cancel_pending_order()` called |
+
+### 10.4. Data Structure
+
+#### Accounts Data (`broker.accounts`)
+
+JSON string containing a map of agent IDs to account information:
+
+```json
+{
+  "agent1": {
+    "balance": "1000.00",
+    "last_updated": "2024-01-01T12:00:00"
+  },
+  "agent2": {
+    "balance": "500.00",
+    "last_updated": "2024-01-01T12:05:00"
+  }
+}
+```
+
+#### Bets Data (`broker.bets`)
+
+JSON string containing a map of agent IDs to bet status information:
+
+```json
+{
+  "agent1": {
+    "active_bets_count": 2,
+    "pending_orders_count": 1,
+    "settled_bets_count": 0,
+    "active_bets": [
+      {
+        "bet_id": "bet-1",
+        "event_id": "event-1",
+        "amount": "100.00",
+        "selection": "home",
+        "odds": "1.85",
+        "bet_type": "MONEYLINE",
+        "status": "ACTIVE"
+      }
+    ],
+    "pending_orders": [
+      {
+        "bet_id": "bet-3",
+        "event_id": "event-1",
+        "amount": "200.00",
+        "selection": "home",
+        "limit_odds": "2.00",
+        "bet_type": "MONEYLINE",
+        "status": "PENDING"
+      }
+    ]
+  }
+}
+```
+
+**Bet Status Fields:**
+- `active_bets_count` - Number of executed bets waiting for settlement
+- `pending_orders_count` - Number of limit orders waiting for execution
+- `settled_bets_count` - Number of completed bets
+- `active_bets` - Array of active bet details (executed, not yet settled)
+- `pending_orders` - Array of pending order details (limit orders not yet executed)
+
+**Bet Detail Fields:**
+- `bet_id` - Unique bet identifier
+- `event_id` - Event identifier
+- `amount` - Bet amount (as string)
+- `selection` - Bet selection ("home", "away", "over", "under")
+- `odds` - Execution odds (for active bets) or `limit_odds` (for pending orders)
+- `bet_type` - "MONEYLINE", "SPREAD", or "TOTAL"
+- `status` - "ACTIVE", "PENDING", "SETTLED", or "CANCELLED"
