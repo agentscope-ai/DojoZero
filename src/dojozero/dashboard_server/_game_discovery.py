@@ -330,7 +330,7 @@ class NBAGameFetcher:
         for date in dates_to_check:
             games = await self.fetch_games_for_date(date)
             for g in games:
-                if g.event_id == game_id:
+                if g.game_id == game_id:
                     return _map_status(g)
 
         return None
@@ -436,7 +436,7 @@ class NFLGameFetcher:
         if game_date:
             games = await self.fetch_games_for_date(game_date)
             for g in games:
-                if g.event_id == event_id:
+                if g.game_id == event_id:
                     return _map_status(g)
 
         # If no date provided or not found, try current scoreboard
@@ -445,7 +445,7 @@ class NFLGameFetcher:
             data = await api.fetch("scoreboard")
             games = _parse_espn_scoreboard(data, "nfl")
             for g in games:
-                if g.event_id == event_id:
+                if g.game_id == event_id:
                     return _map_status(g)
         except Exception as e:
             LOGGER.warning("Error checking game status for %s: %s", event_id, e)

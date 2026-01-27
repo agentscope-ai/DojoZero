@@ -348,7 +348,7 @@ async def demo_store_parsing(sport: str, league: str, event_id: str | None) -> N
             print(f"  {event.__class__.__name__}:")
             if isinstance(event, ESPNGameInitializeEvent):
                 print(f"    {event.away_team} @ {event.home_team}")
-                print(f"    Event ID: {event.event_id}")
+                print(f"    Game ID: {event.game_id}")
                 print(f"    Sport: {event.sport}/{event.league}")
                 print(f"    Venue: {event.venue}")
             elif isinstance(event, ESPNOddsUpdateEvent):

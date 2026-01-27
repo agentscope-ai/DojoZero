@@ -173,7 +173,7 @@ class ESPNStore(DataStore):
                 events.append(
                     ESPNGameInitializeEvent(
                         timestamp=timestamp,
-                        event_id=event_id,
+                        game_id=event_id,
                         sport=self.sport,
                         league=self.league,
                         home_team=home_team.get("displayName", ""),
@@ -202,7 +202,7 @@ class ESPNStore(DataStore):
                     events.append(
                         ESPNOddsUpdateEvent(
                             timestamp=timestamp,
-                            event_id=event_id,
+                            game_id=event_id,
                             sport=self.sport,
                             league=self.league,
                             provider=provider,
@@ -239,7 +239,7 @@ class ESPNStore(DataStore):
                     events.append(
                         ESPNGameStartEvent(
                             timestamp=timestamp,
-                            event_id=event_id,
+                            game_id=event_id,
                             sport=self.sport,
                             league=self.league,
                         )
@@ -260,7 +260,7 @@ class ESPNStore(DataStore):
                     events.append(
                         ESPNGameEndEvent(
                             timestamp=timestamp,
-                            event_id=event_id,
+                            game_id=event_id,
                             sport=self.sport,
                             league=self.league,
                             winner=winner,
@@ -339,7 +339,7 @@ class ESPNStore(DataStore):
         events.append(
             ESPNGameUpdateEvent(
                 timestamp=timestamp,
-                event_id=event_id,
+                game_id=event_id,
                 sport=self.sport,
                 league=self.league,
                 home_score=home_score,
@@ -380,7 +380,7 @@ class ESPNStore(DataStore):
             events.append(
                 ESPNGameStartEvent(
                     timestamp=timestamp,
-                    event_id=event_id,
+                    game_id=event_id,
                     sport=self.sport,
                     league=self.league,
                 )
@@ -416,7 +416,7 @@ class ESPNStore(DataStore):
             events.append(
                 ESPNPlayEvent(
                     timestamp=timestamp,
-                    event_id=event_id,
+                    game_id=event_id,
                     play_id=play_id,
                     sport=self.sport,
                     league=self.league,

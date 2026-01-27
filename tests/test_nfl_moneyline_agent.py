@@ -74,12 +74,12 @@ async def test_nfl_agent_receives_event_and_places_bet(
     )
 
     # Simulate DataStream sending match data
-    event_id = nfl_game_init_data["event_id"]
+    game_id = nfl_game_init_data["game_id"]
     event_list = [
         StreamEvent(
             stream_id="nfl-stream",
             payload={
-                "event_id": event_id,
+                "game_id": game_id,
                 "home_team": "Baltimore Ravens",
                 "away_team": "Kansas City Chiefs",
                 "moneyline_home": "-150",
@@ -91,7 +91,7 @@ async def test_nfl_agent_receives_event_and_places_bet(
         StreamEvent(
             stream_id="nfl-stream",
             payload={
-                "event_id": event_id,
+                "game_id": game_id,
                 "analysis": "Ravens have strong running game. Chiefs have Mahomes.",
             },
             sequence=1,
@@ -103,7 +103,7 @@ async def test_nfl_agent_receives_event_and_places_bet(
 
     # Simulate game result - Ravens win
     game_result_event = NFLGameResultEvent(
-        event_id=event_id,
+        game_id=game_id,
         winner="home",
         final_score={"home": 28, "away": 24},
         home_team="Baltimore Ravens",

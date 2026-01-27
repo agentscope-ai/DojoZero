@@ -55,7 +55,7 @@ class TrialSourceConfig(BaseModel):
         check_interval_seconds: Interval for checking game status
         auto_stop_on_completion: Whether to stop trial when game finishes
         data_dir: Base directory for persistence files. If set, files are
-            created at {data_dir}/{game_date}/{event_id}.jsonl
+            created at {data_dir}/{game_date}/{game_id}.jsonl
         sync_interval_seconds: How often to sync with ESPN API for new games
     """
 
@@ -155,7 +155,7 @@ class ScheduledTrial:
     scenario_name: str
     scenario_config: dict[str, Any]
     sport_type: str  # "nba" or "nfl"
-    event_id: str  # ESPN event ID (used for both NBA and NFL)
+    game_id: str  # ESPN game ID (used for both NBA and NFL)
     event_time: datetime  # When the game starts
     scheduled_start_time: datetime  # When to launch trial
     pre_start_hours: float
@@ -178,7 +178,7 @@ class ScheduledTrial:
             "scenario_name": self.scenario_name,
             "scenario_config": self.scenario_config,
             "sport_type": self.sport_type,
-            "event_id": self.event_id,
+            "game_id": self.game_id,
             "event_time": self.event_time.isoformat(),
             "scheduled_start_time": self.scheduled_start_time.isoformat(),
             "pre_start_hours": self.pre_start_hours,
@@ -210,7 +210,7 @@ class ScheduledTrial:
             scenario_name=data["scenario_name"],
             scenario_config=data.get("scenario_config", {}),
             sport_type=data["sport_type"],
-            event_id=data["event_id"],
+            game_id=data.get("game_id") or data.get("event_id", ""),
             event_time=parser.parse(data["event_time"]),
             scheduled_start_time=parser.parse(data["scheduled_start_time"]),
             pre_start_hours=data.get("pre_start_hours", 2.0),
@@ -364,8 +364,8 @@ class ScheduleManager:
         # All trial sources by ID
         self._sources: dict[str, TrialSource] = {}
 
-        # Track which event IDs have been scheduled for each source
-        # Key: (source_id, event_id), Value: schedule_id
+        # Track which game IDs have been scheduled for each source
+        # Key: (source_id, game_id), Value: schedule_id
         self._scheduled_events: dict[tuple[str, str], str] = {}
 
         # Semaphore to limit concurrent trial launches
@@ -404,7 +404,7 @@ class ScheduleManager:
                 ):
                     source_id = s.metadata.get("source_id")
                     if source_id:
-                        self._scheduled_events[(source_id, s.event_id)] = s.schedule_id
+                        self._scheduled_events[(source_id, s.game_id)] = s.schedule_id
 
         # Start background tasks
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
@@ -451,7 +451,7 @@ class ScheduleManager:
         scenario_name: str,
         scenario_config: dict[str, Any],
         sport_type: str,
-        event_id: str,
+        game_id: str,
         event_time: datetime,
         pre_start_hours: float = 2.0,
         check_interval_seconds: float = 60.0,
@@ -464,7 +464,7 @@ class ScheduleManager:
             scenario_name: Name of the trial builder
             scenario_config: Configuration for the scenario
             sport_type: "nba" or "nfl"
-            event_id: Game ID or ESPN event ID
+            game_id: ESPN game ID
             event_time: When the game starts (UTC)
             pre_start_hours: Hours before game to start trial
             check_interval_seconds: Interval to check game status
@@ -478,9 +478,9 @@ class ScheduleManager:
         scheduled_start_time = event_time - timedelta(hours=pre_start_hours)
 
         # Generate schedule ID
-        hash_input = f"{sport_type}-{event_id}-{datetime.now(timezone.utc).isoformat()}"
+        hash_input = f"{sport_type}-{game_id}-{datetime.now(timezone.utc).isoformat()}"
         hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        schedule_id = f"sched-{sport_type}-{event_id}-{hash_suffix}"
+        schedule_id = f"sched-{sport_type}-{game_id}-{hash_suffix}"
 
         # Extract game_date from event_time in US Eastern time
         game_date = utc_to_us_date(event_time)
@@ -490,7 +490,7 @@ class ScheduleManager:
             scenario_name=scenario_name,
             scenario_config=scenario_config,
             sport_type=sport_type,
-            event_id=event_id,
+            game_id=game_id,
             event_time=event_time,
             scheduled_start_time=scheduled_start_time,
             pre_start_hours=pre_start_hours,
@@ -507,7 +507,7 @@ class ScheduleManager:
             "Scheduled trial '%s' for %s game %s (start: %s)",
             schedule_id,
             sport_type,
-            event_id,
+            game_id,
             scheduled_start_time,
         )
 
@@ -565,21 +565,21 @@ class ScheduleManager:
         scheduled_trials: list[ScheduledTrial] = []
         for game in games:
             if game.game_time_utc is None:
-                LOGGER.warning("Skipping game %s without game time", game.event_id)
+                LOGGER.warning("Skipping game %s without game time", game.game_id)
                 continue
 
             # Build config for this game
             config = dict(scenario_config or {})
 
             # Add game-specific config (both NBA and NFL use espn_game_id)
-            config["espn_game_id"] = game.event_id
+            config["espn_game_id"] = game.game_id
 
             # Add data_dir to hub config if specified
             if data_dir:
                 game_date = utc_to_us_date(game.game_time_utc)
                 if "hub" not in config:
                     config["hub"] = {}
-                persistence_file = f"{data_dir}/{game_date}/{game.event_id}.jsonl"
+                persistence_file = f"{data_dir}/{game_date}/{game.game_id}.jsonl"
                 config["hub"]["persistence_file"] = persistence_file
 
             # Add game info to metadata using typed structure
@@ -600,7 +600,7 @@ class ScheduleManager:
                     scenario_name=scenario_name,
                     scenario_config=config,
                     sport_type=sport_type,
-                    event_id=game.event_id,
+                    game_id=game.game_id,
                     event_time=game.game_time_utc,
                     pre_start_hours=pre_start_hours,
                     check_interval_seconds=check_interval_seconds,
@@ -611,7 +611,7 @@ class ScheduleManager:
                 if scheduled:
                     scheduled_trials.append(scheduled)
             except Exception as e:
-                LOGGER.error("Failed to schedule game %s: %s", game.event_id, e)
+                LOGGER.error("Failed to schedule game %s: %s", game.game_id, e)
 
         LOGGER.info(
             "Batch scheduled %d trials for %s",
@@ -698,7 +698,7 @@ class ScheduleManager:
             # Remove from tracking
             source_id = scheduled.metadata.get("source_id")
             if source_id:
-                self._scheduled_events.pop((source_id, scheduled.event_id), None)
+                self._scheduled_events.pop((source_id, scheduled.game_id), None)
 
             del self._schedules[schedule_id]
             count += 1
@@ -855,7 +855,7 @@ class ScheduleManager:
             if "postponed" in status_text_lower:
                 LOGGER.debug(
                     "Skipping postponed game %s (%s): %s",
-                    game.event_id,
+                    game.game_id,
                     game.short_name,
                     game.status_text,
                 )
@@ -863,21 +863,21 @@ class ScheduleManager:
             if "canceled" in status_text_lower or "cancelled" in status_text_lower:
                 LOGGER.debug(
                     "Skipping cancelled game %s (%s): %s",
-                    game.event_id,
+                    game.game_id,
                     game.short_name,
                     game.status_text,
                 )
                 continue
 
             # Skip if already scheduled for this source
-            if (source.source_id, game.event_id) in self._scheduled_events:
+            if (source.source_id, game.game_id) in self._scheduled_events:
                 continue
 
             # Build config for this game
             game_config = dict(config.scenario_config)
 
             # Add game-specific config (both NBA and NFL use espn_game_id)
-            game_config["espn_game_id"] = game.event_id
+            game_config["espn_game_id"] = game.game_id
 
             # Convert game time to US Eastern date for consistent date handling
             game_date = utc_to_us_date(game.game_time_utc)
@@ -886,9 +886,7 @@ class ScheduleManager:
             if config.data_dir:
                 if "hub" not in game_config:
                     game_config["hub"] = {}
-                persistence_file = (
-                    f"{config.data_dir}/{game_date}/{game.event_id}.jsonl"
-                )
+                persistence_file = f"{config.data_dir}/{game_date}/{game.game_id}.jsonl"
                 game_config["hub"]["persistence_file"] = persistence_file
 
             # Metadata for the trial using typed structure
@@ -907,7 +905,7 @@ class ScheduleManager:
                     scenario_name=config.scenario_name,
                     scenario_config=game_config,
                     sport_type=source.sport_type,
-                    event_id=game.event_id,
+                    game_id=game.game_id,
                     event_time=game.game_time_utc,
                     pre_start_hours=config.pre_start_hours,
                     check_interval_seconds=config.check_interval_seconds,
@@ -915,8 +913,8 @@ class ScheduleManager:
                     metadata=dict(trial_metadata),
                 )
 
-                # Track this event as scheduled for this source
-                self._scheduled_events[(source.source_id, game.event_id)] = schedule_id
+                # Track this game as scheduled for this source
+                self._scheduled_events[(source.source_id, game.game_id)] = schedule_id
 
                 scheduled = self._schedules.get(schedule_id)
                 if scheduled:
@@ -925,7 +923,7 @@ class ScheduleManager:
             except Exception as e:
                 LOGGER.error(
                     "Failed to schedule game %s for source %s: %s",
-                    game.event_id,
+                    game.game_id,
                     source.source_id,
                     e,
                 )
@@ -1103,7 +1101,7 @@ class ScheduleManager:
                                 "Game %s (schedule %s) was already finished at "
                                 "monitoring start. Will allow %.0f second grace "
                                 "period for data processing.",
-                                scheduled.event_id,
+                                scheduled.game_id,
                                 scheduled.schedule_id,
                                 self._grace_period_seconds,
                             )
@@ -1123,7 +1121,7 @@ class ScheduleManager:
                         LOGGER.warning(
                             "Game %s (schedule %s) has been %s (%s). "
                             "Stopping trial immediately.",
-                            scheduled.event_id,
+                            scheduled.game_id,
                             scheduled.schedule_id,
                             state_str,
                             status_text,
@@ -1144,7 +1142,7 @@ class ScheduleManager:
                                 LOGGER.info(
                                     "Game %s (schedule %s) was already finished; "
                                     "grace period (%.0fs) elapsed. Stopping trial.",
-                                    scheduled.event_id,
+                                    scheduled.game_id,
                                     scheduled.schedule_id,
                                     self._grace_period_seconds,
                                 )
@@ -1154,7 +1152,7 @@ class ScheduleManager:
                                 LOGGER.debug(
                                     "Game %s already finished; %.0fs remaining "
                                     "in grace period",
-                                    scheduled.event_id,
+                                    scheduled.game_id,
                                     remaining,
                                 )
                         else:
@@ -1162,7 +1160,7 @@ class ScheduleManager:
                             # Stop immediately
                             LOGGER.info(
                                 "Game %s finished for schedule %s, stopping trial",
-                                scheduled.event_id,
+                                scheduled.game_id,
                                 scheduled.schedule_id,
                             )
                             await self._stop_trial(scheduled)
@@ -1199,9 +1197,9 @@ class ScheduleManager:
                 return
 
             # Generate trial ID
-            hash_input = f"{scheduled.sport_type}-{scheduled.event_id}-{datetime.now(timezone.utc).isoformat()}"
+            hash_input = f"{scheduled.sport_type}-{scheduled.game_id}-{datetime.now(timezone.utc).isoformat()}"
             hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-            trial_id = f"{scheduled.sport_type}-game-{scheduled.event_id}-{hash_suffix}"
+            trial_id = f"{scheduled.sport_type}-game-{scheduled.game_id}-{hash_suffix}"
 
             # Build trial spec - uses build_async which handles both sync and async builders
             try:
@@ -1257,12 +1255,12 @@ class ScheduleManager:
         try:
             if scheduled.sport_type == "nba":
                 return await self._nba_fetcher.get_game_status_info(
-                    scheduled.event_id,
+                    scheduled.game_id,
                     scheduled.game_date,
                 )
             elif scheduled.sport_type == "nfl":
                 return await self._nfl_fetcher.get_game_status_info(
-                    scheduled.event_id,
+                    scheduled.game_id,
                     scheduled.game_date,
                 )
             else:
@@ -1275,7 +1273,7 @@ class ScheduleManager:
             LOGGER.error(
                 "Failed to get game status for %s (event %s, sport %s): %s",
                 scheduled.schedule_id,
-                scheduled.event_id,
+                scheduled.game_id,
                 scheduled.sport_type,
                 e,
                 exc_info=True,

@@ -57,7 +57,7 @@ class GameInitializeEvent(DataEvent):
     when OddsUpdateEvent arrives.
     """
 
-    event_id: str = field(default="")  # ESPN event ID
+    game_id: str = field(default="")  # ESPN event ID for the game
     home_team: str = field(default="")  # Full team name (e.g., "New York Knicks")
     away_team: str = field(default="")  # Full team name (e.g., "San Antonio Spurs")
     game_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -72,7 +72,7 @@ class GameInitializeEvent(DataEvent):
 class GameStartEvent(DataEvent):
     """Game start event signaling transition from pregame to live."""
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
 
     @property
     def event_type(self) -> str:
@@ -84,7 +84,7 @@ class GameStartEvent(DataEvent):
 class GameResultEvent(DataEvent):
     """Game result event with winner and final score."""
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
     winner: str = field(default="")  # "home" or "away"
     final_score: dict[str, int] = field(
         default_factory=dict
@@ -253,7 +253,7 @@ class GameUpdateEvent(DataEvent):
     Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay.
     """
 
-    event_id: str = field(default="")  # ESPN event ID
+    game_id: str = field(default="")  # ESPN event ID for the game
     period: int = field(default=0)
     game_clock: str = field(default="")
     game_time_utc: str = field(default="")  # ISO format datetime string

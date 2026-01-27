@@ -76,12 +76,12 @@ async def test_agent_receives_event_and_places_bet(
     )
 
     # Simulate DataStream sending match data
-    event_id = nba_game_init_data["event_id"]
+    game_id = nba_game_init_data["game_id"]
     event_list = [
         StreamEvent(
             stream_id="nba-stream",
             payload={
-                "event_id": event_id,
+                "game_id": game_id,
                 "home_team": "Lakers",
                 "away_team": "Warriors",
                 "home_odds": "1.85",
@@ -92,7 +92,7 @@ async def test_agent_receives_event_and_places_bet(
         StreamEvent(
             stream_id="nba-stream",
             payload={
-                "event_id": event_id,
+                "game_id": game_id,
                 "new market stats": "other Agent bet on away_odds. You MUST ADD more bets.",
             },
             sequence=1,
@@ -103,7 +103,7 @@ async def test_agent_receives_event_and_places_bet(
         await agent.handle_stream_event(event)
 
     game_result_event = GameResultEvent(
-        event_id=event_id,
+        game_id=game_id,
         winner="home",
         final_score={"home": 110, "away": 105},
     )
@@ -242,12 +242,12 @@ async def test_agent_with_ray_runtime(
     )
 
     # Simulate DataStream sending match data
-    event_id = nba_game_init_data["event_id"]
+    game_id = nba_game_init_data["game_id"]
     event_list = [
         StreamEvent(
             stream_id="nba-stream",
             payload={
-                "event_id": event_id,
+                "game_id": game_id,
                 "home_team": "Lakers",
                 "away_team": "Warriors",
                 "home_odds": "1.85",
@@ -258,7 +258,7 @@ async def test_agent_with_ray_runtime(
         StreamEvent(
             stream_id="nba-stream",
             payload={
-                "event_id": event_id,
+                "game_id": game_id,
                 "new market stats": "other Agent bet on away_odds. You MUST ADD more bets.",
             },
             sequence=1,
@@ -270,7 +270,7 @@ async def test_agent_with_ray_runtime(
         await agent_handler.instance.handle_stream_event(event)  # type: ignore[attr-defined]
 
     game_result_event = GameResultEvent(
-        event_id=event_id,
+        game_id=game_id,
         winner="home",
         final_score={"home": 110, "away": 105},
     )

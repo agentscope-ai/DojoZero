@@ -65,18 +65,18 @@ def trial_id() -> str:
 
 
 @pytest.fixture
-def test_event_id() -> str:
-    """Default event ID for tests."""
+def test_game_id() -> str:
+    """Default game ID for tests."""
     return "test_game_2024"
 
 
 @pytest.fixture
-def nba_game_init_data(test_event_id):
+def nba_game_init_data(test_game_id):
     """NBA game initialization data."""
     from datetime import datetime
 
     return {
-        "event_id": test_event_id,
+        "game_id": test_game_id,
         "home_team": "Lakers",
         "away_team": "Warriors",
         "game_time": datetime.now(),
@@ -84,22 +84,22 @@ def nba_game_init_data(test_event_id):
 
 
 @pytest.fixture
-def nba_odds_data(test_event_id):
+def nba_odds_data(test_game_id):
     """NBA odds update data."""
     return {
-        "event_id": test_event_id,
+        "game_id": test_game_id,
         "home_odds": 1.85,
         "away_odds": 2.10,
     }
 
 
 @pytest.fixture
-def nfl_game_init_data(test_event_id):
+def nfl_game_init_data(test_game_id):
     """NFL game initialization data."""
     from datetime import datetime
 
     return {
-        "event_id": test_event_id,
+        "game_id": test_game_id,
         "home_team": "Baltimore Ravens",
         "away_team": "Kansas City Chiefs",
         "home_team_abbreviation": "BAL",
@@ -111,10 +111,10 @@ def nfl_game_init_data(test_event_id):
 
 
 @pytest.fixture
-def nfl_odds_data(test_event_id):
+def nfl_odds_data(test_game_id):
     """NFL odds update data."""
     return {
-        "event_id": test_event_id,
+        "game_id": test_game_id,
         "provider": "Draft Kings",
         "moneyline_home": -150,
         "moneyline_away": 130,

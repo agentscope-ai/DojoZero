@@ -152,7 +152,7 @@ async def test_polymarket_store_logic(market_url: str):
         for event in events:
             if isinstance(event, OddsUpdateEvent):
                 print("  - OddsUpdateEvent:")
-                print(f"    Event ID: {event.event_id}")
+                print(f"    Game ID: {event.game_id}")
                 print(
                     f"    Home Odds: {event.home_odds:.4f} (from prob: {event.home_probability:.4f})"
                 )
@@ -196,7 +196,7 @@ async def test_polymarket_store_logic(market_url: str):
     for event in parsed_events:
         if isinstance(event, OddsUpdateEvent):
             print("  - OddsUpdateEvent:")
-            print(f"    Event ID: {event.event_id}")
+            print(f"    Game ID: {event.game_id}")
             print(
                 f"    Home Odds: {event.home_odds:.4f} (from prob: {event.home_probability:.4f})"
             )
@@ -232,13 +232,13 @@ async def test_polymarket_store_logic(market_url: str):
 
             if odds_event:
                 # Initialize event in broker via GameInitializeEvent
-                test_event_id = odds_event.event_id or "test_event"  # type: ignore[attr-defined]
+                test_game_id = odds_event.game_id or "test_game"  # type: ignore[attr-defined]
 
                 # Create and send GameInitializeEvent
                 game_init_event = StreamEvent(
-                    stream_id=f"game_init_{test_event_id}",
+                    stream_id=f"game_init_{test_game_id}",
                     payload=GameInitializeEvent(
-                        event_id=test_event_id,
+                        game_id=test_game_id,
                         home_team="Test Home",
                         away_team="Test Away",
                         game_time=datetime.now(),
@@ -247,12 +247,12 @@ async def test_polymarket_store_logic(market_url: str):
                 )
                 await broker.handle_stream_event(game_init_event)
                 print(
-                    f"✓ Initialized event {test_event_id} in broker via GameInitializeEvent"
+                    f"✓ Initialized event {test_game_id} in broker via GameInitializeEvent"
                 )
 
                 # Create StreamEvent and test broker handling
                 stream_event = StreamEvent(
-                    stream_id=f"odds_update_{test_event_id}",
+                    stream_id=f"odds_update_{test_game_id}",
                     payload=odds_event,
                     emitted_at=datetime.now(),
                 )

@@ -31,7 +31,7 @@ class TestScheduledTrial:
             scenario_name="nba-moneyline",
             scenario_config={"game_id": "001"},
             sport_type="nba",
-            event_id="001",
+            game_id="001",
             event_time=event_time,
             scheduled_start_time=start_time,
             pre_start_hours=2.0,
@@ -46,7 +46,7 @@ class TestScheduledTrial:
         assert d["schedule_id"] == "sched-nba-001-abc123"
         assert d["scenario_name"] == "nba-moneyline"
         assert d["sport_type"] == "nba"
-        assert d["event_id"] == "001"
+        assert d["game_id"] == "001"
         assert d["phase"] == "waiting"
         assert d["pre_start_hours"] == 2.0
         assert d["check_interval_seconds"] == 60.0
@@ -100,7 +100,7 @@ class TestFileSchedulerStore:
                 scenario_name="test-scenario",
                 scenario_config={"key": "value"},
                 sport_type="nba",
-                event_id="001",
+                game_id="001",
                 event_time=event_time,
                 scheduled_start_time=start_time,
                 pre_start_hours=2.0,
@@ -140,7 +140,7 @@ class TestFileSchedulerStore:
                 scenario_name="test",
                 scenario_config={},
                 sport_type="nba",
-                event_id="001",
+                game_id="001",
                 event_time=now,
                 scheduled_start_time=now,
                 pre_start_hours=2.0,
@@ -183,7 +183,7 @@ class TestScheduleManager:
                 scenario_name="nba-moneyline",
                 scenario_config={"game_id": "001"},
                 sport_type="nba",
-                event_id="001",
+                game_id="001",
                 event_time=event_time,
                 pre_start_hours=2.0,
                 check_interval_seconds=60.0,
@@ -210,7 +210,7 @@ class TestScheduleManager:
             scenario_name="nba-moneyline",
             scenario_config={},
             sport_type="nba",
-            event_id="001",
+            game_id="001",
             event_time=event_time,
         )
 
@@ -249,14 +249,14 @@ class TestScheduleManager:
             scenario_name="nba-moneyline",
             scenario_config={},
             sport_type="nba",
-            event_id="001",
+            game_id="001",
             event_time=now + timedelta(hours=3),
         )
         await scheduler.schedule_trial(
             scenario_name="nba-moneyline",
             scenario_config={},
             sport_type="nba",
-            event_id="002",
+            game_id="002",
             event_time=now + timedelta(hours=4),
         )
 
@@ -278,7 +278,7 @@ class TestScheduleManager:
                 scenario_name="test",
                 scenario_config={},
                 sport_type="nba",
-                event_id="001",
+                game_id="001",
                 event_time=event_time,
                 scheduled_start_time=event_time - timedelta(hours=2),
                 pre_start_hours=2.0,
@@ -316,7 +316,7 @@ class TestScheduleManager:
                 scenario_name="test",
                 scenario_config={},
                 sport_type="nba",
-                event_id="001",
+                game_id="001",
                 event_time=now,
                 scheduled_start_time=now,
                 pre_start_hours=2.0,
@@ -678,7 +678,7 @@ class TestScheduleManagerConcurrencyAndGracePeriod:
             scenario_name="nba-moneyline",
             scenario_config={"game_id": "001"},
             sport_type="nba",
-            event_id="001",
+            game_id="001",
             event_time=event_time,
             scheduled_start_time=start_time,
             pre_start_hours=2.0,
@@ -736,7 +736,7 @@ class TestScheduleManagerConcurrencyAndGracePeriod:
             scenario_name="nba-moneyline",
             scenario_config={"game_id": "001"},
             sport_type="nba",
-            event_id="001",
+            game_id="001",
             event_time=event_time,
             scheduled_start_time=start_time,
             pre_start_hours=2.0,

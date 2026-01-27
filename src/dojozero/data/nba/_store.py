@@ -119,7 +119,7 @@ class NBAStore(DataStore):
                             events.append(
                                 GameInitializeEvent(
                                     timestamp=timestamp,
-                                    event_id=game_id,
+                                    game_id=game_id,
                                     home_team=home_team_str,
                                     away_team=away_team_str,
                                     game_time=game_time_dt,
@@ -156,7 +156,7 @@ class NBAStore(DataStore):
                 events.append(
                     GameUpdateEvent(
                         timestamp=timestamp,
-                        event_id=game_id,
+                        game_id=game_id,
                         period=0,  # BoxScore doesn't provide period info
                         game_clock="",  # BoxScore doesn't provide clock info
                         game_time_utc="",  # BoxScore doesn't provide game time
@@ -223,7 +223,7 @@ class NBAStore(DataStore):
                         events.append(
                             GameInitializeEvent(
                                 timestamp=timestamp,
-                                event_id=game_id,
+                                game_id=game_id,
                                 home_team=home_team_str,
                                 away_team=away_team_str,
                                 game_time=game_time_dt,
@@ -254,7 +254,7 @@ class NBAStore(DataStore):
                     events.append(
                         GameStartEvent(
                             timestamp=datetime.now(timezone.utc),
-                            event_id=game_id,
+                            game_id=game_id,
                         )
                     )
                     self._state.set_previous_status(game_id, 2)  # In Progress
@@ -286,7 +286,7 @@ class NBAStore(DataStore):
                         events.append(
                             GameResultEvent(
                                 timestamp=datetime.now(timezone.utc),
-                                event_id=game_id,
+                                game_id=game_id,
                                 winner=winner,
                                 final_score={"home": home_score, "away": away_score},
                             )

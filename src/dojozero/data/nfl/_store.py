@@ -175,7 +175,7 @@ class NFLStore(DataStore):
                 events.append(
                     NFLGameInitializeEvent(
                         timestamp=timestamp,
-                        event_id=event_id,
+                        game_id=event_id,
                         home_team=home_team_info.get("displayName", ""),
                         away_team=away_team_info.get("displayName", ""),
                         home_team_id=str(home_team_info.get("id", "")),
@@ -208,7 +208,7 @@ class NFLStore(DataStore):
                     events.append(
                         NFLOddsUpdateEvent(
                             timestamp=timestamp,
-                            event_id=event_id,
+                            game_id=event_id,
                             provider=provider,
                             spread=spread,
                             spread_odds_home=int(
@@ -244,7 +244,7 @@ class NFLStore(DataStore):
                     events.append(
                         NFLGameStartEvent(
                             timestamp=timestamp,
-                            event_id=event_id,
+                            game_id=event_id,
                         )
                     )
 
@@ -263,7 +263,7 @@ class NFLStore(DataStore):
                     events.append(
                         NFLGameResultEvent(
                             timestamp=timestamp,
-                            event_id=event_id,
+                            game_id=event_id,
                             winner=winner,
                             final_score={"home": home_score, "away": away_score},
                             home_team=home_team_info.get("displayName", ""),
@@ -372,7 +372,7 @@ class NFLStore(DataStore):
                     events.append(
                         NFLGameUpdateEvent(
                             timestamp=timestamp,
-                            event_id=event_id,
+                            game_id=event_id,
                             quarter=quarter,
                             game_clock=game_clock,
                             possession=possession_team,
@@ -424,7 +424,7 @@ class NFLStore(DataStore):
         events.append(
             NFLDriveEvent(
                 timestamp=timestamp,
-                event_id=event_id,
+                game_id=event_id,
                 drive_id=drive_id,
                 drive_number=len(
                     [
@@ -484,7 +484,7 @@ class NFLStore(DataStore):
             events.append(
                 NFLGameStartEvent(
                     timestamp=timestamp,
-                    event_id=event_id,
+                    game_id=event_id,
                 )
             )
             self._state.mark_game_started(event_id)
@@ -534,7 +534,7 @@ class NFLStore(DataStore):
             events.append(
                 NFLPlayEvent(
                     timestamp=timestamp,
-                    event_id=event_id,
+                    game_id=event_id,
                     play_id=play_id,
                     sequence_number=int(play.get("sequenceNumber", 0) or 0),
                     quarter=quarter,

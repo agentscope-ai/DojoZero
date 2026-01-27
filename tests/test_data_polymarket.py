@@ -201,7 +201,7 @@ class TestPolymarketStoreParseResponse:
 
         assert len(events) == 1
         assert isinstance(events[0], OddsUpdateEvent)
-        assert events[0].event_id == "401810490"
+        assert events[0].game_id == "401810490"
 
     def test_parse_odds_update_falls_back_to_api_data_without_identifier(
         self, polymarket_store
@@ -220,7 +220,7 @@ class TestPolymarketStoreParseResponse:
         events = polymarket_store._parse_api_response(data, identifier=None)
 
         assert len(events) == 1
-        assert events[0].event_id == "api_event_id"
+        assert events[0].game_id == "api_event_id"
 
     def test_parse_odds_update_falls_back_to_market_id(self, polymarket_store):
         """Test that parsing falls back to market_id when event_id not in API data."""
@@ -237,7 +237,7 @@ class TestPolymarketStoreParseResponse:
         events = polymarket_store._parse_api_response(data, identifier=None)
 
         assert len(events) == 1
-        assert events[0].event_id == "market_123"
+        assert events[0].game_id == "market_123"
 
     def test_parse_odds_update_extracts_probabilities(self, polymarket_store):
         """Test that odds and probabilities are correctly extracted."""
@@ -411,7 +411,7 @@ class TestMetadataFlow:
             }
         }
         events = store._parse_api_response(data, identifier=store._poll_identifier)
-        assert events[0].event_id == "401810490"
+        assert events[0].game_id == "401810490"
         assert events[0].home_tricode == "LAL"
         assert events[0].away_tricode == "BOS"
 
@@ -443,7 +443,7 @@ class TestMetadataFlow:
             }
         }
         events = store._parse_api_response(data, identifier=store._poll_identifier)
-        assert events[0].event_id == "401671827"
+        assert events[0].game_id == "401671827"
         assert events[0].home_tricode == "KC"
         assert events[0].away_tricode == "SF"
 
