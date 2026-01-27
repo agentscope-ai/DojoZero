@@ -104,10 +104,16 @@ class PolymarketStore(DataStore):
                 # Fallback to API response data
                 event_id = odds_data.get("event_id") or odds_data.get("market_id", "")
 
+            # Extract tricodes from identifier (set by trial metadata)
+            home_tricode = identifier.get("home_tricode", "") if identifier else ""
+            away_tricode = identifier.get("away_tricode", "") if identifier else ""
+
             events.append(
                 OddsUpdateEvent(
                     timestamp=timestamp,
                     event_id=event_id,
+                    home_tricode=home_tricode,
+                    away_tricode=away_tricode,
                     home_odds=float(odds_data.get("home_odds", 1.0)),
                     away_odds=float(odds_data.get("away_odds", 1.0)),
                     home_probability=float(odds_data.get("home_probability", 0.0)),

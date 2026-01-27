@@ -260,6 +260,72 @@ class TestPolymarketStoreParseResponse:
         assert event.home_probability == 0.6
         assert event.away_probability == 0.4
 
+    def test_parse_odds_update_extracts_tricodes_from_identifier(
+        self, polymarket_store
+    ):
+        """Test that tricodes are extracted from identifier."""
+        data = {
+            "odds_update": {
+                "home_odds": 1.5,
+                "away_odds": 2.5,
+                "home_probability": 0.6,
+                "away_probability": 0.4,
+            }
+        }
+        identifier = {
+            "espn_game_id": "401810490",
+            "home_tricode": "LAL",
+            "away_tricode": "BOS",
+        }
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.home_tricode == "LAL"
+        assert event.away_tricode == "BOS"
+
+    def test_parse_odds_update_empty_tricodes_without_identifier(
+        self, polymarket_store
+    ):
+        """Test that tricodes are empty when identifier not provided."""
+        data = {
+            "odds_update": {
+                "home_odds": 1.5,
+                "away_odds": 2.5,
+                "home_probability": 0.6,
+                "away_probability": 0.4,
+            }
+        }
+
+        events = polymarket_store._parse_api_response(data, identifier=None)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.home_tricode == ""
+        assert event.away_tricode == ""
+
+    def test_parse_odds_update_empty_tricodes_when_missing_from_identifier(
+        self, polymarket_store
+    ):
+        """Test that tricodes are empty when not in identifier."""
+        data = {
+            "odds_update": {
+                "home_odds": 1.5,
+                "away_odds": 2.5,
+                "home_probability": 0.6,
+                "away_probability": 0.4,
+            }
+        }
+        identifier = {"espn_game_id": "401810490"}  # No tricodes
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.home_tricode == ""
+        assert event.away_tricode == ""
+
     def test_parse_empty_data_returns_empty_list(self, polymarket_store):
         """Test that empty data returns empty event list."""
         events = polymarket_store._parse_api_response({}, identifier=None)
@@ -335,7 +401,7 @@ class TestMetadataFlow:
         assert store._poll_identifier["away_tricode"] == "BOS"
         assert store._poll_identifier["game_date"] == "2025-01-15"
 
-        # Verify event parsing uses espn_game_id
+        # Verify event parsing uses espn_game_id and tricodes
         data = {
             "odds_update": {
                 "home_probability": 0.55,
@@ -346,6 +412,8 @@ class TestMetadataFlow:
         }
         events = store._parse_api_response(data, identifier=store._poll_identifier)
         assert events[0].event_id == "401810490"
+        assert events[0].home_tricode == "LAL"
+        assert events[0].away_tricode == "BOS"
 
     def test_full_metadata_flow_nfl(self, factory, mock_hub):
         """Test complete metadata flow for NFL trial."""
@@ -362,8 +430,10 @@ class TestMetadataFlow:
         # Verify store configuration
         assert store._sport == "nfl"
         assert store._poll_identifier["espn_game_id"] == "401671827"
+        assert store._poll_identifier["home_tricode"] == "KC"
+        assert store._poll_identifier["away_tricode"] == "SF"
 
-        # Verify event parsing uses espn_game_id
+        # Verify event parsing uses espn_game_id and tricodes
         data = {
             "odds_update": {
                 "home_probability": 0.52,
@@ -374,6 +444,8 @@ class TestMetadataFlow:
         }
         events = store._parse_api_response(data, identifier=store._poll_identifier)
         assert events[0].event_id == "401671827"
+        assert events[0].home_tricode == "KC"
+        assert events[0].away_tricode == "SF"
 
 
 # =============================================================================
