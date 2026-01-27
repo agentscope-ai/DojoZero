@@ -78,7 +78,7 @@ class DataStreamBase(ActorBase, ABC):
     async def _publish(self, event: StreamEvent[Any]) -> None:
         """Publish a stream event to all registered consumers.
 
-        Note: Span emission is handled by DataHub._emit_event_span() when the
+        Note: Span emission is handled externally when the
         event is received from the store. We don't emit here to avoid duplicates.
         """
         if not self._consumer_registry:
