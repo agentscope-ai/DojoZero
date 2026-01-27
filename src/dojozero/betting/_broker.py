@@ -9,20 +9,19 @@ This module implements a generic betting broker operator that manages:
 This broker is sport-agnostic and can be used for NBA, NFL, or any other sports betting.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, Literal, Optional, Union, cast
 
 import asyncio
-import json
 import logging
 import uuid
 from collections import defaultdict
 from typing import List, Sequence, Set, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from dojozero.core import (
     RuntimeContext,
@@ -102,8 +101,7 @@ class BetType(Enum):
 # =============================================================================
 
 
-@dataclass
-class Account:
+class Account(BaseModel):
     """Agent account information"""
 
     agent_id: str
@@ -112,6 +110,7 @@ class Account:
     last_updated: datetime
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization (backward compatibility)."""
         return {
             "agent_id": self.agent_id,
             "balance": str(self.balance),
@@ -121,6 +120,7 @@ class Account:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Account":
+        """Create from dictionary (backward compatibility)."""
         return cls(
             agent_id=data["agent_id"],
             balance=Decimal(data["balance"]),
@@ -134,8 +134,7 @@ class Account:
 # =============================================================================
 
 
-@dataclass
-class BettingEvent:
+class BettingEvent(BaseModel):
     """Betting event (e.g., a sports game)"""
 
     event_id: str
@@ -143,16 +142,20 @@ class BettingEvent:
     away_team: str
     game_time: datetime
     status: EventStatus
-    home_odds: Optional[Decimal] = (
-        None  # Can be None initially, filled in when odds arrive
+    home_odds: Optional[Decimal] = Field(
+        default=None, description="Can be None initially, filled in when odds arrive"
     )
-    away_odds: Optional[Decimal] = (
-        None  # Can be None initially, filled in when odds arrive
+    away_odds: Optional[Decimal] = Field(
+        default=None, description="Can be None initially, filled in when odds arrive"
     )
     # Multiple spreads: spread_value -> {home_odds, away_odds}
-    spread_lines: Dict[Decimal, Dict[str, Decimal]] = field(default_factory=dict)
+    spread_lines: Dict[Decimal, Dict[str, Decimal]] = Field(
+        default_factory=dict, description="Spread betting lines"
+    )
     # Multiple totals: total_value -> {over_odds, under_odds}
-    total_lines: Dict[Decimal, Dict[str, Decimal]] = field(default_factory=dict)
+    total_lines: Dict[Decimal, Dict[str, Decimal]] = Field(
+        default_factory=dict, description="Total (over/under) betting lines"
+    )
     last_odds_update: Optional[datetime] = None
     betting_closed_at: Optional[datetime] = None
 
@@ -341,8 +344,7 @@ BetRequest = Union[BetRequestMoneyline, BetRequestSpread, BetRequestTotal]
 # =============================================================================
 
 
-@dataclass
-class Bet:
+class Bet(BaseModel):
     """Bet record"""
 
     bet_id: str
@@ -352,14 +354,15 @@ class Bet:
     selection: str
     odds: Decimal  # Actual execution odds
     order_type: OrderType
-    limit_odds: Optional[Decimal]  # None for market orders
+    limit_odds: Optional[Decimal] = None  # None for market orders
     betting_phase: BettingPhase
     create_time: datetime
-    execution_time: Optional[datetime]  # None until executed
+    execution_time: Optional[datetime] = None  # None until executed
     status: BetStatus
-    bet_type: BetType = (
-        BetType.MONEYLINE
-    )  # Default to moneyline for backward compatibility
+    bet_type: BetType = Field(
+        default=BetType.MONEYLINE,
+        description="Type of bet (default: MONEYLINE for backward compatibility)",
+    )
     spread_value: Optional[Decimal] = None  # For SPREAD bets
     total_value: Optional[Decimal] = None  # For TOTAL bets
     actual_payout: Optional[Decimal] = None
@@ -367,6 +370,7 @@ class Bet:
     settlement_time: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization (backward compatibility)."""
         return {
             "bet_id": self.bet_id,
             "agent_id": self.agent_id,
@@ -394,6 +398,7 @@ class Bet:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Bet":
+        """Create from dictionary (backward compatibility)."""
         return cls(
             bet_id=data["bet_id"],
             agent_id=data["agent_id"],
@@ -402,7 +407,7 @@ class Bet:
             selection=data["selection"],
             odds=Decimal(data["odds"]),
             order_type=OrderType(data["order_type"]),
-            limit_odds=Decimal(data["limit_odds"]) if data["limit_odds"] else None,
+            limit_odds=Decimal(data["limit_odds"]) if data.get("limit_odds") else None,
             betting_phase=BettingPhase(data["betting_phase"]),
             bet_type=BetType(
                 data.get("bet_type", "MONEYLINE")
@@ -416,17 +421,17 @@ class Bet:
             create_time=datetime.fromisoformat(data["create_time"]),
             execution_time=(
                 datetime.fromisoformat(data["execution_time"])
-                if data["execution_time"]
+                if data.get("execution_time")
                 else None
             ),
             status=BetStatus(data["status"]),
             actual_payout=(
-                Decimal(data["actual_payout"]) if data["actual_payout"] else None
+                Decimal(data["actual_payout"]) if data.get("actual_payout") else None
             ),
-            outcome=BetOutcome(data["outcome"]) if data["outcome"] else None,
+            outcome=BetOutcome(data["outcome"]) if data.get("outcome") else None,
             settlement_time=(
                 datetime.fromisoformat(data["settlement_time"])
-                if data["settlement_time"]
+                if data.get("settlement_time")
                 else None
             ),
         )
@@ -458,8 +463,7 @@ class BetSettledPayload:
 # =============================================================================
 
 
-@dataclass
-class Statistics:
+class Statistics(BaseModel):
     """Agent performance statistics"""
 
     total_bets: int
@@ -471,6 +475,7 @@ class Statistics:
     roi: float
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization (backward compatibility)."""
         return {
             "total_bets": self.total_bets,
             "total_wagered": str(self.total_wagered),
@@ -480,123 +485,6 @@ class Statistics:
             "net_profit": str(self.net_profit),
             "roi": self.roi,
         }
-
-
-# =============================================================================
-# Pydantic Model for Broker State Update
-# =============================================================================
-
-
-class BrokerStateUpdate(BaseModel):
-    """Pydantic model for serializing broker state updates to the frontend.
-
-    This model encapsulates all broker state data (accounts and bets) that is sent
-    to the arena frontend for deserialization. Nested data structures use Dict and
-    List types rather than nested Pydantic models for simplicity, while still providing
-    top-level validation through Pydantic.
-
-    Use `from_broker_state()` to create an instance from broker internal state,
-    then `to_json_strings()` to serialize for span tags.
-    """
-
-    accounts: Dict[str, Dict[str, str]] = Field(
-        ...,
-        description="Mapping of agent_id to account data with 'balance' and 'last_updated' keys",
-    )
-    bets: Dict[str, Dict[str, Any]] = Field(
-        ...,
-        description=(
-            "Mapping of agent_id to bets data containing: "
-            "active_bets_count, pending_orders_count, settled_bets_count (int), "
-            "active_bets, pending_orders (lists of bet detail dicts)"
-        ),
-    )
-
-    @classmethod
-    def from_broker_state(
-        cls,
-        accounts: Dict[str, "Account"],
-        active_bets: Dict[str, List[str]],
-        pending_orders: Dict[str, List[str]],
-        bet_history: Dict[str, List[str]],
-        all_bets: Dict[str, "Bet"],
-    ) -> "BrokerStateUpdate":
-        """Create BrokerStateUpdate from broker internal state.
-
-        Args:
-            accounts: Mapping of agent_id to Account dataclass
-            active_bets: Mapping of agent_id to list of bet_ids
-            pending_orders: Mapping of agent_id to list of bet_ids
-            bet_history: Mapping of agent_id to list of bet_ids
-            all_bets: Mapping of bet_id to Bet dataclass
-
-        Returns:
-            BrokerStateUpdate instance ready for serialization
-        """
-        # Build accounts dict
-        accounts_data: Dict[str, Dict[str, str]] = {
-            agent_id: {
-                "balance": str(account.balance),
-                "last_updated": account.last_updated.isoformat(),
-            }
-            for agent_id, account in accounts.items()
-        }
-
-        # Build bets dict
-        bets_data: Dict[str, Dict[str, Any]] = {}
-        for agent_id in accounts.keys():
-            agent_active_bets = active_bets.get(agent_id, [])
-            agent_pending_orders = pending_orders.get(agent_id, [])
-            agent_bet_history = bet_history.get(agent_id, [])
-
-            # Build active bet details
-            active_bet_details = [
-                {
-                    "bet_id": bet.bet_id,
-                    "event_id": bet.event_id,
-                    "amount": str(bet.amount),
-                    "selection": bet.selection,
-                    "odds": str(bet.odds),
-                    "bet_type": bet.bet_type.value,
-                    "status": bet.status.value,
-                }
-                for bet_id in agent_active_bets
-                if (bet := all_bets.get(bet_id))
-            ]
-
-            # Build pending order details
-            pending_order_details = [
-                {
-                    "bet_id": bet.bet_id,
-                    "event_id": bet.event_id,
-                    "amount": str(bet.amount),
-                    "selection": bet.selection,
-                    "limit_odds": str(bet.limit_odds) if bet.limit_odds else None,
-                    "bet_type": bet.bet_type.value,
-                    "status": bet.status.value,
-                }
-                for bet_id in agent_pending_orders
-                if (bet := all_bets.get(bet_id))
-            ]
-
-            bets_data[agent_id] = {
-                "active_bets_count": len(agent_active_bets),
-                "pending_orders_count": len(agent_pending_orders),
-                "settled_bets_count": len(agent_bet_history),
-                "active_bets": active_bet_details,
-                "pending_orders": pending_order_details,
-            }
-
-        return cls(accounts=accounts_data, bets=bets_data)
-
-    def to_json_strings(self) -> tuple[str, str]:
-        """Serialize accounts and bets to separate JSON strings for tags.
-
-        Returns:
-            Tuple of (accounts_json, bets_json) strings
-        """
-        # Pydantic's model_dump() already returns JSON-serializable dicts
-        return json.dumps(self.accounts), json.dumps(self.bets)
 
 
 # =============================================================================
@@ -1686,15 +1574,27 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """
         # Acquire global lock to ensure atomic snapshot
         async with self._state_snapshot_lock:
-            # Create broker state update model directly from broker state
-            state_update = BrokerStateUpdate.from_broker_state(
-                accounts=self._accounts,
-                active_bets=self._active_bets,
-                pending_orders=self._pending_orders,
-                bet_history=self._bet_history,
-                all_bets=self._bets,
-            )
-            accounts_json, bets_json = state_update.to_json_strings()
+            # Serialize accounts: only balance and last_updated
+            accounts_dict = {
+                agent_id: {
+                    "balance": str(account.balance),
+                    "last_updated": account.last_updated.isoformat(),
+                }
+                for agent_id, account in self._accounts.items()
+            }
+
+            # Serialize all bets using Pydantic Bet model
+            bets_dict = {
+                bet_id: bet.model_dump(mode="json")
+                for bet_id, bet in self._bets.items()
+            }
+
+            # Use Pydantic TypeAdapter for JSON serialization
+            accounts_adapter = TypeAdapter(Dict[str, Dict[str, str]])
+            bets_adapter = TypeAdapter(Dict[str, Dict[str, Any]])
+
+            accounts_json = accounts_adapter.dump_json(accounts_dict).decode()
+            bets_json = bets_adapter.dump_json(bets_dict).decode()
 
             # Create span with all the data
             tags = {
@@ -2288,12 +2188,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
 
             """
-            import json
-
             event = await target.get_available_event()
             if not event:
-                return json.dumps(None)
-            return json.dumps(event.to_dict())
+                return "null"
+            return event.model_dump_json()
 
         @tool
         async def place_bet_moneyline(
@@ -2464,10 +2362,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 JSON array of bets with: bet_id, amount, selection, odds, bet_type, status="ACTIVE"
             """
-            import json
-
             bets = await target.get_active_bets(agent_id)
-            return json.dumps([bet.to_dict() for bet in bets])
+            # Use Pydantic serialization for consistency
+            bets_adapter = TypeAdapter(List[Bet])
+            return bets_adapter.dump_json(bets).decode()
 
         @tool
         async def get_pending_orders() -> str:
@@ -2478,10 +2376,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 JSON array of orders with: bet_id, amount, selection, limit_odds, bet_type, status="PENDING"
             """
-            import json
-
             orders = await target.get_pending_orders(agent_id)
-            return json.dumps([order.to_dict() for order in orders])
+            # Use Pydantic serialization for consistency
+            bets_adapter = TypeAdapter(List[Bet])
+            return bets_adapter.dump_json(orders).decode()
 
         @tool
         async def get_bet_history(limit: int = 20) -> str:
@@ -2493,10 +2391,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 JSON array of settled bets with: bet_id, amount, outcome, payout, status="SETTLED"
             """
-            import json
-
             history = await target.get_bet_history(agent_id, limit)
-            return json.dumps([bet.to_dict() for bet in history])
+            # Use Pydantic serialization for consistency
+            bets_adapter = TypeAdapter(List[Bet])
+            return bets_adapter.dump_json(history).decode()
 
         @tool
         async def get_statistics() -> str:
@@ -2505,10 +2403,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 JSON object with: total_bets, wins, losses, win_rate, net_profit, roi
             """
-            import json
-
             stats = await target.get_statistics(agent_id)
-            return json.dumps(stats.to_dict())
+            return stats.model_dump_json()
 
         # Build mapping of tool names to tool functions
         all_tools_map = {

@@ -211,8 +211,8 @@ Logs are emitted as OpenTelemetry spans with the following structure:
 - `broker.change_type` - Type of change that triggered the log (see Change Types below)
 - `broker.accounts_count` - Total number of accounts (integer)
 - `broker.bets_count` - Total number of bets (integer)
-- `broker.accounts` - JSON string containing all account balances
-- `broker.bets` - JSON string containing all bet statuses per agent
+- `broker.accounts` - JSON string containing all account balances (serialized via Pydantic TypeAdapter)
+- `broker.bets` - JSON string containing all bets keyed by bet_id (serialized via Pydantic model_dump)
 
 ### 10.3. Change Types
 
@@ -249,52 +249,71 @@ JSON string containing a map of agent IDs to account information:
 
 #### Bets Data (`broker.bets`)
 
-JSON string containing a map of agent IDs to bet status information:
+JSON string containing a flat map of bet IDs to complete bet information. All bets are serialized using Pydantic's `model_dump(mode="json")`, which provides full type safety and automatic serialization of all bet fields.
 
 ```json
 {
-  "agent1": {
-    "active_bets_count": 2,
-    "pending_orders_count": 1,
-    "settled_bets_count": 0,
-    "active_bets": [
-      {
-        "bet_id": "bet-1",
-        "event_id": "event-1",
-        "amount": "100.00",
-        "selection": "home",
-        "odds": "1.85",
-        "bet_type": "MONEYLINE",
-        "status": "ACTIVE"
-      }
-    ],
-    "pending_orders": [
-      {
-        "bet_id": "bet-3",
-        "event_id": "event-1",
-        "amount": "200.00",
-        "selection": "home",
-        "limit_odds": "2.00",
-        "bet_type": "MONEYLINE",
-        "status": "PENDING"
-      }
-    ]
+  "bet-1": {
+    "bet_id": "bet-1",
+    "agent_id": "agent1",
+    "event_id": "event-1",
+    "amount": "100.00",
+    "selection": "home",
+    "odds": "1.85",
+    "order_type": "MARKET",
+    "limit_odds": null,
+    "betting_phase": "PRE_GAME",
+    "create_time": "2024-01-01T12:00:00",
+    "execution_time": "2024-01-01T12:00:01",
+    "status": "ACTIVE",
+    "bet_type": "MONEYLINE",
+    "spread_value": null,
+    "total_value": null,
+    "actual_payout": null,
+    "outcome": null,
+    "settlement_time": null
+  },
+  "bet-3": {
+    "bet_id": "bet-3",
+    "agent_id": "agent1",
+    "event_id": "event-1",
+    "amount": "200.00",
+    "selection": "home",
+    "odds": "2.00",
+    "order_type": "LIMIT",
+    "limit_odds": "2.00",
+    "betting_phase": "PRE_GAME",
+    "create_time": "2024-01-01T12:05:00",
+    "execution_time": null,
+    "status": "PENDING",
+    "bet_type": "MONEYLINE",
+    "spread_value": null,
+    "total_value": null,
+    "actual_payout": null,
+    "outcome": null,
+    "settlement_time": null
   }
 }
 ```
 
-**Bet Status Fields:**
-- `active_bets_count` - Number of executed bets waiting for settlement
-- `pending_orders_count` - Number of limit orders waiting for execution
-- `settled_bets_count` - Number of bets that have reached a final state (settled with win/loss outcome or cancelled)
-- `active_bets` - Array of active bet details (executed, not yet settled)
-- `pending_orders` - Array of pending order details (limit orders not yet executed)
 
-**Bet Detail Fields:**
+
+**All Fields:**
 - `bet_id` - Unique bet identifier
+- `agent_id` - Agent who placed the bet
 - `event_id` - Event identifier
-- `amount` - Bet amount (as string)
+- `amount` - Bet amount (as string, Decimal serialized)
 - `selection` - Bet selection ("home", "away", "over", "under")
-- `odds` - Execution odds (for active bets) or `limit_odds` (for pending orders)
-- `bet_type` - "MONEYLINE", "SPREAD", or "TOTAL"
-- `status` - "ACTIVE", "PENDING", "SETTLED", or "CANCELLED"
+- `odds` - Execution odds (Decimal serialized as string)
+- `order_type` - "MARKET" or "LIMIT"
+- `limit_odds` - Limit order threshold (null for market orders)
+- `betting_phase` - "PRE_GAME" or "IN_GAME"
+- `create_time` - When bet was created (ISO format)
+- `execution_time` - When bet was executed (null if pending)
+- `status` - Current bet status ("ACTIVE", "PENDING", "SETTLED", or "CANCELLED")
+- `bet_type` - Type of bet ("MONEYLINE", "SPREAD", or "TOTAL")
+- `spread_value` - Spread value for SPREAD bets (null for other bet types)
+- `total_value` - Total value for TOTAL bets (null for other bet types)
+- `actual_payout` - Payout amount (null until settled)
+- `outcome` - "WIN" or "LOSS" (null until settled)
+- `settlement_time` - When bet was settled (null until settled)
