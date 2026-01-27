@@ -524,7 +524,7 @@ def _gather_imports(payload: Mapping[str, Any] | None) -> Sequence[str]:
     raise DojoZeroCLIError("'imports' must be a string or sequence of strings")
 
 
-def _prepare_trial_spec(trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
+async def _prepare_trial_spec(trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
     if not trial_id:
         raise DojoZeroCLIError("trial_id must be provided")
     scenario = payload.get("scenario")
@@ -558,7 +558,8 @@ def _prepare_trial_spec(trial_id: str, payload: Mapping[str, Any]) -> TrialSpec:
     except _TrialBuilderNotFoundError as exc:
         raise DojoZeroCLIError(str(exc)) from exc
     try:
-        spec = definition.build(trial_id, builder_config)
+        # Use build_async to support both sync and async trial builders
+        spec = await definition.build_async(trial_id, builder_config)
     except ValidationError as exc:
         raise DojoZeroCLIError(
             f"invalid config for builder '{builder_name}': {exc}"
@@ -950,7 +951,7 @@ async def _run_command(args: argparse.Namespace) -> int:
 
     spec: TrialSpec | None = None
     if params_payload is not None:
-        spec = _prepare_trial_spec(trial_id, params_payload)
+        spec = await _prepare_trial_spec(trial_id, params_payload)
         if checkpoint_id:
             spec.resume_from_checkpoint_id = checkpoint_id
         elif resume_latest:
@@ -1146,7 +1147,7 @@ async def _backtest_single_file(
         orchestrator: TrialOrchestrator instance
     """
     # Prepare trial spec from params
-    spec = _prepare_trial_spec(trial_id, params_payload)
+    spec = await _prepare_trial_spec(trial_id, params_payload)
 
     # Add backtest metadata
     spec.metadata["backtest_file"] = str(event_file)

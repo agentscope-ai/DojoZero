@@ -1,7 +1,7 @@
 scenario:
   name: nba
   config:
-    espn_game_id: '401810490'  # ESPN game ID for the NBA game
+    espn_game_id: '401810490'  # ESPN game ID - overridden by nba_trial_runner.py
 
     hub:
       persistence_file: outputs/nba_betting_events.jsonl
