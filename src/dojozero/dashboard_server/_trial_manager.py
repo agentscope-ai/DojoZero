@@ -210,9 +210,7 @@ class TrialManager:
                     store.upsert_trial_record(failed_record)
                 continue
 
-            # Use orchestrator's resume_trial method directly (bypasses queue)
-            # This is intentional - auto-resumed trials use the existing spec
-            # and checkpoint, avoiding spec mismatch issues
+            # Resume via orchestrator and track in TrialManager
             try:
                 self._logger.info(
                     "Auto-resuming trial '%s' from checkpoint '%s'",
@@ -223,6 +221,16 @@ class TrialManager:
                 await self._orchestrator.resume_trial(
                     trial_id, checkpoint_id=latest_checkpoint.checkpoint_id
                 )
+
+                # Track the resumed trial in TrialManager so complete_trial() works
+                # This ensures status consistency between TrialManager and Orchestrator
+                queued = QueuedTrial(
+                    trial_id=trial_id,
+                    spec=record.spec,
+                    phase=QueuedTrialPhase.RUNNING,
+                )
+                self._trials[trial_id] = queued
+
                 resumed_count += 1
                 self._logger.info(
                     "Successfully resumed interrupted trial '%s'",
@@ -430,7 +438,10 @@ class TrialManager:
         return list(self._trials.values())
 
     async def cancel(self, trial_id: str) -> bool:
-        """Cancel a pending or running trial.
+        """Cancel a pending or running trial (marks as CANCELLED).
+
+        Use this when a user explicitly cancels a trial before it completes.
+        For trials that finish normally (e.g., game ended), use complete_trial() instead.
 
         Args:
             trial_id: Trial identifier
@@ -438,29 +449,71 @@ class TrialManager:
         Returns:
             True if cancelled, False if not found or already completed
         """
+        return await self._stop_trial_internal(trial_id, QueuedTrialPhase.CANCELLED)
+
+    async def complete_trial(self, trial_id: str) -> bool:
+        """Stop a running trial gracefully (marks as COMPLETED).
+
+        Use this when a trial completes normally (e.g., game ended).
+        For user-initiated cancellation, use cancel() instead.
+
+        Args:
+            trial_id: Trial identifier
+
+        Returns:
+            True if stopped, False if not found or already completed
+        """
+        return await self._stop_trial_internal(trial_id, QueuedTrialPhase.COMPLETED)
+
+    async def _stop_trial_internal(
+        self, trial_id: str, final_phase: QueuedTrialPhase
+    ) -> bool:
+        """Internal method to stop a trial with specified final phase.
+
+        Args:
+            trial_id: Trial identifier
+            final_phase: Phase to set (CANCELLED or COMPLETED)
+
+        Returns:
+            True if stopped, False if not found or already completed
+        """
+        phase_name = final_phase.value
         queued = self._trials.get(trial_id)
+
         if queued is None:
+            # Trial not in _trials - this should not happen.
+            # Trials should be tracked in _trials via submit() or auto-resume.
+            self._logger.error(
+                "Trial '%s' not found in _trials. "
+                "This indicates a bug in trial tracking.",
+                trial_id,
+            )
             return False
 
         if queued.phase == QueuedTrialPhase.PENDING:
-            # Mark as cancelled (will be skipped by worker)
-            queued.phase = QueuedTrialPhase.CANCELLED
-            self._logger.info("Cancelled pending trial: %s", trial_id)
+            # Mark with final phase (will be skipped by worker)
+            queued.phase = final_phase
+            self._logger.info("%s pending trial: %s", phase_name.capitalize(), trial_id)
             return True
 
         if queued.phase in (QueuedTrialPhase.STARTING, QueuedTrialPhase.RUNNING):
-            # Cancel running task
+            # Update phase first
+            queued.phase = final_phase
+            self._logger.info("%s trial: %s", phase_name.capitalize(), trial_id)
+
+            # Cancel task if still running
             task = self._running_tasks.get(trial_id)
             if task and not task.done():
                 task.cancel()
-                queued.phase = QueuedTrialPhase.CANCELLED
-                self._logger.info("Cancelled running trial: %s", trial_id)
-                # Also stop via dashboard
-                try:
-                    await self._orchestrator.stop_trial(trial_id)
-                except Exception as e:
-                    self._logger.warning("Error stopping trial %s: %s", trial_id, e)
-                return True
+
+            # Always stop via orchestrator to update its internal state
+            # (even if our task is done, the orchestrator may not know)
+            try:
+                await self._orchestrator.stop_trial(trial_id)
+            except Exception as e:
+                self._logger.error("Error stopping trial %s: %s", trial_id, e)
+
+            return True
 
         return False
 

@@ -1257,6 +1257,7 @@ class TrialOrchestrator:
             ),
             resume_from_checkpoint_id=None,
             resume_from_latest=False,
+            builder_name=spec.builder_name,
         )
 
     def _spec_with_resume_state(
@@ -1282,6 +1283,7 @@ class TrialOrchestrator:
             ),
             resume_from_checkpoint_id=None,
             resume_from_latest=False,
+            builder_name=spec.builder_name,
         )
 
     def _resolve_resume_checkpoint(
