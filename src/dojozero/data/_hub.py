@@ -138,6 +138,10 @@ class DataHub:
         # Dispatch to subscribed agents
         await self._dispatch_event(event)
 
+    # Class-level counters for progress logging
+    _sls_emit_count: int = 0
+    _sls_error_count: int = 0
+
     def _emit_event_span(
         self, event: DataEvent, actor_id: str, sport_type: str
     ) -> None:
@@ -152,6 +156,12 @@ class DataHub:
             from dojozero.core._tracing import create_span_from_event, emit_span
 
             event_type = event.event_type
+            logger.debug(
+                "DataHub._emit_event_span called: event_type=%s, actor_id=%s, trial_id=%s",
+                event_type,
+                actor_id,
+                self.trial_id,
+            )
 
             # Increment and get sequence for this event type
             self._event_sequences[event_type] += 1
@@ -170,8 +180,6 @@ class DataHub:
                 if key in ("event_type", "timestamp"):
                     continue  # Skip metadata fields
                 if isinstance(value, (dict, list)):
-                    import json
-
                     tags[f"event.{key}"] = json.dumps(value, default=str)
                 else:
                     tags[f"event.{key}"] = value
@@ -193,13 +201,29 @@ class DataHub:
             )
             emit_span(span)
 
+            # Progress logging
+            DataHub._sls_emit_count += 1
+            if DataHub._sls_emit_count % 50 == 0:
+                logger.info(
+                    "DataHub SLS emit progress: %d events emitted (%d errors) "
+                    "[latest: event_type=%s, trial=%s, actor=%s]",
+                    DataHub._sls_emit_count,
+                    DataHub._sls_error_count,
+                    event_type,
+                    self.trial_id,
+                    actor_id,
+                )
+
         except Exception as e:
+            DataHub._sls_error_count += 1
             # Don't let trace emission failures affect event processing
             logger.warning(
-                "Failed to emit event span: %s: %s (event_type=%s)",
+                "Failed to emit event span (#%d): %s: %s (event_type=%s, actor=%s)",
+                DataHub._sls_error_count,
                 type(e).__name__,
                 e,
                 event.event_type,
+                actor_id,
             )
 
     def _cache_event(self, event: DataEvent) -> None:
