@@ -192,6 +192,9 @@ class DataHub:
                     game_id = str(game_id).split("_")[0]
                 tags["dojozero.game.id"] = str(game_id)
 
+            # trial_id is guaranteed non-None here because _emit_event_span is only
+            # called when self.trial_id is truthy (checked in receive_event)
+            assert self.trial_id is not None
             span = create_span_from_event(
                 trial_id=self.trial_id,
                 actor_id=actor_id,
