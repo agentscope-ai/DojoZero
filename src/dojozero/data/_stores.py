@@ -45,6 +45,10 @@ class DataStore(ABC):
     - Emitting cooked events to DataHub
     """
 
+    # Sport type for this store (override in subclass or set via property)
+    # Used for trace context when emitting events
+    sport_type: str = ""
+
     def __init__(
         self,
         store_id: str,

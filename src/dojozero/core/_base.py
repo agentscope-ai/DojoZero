@@ -1,7 +1,6 @@
 """Reusable base classes for concrete DojoZero actor implementations."""
 
 import asyncio
-import json
 import logging
 from abc import ABC
 from typing import Any, Dict, Sequence
@@ -79,13 +78,11 @@ class DataStreamBase(ActorBase, ABC):
     async def _publish(self, event: StreamEvent[Any]) -> None:
         """Publish a stream event to all registered consumers.
 
-        Also emits a span to the global OTel exporter if configured.
+        Note: Span emission is handled externally when the
+        event is received from the store. We don't emit here to avoid duplicates.
         """
         if not self._consumer_registry:
             return
-
-        # Emit span for event publication
-        self._emit_event_span(event)
 
         await asyncio.gather(
             *(
@@ -93,58 +90,6 @@ class DataStreamBase(ActorBase, ABC):
                 for consumer in self._consumer_registry.values()
             )
         )
-
-    def _emit_event_span(self, event: StreamEvent[Any]) -> None:
-        """Emit a span for a stream event to the OTel exporter."""
-        from ._tracing import emit_span, create_span_from_event
-
-        # Determine event type from payload if available
-        event_type = "stream.event"
-        payload = event.payload
-        if hasattr(payload, "event_type"):
-            event_type = payload.event_type
-        elif isinstance(payload, dict) and "event_type" in payload:
-            event_type = payload["event_type"]
-
-        # Build tags for the span
-        tags: dict[str, Any] = {
-            "dojozero.event.type": event_type,
-            "dojozero.event.sequence": event.sequence,
-            "dojozero.sport.type": self._sport_type,
-        }
-
-        # Add payload data as event.* tags
-        if isinstance(payload, dict):
-            payload_dict = payload
-        elif hasattr(payload, "to_dict") and callable(getattr(payload, "to_dict")):
-            payload_dict = getattr(payload, "to_dict")()
-        else:
-            payload_dict = {"data": str(payload)}
-
-        for key, value in payload_dict.items():
-            if key in ("event_type", "timestamp", "actor_id", "stream_id"):
-                continue  # Skip metadata fields
-            if isinstance(value, (dict, list)):
-                tags[f"event.{key}"] = json.dumps(value, default=str)
-            else:
-                tags[f"event.{key}"] = value
-
-        # Extract game_id as top-level tag for easier querying
-        game_id = payload_dict.get("game_id") or payload_dict.get("event_id", "")
-        if game_id:
-            # Handle event_id format like "0022400608_pbp_188" -> extract game_id
-            if "_" in str(game_id) and str(game_id).startswith("00"):
-                game_id = str(game_id).split("_")[0]
-            tags["dojozero.game.id"] = str(game_id)
-
-        span = create_span_from_event(
-            trial_id=self._trial_id,
-            actor_id=self._actor_id,
-            operation_name=event_type,
-            start_time=event.emitted_at,
-            extra_tags=tags,
-        )
-        emit_span(span)
 
 
 class OperatorBase(ActorBase, ABC):

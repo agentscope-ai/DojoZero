@@ -75,6 +75,9 @@ class DataHub:
         self._recent_events: dict[str, list[DataEvent]] = defaultdict(list)
         self._max_recent_events_per_type = 100  # Keep last 100 events per type
 
+        # Track sequence numbers per event type for trace emission
+        self._event_sequences: dict[str, int] = defaultdict(int)
+
     def subscribe_agent(
         self,
         agent_id: str,
@@ -108,11 +111,18 @@ class DataHub:
         if agent_id in self._agent_subscriptions:
             del self._agent_subscriptions[agent_id]
 
-    async def receive_event(self, event: DataEvent) -> None:
+    async def receive_event(
+        self,
+        event: DataEvent,
+        source_actor_id: str | None = None,
+        sport_type: str = "",
+    ) -> None:
         """Receive an event from a DataStore.
 
         Args:
             event: Event to receive
+            source_actor_id: Actor ID of the source (store) that emitted the event
+            sport_type: Sport type of the source store (e.g., "nba", "nfl")
         """
         # Cache event for late-joining subscribers
         self._cache_event(event)
@@ -123,65 +133,100 @@ class DataHub:
 
         # Emit to trace backend if trial_id is set
         if self.trial_id and not self._backtest_mode:
-            self._emit_event_span(event)
+            self._emit_event_span(event, source_actor_id or self.hub_id, sport_type)
 
         # Dispatch to subscribed agents
         await self._dispatch_event(event)
 
+    # Class-level counters for progress logging
     _sls_emit_count: int = 0
     _sls_error_count: int = 0
 
-    def _emit_event_span(self, event: DataEvent) -> None:
+    def _emit_event_span(
+        self, event: DataEvent, actor_id: str, sport_type: str
+    ) -> None:
         """Emit an event as a span to the trace backend.
 
         Args:
             event: Event to emit
+            actor_id: Actor ID of the source (store) that emitted the event
+            sport_type: Sport type of the source store (e.g., "nba", "nfl")
         """
         try:
-            from dojozero.core._tracing import (
-                convert_checkpoint_event_to_span,
-                emit_span,
-                get_sls_log_exporter,
+            from dojozero.core._tracing import create_span_from_event, emit_span
+
+            event_type = event.event_type
+            logger.debug(
+                "DataHub._emit_event_span called: event_type=%s, actor_id=%s, trial_id=%s",
+                event_type,
+                actor_id,
+                self.trial_id,
             )
 
-            # Check if SLS exporter is configured
-            sls_exporter = get_sls_log_exporter()
-            if sls_exporter is None:
-                logger.warning(
-                    "SLS exporter not configured, skipping event span emission "
-                    "for event_type=%s",
-                    event.event_type,
-                )
-                return
+            # Increment and get sequence for this event type
+            self._event_sequences[event_type] += 1
+            sequence = self._event_sequences[event_type]
 
-            # Convert event to dict for span conversion
+            # Build tags with event data
+            tags: dict[str, Any] = {
+                "dojozero.event.type": event_type,
+                "dojozero.event.sequence": sequence,
+                "dojozero.sport.type": sport_type,
+            }
+
+            # Add payload data as event.* tags
             event_dict = event.to_dict()
-            span = convert_checkpoint_event_to_span(
-                trial_id=self.trial_id,  # type: ignore[arg-type]
-                event=event_dict,
-                sequence=0,
-                actor_id=getattr(event, "stream_id", self.hub_id),
+            for key, value in event_dict.items():
+                if key in ("event_type", "timestamp"):
+                    continue  # Skip metadata fields
+                if isinstance(value, (dict, list)):
+                    tags[f"event.{key}"] = json.dumps(value, default=str)
+                else:
+                    tags[f"event.{key}"] = value
+
+            # Extract game_id as top-level tag for easier querying
+            game_id = event_dict.get("game_id") or event_dict.get("event_id", "")
+            if game_id:
+                # Handle event_id format like "0022400608_pbp_188" -> extract game_id
+                if "_" in str(game_id) and str(game_id).startswith("00"):
+                    game_id = str(game_id).split("_")[0]
+                tags["dojozero.game.id"] = str(game_id)
+
+            # trial_id is guaranteed non-None here because _emit_event_span is only
+            # called when self.trial_id is truthy (checked in receive_event)
+            assert self.trial_id is not None
+            span = create_span_from_event(
+                trial_id=self.trial_id,
+                actor_id=actor_id,
+                operation_name=event_type,
+                start_time=event.timestamp,
+                extra_tags=tags,
             )
             emit_span(span)
+
+            # Progress logging
             DataHub._sls_emit_count += 1
             if DataHub._sls_emit_count % 50 == 0:
                 logger.info(
-                    "SLS emit progress: %d events emitted (%d errors) "
-                    "[latest: event_type=%s, trial=%s]",
+                    "DataHub SLS emit progress: %d events emitted (%d errors) "
+                    "[latest: event_type=%s, trial=%s, actor=%s]",
                     DataHub._sls_emit_count,
                     DataHub._sls_error_count,
-                    event.event_type,
+                    event_type,
                     self.trial_id,
+                    actor_id,
                 )
+
         except Exception as e:
             DataHub._sls_error_count += 1
             # Don't let trace emission failures affect event processing
             logger.warning(
-                "Failed to emit event span (#%d): %s: %s (event_type=%s)",
+                "Failed to emit event span (#%d): %s: %s (event_type=%s, actor=%s)",
                 DataHub._sls_error_count,
                 type(e).__name__,
                 e,
                 event.event_type,
+                actor_id,
             )
 
     def _cache_event(self, event: DataEvent) -> None:
@@ -276,11 +321,18 @@ class DataHub:
         Args:
             store: DataStore instance
         """
+        # Capture store info for use in emit_wrapper closure
+        store_id = store.store_id
+        store_sport_type = store.sport_type
 
         # Set the store's event emitter to this hub's receive_event
         # Note: event_emitter is sync callback, but we schedule async work
         def emit_wrapper(event: DataEvent) -> None:
-            task = asyncio.create_task(self.receive_event(event))
+            task = asyncio.create_task(
+                self.receive_event(
+                    event, source_actor_id=store_id, sport_type=store_sport_type
+                )
+            )
             task.add_done_callback(self._handle_task_exception)
 
         store.set_event_emitter(emit_wrapper)

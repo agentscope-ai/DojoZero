@@ -78,6 +78,7 @@ class ESPNStore(DataStore):
             poll_intervals,
             event_emitter,
         )
+        self.sport_type = league  # Use league as sport_type (e.g., "nba", "nfl")
         self._state = ESPNStateTracker()
 
     def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:

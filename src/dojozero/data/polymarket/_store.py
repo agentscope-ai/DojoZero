@@ -74,6 +74,7 @@ class PolymarketStore(DataStore):
         self._market_url = market_url
         self._slug = slug
         self._sport = sport.lower()  # "nba" or "nfl"
+        self.sport_type = self._sport  # Expose for DataHub trace context
 
         # Track game status for dynamic polling intervals
         self._game_started: bool = False
@@ -105,8 +106,8 @@ class PolymarketStore(DataStore):
                 event_id = odds_data.get("event_id") or odds_data.get("market_id", "")
 
             # Extract tricodes from identifier (set by trial metadata)
-            home_tricode = identifier.get("home_tricode", "") if identifier else ""
-            away_tricode = identifier.get("away_tricode", "") if identifier else ""
+            home_tricode = (identifier or {}).get("home_tricode", "")
+            away_tricode = (identifier or {}).get("away_tricode", "")
 
             events.append(
                 OddsUpdateEvent(

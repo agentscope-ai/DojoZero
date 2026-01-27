@@ -18,6 +18,8 @@ from dojozero.data.nba._state_tracker import GameStateTracker
 class NBAStore(DataStore):
     """NBA data store for polling NBA API and emitting events."""
 
+    sport_type: str = "nba"
+
     def __init__(
         self,
         store_id: str = "nba_store",
