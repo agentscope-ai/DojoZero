@@ -560,6 +560,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._event_active_bets: Dict[str, Set[str]] = defaultdict(set)
         self._event_pending_orders: Dict[str, Set[str]] = defaultdict(set)
 
+        # Global lock for atomic state snapshots during logging
+        self._state_snapshot_lock: asyncio.Lock = asyncio.Lock()
+
         # Configuration
         self.initial_balance = config.get("initial_balance", "0")
         # Default to all tools if not specified (None means all tools allowed)
@@ -592,12 +595,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             len(self._bets),
         )
 
-    def register_agents(self, agents: Sequence[Agent]) -> None:
+    async def register_agents(self, agents: Sequence[Agent]) -> None:
         """Register agents and create their accounts"""
         super().register_agents(agents)
         for agent in agents:
             if agent.actor_id not in self._accounts:
-                self.create_account(agent.actor_id, Decimal(self.initial_balance))
+                await self.create_account(agent.actor_id, Decimal(self.initial_balance))
 
     # =========================================================================
     # Event Stream Processing
@@ -1491,7 +1494,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             asyncio.create_task(self._notify_agent(bet.agent_id, notification))
 
             # Log state change
-            self._log_accounts_and_bets_status("bet_settled")
+            await self._log_accounts_and_bets_status("bet_settled")
 
     async def _cancel_pregame_orders(self, event_id: str) -> None:
         """Cancel all unfilled pre-game orders for an event"""
@@ -1547,101 +1550,104 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         )
 
         # Log state change
-        self._log_accounts_and_bets_status("bet_cancelled")
+        await self._log_accounts_and_bets_status("bet_cancelled")
 
     # =========================================================================
     # Logging
     # =========================================================================
 
-    def _log_accounts_and_bets_status(self, change_type: str) -> None:
+    async def _log_accounts_and_bets_status(self, change_type: str) -> None:
         """Emit a log to SLS about each agent's current balance and bet status.
 
         This is called whenever self._accounts or self._bets have changed.
+        Uses a global lock to ensure atomic snapshot of broker state.
 
         Args:
             change_type: Description of what changed (e.g., "account_created", "bet_placed")
         """
-        # Collect account balances
-        accounts_data = {}
-        for agent_id, account in self._accounts.items():
-            accounts_data[agent_id] = {
-                "balance": str(account.balance),
-                "last_updated": account.last_updated.isoformat(),
+        # Acquire global lock to ensure atomic snapshot
+        async with self._state_snapshot_lock:
+            # Collect account balances
+            accounts_data = {}
+            for agent_id, account in self._accounts.items():
+                accounts_data[agent_id] = {
+                    "balance": str(account.balance),
+                    "last_updated": account.last_updated.isoformat(),
+                }
+
+            # Collect bet status per agent
+            bets_data = {}
+            for agent_id in self._accounts.keys():
+                active_bets = self._active_bets.get(agent_id, [])
+                pending_orders = self._pending_orders.get(agent_id, [])
+                bet_history = self._bet_history.get(agent_id, [])
+
+                # Get bet details
+                active_bet_details = []
+                for bet_id in active_bets:
+                    bet = self._bets.get(bet_id)
+                    if bet:
+                        active_bet_details.append(
+                            {
+                                "bet_id": bet.bet_id,
+                                "event_id": bet.event_id,
+                                "amount": str(bet.amount),
+                                "selection": bet.selection,
+                                "odds": str(bet.odds),
+                                "bet_type": bet.bet_type.value,
+                                "status": bet.status.value,
+                            }
+                        )
+
+                pending_order_details = []
+                for bet_id in pending_orders:
+                    bet = self._bets.get(bet_id)
+                    if bet:
+                        pending_order_details.append(
+                            {
+                                "bet_id": bet.bet_id,
+                                "event_id": bet.event_id,
+                                "amount": str(bet.amount),
+                                "selection": bet.selection,
+                                "limit_odds": str(bet.limit_odds)
+                                if bet.limit_odds
+                                else None,
+                                "bet_type": bet.bet_type.value,
+                                "status": bet.status.value,
+                            }
+                        )
+
+                bets_data[agent_id] = {
+                    "active_bets_count": len(active_bets),
+                    "pending_orders_count": len(pending_orders),
+                    "settled_bets_count": len(bet_history),
+                    "active_bets": active_bet_details,
+                    "pending_orders": pending_order_details,
+                }
+
+            # Create span with all the data
+            tags = {
+                "dojozero.event.type": "broker.state_update",
+                "broker.change_type": change_type,
+                "broker.accounts_count": len(self._accounts),
+                "broker.bets_count": len(self._bets),
+                "broker.accounts": json.dumps(accounts_data, default=str),
+                "broker.bets": json.dumps(bets_data, default=str),
             }
 
-        # Collect bet status per agent
-        bets_data = {}
-        for agent_id in self._accounts.keys():
-            active_bets = self._active_bets.get(agent_id, [])
-            pending_orders = self._pending_orders.get(agent_id, [])
-            bet_history = self._bet_history.get(agent_id, [])
-
-            # Get bet details
-            active_bet_details = []
-            for bet_id in active_bets:
-                bet = self._bets.get(bet_id)
-                if bet:
-                    active_bet_details.append(
-                        {
-                            "bet_id": bet.bet_id,
-                            "event_id": bet.event_id,
-                            "amount": str(bet.amount),
-                            "selection": bet.selection,
-                            "odds": str(bet.odds),
-                            "bet_type": bet.bet_type.value,
-                            "status": bet.status.value,
-                        }
-                    )
-
-            pending_order_details = []
-            for bet_id in pending_orders:
-                bet = self._bets.get(bet_id)
-                if bet:
-                    pending_order_details.append(
-                        {
-                            "bet_id": bet.bet_id,
-                            "event_id": bet.event_id,
-                            "amount": str(bet.amount),
-                            "selection": bet.selection,
-                            "limit_odds": str(bet.limit_odds)
-                            if bet.limit_odds
-                            else None,
-                            "bet_type": bet.bet_type.value,
-                            "status": bet.status.value,
-                        }
-                    )
-
-            bets_data[agent_id] = {
-                "active_bets_count": len(active_bets),
-                "pending_orders_count": len(pending_orders),
-                "settled_bets_count": len(bet_history),
-                "active_bets": active_bet_details,
-                "pending_orders": pending_order_details,
-            }
-
-        # Create span with all the data
-        tags = {
-            "dojozero.event.type": "broker.state_update",
-            "broker.change_type": change_type,
-            "broker.accounts_count": len(self._accounts),
-            "broker.bets_count": len(self._bets),
-            "broker.accounts": json.dumps(accounts_data, default=str),
-            "broker.bets": json.dumps(bets_data, default=str),
-        }
-
-        span = create_span_from_event(
-            trial_id=self.trial_id,
-            actor_id=self.actor_id,
-            operation_name="broker.state_update",
-            extra_tags=tags,
-        )
-        emit_span(span)
+            span = create_span_from_event(
+                trial_id=self.trial_id,
+                actor_id=self.actor_id,
+                operation_name="broker.state_update",
+                extra_tags=tags,
+            )
+            emit_span(span)
 
     # =========================================================================
     # Account Management
     # =========================================================================
 
-    def create_account(self, agent_id: str, initial_balance: Decimal) -> Account:
+    async def create_account(self, agent_id: str, initial_balance: Decimal) -> Account:
         """Initialize a new agent account"""
         if initial_balance < 0:
             raise ValueError("Initial balance must be non-negative")
@@ -1659,7 +1665,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._accounts[agent_id] = account
 
         logger.info("Created account for %s with balance %s", agent_id, initial_balance)
-        self._log_accounts_and_bets_status("account_created")
+        await self._log_accounts_and_bets_status("account_created")
         return account
 
     async def get_balance(self, agent_id: str) -> Decimal:
@@ -1684,7 +1690,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             logger.info(
                 "Deposit for %s: +%s (balance: %s)", agent_id, amount, account.balance
             )
-            self._log_accounts_and_bets_status("deposit")
+            await self._log_accounts_and_bets_status("deposit")
             return account.balance
 
     async def withdraw(self, agent_id: str, amount: Decimal) -> Decimal:
@@ -1709,7 +1715,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             logger.info(
                 "Withdraw for %s: -%s (balance: %s)", agent_id, amount, account.balance
             )
-            self._log_accounts_and_bets_status("withdraw")
+            await self._log_accounts_and_bets_status("withdraw")
             return account.balance
 
     # =========================================================================
@@ -1885,7 +1891,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     )
 
                 # Log state change
-                self._log_accounts_and_bets_status("bet_placed")
+                await self._log_accounts_and_bets_status("bet_placed")
                 return "bet_placed"
 
         except (ValueError, Exception) as e:
@@ -1921,7 +1927,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         )
 
         # Log state change
-        self._log_accounts_and_bets_status("bet_executed")
+        await self._log_accounts_and_bets_status("bet_executed")
 
         # Send execution notification to agent
         notification = StreamEvent(

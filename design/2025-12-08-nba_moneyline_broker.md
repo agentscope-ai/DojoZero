@@ -286,7 +286,7 @@ JSON string containing a map of agent IDs to bet status information:
 **Bet Status Fields:**
 - `active_bets_count` - Number of executed bets waiting for settlement
 - `pending_orders_count` - Number of limit orders waiting for execution
-- `settled_bets_count` - Number of completed bets
+- `settled_bets_count` - Number of bets that have reached a final state (settled with win/loss outcome or cancelled)
 - `active_bets` - Array of active bet details (executed, not yet settled)
 - `pending_orders` - Array of pending order details (limit orders not yet executed)
 

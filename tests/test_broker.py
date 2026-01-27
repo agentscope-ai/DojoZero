@@ -91,7 +91,7 @@ def agent():
 @pytest_asyncio.fixture
 async def broker_with_agent(broker, agent):
     """Broker with registered agent"""
-    broker.register_agents([agent])  # type: ignore[arg-type]
+    await broker.register_agents([agent])  # type: ignore[arg-type]
     return broker, agent
 
 
@@ -134,7 +134,7 @@ class TestAccountManagement:
 
     async def test_create_account(self, broker):
         """Test creating a new account"""
-        account = broker.create_account("agent1", Decimal("500.00"))
+        account = await broker.create_account("agent1", Decimal("500.00"))
 
         assert account.agent_id == "agent1"
         assert account.balance == Decimal("500.00")
@@ -142,15 +142,15 @@ class TestAccountManagement:
 
     async def test_create_duplicate_account_raises_error(self, broker):
         """Test that creating duplicate account raises error"""
-        broker.create_account("agent1", Decimal("500.00"))
+        await broker.create_account("agent1", Decimal("500.00"))
 
         with pytest.raises(ValueError, match="already exists"):
-            broker.create_account("agent1", Decimal("500.00"))
+            await broker.create_account("agent1", Decimal("500.00"))
 
     async def test_create_account_negative_balance_raises_error(self, broker):
         """Test that negative initial balance raises error"""
         with pytest.raises(ValueError, match="non-negative"):
-            broker.create_account("agent1", Decimal("-100.00"))
+            await broker.create_account("agent1", Decimal("-100.00"))
 
     async def test_get_balance(self, broker_with_agent):
         """Test retrieving account balance"""
@@ -2220,7 +2220,7 @@ class TestAllowedTools:
     async def test_allowed_tools_filtering(self, broker_with_limited_tools, agent):
         """Test that only allowed tools are exposed"""
         broker = broker_with_limited_tools
-        broker.register_agents([agent])  # type: ignore[arg-type]
+        await broker.register_agents([agent])  # type: ignore[arg-type]
 
         # Get tools for agent
         tools = broker.agent_tools(agent.actor_id)
@@ -2238,7 +2238,7 @@ class TestAllowedTools:
 
     async def test_all_tools_when_none_specified(self, broker, agent):
         """Test that all tools are available when allowed_tools is None"""
-        broker.register_agents([agent])  # type: ignore[arg-type]
+        await broker.register_agents([agent])  # type: ignore[arg-type]
 
         # Get tools for agent
         tools = broker.agent_tools(agent.actor_id)
