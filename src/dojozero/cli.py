@@ -425,6 +425,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show ESPN and Polymarket links for each game.",
     )
+    list_trials_parser.add_argument(
+        "--include-finished",
+        action="store_true",
+        help="Include completed/cancelled/failed scheduled trials.",
+    )
 
     # List trial sources command
     list_sources_parser = subparsers.add_parser(
@@ -1622,6 +1627,7 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
     running_only = getattr(args, "running_only", False)
     output_json = args.output_json
     show_links = getattr(args, "show_links", False)
+    include_finished = getattr(args, "include_finished", False)
 
     # Fetch data from both endpoints by default
     scheduled_trials: list[dict] = []
@@ -1632,7 +1638,12 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
             # Fetch scheduled trials unless --running-only
             if not running_only:
                 try:
-                    resp = await client.get(f"{server}/api/scheduled-trials")
+                    params = {}
+                    if include_finished:
+                        params["include_finished"] = "true"
+                    resp = await client.get(
+                        f"{server}/api/scheduled-trials", params=params
+                    )
                     resp.raise_for_status()
                     data = resp.json()
                     scheduled_trials = data.get("scheduled_trials", [])
@@ -1673,60 +1684,76 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
         return 0
 
     # Pretty print with user-friendly info
-    total_count = len(scheduled_trials) + len(running_trials)
-    print(f"Trials ({total_count} total)")
     print("=" * 110)
 
-    # Print scheduled trials
-    if scheduled_trials and not running_only:
-        print(f"\n📅 Scheduled Trials ({len(scheduled_trials)}):")
-        print("-" * 110)
-        # Header
-        print(
-            f"  {'Status':<12} {'Game':<35} {'Game Time':<14} {'Trial Start':<14} {'Event ID':<12}"
-        )
-        print("  " + "-" * 106)
+    # Split scheduled trials into active and finished
+    scheduled_finished_phases = {"completed", "cancelled", "failed"}
+    active_scheduled = [
+        t
+        for t in scheduled_trials
+        if t.get("phase", "") not in scheduled_finished_phases
+    ]
+    finished_scheduled = [
+        t for t in scheduled_trials if t.get("phase", "") in scheduled_finished_phases
+    ]
 
-        for trial in scheduled_trials:
+    # Build set of trial IDs that are finished according to scheduled trials
+    # (these should not appear in active running trials)
+    finished_scheduled_trial_ids = {
+        t.get("launched_trial_id")
+        for t in finished_scheduled
+        if t.get("launched_trial_id")
+    }
+
+    # Split running trials into active and finished
+    running_active_phases = {"pending", "starting", "running"}
+    running_finished_phases = {"stopped", "completed", "failed", "cancelled"}
+    active_running = [
+        t
+        for t in running_trials
+        if t.get("phase", "") in running_active_phases
+        and t.get("id", t.get("trial_id", "")) not in finished_scheduled_trial_ids
+    ]
+    finished_running = [
+        t for t in running_trials if t.get("phase", "") in running_finished_phases
+    ]
+
+    # Helper to get game name from metadata
+    def _get_game_name(metadata: dict, fallback: str = "") -> str:
+        if metadata.get("game_short_name"):
+            return metadata["game_short_name"]
+        elif metadata.get("home_tricode") and metadata.get("away_tricode"):
+            return f"{metadata['away_tricode']} @ {metadata['home_tricode']}"
+        elif metadata.get("home_team") and metadata.get("away_team"):
+            return f"{metadata['away_team']} @ {metadata['home_team']}"
+        return fallback
+
+    # === TABLE 1: Scheduled Trials (active only) ===
+    if active_scheduled and not running_only:
+        print(f"\n📅 Scheduled Trials ({len(active_scheduled)}):")
+        print("-" * 100)
+        print(
+            f"  {'Status':<12} {'Game':<30} {'Game Time':<14} {'Trial Start':<14} {'ESPN Game ID':<12}"
+        )
+        print("  " + "-" * 96)
+
+        for trial in active_scheduled:
             phase = trial.get("phase", "")
             metadata = trial.get("metadata", {})
-
-            # Get user-friendly game name from metadata
-            game_name = metadata.get("game_short_name", "")
-            if not game_name:
-                home = metadata.get("home_team", "")
-                away = metadata.get("away_team", "")
-                if home and away:
-                    game_name = f"{away} @ {home}"
-                else:
-                    game_name = trial.get("scenario_name", "")
-
-            # Truncate game name if too long
-            if len(game_name) > 33:
-                game_name = game_name[:30] + "..."
-
-            # Get times in local timezone
+            game_name = _get_game_name(metadata, trial.get("scenario_name", ""))
+            if len(game_name) > 28:
+                game_name = game_name[:25] + "..."
             event_time = utc_iso_to_local(trial.get("event_time", ""))
             start_time = utc_iso_to_local(trial.get("scheduled_start_time", ""))
-            event_id = trial.get("event_id", "")[:10]
+            espn_game_id = (
+                metadata.get("espn_game_id", "") or trial.get("event_id", "")
+            )[:12]
 
-            # Status emoji based on phase
-            status_icon = {
-                "waiting": "⏳",
-                "launching": "🚀",
-                "running": "▶️",
-                "monitoring": "👁️",
-                "completed": "✅",
-                "failed": "❌",
-                "cancelled": "🚫",
-            }.get(phase, "")
-            status = f"{status_icon} {phase}"
-
+            # Use text-only status for consistent column width
             print(
-                f"  {status:<12} {game_name:<35} {event_time:<14} {start_time:<14} {event_id:<12}"
+                f"  {phase:<12} {game_name:<30} {event_time:<14} {start_time:<14} {espn_game_id:<12}"
             )
 
-            # Show links if requested
             if show_links:
                 _print_trial_links(
                     metadata=metadata,
@@ -1734,67 +1761,90 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
                     sport_type=trial.get("sport_type", "nba"),
                     event_time_str=trial.get("event_time", ""),
                 )
-
-            # Show error if present
             if trial.get("error"):
                 print(f"    └─ Error: {trial['error'][:80]}")
 
-    # Print running trials
-    if running_trials and not scheduled_only:
-        print(f"\n🏃 Running Trials ({len(running_trials)}):")
+    # === TABLE 2: Finished Trials (from both scheduled and running) ===
+    # Combine finished scheduled trials with finished running trials
+    all_finished: list[dict] = []
+    for trial in finished_scheduled:
+        all_finished.append(
+            {
+                "source": "scheduled",
+                "phase": trial.get("phase", ""),
+                "game_name": _get_game_name(
+                    trial.get("metadata", {}), trial.get("scenario_name", "")
+                ),
+                "espn_game_id": trial.get("metadata", {}).get("espn_game_id", "")
+                or trial.get("event_id", ""),
+                "trial_id": trial.get("launched_trial_id", ""),
+                "error": trial.get("error"),
+            }
+        )
+    for trial in finished_running:
+        all_finished.append(
+            {
+                "source": "running",
+                "phase": trial.get("phase", ""),
+                "game_name": _get_game_name(trial.get("metadata", {})),
+                "espn_game_id": trial.get("metadata", {}).get("espn_game_id", "")
+                or trial.get("metadata", {}).get("event_id", ""),
+                "trial_id": trial.get("id", trial.get("trial_id", "")),
+                "error": trial.get("error"),
+            }
+        )
+
+    if all_finished and include_finished:
+        print(f"\n📋 Finished Trials ({len(all_finished)}):")
         print("-" * 110)
-        # Header
-        print(f"  {'Status':<12} {'Trial ID':<38} {'Game Info':<40}")
-        print("  " + "-" * 88)
+        print(f"  {'Status':<12} {'Game':<30} {'ESPN Game ID':<14} {'Trial ID':<45}")
+        print("  " + "-" * 106)
 
-        for trial in running_trials:
+        for item in all_finished:
+            phase = item["phase"]
+            game_name = (
+                item["game_name"][:28] + "..."
+                if len(item["game_name"]) > 28
+                else item["game_name"]
+            )
+            espn_game_id = item["espn_game_id"][:12] if item["espn_game_id"] else ""
+            trial_id = item["trial_id"]
+            if len(trial_id) > 43:
+                trial_id = trial_id[:40] + "..."
+
+            # Use text-only status for consistent column width
+            print(f"  {phase:<12} {game_name:<30} {espn_game_id:<14} {trial_id:<45}")
+
+            if item.get("error"):
+                print(f"    └─ Error: {item['error'][:80]}")
+
+    # === TABLE 3: Running Trials (active only, no status column) ===
+    if active_running and not scheduled_only:
+        print(f"\n🏃 Running Trials ({len(active_running)}):")
+        print("-" * 100)
+        print(f"  {'Game':<30} {'ESPN Game ID':<14} {'Trial ID':<50}")
+        print("  " + "-" * 96)
+
+        for trial in active_running:
             trial_id = trial.get("id", trial.get("trial_id", ""))
-            phase = trial.get("phase", "")
             metadata = trial.get("metadata", {})
+            game_name = _get_game_name(metadata)
+            espn_game_id = metadata.get("espn_game_id", "") or metadata.get(
+                "event_id", ""
+            )
 
-            # Get game info from metadata
-            game_info = ""
-            if metadata.get("game_short_name"):
-                game_info = metadata["game_short_name"]
-            elif metadata.get("home_team") and metadata.get("away_team"):
-                game_info = f"{metadata['away_team']} @ {metadata['home_team']}"
-            elif metadata.get("espn_game_id"):
-                game_info = f"ESPN: {metadata['espn_game_id']}"
-            elif metadata.get("event_id"):
-                game_info = f"Event: {metadata['event_id']}"
+            if len(trial_id) > 48:
+                trial_id = trial_id[:45] + "..."
+            if len(game_name) > 28:
+                game_name = game_name[:25] + "..."
+            if len(espn_game_id) > 12:
+                espn_game_id = espn_game_id[:12]
 
-            # Truncate if needed
-            if len(trial_id) > 36:
-                trial_id = trial_id[:33] + "..."
-            if len(game_info) > 38:
-                game_info = game_info[:35] + "..."
+            print(f"  {game_name:<30} {espn_game_id:<14} {trial_id:<50}")
 
-            # Status emoji
-            status_icon = {
-                "pending": "⏳",
-                "starting": "🚀",
-                "running": "▶️",
-                "stopping": "⏹️",
-                "stopped": "⏹️",
-                "failed": "❌",
-            }.get(phase, "")
-            status = f"{status_icon} {phase}"
-
-            print(f"  {status:<12} {trial_id:<38} {game_info:<40}")
-
-            # Show links if requested
-            if show_links:
-                _print_trial_links(
-                    metadata=metadata,
-                    event_id=metadata.get("event_id", ""),
-                    sport_type=metadata.get("sport_type", "nba"),
-                )
-
-            # Show error if present
-            if trial.get("error"):
-                print(f"    └─ Error: {trial['error'][:80]}")
-
-    if total_count == 0:
+    # Summary
+    active_count = len(active_scheduled) + len(active_running)
+    if active_count == 0 and (not include_finished or len(all_finished) == 0):
         print("\n  No trials found.")
 
     return 0

@@ -392,17 +392,16 @@ class ScheduleManager:
             for source in loaded_sources:
                 self._sources[source.source_id] = source
 
-            # Load scheduled trials
+            # Load all scheduled trials (including finished ones for history)
             loaded = self._store.load()
             for s in loaded:
-                # Skip completed/cancelled schedules
+                self._schedules[s.schedule_id] = s
+                # Track scheduled events for active schedules only
                 if s.phase not in (
                     ScheduledTrialPhase.COMPLETED,
                     ScheduledTrialPhase.CANCELLED,
                     ScheduledTrialPhase.FAILED,
                 ):
-                    self._schedules[s.schedule_id] = s
-                    # Track scheduled events
                     source_id = s.metadata.get("source_id")
                     if source_id:
                         self._scheduled_events[(source_id, s.event_id)] = s.schedule_id
@@ -655,9 +654,27 @@ class ScheduleManager:
         """Get a scheduled trial by ID."""
         return self._schedules.get(schedule_id)
 
-    def list_scheduled(self) -> list[ScheduledTrial]:
-        """List all scheduled trials."""
-        return list(self._schedules.values())
+    def list_scheduled(self, include_finished: bool = False) -> list[ScheduledTrial]:
+        """List scheduled trials.
+
+        Args:
+            include_finished: If True, include completed/cancelled/failed trials.
+                             If False (default), only return active trials.
+
+        Returns:
+            List of scheduled trials
+        """
+        if include_finished:
+            return list(self._schedules.values())
+
+        # Filter out finished trials
+        active_phases = {
+            ScheduledTrialPhase.WAITING,
+            ScheduledTrialPhase.LAUNCHING,
+            ScheduledTrialPhase.RUNNING,
+            ScheduledTrialPhase.MONITORING,
+        }
+        return [s for s in self._schedules.values() if s.phase in active_phases]
 
     async def clear_all_scheduled(self) -> int:
         """Cancel and remove all scheduled trials.
@@ -1266,13 +1283,13 @@ class ScheduleManager:
         return None
 
     async def _stop_trial(self, scheduled: ScheduledTrial) -> None:
-        """Stop a running trial."""
+        """Stop a running trial (game completed normally)."""
         if not scheduled.launched_trial_id:
             return
 
         try:
-            # Stop via trial manager (which handles orchestrator stop internally)
-            await self._trial_manager.cancel(scheduled.launched_trial_id)
+            # Stop via trial manager - use complete_trial() not cancel() since game completed
+            await self._trial_manager.complete_trial(scheduled.launched_trial_id)
 
             scheduled.phase = ScheduledTrialPhase.COMPLETED
             self._persist()

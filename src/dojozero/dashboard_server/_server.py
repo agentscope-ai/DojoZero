@@ -1104,9 +1104,15 @@ def create_dashboard_app(
 
     @app.get("/api/scheduled-trials")
     async def list_scheduled_trials(
+        include_finished: bool = False,
         state: DashboardServerState = Depends(get_server_state),
     ) -> JSONResponse:
-        """List all scheduled trials (auto-scheduled from trial sources)."""
+        """List scheduled trials (auto-scheduled from trial sources).
+
+        Args:
+            include_finished: If true, include completed/cancelled/failed trials.
+                             Default is false (only active trials).
+        """
         if state.schedule_manager is None:
             return JSONResponse(
                 content={
@@ -1115,7 +1121,9 @@ def create_dashboard_app(
                 status_code=400,
             )
 
-        schedules = state.schedule_manager.list_scheduled()
+        schedules = state.schedule_manager.list_scheduled(
+            include_finished=include_finished
+        )
         return JSONResponse(
             content={
                 "count": len(schedules),
