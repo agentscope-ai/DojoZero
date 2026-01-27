@@ -15,6 +15,8 @@ class OddsUpdateEvent(DataEvent):
     """
 
     event_id: str = field(default="")
+    home_tricode: str = field(default="")  # Home team code (e.g., "LAL", "KC")
+    away_tricode: str = field(default="")  # Away team code (e.g., "BOS", "SF")
     home_odds: float = field(default=1.0)  # Computed: 1 / home_probability
     away_odds: float = field(default=1.0)  # Computed: 1 / away_probability
     home_probability: float = field(
