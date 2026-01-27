@@ -258,8 +258,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
     ) -> None:
         """Emit a span for an agent message to the OTel exporter."""
         tags: dict[str, Any] = {
-            "dojozero.event.type": operation_name,
-            "dojozero.event.sequence": self._event_count,
+            "sequence": self._event_count,
             "event.stream_id": stream_id,
             "event.role": role,
             "event.name": self.name,

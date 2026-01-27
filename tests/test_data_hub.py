@@ -454,7 +454,7 @@ class TestDataHubSpanEmission:
         # Verify create_span_from_event was called with correct tags
         call_args = mock_create_span.call_args
         tags = call_args.kwargs["extra_tags"]
-        assert tags["dojozero.game.date"] == "2025-01-21"
+        assert tags["game.date"] == "2025-01-21"
 
     @patch("dojozero.core._tracing.emit_span")
     @patch("dojozero.core._tracing.create_span_from_event")
@@ -486,7 +486,7 @@ class TestDataHubSpanEmission:
 
         call_args = mock_create_span.call_args
         tags = call_args.kwargs["extra_tags"]
-        assert tags["dojozero.game.date"] == "2025-02-15"
+        assert tags["game.date"] == "2025-02-15"
 
     @patch("dojozero.core._tracing.emit_span")
     @patch("dojozero.core._tracing.create_span_from_event")
@@ -505,7 +505,7 @@ class TestDataHubSpanEmission:
 
         call_args = mock_create_span.call_args
         tags = call_args.kwargs["extra_tags"]
-        assert tags["dojozero.game.date"] == "2025-03-10"
+        assert tags["game.date"] == "2025-03-10"
 
     @patch("dojozero.core._tracing.emit_span")
     @patch("dojozero.core._tracing.create_span_from_event")
@@ -522,7 +522,7 @@ class TestDataHubSpanEmission:
 
         call_args = mock_create_span.call_args
         tags = call_args.kwargs["extra_tags"]
-        assert "dojozero.game.date" not in tags
+        assert "game.date" not in tags
 
     @patch("dojozero.core._tracing.emit_span")
     @patch("dojozero.core._tracing.create_span_from_event")
@@ -539,7 +539,7 @@ class TestDataHubSpanEmission:
 
         call_args = mock_create_span.call_args
         tags = call_args.kwargs["extra_tags"]
-        assert tags["dojozero.game.id"] == "401810490"
+        assert tags["game.id"] == "401810490"
 
     @patch("dojozero.core._tracing.emit_span")
     @patch("dojozero.core._tracing.create_span_from_event")
@@ -556,4 +556,24 @@ class TestDataHubSpanEmission:
 
         call_args = mock_create_span.call_args
         tags = call_args.kwargs["extra_tags"]
-        assert tags["dojozero.game.id"] == "0022400608"
+        assert tags["game.id"] == "0022400608"
+
+    @patch("dojozero.core._tracing.emit_span")
+    @patch("dojozero.core._tracing.create_span_from_event")
+    def test_game_id_from_store_takes_precedence(
+        self, mock_create_span, mock_emit_span, hub_with_trial_id
+    ):
+        """Test game_id passed from store takes precedence over event payload."""
+        mock_create_span.return_value = MagicMock()
+        # Event has different game_id in payload
+        event = TestEvent(event_id="999999999", value="test")
+
+        # Pass authoritative game_id from store
+        hub_with_trial_id._emit_event_span(
+            event, actor_id="test_actor", sport_type="nba", game_id="401810490"
+        )
+
+        call_args = mock_create_span.call_args
+        tags = call_args.kwargs["extra_tags"]
+        # Store's game_id should win over event's event_id
+        assert tags["game.id"] == "401810490"

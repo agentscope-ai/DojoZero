@@ -417,11 +417,11 @@ class SLSTraceReader:
             start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
 
         # SLS query for trial.started spans
-        # Note: Field names use underscores in SLS (operation_name, dojozero_trial_id)
+        # Note: Field names use underscores in SLS (operation_name, trace_id)
         query = (
             f'service:"{self._service_name}" AND '
             f'operation_name:"trial.started" | '
-            f"SELECT DISTINCT dojozero_trial_id as trial_id LIMIT {limit}"
+            f"SELECT DISTINCT trace_id as trial_id LIMIT {limit}"
         )
 
         params = {
@@ -487,9 +487,9 @@ class SLSTraceReader:
             from_time = start_time
 
         # SLS query for spans with specific trial_id
-        # Note: Field names use underscores in SLS (dojozero_trial_id not dojozero.trial.id)
+        # Note: trace_id contains the trial_id
         # Simple search query without SQL - results are returned in time order by default
-        query = f'service:"{self._service_name}" AND dojozero_trial_id:"{trial_id}"'
+        query = f'service:"{self._service_name}" AND trace_id:"{trial_id}"'
 
         params = {
             "type": "log",
@@ -764,9 +764,8 @@ def create_span_from_event(
     start_us = int(now.timestamp() * 1_000_000)
     duration_us = duration_ms * 1000
 
-    tags = {
-        "dojozero.trial.id": trial_id,
-        "dojozero.actor.id": actor_id,
+    tags: dict[str, Any] = {
+        "actor.id": actor_id,
     }
     if extra_tags:
         tags.update(extra_tags)
@@ -812,8 +811,8 @@ def convert_actor_registration_to_span(
 
     tags: dict[str, Any] = {
         "dojozero.trial.id": trial_id,
-        "dojozero.actor.id": actor_id,
-        "dojozero.actor.type": actor_type,
+        "actor.id": actor_id,
+        "actor.type": actor_type,
     }
 
     # Add resource.* tags from metadata
@@ -874,10 +873,8 @@ def convert_checkpoint_event_to_span(
         "sequence",
     }
     tags: dict[str, Any] = {
-        "dojozero.trial.id": trial_id,
-        "dojozero.actor.id": event_actor_id,
-        "dojozero.event.type": event_type,
-        "dojozero.event.sequence": event.get("sequence", sequence),
+        "actor.id": event_actor_id,
+        "sequence": event.get("sequence", sequence),
     }
     # Add remaining event data as tags
     for key, value in event.items():
@@ -1005,10 +1002,8 @@ def convert_agent_message_to_span(
 
     # Use event.* prefix so arena UI spanToEvent can extract fields
     tags: dict[str, Any] = {
-        "dojozero.trial.id": trial_id,
-        "dojozero.actor.id": actor_id,
-        "dojozero.event.type": operation_name,
-        "dojozero.event.sequence": sequence,
+        "actor.id": actor_id,
+        "sequence": sequence,
         "event.stream_id": stream_id,
         "event.role": role,
         "event.name": name,
