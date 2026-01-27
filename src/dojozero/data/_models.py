@@ -152,6 +152,30 @@ def convert_datetime_to_iso(obj: Any) -> Any:
         return obj
 
 
+def extract_game_id(event_dict: dict[str, Any]) -> str:
+    """Extract game_id from an event dictionary.
+
+    Tries 'game_id' field first, then falls back to 'event_id'.
+    Handles event_id formats like "0022400608_pbp_188" by extracting
+    the first segment (the actual game_id).
+
+    Args:
+        event_dict: Dictionary representation of an event
+
+    Returns:
+        Extracted game_id string, or empty string if not found
+    """
+    raw_id = event_dict.get("game_id") or event_dict.get("event_id", "")
+    if not raw_id:
+        return ""
+
+    raw_id_str = str(raw_id)
+    # Handle event_id format like "0022400608_pbp_188" -> extract game_id
+    if "_" in raw_id_str and raw_id_str.startswith("00"):
+        return raw_id_str.split("_")[0]
+    return raw_id_str
+
+
 class DataEventFactory:
     """Factory for creating DataEvent instances from dictionaries.
 

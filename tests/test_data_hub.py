@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from dojozero.data._hub import DataHub
-from dojozero.data._models import DataEvent, register_event
+from dojozero.data._models import DataEvent, extract_game_id, register_event
 
 
 # Test event class - must be a frozen dataclass with kw_only=True for registration
@@ -579,3 +579,37 @@ class TestDataHubSpanEmission:
         tags = call_args.kwargs["extra_tags"]
         # Store's game_id should win over event's event_id
         assert tags["game.id"] == "401810490"
+
+
+class TestExtractGameId:
+    """Tests for the extract_game_id utility function."""
+
+    def test_extracts_game_id_field(self):
+        """Test extraction from game_id field."""
+        event_dict = {"game_id": "401810490", "event_id": "other_id"}
+        assert extract_game_id(event_dict) == "401810490"
+
+    def test_falls_back_to_event_id(self):
+        """Test fallback to event_id when game_id is missing."""
+        event_dict = {"event_id": "401810490"}
+        assert extract_game_id(event_dict) == "401810490"
+
+    def test_parses_pbp_event_id_format(self):
+        """Test parsing of play-by-play event_id format."""
+        event_dict = {"event_id": "0022400608_pbp_188"}
+        assert extract_game_id(event_dict) == "0022400608"
+
+    def test_returns_empty_string_when_no_ids(self):
+        """Test returns empty string when no game_id or event_id."""
+        event_dict = {"other_field": "value"}
+        assert extract_game_id(event_dict) == ""
+
+    def test_handles_non_pbp_event_id(self):
+        """Test event_id that doesn't match pbp pattern is returned as-is."""
+        event_dict = {"event_id": "401810490"}
+        assert extract_game_id(event_dict) == "401810490"
+
+    def test_handles_empty_game_id(self):
+        """Test falls back to event_id when game_id is empty string."""
+        event_dict = {"game_id": "", "event_id": "401810490"}
+        assert extract_game_id(event_dict) == "401810490"

@@ -810,7 +810,6 @@ def convert_actor_registration_to_span(
     operation_name = f"{actor_type}.registered"
 
     tags: dict[str, Any] = {
-        "dojozero.trial.id": trial_id,
         "actor.id": actor_id,
         "actor.type": actor_type,
     }

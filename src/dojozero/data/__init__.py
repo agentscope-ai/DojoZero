@@ -1,7 +1,13 @@
 """Data infrastructure: Events, Facts, Stores, Processors, and DataHub."""
 
 # Core base classes
-from dojozero.data._models import DataEvent, DataEventFactory, DataFact, register_event
+from dojozero.data._models import (
+    DataEvent,
+    DataEventFactory,
+    DataFact,
+    extract_game_id,
+    register_event,
+)
 from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data._processors import CompositeProcessor, DataProcessor
 from dojozero.data._backtest import BacktestCoordinator, ReplayCoordinator
@@ -51,6 +57,7 @@ __all__ = [
     "DataEvent",
     "DataEventFactory",
     "DataFact",
+    "extract_game_id",
     "register_event",
     # Game info models
     "GameInfo",

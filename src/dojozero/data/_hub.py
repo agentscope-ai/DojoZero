@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from dojozero.data._models import DataEvent
+from dojozero.data._models import DataEvent, extract_game_id
 
 logger = logging.getLogger(__name__)
 
@@ -191,16 +191,9 @@ class DataHub:
 
             # Extract game_id as top-level tag for easier querying
             # Use store's game_id (authoritative), fall back to event payload
-            resolved_game_id = (
-                game_id or event_dict.get("game_id") or event_dict.get("event_id", "")
-            )
+            resolved_game_id = game_id or extract_game_id(event_dict)
             if resolved_game_id:
-                # Handle event_id format like "0022400608_pbp_188" -> extract game_id
-                if "_" in str(resolved_game_id) and str(resolved_game_id).startswith(
-                    "00"
-                ):
-                    resolved_game_id = str(resolved_game_id).split("_")[0]
-                tags["game.id"] = str(resolved_game_id)
+                tags["game.id"] = resolved_game_id
 
             # Extract game_date as top-level tag (YYYY-MM-DD format)
             game_date = None
