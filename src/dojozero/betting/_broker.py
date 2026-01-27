@@ -22,6 +22,8 @@ import uuid
 from collections import defaultdict
 from typing import List, Sequence, Set, TypedDict
 
+from pydantic import BaseModel, Field
+
 from dojozero.core import (
     RuntimeContext,
     Agent,
@@ -478,6 +480,123 @@ class Statistics:
             "net_profit": str(self.net_profit),
             "roi": self.roi,
         }
+
+
+# =============================================================================
+# Pydantic Model for Broker State Update
+# =============================================================================
+
+
+class BrokerStateUpdate(BaseModel):
+    """Pydantic model for serializing broker state updates to the frontend.
+
+    This model encapsulates all broker state data (accounts and bets) that is sent
+    to the arena frontend for deserialization. Nested data structures use Dict and
+    List types rather than nested Pydantic models for simplicity, while still providing
+    top-level validation through Pydantic.
+
+    Use `from_broker_state()` to create an instance from broker internal state,
+    then `to_json_strings()` to serialize for span tags.
+    """
+
+    accounts: Dict[str, Dict[str, str]] = Field(
+        ...,
+        description="Mapping of agent_id to account data with 'balance' and 'last_updated' keys",
+    )
+    bets: Dict[str, Dict[str, Any]] = Field(
+        ...,
+        description=(
+            "Mapping of agent_id to bets data containing: "
+            "active_bets_count, pending_orders_count, settled_bets_count (int), "
+            "active_bets, pending_orders (lists of bet detail dicts)"
+        ),
+    )
+
+    @classmethod
+    def from_broker_state(
+        cls,
+        accounts: Dict[str, "Account"],
+        active_bets: Dict[str, List[str]],
+        pending_orders: Dict[str, List[str]],
+        bet_history: Dict[str, List[str]],
+        all_bets: Dict[str, "Bet"],
+    ) -> "BrokerStateUpdate":
+        """Create BrokerStateUpdate from broker internal state.
+
+        Args:
+            accounts: Mapping of agent_id to Account dataclass
+            active_bets: Mapping of agent_id to list of bet_ids
+            pending_orders: Mapping of agent_id to list of bet_ids
+            bet_history: Mapping of agent_id to list of bet_ids
+            all_bets: Mapping of bet_id to Bet dataclass
+
+        Returns:
+            BrokerStateUpdate instance ready for serialization
+        """
+        # Build accounts dict
+        accounts_data: Dict[str, Dict[str, str]] = {
+            agent_id: {
+                "balance": str(account.balance),
+                "last_updated": account.last_updated.isoformat(),
+            }
+            for agent_id, account in accounts.items()
+        }
+
+        # Build bets dict
+        bets_data: Dict[str, Dict[str, Any]] = {}
+        for agent_id in accounts.keys():
+            agent_active_bets = active_bets.get(agent_id, [])
+            agent_pending_orders = pending_orders.get(agent_id, [])
+            agent_bet_history = bet_history.get(agent_id, [])
+
+            # Build active bet details
+            active_bet_details = [
+                {
+                    "bet_id": bet.bet_id,
+                    "event_id": bet.event_id,
+                    "amount": str(bet.amount),
+                    "selection": bet.selection,
+                    "odds": str(bet.odds),
+                    "bet_type": bet.bet_type.value,
+                    "status": bet.status.value,
+                }
+                for bet_id in agent_active_bets
+                if (bet := all_bets.get(bet_id))
+            ]
+
+            # Build pending order details
+            pending_order_details = [
+                {
+                    "bet_id": bet.bet_id,
+                    "event_id": bet.event_id,
+                    "amount": str(bet.amount),
+                    "selection": bet.selection,
+                    "limit_odds": str(bet.limit_odds) if bet.limit_odds else None,
+                    "bet_type": bet.bet_type.value,
+                    "status": bet.status.value,
+                }
+                for bet_id in agent_pending_orders
+                if (bet := all_bets.get(bet_id))
+            ]
+
+            bets_data[agent_id] = {
+                "active_bets_count": len(agent_active_bets),
+                "pending_orders_count": len(agent_pending_orders),
+                "settled_bets_count": len(agent_bet_history),
+                "active_bets": active_bet_details,
+                "pending_orders": pending_order_details,
+            }
+
+        return cls(accounts=accounts_data, bets=bets_data)
+
+    def to_json_strings(self) -> tuple[str, str]:
+        """Serialize accounts and bets to separate JSON strings for tags.
+
+        Returns:
+            Tuple of (accounts_json, bets_json) strings
+        """
+        # Pydantic's model_dump() already returns JSON-serializable dicts
+        return json.dumps(self.accounts), json.dumps(self.bets)
 
 
 # =============================================================================
@@ -1567,63 +1686,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """
         # Acquire global lock to ensure atomic snapshot
         async with self._state_snapshot_lock:
-            # Collect account balances
-            accounts_data = {}
-            for agent_id, account in self._accounts.items():
-                accounts_data[agent_id] = {
-                    "balance": str(account.balance),
-                    "last_updated": account.last_updated.isoformat(),
-                }
-
-            # Collect bet status per agent
-            bets_data = {}
-            for agent_id in self._accounts.keys():
-                active_bets = self._active_bets.get(agent_id, [])
-                pending_orders = self._pending_orders.get(agent_id, [])
-                bet_history = self._bet_history.get(agent_id, [])
-
-                # Get bet details
-                active_bet_details = []
-                for bet_id in active_bets:
-                    bet = self._bets.get(bet_id)
-                    if bet:
-                        active_bet_details.append(
-                            {
-                                "bet_id": bet.bet_id,
-                                "event_id": bet.event_id,
-                                "amount": str(bet.amount),
-                                "selection": bet.selection,
-                                "odds": str(bet.odds),
-                                "bet_type": bet.bet_type.value,
-                                "status": bet.status.value,
-                            }
-                        )
-
-                pending_order_details = []
-                for bet_id in pending_orders:
-                    bet = self._bets.get(bet_id)
-                    if bet:
-                        pending_order_details.append(
-                            {
-                                "bet_id": bet.bet_id,
-                                "event_id": bet.event_id,
-                                "amount": str(bet.amount),
-                                "selection": bet.selection,
-                                "limit_odds": str(bet.limit_odds)
-                                if bet.limit_odds
-                                else None,
-                                "bet_type": bet.bet_type.value,
-                                "status": bet.status.value,
-                            }
-                        )
-
-                bets_data[agent_id] = {
-                    "active_bets_count": len(active_bets),
-                    "pending_orders_count": len(pending_orders),
-                    "settled_bets_count": len(bet_history),
-                    "active_bets": active_bet_details,
-                    "pending_orders": pending_order_details,
-                }
+            # Create broker state update model directly from broker state
+            state_update = BrokerStateUpdate.from_broker_state(
+                accounts=self._accounts,
+                active_bets=self._active_bets,
+                pending_orders=self._pending_orders,
+                bet_history=self._bet_history,
+                all_bets=self._bets,
+            )
+            accounts_json, bets_json = state_update.to_json_strings()
 
             # Create span with all the data
             tags = {
@@ -1631,8 +1702,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 "broker.change_type": change_type,
                 "broker.accounts_count": len(self._accounts),
                 "broker.bets_count": len(self._bets),
-                "broker.accounts": json.dumps(accounts_data, default=str),
-                "broker.bets": json.dumps(bets_data, default=str),
+                "broker.accounts": accounts_json,
+                "broker.bets": bets_json,
             }
 
             span = create_span_from_event(
