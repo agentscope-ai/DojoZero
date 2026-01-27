@@ -193,7 +193,7 @@ class DataHub:
                 tags["dojozero.game.id"] = str(game_id)
 
             span = create_span_from_event(
-                trial_id=self.trial_id,  # type: ignore[arg-type]
+                trial_id=self.trial_id,
                 actor_id=actor_id,
                 operation_name=event_type,
                 start_time=event.timestamp,
