@@ -75,6 +75,9 @@ class DataHub:
         self._recent_events: dict[str, list[DataEvent]] = defaultdict(list)
         self._max_recent_events_per_type = 100  # Keep last 100 events per type
 
+        # Track sequence numbers per event type for trace emission
+        self._event_sequences: dict[str, int] = defaultdict(int)
+
     def subscribe_agent(
         self,
         agent_id: str,
@@ -108,11 +111,18 @@ class DataHub:
         if agent_id in self._agent_subscriptions:
             del self._agent_subscriptions[agent_id]
 
-    async def receive_event(self, event: DataEvent) -> None:
+    async def receive_event(
+        self,
+        event: DataEvent,
+        source_actor_id: str | None = None,
+        sport_type: str = "",
+    ) -> None:
         """Receive an event from a DataStore.
 
         Args:
             event: Event to receive
+            source_actor_id: Actor ID of the source (store) that emitted the event
+            sport_type: Sport type of the source store (e.g., "nba", "nfl")
         """
         # Cache event for late-joining subscribers
         self._cache_event(event)
@@ -121,11 +131,76 @@ class DataHub:
         if not self._backtest_mode:
             await self._persist_event(event)
 
-        # Note: Event span emission is handled by DataStream._emit_event_span()
-        # when the stream publishes the event. We don't emit here to avoid duplicates.
+        # Emit to trace backend if trial_id is set
+        if self.trial_id and not self._backtest_mode:
+            self._emit_event_span(event, source_actor_id or self.hub_id, sport_type)
 
         # Dispatch to subscribed agents
         await self._dispatch_event(event)
+
+    def _emit_event_span(
+        self, event: DataEvent, actor_id: str, sport_type: str
+    ) -> None:
+        """Emit an event as a span to the trace backend.
+
+        Args:
+            event: Event to emit
+            actor_id: Actor ID of the source (store) that emitted the event
+            sport_type: Sport type of the source store (e.g., "nba", "nfl")
+        """
+        try:
+            from dojozero.core._tracing import create_span_from_event, emit_span
+
+            event_type = event.event_type
+
+            # Increment and get sequence for this event type
+            self._event_sequences[event_type] += 1
+            sequence = self._event_sequences[event_type]
+
+            # Build tags with event data
+            tags: dict[str, Any] = {
+                "dojozero.event.type": event_type,
+                "dojozero.event.sequence": sequence,
+                "dojozero.sport.type": sport_type,
+            }
+
+            # Add payload data as event.* tags
+            event_dict = event.to_dict()
+            for key, value in event_dict.items():
+                if key in ("event_type", "timestamp"):
+                    continue  # Skip metadata fields
+                if isinstance(value, (dict, list)):
+                    import json
+
+                    tags[f"event.{key}"] = json.dumps(value, default=str)
+                else:
+                    tags[f"event.{key}"] = value
+
+            # Extract game_id as top-level tag for easier querying
+            game_id = event_dict.get("game_id") or event_dict.get("event_id", "")
+            if game_id:
+                # Handle event_id format like "0022400608_pbp_188" -> extract game_id
+                if "_" in str(game_id) and str(game_id).startswith("00"):
+                    game_id = str(game_id).split("_")[0]
+                tags["dojozero.game.id"] = str(game_id)
+
+            span = create_span_from_event(
+                trial_id=self.trial_id,  # type: ignore[arg-type]
+                actor_id=actor_id,
+                operation_name=event_type,
+                start_time=event.timestamp,
+                extra_tags=tags,
+            )
+            emit_span(span)
+
+        except Exception as e:
+            # Don't let trace emission failures affect event processing
+            logger.warning(
+                "Failed to emit event span: %s: %s (event_type=%s)",
+                type(e).__name__,
+                e,
+                event.event_type,
+            )
 
     def _cache_event(self, event: DataEvent) -> None:
         """Cache event for late-joining subscribers."""
@@ -219,11 +294,18 @@ class DataHub:
         Args:
             store: DataStore instance
         """
+        # Capture store info for use in emit_wrapper closure
+        store_id = store.store_id
+        store_sport_type = store.sport_type
 
         # Set the store's event emitter to this hub's receive_event
         # Note: event_emitter is sync callback, but we schedule async work
         def emit_wrapper(event: DataEvent) -> None:
-            task = asyncio.create_task(self.receive_event(event))
+            task = asyncio.create_task(
+                self.receive_event(
+                    event, source_actor_id=store_id, sport_type=store_sport_type
+                )
+            )
             task.add_done_callback(self._handle_task_exception)
 
         store.set_event_emitter(emit_wrapper)

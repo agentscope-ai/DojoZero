@@ -74,6 +74,7 @@ class PolymarketStore(DataStore):
         self._market_url = market_url
         self._slug = slug
         self._sport = sport.lower()  # "nba" or "nfl"
+        self.sport_type = self._sport  # Expose for DataHub trace context
 
         # Track game status for dynamic polling intervals
         self._game_started: bool = False

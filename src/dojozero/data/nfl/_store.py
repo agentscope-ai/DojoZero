@@ -21,6 +21,8 @@ from dojozero.data.nfl._state_tracker import NFLGameStateTracker
 class NFLStore(DataStore):
     """NFL data store for polling ESPN API and emitting events."""
 
+    sport_type: str = "nfl"
+
     def __init__(
         self,
         store_id: str = "nfl_store",
