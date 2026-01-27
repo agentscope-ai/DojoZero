@@ -121,68 +121,11 @@ class DataHub:
         if not self._backtest_mode:
             await self._persist_event(event)
 
-        # Emit to trace backend if trial_id is set
-        if self.trial_id and not self._backtest_mode:
-            self._emit_event_span(event)
+        # Note: Event span emission is handled by DataStream._emit_event_span()
+        # when the stream publishes the event. We don't emit here to avoid duplicates.
 
         # Dispatch to subscribed agents
         await self._dispatch_event(event)
-
-    _sls_emit_count: int = 0
-    _sls_error_count: int = 0
-
-    def _emit_event_span(self, event: DataEvent) -> None:
-        """Emit an event as a span to the trace backend.
-
-        Args:
-            event: Event to emit
-        """
-        try:
-            from dojozero.core._tracing import (
-                convert_checkpoint_event_to_span,
-                emit_span,
-                get_sls_log_exporter,
-            )
-
-            # Check if SLS exporter is configured
-            sls_exporter = get_sls_log_exporter()
-            if sls_exporter is None:
-                logger.warning(
-                    "SLS exporter not configured, skipping event span emission "
-                    "for event_type=%s",
-                    event.event_type,
-                )
-                return
-
-            # Convert event to dict for span conversion
-            event_dict = event.to_dict()
-            span = convert_checkpoint_event_to_span(
-                trial_id=self.trial_id,  # type: ignore[arg-type]
-                event=event_dict,
-                sequence=0,
-                actor_id=getattr(event, "stream_id", self.hub_id),
-            )
-            emit_span(span)
-            DataHub._sls_emit_count += 1
-            if DataHub._sls_emit_count % 50 == 0:
-                logger.info(
-                    "SLS emit progress: %d events emitted (%d errors) "
-                    "[latest: event_type=%s, trial=%s]",
-                    DataHub._sls_emit_count,
-                    DataHub._sls_error_count,
-                    event.event_type,
-                    self.trial_id,
-                )
-        except Exception as e:
-            DataHub._sls_error_count += 1
-            # Don't let trace emission failures affect event processing
-            logger.warning(
-                "Failed to emit event span (#%d): %s: %s (event_type=%s)",
-                DataHub._sls_error_count,
-                type(e).__name__,
-                e,
-                event.event_type,
-            )
 
     def _cache_event(self, event: DataEvent) -> None:
         """Cache event for late-joining subscribers."""
