@@ -23,7 +23,7 @@ from dojozero.betting import (
     BetType,
 )
 
-from dojozero.core import RuntimeContext, StreamEvent
+from dojozero.core import StreamEvent
 from dojozero.data.nba._events import (
     GameInitializeEvent,
     GameStartEvent,
@@ -70,13 +70,7 @@ async def broker():
         "actor_id": "test_broker",
         "initial_balance": "1000.00",
     }
-    context = RuntimeContext(
-        trial_id="test-trial",
-        data_hubs={},
-        stores={},
-        startup=None,
-    )
-    broker = BrokerOperator.from_dict(dict(config), context)
+    broker = BrokerOperator(config, trial_id="test-trial")
     await broker.start()
     yield broker
     await broker.stop()
@@ -91,7 +85,7 @@ def agent():
 @pytest_asyncio.fixture
 async def broker_with_agent(broker, agent):
     """Broker with registered agent"""
-    broker.register_agents([agent])  # type: ignore[arg-type]
+    await broker.register_agents([agent])  # type: ignore[arg-type]
     return broker, agent
 
 
@@ -134,7 +128,7 @@ class TestAccountManagement:
 
     async def test_create_account(self, broker):
         """Test creating a new account"""
-        account = broker.create_account("agent1", Decimal("500.00"))
+        account = await broker.create_account("agent1", Decimal("500.00"))
 
         assert account.agent_id == "agent1"
         assert account.balance == Decimal("500.00")
@@ -142,15 +136,15 @@ class TestAccountManagement:
 
     async def test_create_duplicate_account_raises_error(self, broker):
         """Test that creating duplicate account raises error"""
-        broker.create_account("agent1", Decimal("500.00"))
+        await broker.create_account("agent1", Decimal("500.00"))
 
         with pytest.raises(ValueError, match="already exists"):
-            broker.create_account("agent1", Decimal("500.00"))
+            await broker.create_account("agent1", Decimal("500.00"))
 
     async def test_create_account_negative_balance_raises_error(self, broker):
         """Test that negative initial balance raises error"""
         with pytest.raises(ValueError, match="non-negative"):
-            broker.create_account("agent1", Decimal("-100.00"))
+            await broker.create_account("agent1", Decimal("-100.00"))
 
     async def test_get_balance(self, broker_with_agent):
         """Test retrieving account balance"""
@@ -234,7 +228,7 @@ class TestEventManagement:
 
         event = await broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
         assert quote["event_id"] == "game1"
         assert quote["home_team"] == "Lakers"
         assert quote["away_team"] == "Warriors"
@@ -281,7 +275,7 @@ class TestEventManagement:
 
         event = await broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
 
         assert quote["event_id"] == event_id
         assert quote["home_team"] == "Lakers"
@@ -313,7 +307,7 @@ class TestEventManagement:
 
         event = await broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
         assert Decimal(quote["home_odds"]) == Decimal("2.00")
         assert Decimal(quote["away_odds"]) == Decimal("2.20")
 
@@ -341,7 +335,7 @@ class TestEventManagement:
 
         event = await broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
         assert quote["status"] == "LIVE"
 
     async def test_update_event_status_to_closed(self, initialized_event):
@@ -1267,13 +1261,7 @@ class TestStateManagement:
         state = await broker.save_state()
 
         # Create new broker and load state
-        context = RuntimeContext(
-            trial_id="test-trial",
-            data_hubs={},
-            stores={},
-            startup=None,
-        )
-        new_broker = BrokerOperator.from_dict({"actor_id": "new_broker"}, context)
+        new_broker = BrokerOperator({"actor_id": "new_broker"}, trial_id="test-trial")
         await new_broker.load_state(state)
 
         # Verify state was restored
@@ -1285,7 +1273,7 @@ class TestStateManagement:
 
         event = await new_broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
         assert quote["event_id"] == "test_event"
 
 
@@ -1652,7 +1640,7 @@ class TestSpreadBetting:
         # Verify initial odds
         event = await broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
         assert "spread_lines" in quote
         assert "-3.5" in quote["spread_lines"]
         assert Decimal(quote["spread_lines"]["-3.5"]["home_odds"]) == Decimal("1.90")
@@ -1672,7 +1660,7 @@ class TestSpreadBetting:
         # Verify odds were updated
         updated_event = await broker.get_available_event()
         assert updated_event is not None
-        updated_quote = updated_event.to_dict()
+        updated_quote = updated_event.model_dump(mode="json")
         assert Decimal(updated_quote["spread_lines"]["-3.5"]["home_odds"]) == Decimal(
             "1.95"
         )
@@ -1964,7 +1952,7 @@ class TestTotalBetting:
         # Verify initial odds
         event = await broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
         assert "total_lines" in quote
         assert "220.5" in quote["total_lines"]
         assert Decimal(quote["total_lines"]["220.5"]["over_odds"]) == Decimal("1.88")
@@ -1984,7 +1972,7 @@ class TestTotalBetting:
         # Verify odds were updated
         updated_event = await broker.get_available_event()
         assert updated_event is not None
-        updated_quote = updated_event.to_dict()
+        updated_quote = updated_event.model_dump(mode="json")
         assert Decimal(updated_quote["total_lines"]["220.5"]["over_odds"]) == Decimal(
             "1.92"
         )
@@ -2206,13 +2194,7 @@ class TestAllowedTools:
             "initial_balance": "1000.00",
             "allowed_tools": ["get_balance", "get_event", "place_bet_moneyline"],
         }
-        context = RuntimeContext(
-            trial_id="test-trial",
-            data_hubs={},
-            stores={},
-            startup=None,
-        )
-        broker = BrokerOperator.from_dict(dict(config), context)
+        broker = BrokerOperator(config, trial_id="test-trial")
         await broker.start()
         yield broker
         await broker.stop()
@@ -2220,7 +2202,7 @@ class TestAllowedTools:
     async def test_allowed_tools_filtering(self, broker_with_limited_tools, agent):
         """Test that only allowed tools are exposed"""
         broker = broker_with_limited_tools
-        broker.register_agents([agent])  # type: ignore[arg-type]
+        await broker.register_agents([agent])  # type: ignore[arg-type]
 
         # Get tools for agent
         tools = broker.agent_tools(agent.actor_id)
@@ -2238,7 +2220,7 @@ class TestAllowedTools:
 
     async def test_all_tools_when_none_specified(self, broker, agent):
         """Test that all tools are available when allowed_tools is None"""
-        broker.register_agents([agent])  # type: ignore[arg-type]
+        await broker.register_agents([agent])  # type: ignore[arg-type]
 
         # Get tools for agent
         tools = broker.agent_tools(agent.actor_id)
@@ -2308,7 +2290,7 @@ class TestEventOrdering:
         # 3. Verify status is LIVE (buffered GameStartEvent was applied)
         event = await broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
         assert quote["status"] == "LIVE"
 
     async def test_game_result_before_game_initialize(self, broker):
@@ -2380,7 +2362,7 @@ class TestEventOrdering:
 
         event = await broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
         assert quote["status"] == "SCHEDULED"
 
         # 2. GameStartEvent second
@@ -2393,7 +2375,7 @@ class TestEventOrdering:
 
         event = await broker.get_available_event()
         assert event is not None
-        quote = event.to_dict()
+        quote = event.model_dump(mode="json")
         assert quote["status"] == "LIVE"
 
         # 3. GameResultEvent third

@@ -182,3 +182,144 @@ operators:
 - `get_statistics()` - Get performance stats
 
 If `allowed_tools` is omitted or `None`, all tools are enabled by default.
+
+## 10. Logging and Observability
+
+The broker emits logs to SLS (Simple Log Service) whenever account balances or bet statuses change. 
+
+### 10.1. When Logs Are Emitted
+
+Logs are automatically emitted whenever `self._accounts` or `self._bets` are modified:
+
+- **Account Operations**: `account_created`, `deposit`, `withdraw`
+- **Bet Operations**: `bet_placed`, `bet_executed`, `bet_settled`, `bet_cancelled`
+
+Each log contains a snapshot of **all** agents' current balances and bet statuses, not just the agent that triggered the change.
+
+### 10.2. Log Format
+
+Logs are emitted as OpenTelemetry spans with the following structure:
+
+**Operation Name:** `broker.state_update`
+
+**Standard Tags:**
+- `dojozero.trial.id` - Trial identifier
+- `dojozero.actor.id` - Broker actor identifier
+- `dojozero.event.type` - `"broker.state_update"`
+
+**Broker-Specific Tags:**
+- `broker.change_type` - Type of change that triggered the log (see Change Types below)
+- `broker.accounts_count` - Total number of accounts (integer)
+- `broker.bets_count` - Total number of bets (integer)
+- `broker.accounts` - JSON string containing all account information (serialized via Pydantic TypeAdapter directly from Account models, includes all fields: `agent_id`, `balance`, `created_at`, `last_updated`)
+- `broker.bets` - JSON string containing all bets keyed by bet_id (serialized via Pydantic TypeAdapter directly from Bet models, includes all 18 bet fields)
+
+### 10.3. Change Types
+
+The `broker.change_type` tag indicates what operation triggered the log:
+
+| Change Type | Description | When Emitted |
+|------------|-------------|--------------|
+| `account_created` | New agent account created | `create_account()` called |
+| `deposit` | Funds added to account | `deposit()` called |
+| `withdraw` | Funds removed from account | `withdraw()` called |
+| `bet_placed` | New bet placed (funds locked) | `place_bet()` called |
+| `bet_executed` | Limit order executed | `_match_bet()` called (limit order filled) |
+| `bet_settled` | Bet settled with outcome | `_settle_bet()` called (game ended) |
+| `bet_cancelled` | Pending order cancelled | `_cancel_pending_order()` called |
+
+### 10.4. Data Structure
+
+#### Accounts Data (`broker.accounts`)
+
+JSON string containing a map of agent IDs to complete account information. All fields from the `Account` Pydantic model are included:
+
+```json
+{
+  "agent1": {
+    "agent_id": "agent1",
+    "balance": "1000.00",
+    "created_at": "2024-01-01T10:00:00",
+    "last_updated": "2024-01-01T12:00:00"
+  },
+  "agent2": {
+    "agent_id": "agent2",
+    "balance": "500.00",
+    "created_at": "2024-01-01T10:00:00",
+    "last_updated": "2024-01-01T12:05:00"
+  }
+}
+```
+
+**Note:** Accounts are serialized directly using Pydantic `TypeAdapter(Dict[str, Account])`, which handles all Account model fields automatically.
+
+#### Bets Data (`broker.bets`)
+
+JSON string containing a flat map of bet IDs to complete bet information. All bets are serialized directly using Pydantic `TypeAdapter(Dict[str, Bet])`, which handles all Bet model fields automatically with full type safety.
+
+```json
+{
+  "bet-1": {
+    "bet_id": "bet-1",
+    "agent_id": "agent1",
+    "event_id": "event-1",
+    "amount": "100.00",
+    "selection": "home",
+    "odds": "1.85",
+    "order_type": "MARKET",
+    "limit_odds": null,
+    "betting_phase": "PRE_GAME",
+    "create_time": "2024-01-01T12:00:00",
+    "execution_time": "2024-01-01T12:00:01",
+    "status": "ACTIVE",
+    "bet_type": "MONEYLINE",
+    "spread_value": null,
+    "total_value": null,
+    "actual_payout": null,
+    "outcome": null,
+    "settlement_time": null
+  },
+  "bet-3": {
+    "bet_id": "bet-3",
+    "agent_id": "agent1",
+    "event_id": "event-1",
+    "amount": "200.00",
+    "selection": "home",
+    "odds": "2.00",
+    "order_type": "LIMIT",
+    "limit_odds": "2.00",
+    "betting_phase": "PRE_GAME",
+    "create_time": "2024-01-01T12:05:00",
+    "execution_time": null,
+    "status": "PENDING",
+    "bet_type": "MONEYLINE",
+    "spread_value": null,
+    "total_value": null,
+    "actual_payout": null,
+    "outcome": null,
+    "settlement_time": null
+  }
+}
+```
+
+
+
+**All Fields:**
+- `bet_id` - Unique bet identifier
+- `agent_id` - Agent who placed the bet
+- `event_id` - Event identifier
+- `amount` - Bet amount (as string, Decimal serialized)
+- `selection` - Bet selection ("home", "away", "over", "under")
+- `odds` - Execution odds (Decimal serialized as string)
+- `order_type` - "MARKET" or "LIMIT"
+- `limit_odds` - Limit order threshold (null for market orders)
+- `betting_phase` - "PRE_GAME" or "IN_GAME"
+- `create_time` - When bet was created (ISO format)
+- `execution_time` - When bet was executed (null if pending)
+- `status` - Current bet status ("ACTIVE", "PENDING", "SETTLED", or "CANCELLED")
+- `bet_type` - Type of bet ("MONEYLINE", "SPREAD", or "TOTAL")
+- `spread_value` - Spread value for SPREAD bets (null for other bet types)
+- `total_value` - Total value for TOTAL bets (null for other bet types)
+- `actual_payout` - Payout amount (null until settled)
+- `outcome` - "WIN" or "LOSS" (null until settled)
+- `settlement_time` - When bet was settled (null until settled)

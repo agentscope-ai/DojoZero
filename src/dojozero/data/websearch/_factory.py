@@ -20,13 +20,15 @@ logger = logging.getLogger(__name__)
 
 # Default processor mapping for common event types
 # Maps event_type -> (processor_class, source_event_types)
+# Note: source_event_types must use full event type values (e.g., "event.raw_web_search")
+# to match the event_type property of DataEvent subclasses
 DEFAULT_PROCESSOR_MAP: dict[str, tuple[type[Any] | None, list[str]]] = {
     # Raw stream: no processor, emitted directly from store
     "raw_web_search": (None, []),
     # Processed streams: processor class and source event types
-    "injury_summary": (InjurySummaryProcessor, ["raw_web_search"]),
-    "power_ranking": (PowerRankingProcessor, ["raw_web_search"]),
-    "expert_prediction": (ExpertPredictionProcessor, ["raw_web_search"]),
+    "injury_summary": (InjurySummaryProcessor, ["event.raw_web_search"]),
+    "power_ranking": (PowerRankingProcessor, ["event.raw_web_search"]),
+    "expert_prediction": (ExpertPredictionProcessor, ["event.raw_web_search"]),
 }
 
 
