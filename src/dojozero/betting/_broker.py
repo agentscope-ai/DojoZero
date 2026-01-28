@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, Literal, Optional, Union, cast
+from typing import Any, Dict, Literal, Optional, Union
 
 import asyncio
 import logging
@@ -24,10 +24,10 @@ from typing import List, Sequence, Set, TypedDict
 from pydantic import BaseModel, Field, TypeAdapter, computed_field
 
 from dojozero.core import (
-    RuntimeContext,
     Agent,
     Operator,
     OperatorBase,
+    RuntimeContext,
     StreamEvent,
 )
 from dojozero.core._tracing import create_span_from_event, emit_span
@@ -149,22 +149,6 @@ class BettingEvent(BaseModel):
     def can_bet_ingame(self) -> bool:
         """True if IN_GAME betting is allowed (status=LIVE)."""
         return self.status == EventStatus.LIVE
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for backward compatibility.
-
-        This method is kept for backward compatibility with tests and other code.
-        Pydantic's model_dump(mode="json") already handles Decimal key conversion automatically.
-        """
-        return self.model_dump(mode="json")
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BettingEvent":
-        """Create from dictionary for backward compatibility.
-
-        Pydantic's model_validate() automatically handles string-to-Decimal key conversion.
-        """
-        return cls.model_validate(data)
 
 
 # =============================================================================
@@ -412,10 +396,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
     @classmethod
     def from_dict(
-        cls, config: Dict[str, Any], context: RuntimeContext
+        cls, config: BrokerOperatorConfig, context: RuntimeContext
     ) -> "BrokerOperator":
-        """Create broker from configuration dictionary"""
-        return cls(cast(BrokerOperatorConfig, config), context.trial_id)
+        """Create broker from configuration dictionary."""
+        return cls(config, context.trial_id)
 
     async def start(self) -> None:
         """Protocol hook: called before traffic is routed"""

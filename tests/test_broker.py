@@ -23,7 +23,7 @@ from dojozero.betting import (
     BetType,
 )
 
-from dojozero.core import RuntimeContext, StreamEvent
+from dojozero.core import StreamEvent
 from dojozero.data.nba._events import (
     GameInitializeEvent,
     GameStartEvent,
@@ -70,13 +70,7 @@ async def broker():
         "actor_id": "test_broker",
         "initial_balance": "1000.00",
     }
-    context = RuntimeContext(
-        trial_id="test-trial",
-        data_hubs={},
-        stores={},
-        startup=None,
-    )
-    broker = BrokerOperator.from_dict(dict(config), context)
+    broker = BrokerOperator(config, trial_id="test-trial")
     await broker.start()
     yield broker
     await broker.stop()
@@ -1267,13 +1261,7 @@ class TestStateManagement:
         state = await broker.save_state()
 
         # Create new broker and load state
-        context = RuntimeContext(
-            trial_id="test-trial",
-            data_hubs={},
-            stores={},
-            startup=None,
-        )
-        new_broker = BrokerOperator.from_dict({"actor_id": "new_broker"}, context)
+        new_broker = BrokerOperator({"actor_id": "new_broker"}, trial_id="test-trial")
         await new_broker.load_state(state)
 
         # Verify state was restored
@@ -2206,13 +2194,7 @@ class TestAllowedTools:
             "initial_balance": "1000.00",
             "allowed_tools": ["get_balance", "get_event", "place_bet_moneyline"],
         }
-        context = RuntimeContext(
-            trial_id="test-trial",
-            data_hubs={},
-            stores={},
-            startup=None,
-        )
-        broker = BrokerOperator.from_dict(dict(config), context)
+        broker = BrokerOperator(config, trial_id="test-trial")
         await broker.start()
         yield broker
         await broker.stop()
