@@ -398,14 +398,23 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             # Single event: format directly
             event = events[0]
             payload = event.payload
-            return self._event_formatter(payload)
+            if isinstance(payload, DataEvent):
+                return self._event_formatter(payload)
+            else:
+                return f"[New data]: {json.dumps(payload, default=str, ensure_ascii=False)}"
 
         # Multiple events: consolidate with headers
         lines = [f"[{len(events)} New Events Received]\n"]
 
         for event in events:
             payload = event.payload
-            formatted = self._event_formatter(payload)
+            if isinstance(payload, DataEvent):
+                formatted = self._event_formatter(payload)
+            else:
+                formatted = (
+                    f"[Data]: {json.dumps(payload, default=str, ensure_ascii=False)}"
+                )
+
             lines.append(formatted)
 
         return "\n".join(lines)
@@ -428,7 +437,12 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # update event history
         for event in events:
             payload = event.payload
-            formatted = self._event_formatter(payload)
+            if isinstance(payload, DataEvent):
+                formatted = self._event_formatter(payload)
+            else:
+                formatted = (
+                    f"[Data]: {json.dumps(payload, default=str, ensure_ascii=False)}"
+                )
             truncated = self._truncate_event(formatted)
             self._event_history.append(truncated)
 

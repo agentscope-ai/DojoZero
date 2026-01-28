@@ -87,40 +87,6 @@ class BettingAgent(BaseBettingAgent):
                 self._game_context["home_score"] = final_score.get("home", 0)
                 self._game_context["away_score"] = final_score.get("away", 0)
 
-    def _get_context_summary(self) -> str:
-        """Get NBA-specific game context summary."""
-        ctx = self._game_context
-        home = ctx.get("home_team", "?")
-        away = ctx.get("away_team", "?")
-        status = ctx.get("game_status", "unknown")
-
-        if status == "not_started":
-            return (
-                f"Game: {away} @ {home} - Not started yet. Events: {self._event_count}"
-            )
-
-        if status == "initialized":
-            return f"Game: {away} @ {home} - Initialized. Events: {self._event_count}"
-
-        period = ctx.get("period", 0)
-        clock = ctx.get("game_clock", "")
-        home_score = ctx.get("home_score", 0)
-        away_score = ctx.get("away_score", 0)
-
-        period_str = f"Q{period}" if period <= 4 else f"OT{period - 4}"
-
-        if status == "finished":
-            return f"Game: {away} @ {home} - FINAL: {away_score}-{home_score}. Events: {self._event_count}"
-
-        odds = ctx.get("latest_odds", {})
-        odds_str = ""
-        if odds:
-            odds_str = (
-                f" | Odds: Home {odds.get('home', '?')}, Away {odds.get('away', '?')}"
-            )
-
-        return f"Game: {away} @ {home} | {period_str} {clock} | Score: {away_score}-{home_score}{odds_str}. Events: {self._event_count}"
-
     @classmethod
     def from_dict(
         cls,
