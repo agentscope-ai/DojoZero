@@ -264,6 +264,170 @@ class TestScheduleManager:
         assert len(schedules) == 2
 
     @pytest.mark.asyncio
+    async def test_unique_persistence_files_for_same_game(self, mock_trial_manager):
+        """Test that multiple trials for the same game get unique persistence files."""
+        scheduler = ScheduleManager(
+            trial_manager=mock_trial_manager,
+            store=None,
+        )
+
+        now = datetime.now(timezone.utc)
+        event_time = now + timedelta(hours=3)
+        event_id = "401810525"
+        sport_type = "nba"
+
+        # Schedule two trials for the same game
+        schedule_id_1 = await scheduler.schedule_trial(
+            scenario_name="nba-moneyline",
+            scenario_config={"hub": {}},
+            sport_type=sport_type,
+            event_id=event_id,
+            event_time=event_time,
+        )
+
+        # Add a small delay to ensure different timestamps
+        import asyncio
+
+        await asyncio.sleep(0.01)
+
+        schedule_id_2 = await scheduler.schedule_trial(
+            scenario_name="nba-moneyline",
+            scenario_config={"hub": {}},
+            sport_type=sport_type,
+            event_id=event_id,
+            event_time=event_time,
+        )
+
+        # Verify schedule IDs are different
+        assert schedule_id_1 != schedule_id_2
+        assert schedule_id_1.startswith(f"sched-{sport_type}-{event_id}-")
+        assert schedule_id_2.startswith(f"sched-{sport_type}-{event_id}-")
+
+        # Retrieve the scheduled trials
+        trial_1 = scheduler.get_scheduled(schedule_id_1)
+        trial_2 = scheduler.get_scheduled(schedule_id_2)
+
+        assert trial_1 is not None
+        assert trial_2 is not None
+
+        # Extract persistence files from configs if they exist
+        persistence_file_1 = trial_1.scenario_config.get("hub", {}).get(
+            "persistence_file"
+        )
+        persistence_file_2 = trial_2.scenario_config.get("hub", {}).get(
+            "persistence_file"
+        )
+
+        # If persistence files are set, they should be different
+        if persistence_file_1 and persistence_file_2:
+            assert persistence_file_1 != persistence_file_2
+            # Each should contain the unique schedule_id
+            assert schedule_id_1 in persistence_file_1
+            assert schedule_id_2 in persistence_file_2
+
+    @pytest.mark.asyncio
+    async def test_schedule_id_generation_is_unique(self, mock_trial_manager):
+        """Test that _generate_schedule_id creates unique IDs for same game."""
+        scheduler = ScheduleManager(
+            trial_manager=mock_trial_manager,
+            store=None,
+        )
+
+        sport_type = "nba"
+        event_id = "401810525"
+
+        # Generate multiple schedule IDs for the same game
+        schedule_ids = set()
+        for _ in range(5):
+            schedule_id = scheduler._generate_schedule_id(sport_type, event_id)
+            schedule_ids.add(schedule_id)
+            # Small delay to ensure different timestamps
+            import asyncio
+
+            await asyncio.sleep(0.001)
+
+        # All IDs should be unique
+        assert len(schedule_ids) == 5
+
+        # All should have the correct format
+        for schedule_id in schedule_ids:
+            assert schedule_id.startswith(f"sched-{sport_type}-{event_id}-")
+            # Should have 8-char hash suffix
+            hash_part = schedule_id.split("-")[-1]
+            assert len(hash_part) == 8
+
+    @pytest.mark.asyncio
+    async def test_persistence_file_with_schedule_id(self, mock_trial_manager):
+        """Test that scheduling with data_dir creates unique persistence files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scheduler = ScheduleManager(
+                trial_manager=mock_trial_manager,
+                store=None,
+            )
+
+            now = datetime.now(timezone.utc)
+            event_time = now + timedelta(hours=3)
+            event_id = "401810525"
+            sport_type = "nba"
+
+            # Schedule two trials for the same game with data_dir
+            # First, pre-generate schedule IDs and set persistence_file
+            schedule_id_1 = scheduler._generate_schedule_id(sport_type, event_id)
+            game_date = "2026-01-27"
+            persistence_file_1 = f"{tmpdir}/{game_date}/{schedule_id_1}.jsonl"
+
+            import asyncio
+
+            await asyncio.sleep(0.01)
+
+            schedule_id_2 = scheduler._generate_schedule_id(sport_type, event_id)
+            persistence_file_2 = f"{tmpdir}/{game_date}/{schedule_id_2}.jsonl"
+
+            # Schedule trials with pre-determined persistence files
+            config_1 = {"hub": {"persistence_file": persistence_file_1}}
+            config_2 = {"hub": {"persistence_file": persistence_file_2}}
+
+            returned_id_1 = await scheduler.schedule_trial(
+                scenario_name="nba-moneyline",
+                scenario_config=config_1,
+                sport_type=sport_type,
+                event_id=event_id,
+                event_time=event_time,
+                schedule_id=schedule_id_1,
+            )
+
+            returned_id_2 = await scheduler.schedule_trial(
+                scenario_name="nba-moneyline",
+                scenario_config=config_2,
+                sport_type=sport_type,
+                event_id=event_id,
+                event_time=event_time,
+                schedule_id=schedule_id_2,
+            )
+
+            # Verify schedule IDs are different
+            assert returned_id_1 != returned_id_2
+            assert returned_id_1 == schedule_id_1
+            assert returned_id_2 == schedule_id_2
+
+            # Retrieve the scheduled trials
+            trial_1 = scheduler.get_scheduled(schedule_id_1)
+            trial_2 = scheduler.get_scheduled(schedule_id_2)
+
+            assert trial_1 is not None
+            assert trial_2 is not None
+
+            # Verify persistence files are different and contain schedule_id
+            pf_1 = trial_1.scenario_config.get("hub", {}).get("persistence_file")
+            pf_2 = trial_2.scenario_config.get("hub", {}).get("persistence_file")
+
+            assert pf_1 == persistence_file_1
+            assert pf_2 == persistence_file_2
+            assert pf_1 != pf_2
+            assert schedule_id_1 in pf_1
+            assert schedule_id_2 in pf_2
+
+    @pytest.mark.asyncio
     async def test_start_loads_persisted(self, mock_trial_manager):
         """Test that start() loads persisted schedules."""
         with tempfile.TemporaryDirectory() as tmpdir:

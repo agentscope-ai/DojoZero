@@ -15,12 +15,11 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(slots=True)
 class BaseTrialMetadata:
     """Base metadata common to all trial types.
 
     All trial metadata classes should inherit from this base.
-    The frozen=True ensures metadata is immutable after construction.
 
     Attributes:
         hub_id: DataHub identifier for the trial

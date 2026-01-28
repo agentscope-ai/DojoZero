@@ -446,6 +446,20 @@ class ScheduleManager:
 
         LOGGER.info("ScheduleManager stopped")
 
+    def _generate_schedule_id(self, sport_type: str, event_id: str) -> str:
+        """Generate a unique schedule ID.
+
+        Args:
+            sport_type: Sport type (e.g., "nba", "nfl")
+            event_id: Game or event ID
+
+        Returns:
+            Unique schedule ID
+        """
+        hash_input = f"{sport_type}-{event_id}-{datetime.now(timezone.utc).isoformat()}"
+        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+        return f"sched-{sport_type}-{event_id}-{hash_suffix}"
+
     async def schedule_trial(
         self,
         scenario_name: str,
@@ -457,6 +471,7 @@ class ScheduleManager:
         check_interval_seconds: float = 60.0,
         auto_stop_on_completion: bool = True,
         metadata: dict[str, Any] | None = None,
+        schedule_id: str | None = None,
     ) -> str:
         """Schedule a single trial.
 
@@ -470,6 +485,7 @@ class ScheduleManager:
             check_interval_seconds: Interval to check game status
             auto_stop_on_completion: Whether to stop trial when game finishes
             metadata: Optional metadata
+            schedule_id: Optional schedule ID (generated if not provided)
 
         Returns:
             Schedule ID
@@ -481,6 +497,9 @@ class ScheduleManager:
         hash_input = f"{sport_type}-{game_id}-{datetime.now(timezone.utc).isoformat()}"
         hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         schedule_id = f"sched-{sport_type}-{game_id}-{hash_suffix}"
+        # Generate schedule ID if not provided
+        if schedule_id is None:
+            schedule_id = self._generate_schedule_id(sport_type, event_id)
 
         # Extract game_date from event_time in US Eastern time
         game_date = utc_to_us_date(event_time)
@@ -574,12 +593,17 @@ class ScheduleManager:
             # Add game-specific config (both NBA and NFL use espn_game_id)
             config["espn_game_id"] = game.game_id
 
-            # Add data_dir to hub config if specified
+            # Prepare hub config
+            game_date = utc_to_us_date(game.game_time_utc)
+            if "hub" not in config:
+                config["hub"] = {}
+
+            # Generate schedule_id early so we can use it in persistence_file
+            schedule_id = self._generate_schedule_id(sport_type, game.event_id)
+
+            # Set persistence_file with unique schedule_id to avoid conflicts
             if data_dir:
-                game_date = utc_to_us_date(game.game_time_utc)
-                if "hub" not in config:
-                    config["hub"] = {}
-                persistence_file = f"{data_dir}/{game_date}/{game.game_id}.jsonl"
+                persistence_file = f"{data_dir}/{game_date}/{schedule_id}.jsonl"
                 config["hub"]["persistence_file"] = persistence_file
 
             # Add game info to metadata using typed structure
@@ -606,6 +630,7 @@ class ScheduleManager:
                     check_interval_seconds=check_interval_seconds,
                     auto_stop_on_completion=auto_stop_on_completion,
                     metadata=game_metadata,
+                    schedule_id=schedule_id,
                 )
                 scheduled = self._schedules.get(schedule_id)
                 if scheduled:
@@ -882,11 +907,16 @@ class ScheduleManager:
             # Convert game time to US Eastern date for consistent date handling
             game_date = utc_to_us_date(game.game_time_utc)
 
-            # Add data_dir to hub config if specified
+            # Prepare hub config
+            if "hub" not in game_config:
+                game_config["hub"] = {}
+
+            # Generate schedule_id early so we can use it in persistence_file
+            schedule_id = self._generate_schedule_id(source.sport_type, game.event_id)
+
+            # Set persistence_file with unique schedule_id to avoid conflicts
             if config.data_dir:
-                if "hub" not in game_config:
-                    game_config["hub"] = {}
-                persistence_file = f"{config.data_dir}/{game_date}/{game.game_id}.jsonl"
+                persistence_file = f"{config.data_dir}/{game_date}/{schedule_id}.jsonl"
                 game_config["hub"]["persistence_file"] = persistence_file
 
             # Metadata for the trial using typed structure
@@ -911,6 +941,7 @@ class ScheduleManager:
                     check_interval_seconds=config.check_interval_seconds,
                     auto_stop_on_completion=config.auto_stop_on_completion,
                     metadata=dict(trial_metadata),
+                    schedule_id=schedule_id,
                 )
 
                 # Track this game as scheduled for this source

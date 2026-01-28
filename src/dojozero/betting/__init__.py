@@ -34,6 +34,7 @@ from dojozero.betting._config import (
     TrialBrokerConfig,
 )
 from dojozero.betting._metadata import (
+    BacktestBettingTrialMetadata,
     BettingTrialMetadata,
 )
 from dojozero.betting._broker import (
@@ -66,6 +67,7 @@ __all__ = [
     "TrialBrokerConfig",
     # Metadata types
     "BettingTrialMetadata",
+    "BacktestBettingTrialMetadata",
     # Broker
     "BrokerOperator",
     "BrokerOperatorConfig",
