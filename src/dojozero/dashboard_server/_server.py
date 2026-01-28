@@ -668,12 +668,20 @@ def create_dashboard_app(
             backtest_speed = request.backtest.speed
             backtest_max_sleep = request.backtest.max_sleep
 
-            # Add backtest metadata
-            spec.metadata["backtest_file"] = str(event_file)
-            spec.metadata["backtest_mode"] = True
-            spec.metadata["backtest_speed"] = backtest_speed
-            spec.metadata["backtest_max_sleep"] = backtest_max_sleep
-            spec.metadata["builder_name"] = scenario.name
+            # Convert metadata to backtest-specific type with required backtest fields
+            from dataclasses import asdict
+
+            from dojozero.betting import BacktestBettingTrialMetadata
+
+            metadata_dict = asdict(spec.metadata)
+            spec.metadata = BacktestBettingTrialMetadata(
+                **metadata_dict,
+                backtest_mode=True,
+                backtest_file=str(event_file),
+                backtest_speed=backtest_speed,
+                backtest_max_sleep=backtest_max_sleep,
+            )
+            spec.builder_name = scenario.name
 
             # Create factory for backtest launch
             def make_backtest_coro() -> Coroutine[Any, Any, TrialStatus]:

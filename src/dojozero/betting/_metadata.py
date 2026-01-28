@@ -25,7 +25,7 @@ from typing import Literal
 from dojozero.core._metadata import BaseTrialMetadata
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(slots=True)
 class BettingTrialMetadata(BaseTrialMetadata):
     """Typed metadata for betting trials (NBA, NFL).
 
@@ -34,7 +34,6 @@ class BettingTrialMetadata(BaseTrialMetadata):
     - IDE autocomplete for metadata fields
     - Type checker catches typos and missing required fields
     - Constructor validation for required fields
-    - Immutability (frozen=True)
 
     Attributes:
         sample: Trial type identifier (e.g., "nba", "nfl-moneyline")
@@ -77,6 +76,27 @@ class BettingTrialMetadata(BaseTrialMetadata):
     polymarket_poll_intervals: dict[str, float] | None = None
 
 
+@dataclass(slots=True)
+class BacktestBettingTrialMetadata(BettingTrialMetadata):
+    """Typed metadata for backtest betting trials.
+
+    Extends BettingTrialMetadata with required backtest-specific fields.
+
+    Attributes:
+        backtest_mode: Always True for backtest trials
+        backtest_file: Path to the backtest event file
+        backtest_speed: Speed multiplier for backtest playback
+        backtest_max_sleep: Maximum sleep time between events (seconds)
+    """
+
+    # Backtest fields (required)
+    backtest_mode: bool = True
+    backtest_file: str | None = None
+    backtest_speed: float = 1.0
+    backtest_max_sleep: float = 20.0
+
+
 __all__ = [
     "BettingTrialMetadata",
+    "BacktestBettingTrialMetadata",
 ]
