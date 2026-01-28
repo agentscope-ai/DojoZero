@@ -2223,10 +2223,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Build mapping of tool names to tool functions
         all_tools_map = {
             "get_balance": get_balance,
-            "get_event": get_event,
+            # "get_event": get_event,
             "place_bet_moneyline": place_bet_moneyline,
-            "place_bet_spread": place_bet_spread,
-            "place_bet_total": place_bet_total,
+            # "place_bet_spread": place_bet_spread,
+            # "place_bet_total": place_bet_total,
             "cancel_bet": cancel_bet,
             "get_active_bets": get_active_bets,
             "get_pending_orders": get_pending_orders,

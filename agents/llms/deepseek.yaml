@@ -1,0 +1,5 @@
+llm:
+  - model_type: openai
+    model_name: deepseek-v3.2
+    api_key_env: DOJOZERO_OPENAI_API_KEY
+    base_url_env: DOJOZERO_OPENAI_BASE_URL

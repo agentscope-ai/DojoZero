@@ -2,9 +2,13 @@
 
 from ._config import (
     load_agent_config,
+    load_persona_config,
+    load_llm_file_config,
     AgentConfig,
     SingleModelAgentConfig,
     LLMConfig,
+    PersonaConfig,
+    LLMFileConfig,
     create_model,
     create_formatter,
     expand_agent_config,
@@ -19,9 +23,13 @@ from ._trial_utils import (
 
 __all__ = [
     "load_agent_config",
+    "load_persona_config",
+    "load_llm_file_config",
     "AgentConfig",
     "SingleModelAgentConfig",
     "LLMConfig",
+    "PersonaConfig",
+    "LLMFileConfig",
     "create_toolkit",
     "create_model",
     "create_formatter",

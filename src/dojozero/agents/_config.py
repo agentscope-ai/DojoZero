@@ -25,6 +25,18 @@ class LLMConfig(TypedDict, total=False):
     max_tokens: int  # Max tokens for response generation (default: 16384)
 
 
+class PersonaConfig(TypedDict):
+    """Persona configuration - contains only sys_prompt."""
+
+    sys_prompt: str
+
+
+class LLMFileConfig(TypedDict):
+    """LLM file configuration - contains list of LLM configs."""
+
+    llm: list[LLMConfig]
+
+
 class AgentConfig(TypedDict):
     """Agent YAML configuration structure.
 
@@ -62,48 +74,83 @@ def _parse_llm_config(llm_data: dict[str, Any]) -> LLMConfig:
     return llm_config
 
 
-def load_agent_config(config_path: str | Path) -> AgentConfig:
-    """Load agent configuration from YAML file.
+def load_persona_config(config_path: str | Path) -> PersonaConfig:
+    """Load persona configuration from YAML file.
 
     Args:
-        config_path: Path to YAML config file
+        config_path: Path to persona YAML config file (contains only sys_prompt)
 
     Returns:
-        Parsed AgentConfig dictionary with llm as a list of LLMConfig
-
-    Raises:
-        ValueError: If multiple models are specified with duplicate names
+        Parsed PersonaConfig dictionary
     """
     path = Path(config_path)
     with path.open("r", encoding="utf-8") as f:
         data: dict[str, Any] = yaml.safe_load(f)
 
-    # Parse LLM config - always as a list
+    return PersonaConfig(sys_prompt=data.get("sys_prompt", ""))
+
+
+def load_llm_file_config(config_path: str | Path) -> LLMFileConfig:
+    """Load LLM configuration from YAML file.
+
+    Args:
+        config_path: Path to LLM YAML config file (contains llm list)
+
+    Returns:
+        Parsed LLMFileConfig dictionary with llm as a list of LLMConfig
+    """
+    path = Path(config_path)
+    with path.open("r", encoding="utf-8") as f:
+        data: dict[str, Any] = yaml.safe_load(f)
+
     llm_data = data.get("llm", [])
     llm_configs: list[LLMConfig] = []
 
     if isinstance(llm_data, list):
-        # Already a list of model configs
         for item in llm_data:
             llm_configs.append(_parse_llm_config(item))
     else:
-        # Single model config (backwards compatibility during transition)
+        # Single model config (backwards compatibility)
         llm_configs.append(_parse_llm_config(llm_data))
 
+    return LLMFileConfig(llm=llm_configs)
+
+
+def load_agent_config(
+    persona_config_path: str | Path,
+    llm_config_path: str | Path,
+    name: str = "",
+) -> AgentConfig:
+    """Load agent configuration from separate persona and LLM config files.
+
+    Args:
+        persona_config_path: Path to persona YAML config (contains sys_prompt)
+        llm_config_path: Path to LLM YAML config (contains llm list)
+        name: Optional agent name
+
+    Returns:
+        Parsed AgentConfig combining persona and LLM configs
+
+    Raises:
+        ValueError: If multiple models are specified with duplicate names
+    """
+    persona_config = load_persona_config(persona_config_path)
+    llm_file_config = load_llm_file_config(llm_config_path)
+
     # Validate unique model names when multiple models are specified
+    llm_configs = llm_file_config["llm"]
     if len(llm_configs) > 1:
         model_names = [c.get("model_name", "qwen3-max") for c in llm_configs]
         if len(model_names) != len(set(model_names)):
             raise ValueError(
-                f"Duplicate model names found in agent config '{path}'. "
+                f"Duplicate model names found in LLM config '{llm_config_path}'. "
                 "Model names must be unique when multiple models are specified."
             )
 
-    # Build AgentConfig with all required fields
     return AgentConfig(
-        name=data.get("name", ""),
-        sys_prompt=data.get("sys_prompt", ""),
-        tools=data.get("tools", []),
+        name=name,
+        sys_prompt=persona_config["sys_prompt"],
+        tools=[],  # Tools are specified in trial params, not in config files
         llm=llm_configs,
     )
 

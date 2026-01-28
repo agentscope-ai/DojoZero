@@ -23,38 +23,46 @@ TAgentConfig = TypeVar("TAgentConfig", bound=dict[str, Any])
 
 def load_agent_configs_cached(
     agents: list[dict[str, Any]],
-) -> dict[str, AgentConfig]:
+) -> dict[tuple[str, str], AgentConfig]:
     """Load and cache agent configs from YAML files.
 
-    Loads each unique agent_config_path only once to avoid redundant disk I/O.
+    Loads each unique (persona_config_path, llm_config_path) pair only once.
 
     Args:
         agents: List of agent configuration dicts
 
     Returns:
-        Dict mapping agent_config_path to loaded AgentConfig
+        Dict mapping (persona_config_path, llm_config_path) to loaded AgentConfig
     """
-    config_cache: dict[str, AgentConfig] = {}
+    config_cache: dict[tuple[str, str], AgentConfig] = {}
 
     for agent_dict in agents:
-        agent_config_path = agent_dict.get("agent_config_path")
-        if agent_config_path and agent_config_path not in config_cache:
-            config_cache[agent_config_path] = load_agent_config(agent_config_path)
+        persona_config_path = agent_dict.get("persona_config_path")
+        llm_config_path = agent_dict.get("llm_config_path")
+
+        if persona_config_path and llm_config_path:
+            cache_key = (persona_config_path, llm_config_path)
+            if cache_key not in config_cache:
+                config_cache[cache_key] = load_agent_config(
+                    persona_config_path,
+                    llm_config_path,
+                    name=agent_dict.get("name", ""),
+                )
 
     return config_cache
 
 
 def get_expanded_agent_ids(
     agent_dict: dict[str, Any],
-    config_cache: dict[str, AgentConfig] | None = None,
+    config_cache: dict[tuple[str, str], AgentConfig] | None = None,
 ) -> list[str]:
     """Get the list of agent IDs that will be created from an agent config.
 
-    If agent_config_path is specified, returns expanded IDs (one per model).
+    If persona_config_path and llm_config_path are specified, returns expanded IDs.
     Otherwise, returns the single agent ID.
 
     Args:
-        agent_dict: Agent configuration dict with id, optional agent_config_path
+        agent_dict: Agent configuration dict with id, optional config paths
         config_cache: Optional cache of loaded configs to avoid re-loading
 
     Returns:
@@ -64,13 +72,20 @@ def get_expanded_agent_ids(
     if not agent_id:
         return []
 
-    agent_config_path = agent_dict.get("agent_config_path")
-    if agent_config_path:
+    persona_config_path = agent_dict.get("persona_config_path")
+    llm_config_path = agent_dict.get("llm_config_path")
+
+    if persona_config_path and llm_config_path:
+        cache_key = (persona_config_path, llm_config_path)
         # Use cached config if available, otherwise load
-        if config_cache and agent_config_path in config_cache:
-            yaml_config = config_cache[agent_config_path]
+        if config_cache and cache_key in config_cache:
+            yaml_config = config_cache[cache_key]
         else:
-            yaml_config = load_agent_config(agent_config_path)
+            yaml_config = load_agent_config(
+                persona_config_path,
+                llm_config_path,
+                name=agent_dict.get("name", ""),
+            )
 
         expanded_ids = []
         for llm_config in yaml_config["llm"]:
@@ -83,11 +98,11 @@ def get_expanded_agent_ids(
 
 def build_operator_to_agents_map(
     agents: list[dict[str, Any]],
-    config_cache: dict[str, AgentConfig] | None = None,
+    config_cache: dict[tuple[str, str], AgentConfig] | None = None,
 ) -> dict[str, list[str]]:
     """Build a mapping from operator IDs to agent IDs.
 
-    For agents with agent_config_path, expands to include all model-specific agent IDs.
+    For agents with config paths, expands to include all model-specific agent IDs.
 
     Args:
         agents: List of agent configuration dicts
@@ -118,12 +133,12 @@ def build_agent_specs(
     agents: list[dict[str, Any]],
     agent_cls: type[Any],
     allowed_class_names: set[str] | None = None,
-    config_cache: dict[str, AgentConfig] | None = None,
+    config_cache: dict[tuple[str, str], AgentConfig] | None = None,
 ) -> list[AgentSpec[Any]]:
     """Build AgentSpec instances from agent configuration dicts.
 
     Supports two modes:
-    1. YAML config path: Loads config and expands into multiple agents (one per model)
+    1. YAML config paths: Loads config and expands into multiple agents (one per model)
     2. Inline config: Creates a single agent with specified config
 
     Args:
@@ -158,14 +173,20 @@ def build_agent_specs(
         operator_ids = agent_dict.get("operators", [])
         data_stream_ids = agent_dict.get("data_streams", [])
 
-        agent_config_path = agent_dict.get("agent_config_path")
+        persona_config_path = agent_dict.get("persona_config_path")
+        llm_config_path = agent_dict.get("llm_config_path")
 
-        if agent_config_path:
+        if persona_config_path and llm_config_path:
+            cache_key = (persona_config_path, llm_config_path)
             # Use cached config if available, otherwise load
-            if config_cache and agent_config_path in config_cache:
-                yaml_config = config_cache[agent_config_path]
+            if config_cache and cache_key in config_cache:
+                yaml_config = config_cache[cache_key]
             else:
-                yaml_config = load_agent_config(agent_config_path)
+                yaml_config = load_agent_config(
+                    persona_config_path,
+                    llm_config_path,
+                    name=agent_dict.get("name", ""),
+                )
 
             expanded_configs = expand_agent_config(yaml_config)
 

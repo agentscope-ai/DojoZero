@@ -124,7 +124,8 @@ class NBATrialParams(BaseModel):
             "  - 'class': str (required) - Must be 'BettingAgent'\n"
             "  - 'operators': list[str] (optional) - Operator IDs to register\n"
             "  - 'data_streams': list[str] (optional) - DataStream actor IDs to subscribe to\n"
-            "  - 'agent_config_path': str (optional) - Path to agent YAML config file"
+            "  - 'persona_config_path': str (optional) - Path to persona YAML config file\n"
+            "  - 'llm_config_path': str (optional) - Path to LLM YAML config file"
         ),
     )
 
@@ -350,7 +351,7 @@ async def _build_trial_spec(
         )
 
     # Build operator_id -> agent_ids mapping from agent configs
-    # For agents with agent_config_path, expand to include all model-specific agent IDs
+    # For agents with config paths, expand to include all model-specific agent IDs
     # Load configs once and reuse to avoid redundant disk I/O
     config_cache = load_agent_configs_cached(params.agents) if params.agents else {}
     operator_to_agents = (
@@ -408,7 +409,7 @@ async def _build_trial_spec(
         )
 
     # Create agent specs from agents config
-    # Agents with agent_config_path are expanded into multiple agents (one per model)
+    # Agents with config paths are expanded into multiple agents (one per model)
     if not params.agents:
         raise ValueError(
             "No agents specified. At least one agent with class 'BettingAgent' is required."

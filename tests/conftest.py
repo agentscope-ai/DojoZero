@@ -17,11 +17,18 @@ TEST_API_KEY_ENV = "DOJOZERO_OPENAI_API_KEY"
 TEST_BASE_URL_ENV = "DOJOZERO_OPENAI_BASE_URL"
 
 # Common paths
-CONFIG_DIR = Path(__file__).parent.parent / "configs" / "agents"
-BASIC_CONFIG_PATH = CONFIG_DIR / "basic.yaml"
-WHALE_CONFIG_PATH = CONFIG_DIR / "whale.yaml"
-SHEEP_CONFIG_PATH = CONFIG_DIR / "sheep.yaml"
-SHARK_CONFIG_PATH = CONFIG_DIR / "shark.yaml"
+AGENTS_DIR = Path(__file__).parent.parent / "agents"
+PERSONAS_DIR = AGENTS_DIR / "personas"
+LLMS_DIR = AGENTS_DIR / "llms"
+
+# Default LLM config for tests
+DEFAULT_LLM_CONFIG_PATH = LLMS_DIR / "qwen.yaml"
+
+# Persona config paths
+BASIC_PERSONA_PATH = PERSONAS_DIR / "basic.yaml"
+WHALE_PERSONA_PATH = PERSONAS_DIR / "whale.yaml"
+SHEEP_PERSONA_PATH = PERSONAS_DIR / "sheep.yaml"
+SHARK_PERSONA_PATH = PERSONAS_DIR / "shark.yaml"
 
 
 def pytest_addoption(parser):
@@ -145,12 +152,16 @@ def create_broker_fixture(actor_id: str, trial_id: str = "test-trial"):
     )
 
 
-def create_nba_test_agent(config_path: Path, trial_id: str = "test-trial"):
+def create_nba_test_agent(
+    persona_config_path: Path,
+    llm_config_path: Path = DEFAULT_LLM_CONFIG_PATH,
+    trial_id: str = "test-trial",
+):
     """Create NBA BettingAgent with test-specific env vars."""
     from dojozero.nba._agent import BettingAgent
     from dojozero.agents import load_agent_config, create_model, create_formatter
 
-    config = load_agent_config(config_path)
+    config = load_agent_config(persona_config_path, llm_config_path)
     # llm is a list of configs - use the first one for tests
     llm_config = config["llm"][0].copy()
     llm_config["api_key_env"] = TEST_API_KEY_ENV
@@ -166,12 +177,16 @@ def create_nba_test_agent(config_path: Path, trial_id: str = "test-trial"):
     )
 
 
-def create_nfl_test_agent(config_path: Path, trial_id: str = "test-trial"):
+def create_nfl_test_agent(
+    persona_config_path: Path,
+    llm_config_path: Path = DEFAULT_LLM_CONFIG_PATH,
+    trial_id: str = "test-trial",
+):
     """Create NFL BettingAgent with test-specific env vars."""
     from dojozero.nfl._agent import BettingAgent
     from dojozero.agents import load_agent_config, create_model, create_formatter
 
-    config = load_agent_config(config_path)
+    config = load_agent_config(persona_config_path, llm_config_path)
     # llm is a list of configs - use the first one for tests
     llm_config = config["llm"][0].copy()
     llm_config["api_key_env"] = TEST_API_KEY_ENV

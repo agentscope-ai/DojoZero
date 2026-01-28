@@ -20,7 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from conftest import (
-    BASIC_CONFIG_PATH,
+    DEFAULT_LLM_CONFIG_PATH,
+    BASIC_PERSONA_PATH,
     TEST_API_KEY_ENV,
     create_broker_fixture,
     create_nfl_test_agent,
@@ -38,7 +39,7 @@ def broker():
 @pytest.fixture
 def agent():
     """Create NFL BettingAgent with test-specific env vars."""
-    return create_nfl_test_agent(BASIC_CONFIG_PATH)
+    return create_nfl_test_agent(DEFAULT_LLM_CONFIG_PATH, BASIC_PERSONA_PATH)
 
 
 @pytest.mark.asyncio
