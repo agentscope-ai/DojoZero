@@ -446,19 +446,19 @@ class ScheduleManager:
 
         LOGGER.info("ScheduleManager stopped")
 
-    def _generate_schedule_id(self, sport_type: str, event_id: str) -> str:
+    def _generate_schedule_id(self, sport_type: str, game_id: str) -> str:
         """Generate a unique schedule ID.
 
         Args:
             sport_type: Sport type (e.g., "nba", "nfl")
-            event_id: Game or event ID
+            game_id: Game ID
 
         Returns:
             Unique schedule ID
         """
-        hash_input = f"{sport_type}-{event_id}-{datetime.now(timezone.utc).isoformat()}"
+        hash_input = f"{sport_type}-{game_id}-{datetime.now(timezone.utc).isoformat()}"
         hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        return f"sched-{sport_type}-{event_id}-{hash_suffix}"
+        return f"sched-{sport_type}-{game_id}-{hash_suffix}"
 
     async def schedule_trial(
         self,
@@ -493,13 +493,9 @@ class ScheduleManager:
         # Calculate scheduled start time
         scheduled_start_time = event_time - timedelta(hours=pre_start_hours)
 
-        # Generate schedule ID
-        hash_input = f"{sport_type}-{game_id}-{datetime.now(timezone.utc).isoformat()}"
-        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        schedule_id = f"sched-{sport_type}-{game_id}-{hash_suffix}"
         # Generate schedule ID if not provided
         if schedule_id is None:
-            schedule_id = self._generate_schedule_id(sport_type, event_id)
+            schedule_id = self._generate_schedule_id(sport_type, game_id)
 
         # Extract game_date from event_time in US Eastern time
         game_date = utc_to_us_date(event_time)
@@ -599,7 +595,7 @@ class ScheduleManager:
                 config["hub"] = {}
 
             # Generate schedule_id early so we can use it in persistence_file
-            schedule_id = self._generate_schedule_id(sport_type, game.event_id)
+            schedule_id = self._generate_schedule_id(sport_type, game.game_id)
 
             # Set persistence_file with unique schedule_id to avoid conflicts
             if data_dir:
@@ -912,7 +908,7 @@ class ScheduleManager:
                 game_config["hub"] = {}
 
             # Generate schedule_id early so we can use it in persistence_file
-            schedule_id = self._generate_schedule_id(source.sport_type, game.event_id)
+            schedule_id = self._generate_schedule_id(source.sport_type, game.game_id)
 
             # Set persistence_file with unique schedule_id to avoid conflicts
             if config.data_dir:
@@ -1243,7 +1239,7 @@ class ScheduleManager:
 
             # Note: spec.metadata is a frozen dataclass (e.g., BettingTrialMetadata)
             # with sport_type and espn_game_id already populated by the builder.
-            # No need to add schedule_id/event_id - they're tracked in ScheduledTrial.
+            # No need to add schedule_id/game_id - they're tracked in ScheduledTrial.
 
             # Submit to trial manager
             await self._trial_manager.submit(spec)

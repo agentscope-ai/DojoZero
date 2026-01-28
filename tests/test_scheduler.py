@@ -62,7 +62,7 @@ class TestScheduledTrial:
             "scenario_name": "nfl-moneyline",
             "scenario_config": {"event_id": "401772976"},
             "sport_type": "nfl",
-            "event_id": "401772976",
+            "game_id": "401772976",
             "event_time": event_time.isoformat(),
             "scheduled_start_time": start_time.isoformat(),
             "pre_start_hours": 1.0,
@@ -273,7 +273,7 @@ class TestScheduleManager:
 
         now = datetime.now(timezone.utc)
         event_time = now + timedelta(hours=3)
-        event_id = "401810525"
+        game_id = "401810525"
         sport_type = "nba"
 
         # Schedule two trials for the same game
@@ -281,7 +281,7 @@ class TestScheduleManager:
             scenario_name="nba-moneyline",
             scenario_config={"hub": {}},
             sport_type=sport_type,
-            event_id=event_id,
+            game_id=game_id,
             event_time=event_time,
         )
 
@@ -294,14 +294,14 @@ class TestScheduleManager:
             scenario_name="nba-moneyline",
             scenario_config={"hub": {}},
             sport_type=sport_type,
-            event_id=event_id,
+            game_id=game_id,
             event_time=event_time,
         )
 
         # Verify schedule IDs are different
         assert schedule_id_1 != schedule_id_2
-        assert schedule_id_1.startswith(f"sched-{sport_type}-{event_id}-")
-        assert schedule_id_2.startswith(f"sched-{sport_type}-{event_id}-")
+        assert schedule_id_1.startswith(f"sched-{sport_type}-{game_id}-")
+        assert schedule_id_2.startswith(f"sched-{sport_type}-{game_id}-")
 
         # Retrieve the scheduled trials
         trial_1 = scheduler.get_scheduled(schedule_id_1)
@@ -334,12 +334,12 @@ class TestScheduleManager:
         )
 
         sport_type = "nba"
-        event_id = "401810525"
+        game_id = "401810525"
 
         # Generate multiple schedule IDs for the same game
         schedule_ids = set()
         for _ in range(5):
-            schedule_id = scheduler._generate_schedule_id(sport_type, event_id)
+            schedule_id = scheduler._generate_schedule_id(sport_type, game_id)
             schedule_ids.add(schedule_id)
             # Small delay to ensure different timestamps
             import asyncio
@@ -351,7 +351,7 @@ class TestScheduleManager:
 
         # All should have the correct format
         for schedule_id in schedule_ids:
-            assert schedule_id.startswith(f"sched-{sport_type}-{event_id}-")
+            assert schedule_id.startswith(f"sched-{sport_type}-{game_id}-")
             # Should have 8-char hash suffix
             hash_part = schedule_id.split("-")[-1]
             assert len(hash_part) == 8
@@ -367,12 +367,12 @@ class TestScheduleManager:
 
             now = datetime.now(timezone.utc)
             event_time = now + timedelta(hours=3)
-            event_id = "401810525"
+            game_id = "401810525"
             sport_type = "nba"
 
             # Schedule two trials for the same game with data_dir
             # First, pre-generate schedule IDs and set persistence_file
-            schedule_id_1 = scheduler._generate_schedule_id(sport_type, event_id)
+            schedule_id_1 = scheduler._generate_schedule_id(sport_type, game_id)
             game_date = "2026-01-27"
             persistence_file_1 = f"{tmpdir}/{game_date}/{schedule_id_1}.jsonl"
 
@@ -380,7 +380,7 @@ class TestScheduleManager:
 
             await asyncio.sleep(0.01)
 
-            schedule_id_2 = scheduler._generate_schedule_id(sport_type, event_id)
+            schedule_id_2 = scheduler._generate_schedule_id(sport_type, game_id)
             persistence_file_2 = f"{tmpdir}/{game_date}/{schedule_id_2}.jsonl"
 
             # Schedule trials with pre-determined persistence files
@@ -391,7 +391,7 @@ class TestScheduleManager:
                 scenario_name="nba-moneyline",
                 scenario_config=config_1,
                 sport_type=sport_type,
-                event_id=event_id,
+                game_id=game_id,
                 event_time=event_time,
                 schedule_id=schedule_id_1,
             )
@@ -400,7 +400,7 @@ class TestScheduleManager:
                 scenario_name="nba-moneyline",
                 scenario_config=config_2,
                 sport_type=sport_type,
-                event_id=event_id,
+                game_id=game_id,
                 event_time=event_time,
                 schedule_id=schedule_id_2,
             )
@@ -871,7 +871,7 @@ class TestScheduleManagerConcurrencyAndGracePeriod:
             "scenario_name": "nba-moneyline",
             "scenario_config": {"game_id": "001"},
             "sport_type": "nba",
-            "event_id": "001",
+            "game_id": "001",
             "event_time": event_time.isoformat(),
             "scheduled_start_time": start_time.isoformat(),
             "pre_start_hours": 2.0,
@@ -927,7 +927,7 @@ class TestScheduleManagerConcurrencyAndGracePeriod:
             "scenario_name": "nba-moneyline",
             "scenario_config": {"game_id": "001"},
             "sport_type": "nba",
-            "event_id": "001",
+            "game_id": "001",
             "event_time": event_time.isoformat(),
             "scheduled_start_time": start_time.isoformat(),
             "pre_start_hours": 2.0,
