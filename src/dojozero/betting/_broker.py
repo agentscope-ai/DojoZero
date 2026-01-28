@@ -21,7 +21,7 @@ import uuid
 from collections import defaultdict
 from typing import List, Sequence, Set, TypedDict
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, computed_field
 
 from dojozero.core import (
     RuntimeContext,
@@ -109,25 +109,6 @@ class Account(BaseModel):
     created_at: datetime
     last_updated: datetime
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization (backward compatibility)."""
-        return {
-            "agent_id": self.agent_id,
-            "balance": str(self.balance),
-            "created_at": self.created_at.isoformat(),
-            "last_updated": self.last_updated.isoformat(),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Account":
-        """Create from dictionary (backward compatibility)."""
-        return cls(
-            agent_id=data["agent_id"],
-            balance=Decimal(data["balance"]),
-            created_at=datetime.fromisoformat(data["created_at"]),
-            last_updated=datetime.fromisoformat(data["last_updated"]),
-        )
-
 
 # =============================================================================
 # Event
@@ -159,98 +140,31 @@ class BettingEvent(BaseModel):
     last_odds_update: Optional[datetime] = None
     betting_closed_at: Optional[datetime] = None
 
+    @computed_field
+    def can_bet_pregame(self) -> bool:
+        """True if PRE_GAME betting is allowed (status=SCHEDULED)."""
+        return self.status == EventStatus.SCHEDULED
+
+    @computed_field
+    def can_bet_ingame(self) -> bool:
+        """True if IN_GAME betting is allowed (status=LIVE)."""
+        return self.status == EventStatus.LIVE
+
     def to_dict(self) -> Dict[str, Any]:
-        # Ensure spread_lines and total_lines are dicts (protection against None)
-        spread_lines = self.spread_lines if self.spread_lines is not None else {}
-        total_lines = self.total_lines if self.total_lines is not None else {}
+        """Convert to dictionary for backward compatibility.
 
-        # Determine which betting phases are available based on status
-        can_bet_pregame = self.status == EventStatus.SCHEDULED
-        can_bet_ingame = self.status == EventStatus.LIVE
-
-        return {
-            "event_id": self.event_id,
-            "home_team": self.home_team,
-            "away_team": self.away_team,
-            "game_time": self.game_time.isoformat(),
-            "status": self.status.value,
-            "home_odds": str(self.home_odds) if self.home_odds else None,
-            "away_odds": str(self.away_odds) if self.away_odds else None,
-            "spread_lines": {
-                str(k): {
-                    "home_odds": str(v["home_odds"]),
-                    "away_odds": str(v["away_odds"]),
-                }
-                for k, v in spread_lines.items()
-            },
-            "total_lines": {
-                str(k): {
-                    "over_odds": str(v["over_odds"]),
-                    "under_odds": str(v["under_odds"]),
-                }
-                for k, v in total_lines.items()
-            },
-            "last_odds_update": (
-                self.last_odds_update.isoformat() if self.last_odds_update else None
-            ),
-            # Clarify what betting is available:
-            # - can_bet_pregame: True if PRE_GAME betting is allowed (status=SCHEDULED)
-            # - can_bet_ingame: True if IN_GAME betting is allowed (status=LIVE)
-            # - betting_closed_at: When pre-game betting closed (informational only)
-            "can_bet_pregame": can_bet_pregame,
-            "can_bet_ingame": can_bet_ingame,
-            "betting_closed_at": (
-                self.betting_closed_at.isoformat() if self.betting_closed_at else None
-            ),
-        }
+        This method is kept for backward compatibility with tests and other code.
+        Pydantic's model_dump(mode="json") already handles Decimal key conversion automatically.
+        """
+        return self.model_dump(mode="json")
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "BettingEvent":
-        # Handle None or missing spread_lines/total_lines (backward compatibility)
-        spread_lines_data = data.get("spread_lines")
-        if spread_lines_data is None:
-            spread_lines = {}
-        else:
-            spread_lines = {
-                Decimal(k): {
-                    "home_odds": Decimal(v["home_odds"]),
-                    "away_odds": Decimal(v["away_odds"]),
-                }
-                for k, v in spread_lines_data.items()
-            }
+        """Create from dictionary for backward compatibility.
 
-        total_lines_data = data.get("total_lines")
-        if total_lines_data is None:
-            total_lines = {}
-        else:
-            total_lines = {
-                Decimal(k): {
-                    "over_odds": Decimal(v["over_odds"]),
-                    "under_odds": Decimal(v["under_odds"]),
-                }
-                for k, v in total_lines_data.items()
-            }
-        return cls(
-            event_id=data["event_id"],
-            home_team=data["home_team"],
-            away_team=data["away_team"],
-            game_time=datetime.fromisoformat(data["game_time"]),
-            status=EventStatus(data["status"]),
-            home_odds=Decimal(val) if (val := data.get("home_odds")) else None,
-            away_odds=Decimal(val) if (val := data.get("away_odds")) else None,
-            spread_lines=spread_lines,
-            total_lines=total_lines,
-            last_odds_update=(
-                datetime.fromisoformat(val)
-                if (val := data.get("last_odds_update"))
-                else None
-            ),
-            betting_closed_at=(
-                datetime.fromisoformat(val)
-                if (val := data.get("betting_closed_at"))
-                else None
-            ),
-        )
+        Pydantic's model_validate() automatically handles string-to-Decimal key conversion.
+        """
+        return cls.model_validate(data)
 
 
 # =============================================================================
@@ -369,73 +283,6 @@ class Bet(BaseModel):
     outcome: Optional[BetOutcome] = None
     settlement_time: Optional[datetime] = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization (backward compatibility)."""
-        return {
-            "bet_id": self.bet_id,
-            "agent_id": self.agent_id,
-            "event_id": self.event_id,
-            "amount": str(self.amount),
-            "selection": self.selection,
-            "odds": str(self.odds),
-            "order_type": self.order_type.value,
-            "limit_odds": str(self.limit_odds) if self.limit_odds else None,
-            "betting_phase": self.betting_phase.value,
-            "bet_type": self.bet_type.value,
-            "spread_value": str(self.spread_value) if self.spread_value else None,
-            "total_value": str(self.total_value) if self.total_value else None,
-            "create_time": self.create_time.isoformat(),
-            "execution_time": (
-                self.execution_time.isoformat() if self.execution_time else None
-            ),
-            "status": self.status.value,
-            "actual_payout": str(self.actual_payout) if self.actual_payout else None,
-            "outcome": self.outcome.value if self.outcome else None,
-            "settlement_time": (
-                self.settlement_time.isoformat() if self.settlement_time else None
-            ),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Bet":
-        """Create from dictionary (backward compatibility)."""
-        return cls(
-            bet_id=data["bet_id"],
-            agent_id=data["agent_id"],
-            event_id=data["event_id"],
-            amount=Decimal(data["amount"]),
-            selection=data["selection"],
-            odds=Decimal(data["odds"]),
-            order_type=OrderType(data["order_type"]),
-            limit_odds=Decimal(data["limit_odds"]) if data.get("limit_odds") else None,
-            betting_phase=BettingPhase(data["betting_phase"]),
-            bet_type=BetType(
-                data.get("bet_type", "MONEYLINE")
-            ),  # Default to MONEYLINE for backward compatibility
-            spread_value=Decimal(data["spread_value"])
-            if data.get("spread_value")
-            else None,
-            total_value=Decimal(data["total_value"])
-            if data.get("total_value")
-            else None,
-            create_time=datetime.fromisoformat(data["create_time"]),
-            execution_time=(
-                datetime.fromisoformat(data["execution_time"])
-                if data.get("execution_time")
-                else None
-            ),
-            status=BetStatus(data["status"]),
-            actual_payout=(
-                Decimal(data["actual_payout"]) if data.get("actual_payout") else None
-            ),
-            outcome=BetOutcome(data["outcome"]) if data.get("outcome") else None,
-            settlement_time=(
-                datetime.fromisoformat(data["settlement_time"])
-                if data.get("settlement_time")
-                else None
-            ),
-        )
-
 
 @dataclass
 class BetExecutedPayload:
@@ -473,18 +320,6 @@ class Statistics(BaseModel):
     win_rate: float
     net_profit: Decimal
     roi: float
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization (backward compatibility)."""
-        return {
-            "total_bets": self.total_bets,
-            "total_wagered": str(self.total_wagered),
-            "wins": self.wins,
-            "losses": self.losses,
-            "win_rate": self.win_rate,
-            "net_profit": str(self.net_profit),
-            "roi": self.roi,
-        }
 
 
 # =============================================================================
@@ -2043,14 +1878,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             return {
                 "actor_id": self.actor_id,
                 "accounts": {
-                    agent_id: account.to_dict()
+                    agent_id: account.model_dump(mode="json")
                     for agent_id, account in self._accounts.items()
                 },
                 "events": {
-                    event_id: event.to_dict()
+                    event_id: event.model_dump(mode="json")
                     for event_id, event in self._events.items()
                 },
-                "bets": {bet_id: bet.to_dict() for bet_id, bet in self._bets.items()},
+                "bets": {
+                    bet_id: bet.model_dump(mode="json")
+                    for bet_id, bet in self._bets.items()
+                },
                 "active_bets": dict(self._active_bets),
                 "pending_orders": dict(self._pending_orders),
                 "bet_history": dict(self._bet_history),
@@ -2070,19 +1908,19 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """Import operator state from persistence"""
         # Load accounts
         self._accounts = {
-            agent_id: Account.from_dict(account_data)
+            agent_id: Account.model_validate(account_data)
             for agent_id, account_data in state["accounts"].items()
         }
 
         # Load events
         self._events = {
-            event_id: BettingEvent.from_dict(event_data)
+            event_id: BettingEvent.model_validate(event_data)
             for event_id, event_data in state["events"].items()
         }
 
         # Load bets
         self._bets = {
-            bet_id: Bet.from_dict(bet_data)
+            bet_id: Bet.model_validate(bet_data)
             for bet_id, bet_data in state["bets"].items()
         }
 
