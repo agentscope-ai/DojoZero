@@ -12,11 +12,14 @@ class WebSearchIntent(str, Enum):
 
     These intents specify the type of processing expected for a query,
     allowing explicit routing to specific processors.
+
+    Note: These are routing hints for processors, separate from EventTypes
+    which are used for event type identification in the event bus.
     """
 
-    INJURY_SUMMARY = EventTypes.INJURY_SUMMARY.value
-    POWER_RANKING = EventTypes.POWER_RANKING.value
-    EXPERT_PREDICTION = EventTypes.EXPERT_PREDICTION.value
+    INJURY_SUMMARY = "injury_summary"
+    POWER_RANKING = "power_ranking"
+    EXPERT_PREDICTION = "expert_prediction"
 
 
 @register_event
