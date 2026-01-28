@@ -1,11 +1,15 @@
 """Polymarket data store implementation."""
 
+import logging
 from typing import Any, Sequence
 
 from dojozero.data._models import DataEvent
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.polymarket._api import PolymarketAPI
 from dojozero.data.polymarket._events import OddsUpdateEvent
+from dojozero.data.polymarket._models import MarketOddsData
+
+logger = logging.getLogger("dojozero.data.polymarket._store")
 
 
 class PolymarketStore(DataStore):
@@ -93,9 +97,75 @@ class PolymarketStore(DataStore):
 
         events = []
 
-        # Handle odds update events (for broker)
+        # Collect all odds data (moneyline, spreads, totals) and combine into a single OddsUpdateEvent
+        moneyline_data = None
+        spread_odds_list: list[MarketOddsData] = []
+        total_odds_list: list[MarketOddsData] = []
+
+        # Check for odds_update (backward compatibility - moneyline only)
         if "odds_update" in data:
             odds_data = data["odds_update"]
+            # Only use if it doesn't have market_type or if market_type is moneyline
+            market_type = odds_data.get("market_type", "moneyline")
+            if market_type == "moneyline" or "market_type" not in odds_data:
+                moneyline_data = odds_data
+
+        # Check for odds_update_moneyline
+        if "odds_update_moneyline" in data:
+            moneyline_data = data["odds_update_moneyline"]
+
+        # Check for odds_update_spreads (handle both single entry and multiple indexed entries)
+        # Look for all keys matching odds_update_spreads_* pattern
+        # Use a set to track seen spread values to avoid duplicates
+        seen_spreads: set[float] = set()
+        spread_keys = [k for k in data.keys() if k.startswith("odds_update_spreads")]
+        for spread_key in spread_keys:
+            spread_data = data[spread_key]
+            line = spread_data.get("line")
+            if line is not None:
+                try:
+                    spread_value = float(line)
+                    # Skip if we've already seen this spread value (deduplicate)
+                    if spread_value in seen_spreads:
+                        continue
+                    seen_spreads.add(spread_value)
+
+                    # Create MarketOddsData from the spread data
+                    spread_odds = MarketOddsData.model_validate(spread_data)
+                    spread_odds_list.append(spread_odds)
+                except (ValueError, TypeError) as e:
+                    logger.debug(
+                        "Failed to create MarketOddsData from %s: %s", spread_key, e
+                    )
+                    pass
+
+        # Check for odds_update_totals (handle both single entry and multiple indexed entries)
+        # Look for all keys matching odds_update_totals_* pattern
+        # Use a set to track seen total values to avoid duplicates
+        seen_totals: set[float] = set()
+        total_keys = [k for k in data.keys() if k.startswith("odds_update_totals")]
+        for total_key in total_keys:
+            total_data = data[total_key]
+            line = total_data.get("line")
+            if line is not None:
+                try:
+                    total_value = float(line)
+                    # Skip if we've already seen this total value (deduplicate)
+                    if total_value in seen_totals:
+                        continue
+                    seen_totals.add(total_value)
+
+                    # Create MarketOddsData from the total data
+                    total_odds = MarketOddsData.model_validate(total_data)
+                    total_odds_list.append(total_odds)
+                except (ValueError, TypeError) as e:
+                    logger.debug(
+                        "Failed to create MarketOddsData from %s: %s", total_key, e
+                    )
+                    pass
+
+        # Create a single OddsUpdateEvent with all the data combined
+        if moneyline_data or spread_odds_list or total_odds_list:
             timestamp = datetime.now(timezone.utc)
 
             # Use espn_game_id from identifier to ensure consistency with game events
@@ -109,16 +179,60 @@ class PolymarketStore(DataStore):
             home_tricode = (identifier or {}).get("home_tricode", "")
             away_tricode = (identifier or {}).get("away_tricode", "")
 
+            # Use moneyline data for home_odds/away_odds if available
+            home_odds = 1.0
+            away_odds = 1.0
+            home_probability = 0.0
+            away_probability = 0.0
+
+            if moneyline_data:
+                home_odds = float(moneyline_data.get("home_odds", 1.0))
+                away_odds = float(moneyline_data.get("away_odds", 1.0))
+                home_probability = float(moneyline_data.get("home_probability", 0.0))
+                away_probability = float(moneyline_data.get("away_probability", 0.0))
+                # Use event_id from moneyline data if not set
+                if not event_id:
+                    event_id = moneyline_data.get("event_id") or moneyline_data.get(
+                        "market_id", ""
+                    )
+
+            # Convert MarketOddsData to broker-expected format
+            # For spreads: {"spread": line, "home_odds": home_odds, "away_odds": away_odds}
+            # For totals: {"total": line, "over_odds": home_odds, "under_odds": away_odds}
+            spread_updates_dict: list[dict[str, Any]] = []
+            for spread_odds in spread_odds_list:
+                if spread_odds.line is not None:
+                    spread_updates_dict.append(
+                        {
+                            "spread": spread_odds.line,
+                            "home_odds": spread_odds.home_odds,
+                            "away_odds": spread_odds.away_odds,
+                        }
+                    )
+
+            total_updates_dict: list[dict[str, Any]] = []
+            for total_odds in total_odds_list:
+                if total_odds.line is not None:
+                    total_updates_dict.append(
+                        {
+                            "total": total_odds.line,
+                            "over_odds": total_odds.home_odds,  # home_odds = over_odds for totals
+                            "under_odds": total_odds.away_odds,  # away_odds = under_odds for totals
+                        }
+                    )
+
             events.append(
                 OddsUpdateEvent(
                     timestamp=timestamp,
                     game_id=game_id,
                     home_tricode=home_tricode,
                     away_tricode=away_tricode,
-                    home_odds=float(odds_data.get("home_odds", 1.0)),
-                    away_odds=float(odds_data.get("away_odds", 1.0)),
-                    home_probability=float(odds_data.get("home_probability", 0.0)),
-                    away_probability=float(odds_data.get("away_probability", 0.0)),
+                    home_odds=home_odds,
+                    away_odds=away_odds,
+                    home_probability=home_probability,
+                    away_probability=away_probability,
+                    spread_updates=spread_updates_dict,
+                    total_updates=total_updates_dict,
                 )
             )
 
@@ -165,7 +279,25 @@ class PolymarketStore(DataStore):
                     f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
                 )
             elif "espn_game_id" in identifier:
+                # For backward compatibility, we can still use event_id
+                # But prefer slug if we can construct it
                 params["event_id"] = identifier["espn_game_id"]
+                # Also try to construct slug if we have the info
+                if (
+                    "away_tricode" in identifier
+                    and "home_tricode" in identifier
+                    and "game_date" in identifier
+                ):
+                    away_tricode = PolymarketAPI.normalize_tricode(
+                        identifier["away_tricode"], self._sport
+                    )
+                    home_tricode = PolymarketAPI.normalize_tricode(
+                        identifier["home_tricode"], self._sport
+                    )
+                    game_date = identifier["game_date"]
+                    params["slug"] = (
+                        f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
+                    )
 
         # Fetch odds from API
         data = await self._api.fetch("odds", params if params else None)
