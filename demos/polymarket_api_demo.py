@@ -264,7 +264,7 @@ async def test_polymarket_store_logic(market_url: str):
                 # Verify odds were updated
                 event = await broker.get_available_event()
                 if event:
-                    quote = event.to_dict()
+                    quote = event.model_dump()
                     print("  Current odds in broker:")
                     print(f"    Home: {quote['home_odds']}")
                     print(f"    Away: {quote['away_odds']}")
