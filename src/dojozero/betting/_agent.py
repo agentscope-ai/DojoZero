@@ -146,6 +146,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         self._is_processing: bool = False
         self._processing_lock = asyncio.Lock()
         self._max_event_retry_count = 3
+        self._retry_sleep_time = 3
         # Event formatter for converting DataEvents to LLM-friendly text
         self._event_formatter = event_formatter or _default_format_event
         # Betting history tracking
@@ -513,6 +514,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                     self._max_event_retry_count,
                     e,
                 )
+                await asyncio.sleep(self._retry_sleep_time)
                 return await self._process_events_with_retry(events, retry_count + 1)
             else:
                 logger.error(
