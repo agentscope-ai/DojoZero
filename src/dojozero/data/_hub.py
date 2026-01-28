@@ -118,6 +118,7 @@ class DataHub:
         source_actor_id: str | None = None,
         sport_type: str = "",
         game_id: str = "",
+        game_date: str = "",
     ) -> None:
         """Receive an event from a DataStore.
 
@@ -126,6 +127,7 @@ class DataHub:
             source_actor_id: Actor ID of the source (store) that emitted the event
             sport_type: Sport type of the source store (e.g., "nba", "nfl")
             game_id: Game ID from the source store's poll_identifier (authoritative)
+            game_date: Game date from the source store's poll_identifier (YYYY-MM-DD)
         """
         # Cache event for late-joining subscribers
         self._cache_event(event)
@@ -137,7 +139,7 @@ class DataHub:
         # Emit to trace backend if trial_id is set
         if self.trial_id and not self._backtest_mode:
             self._emit_event_span(
-                event, source_actor_id or self.hub_id, sport_type, game_id
+                event, source_actor_id or self.hub_id, sport_type, game_id, game_date
             )
 
         # Dispatch to subscribed agents
@@ -148,7 +150,12 @@ class DataHub:
     _sls_error_count: int = 0
 
     def _emit_event_span(
-        self, event: DataEvent, actor_id: str, sport_type: str, game_id: str = ""
+        self,
+        event: DataEvent,
+        actor_id: str,
+        sport_type: str,
+        game_id: str = "",
+        game_date: str = "",
     ) -> None:
         """Emit an event as a span to the trace backend.
 
@@ -157,6 +164,7 @@ class DataHub:
             actor_id: Actor ID of the source (store) that emitted the event
             sport_type: Sport type of the source store (e.g., "nba", "nfl")
             game_id: Game ID from the source store (authoritative, fallback to event)
+            game_date: Game date from the source store (YYYY-MM-DD, authoritative)
         """
         try:
             from dojozero.core._tracing import create_span_from_event, emit_span
@@ -196,22 +204,27 @@ class DataHub:
                 tags["game.id"] = resolved_game_id
 
             # Extract game_date as top-level tag (YYYY-MM-DD format)
-            game_date = None
-            # Try game_time field (datetime) - used by NBA/NFL events
-            if "game_time" in event_dict:
-                game_time = event_dict["game_time"]
-                if isinstance(game_time, datetime):
-                    game_date = game_time.strftime("%Y-%m-%d")
-                elif isinstance(game_time, str) and game_time:
-                    # ISO format string - extract date portion
-                    game_date = game_time[:10] if len(game_time) >= 10 else None
-            # Fallback to game_time_utc (string) - used by some NBA events
-            if not game_date and "game_time_utc" in event_dict:
-                game_time_utc = event_dict["game_time_utc"]
-                if isinstance(game_time_utc, str) and len(game_time_utc) >= 10:
-                    game_date = game_time_utc[:10]  # YYYY-MM-DD
-            if game_date:
-                tags["game.date"] = game_date
+            # Use store's game_date (authoritative), fall back to event payload
+            resolved_game_date = game_date  # From store's poll_identifier
+            if not resolved_game_date:
+                # Try game_time field (datetime) - used by NBA/NFL events
+                if "game_time" in event_dict:
+                    game_time_val = event_dict["game_time"]
+                    if isinstance(game_time_val, datetime):
+                        resolved_game_date = game_time_val.strftime("%Y-%m-%d")
+                    elif isinstance(game_time_val, str) and game_time_val:
+                        # ISO format string - extract date portion
+                        resolved_game_date = (
+                            game_time_val[:10] if len(game_time_val) >= 10 else None
+                        )
+            if not resolved_game_date:
+                # Fallback to game_time_utc (string) - used by some NBA events
+                if "game_time_utc" in event_dict:
+                    game_time_utc = event_dict["game_time_utc"]
+                    if isinstance(game_time_utc, str) and len(game_time_utc) >= 10:
+                        resolved_game_date = game_time_utc[:10]  # YYYY-MM-DD
+            if resolved_game_date:
+                tags["game.date"] = resolved_game_date
 
             # trial_id is guaranteed non-None here because _emit_event_span is only
             # called when self.trial_id is truthy (checked in receive_event)
@@ -349,6 +362,8 @@ class DataHub:
         store_game_id = store._poll_identifier.get(
             "espn_game_id", store._poll_identifier.get("game_id", "")
         )
+        # Get game_date from store's poll_identifier (for trace metadata)
+        store_game_date = store._poll_identifier.get("game_date", "")
 
         # Set the store's event emitter to this hub's receive_event
         # Note: event_emitter is sync callback, but we schedule async work
@@ -359,6 +374,7 @@ class DataHub:
                     source_actor_id=store_id,
                     sport_type=store_sport_type,
                     game_id=store_game_id,
+                    game_date=store_game_date,
                 )
             )
             task.add_done_callback(self._handle_task_exception)
