@@ -63,12 +63,15 @@ async def demo_websearch_stack():
     store = WebSearchStore(store_id="demo_websearch_store", api=api)
 
     # Register processors
+    # Note: source_event_types must use full event type values (e.g., "event.raw_web_search")
     store.register_stream(
-        "injury_summary", InjurySummaryProcessor(), ["raw_web_search"]
+        "injury_summary", InjurySummaryProcessor(), ["event.raw_web_search"]
     )
-    store.register_stream("power_ranking", PowerRankingProcessor(), ["raw_web_search"])
     store.register_stream(
-        "expert_prediction", ExpertPredictionProcessor(), ["raw_web_search"]
+        "power_ranking", PowerRankingProcessor(), ["event.raw_web_search"]
+    )
+    store.register_stream(
+        "expert_prediction", ExpertPredictionProcessor(), ["event.raw_web_search"]
     )
 
     # Connect store to DataHub

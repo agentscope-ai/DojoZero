@@ -25,7 +25,7 @@ class ESPNGameInitializeEvent(DataEvent):
     Contains basic information about the matchup.
     """
 
-    event_id: str = field(default="")  # ESPN event ID
+    game_id: str = field(default="")  # ESPN event ID for the game
     sport: str = field(default="")  # e.g., "football", "basketball"
     league: str = field(default="")  # e.g., "nfl", "nba", "eng.1"
     home_team: str = field(default="")  # Full team name
@@ -41,7 +41,7 @@ class ESPNGameInitializeEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_game_initialize"
+        return "event.espn_game_initialize"
 
 
 @register_event
@@ -52,13 +52,13 @@ class ESPNGameStartEvent(DataEvent):
     Emitted when a game transitions from scheduled to in-progress.
     """
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
     sport: str = field(default="")
     league: str = field(default="")
 
     @property
     def event_type(self) -> str:
-        return "espn_game_start"
+        return "event.espn_game_start"
 
 
 @register_event
@@ -69,7 +69,7 @@ class ESPNGameEndEvent(DataEvent):
     Emitted when a game is marked as final.
     """
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
     sport: str = field(default="")
     league: str = field(default="")
     winner: str = field(default="")  # "home", "away", or "" for tie/draw
@@ -80,7 +80,7 @@ class ESPNGameEndEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_game_end"
+        return "event.espn_game_end"
 
 
 @register_event
@@ -92,7 +92,7 @@ class ESPNGameUpdateEvent(DataEvent):
     Sport-specific details are in the metadata dict.
     """
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
     sport: str = field(default="")
     league: str = field(default="")
     home_score: int = field(default=0)
@@ -107,7 +107,7 @@ class ESPNGameUpdateEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_game_update"
+        return "event.espn_game_update"
 
 
 # =============================================================================
@@ -124,7 +124,7 @@ class ESPNPlayEvent(DataEvent):
     Sport-specific details are in the metadata dict.
     """
 
-    event_id: str = field(default="")  # ESPN event ID (game)
+    game_id: str = field(default="")  # ESPN event ID for the game
     play_id: str = field(default="")  # Unique play ID
     sport: str = field(default="")
     league: str = field(default="")
@@ -144,7 +144,7 @@ class ESPNPlayEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_play"
+        return "event.espn_play"
 
 
 # =============================================================================
@@ -160,7 +160,7 @@ class ESPNOddsUpdateEvent(DataEvent):
     Contains betting odds from ESPN's data (typically from DraftKings, FanDuel, etc.)
     """
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
     sport: str = field(default="")
     league: str = field(default="")
     provider: str = field(default="")  # e.g., "Draft Kings", "FanDuel"
@@ -181,7 +181,7 @@ class ESPNOddsUpdateEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "espn_odds_update"
+        return "event.espn_odds_update"
 
 
 # =============================================================================

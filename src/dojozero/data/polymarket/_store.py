@@ -100,10 +100,10 @@ class PolymarketStore(DataStore):
 
             # Use espn_game_id from identifier to ensure consistency with game events
             if identifier and "espn_game_id" in identifier:
-                event_id = identifier["espn_game_id"]
+                game_id = identifier["espn_game_id"]
             else:
                 # Fallback to API response data
-                event_id = odds_data.get("event_id") or odds_data.get("market_id", "")
+                game_id = odds_data.get("event_id") or odds_data.get("market_id", "")
 
             # Extract tricodes from identifier (set by trial metadata)
             home_tricode = (identifier or {}).get("home_tricode", "")
@@ -112,7 +112,7 @@ class PolymarketStore(DataStore):
             events.append(
                 OddsUpdateEvent(
                     timestamp=timestamp,
-                    event_id=event_id,
+                    game_id=game_id,
                     home_tricode=home_tricode,
                     away_tricode=away_tricode,
                     home_odds=float(odds_data.get("home_odds", 1.0)),

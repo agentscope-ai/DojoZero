@@ -4,10 +4,11 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from dojozero.data._models import DataEvent
+from dojozero.data._models import DataEvent, extract_game_id
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,8 @@ class DataHub:
         event: DataEvent,
         source_actor_id: str | None = None,
         sport_type: str = "",
+        game_id: str = "",
+        game_date: str = "",
     ) -> None:
         """Receive an event from a DataStore.
 
@@ -123,6 +126,8 @@ class DataHub:
             event: Event to receive
             source_actor_id: Actor ID of the source (store) that emitted the event
             sport_type: Sport type of the source store (e.g., "nba", "nfl")
+            game_id: Game ID from the source store's poll_identifier (authoritative)
+            game_date: Game date from the source store's poll_identifier (YYYY-MM-DD)
         """
         # Cache event for late-joining subscribers
         self._cache_event(event)
@@ -133,7 +138,9 @@ class DataHub:
 
         # Emit to trace backend if trial_id is set
         if self.trial_id and not self._backtest_mode:
-            self._emit_event_span(event, source_actor_id or self.hub_id, sport_type)
+            self._emit_event_span(
+                event, source_actor_id or self.hub_id, sport_type, game_id, game_date
+            )
 
         # Dispatch to subscribed agents
         await self._dispatch_event(event)
@@ -143,7 +150,12 @@ class DataHub:
     _sls_error_count: int = 0
 
     def _emit_event_span(
-        self, event: DataEvent, actor_id: str, sport_type: str
+        self,
+        event: DataEvent,
+        actor_id: str,
+        sport_type: str,
+        game_id: str = "",
+        game_date: str = "",
     ) -> None:
         """Emit an event as a span to the trace backend.
 
@@ -151,6 +163,8 @@ class DataHub:
             event: Event to emit
             actor_id: Actor ID of the source (store) that emitted the event
             sport_type: Sport type of the source store (e.g., "nba", "nfl")
+            game_id: Game ID from the source store (authoritative, fallback to event)
+            game_date: Game date from the source store (YYYY-MM-DD, authoritative)
         """
         try:
             from dojozero.core._tracing import create_span_from_event, emit_span
@@ -169,9 +183,8 @@ class DataHub:
 
             # Build tags with event data
             tags: dict[str, Any] = {
-                "dojozero.event.type": event_type,
-                "dojozero.event.sequence": sequence,
-                "dojozero.sport.type": sport_type,
+                "sequence": sequence,
+                "sport.type": sport_type,
             }
 
             # Add payload data as event.* tags
@@ -185,12 +198,33 @@ class DataHub:
                     tags[f"event.{key}"] = value
 
             # Extract game_id as top-level tag for easier querying
-            game_id = event_dict.get("game_id") or event_dict.get("event_id", "")
-            if game_id:
-                # Handle event_id format like "0022400608_pbp_188" -> extract game_id
-                if "_" in str(game_id) and str(game_id).startswith("00"):
-                    game_id = str(game_id).split("_")[0]
-                tags["dojozero.game.id"] = str(game_id)
+            # Use store's game_id (authoritative), fall back to event payload
+            resolved_game_id = game_id or extract_game_id(event_dict)
+            if resolved_game_id:
+                tags["game.id"] = resolved_game_id
+
+            # Extract game_date as top-level tag (YYYY-MM-DD format)
+            # Use store's game_date (authoritative), fall back to event payload
+            resolved_game_date = game_date  # From store's poll_identifier
+            if not resolved_game_date:
+                # Try game_time field (datetime) - used by NBA/NFL events
+                if "game_time" in event_dict:
+                    game_time_val = event_dict["game_time"]
+                    if isinstance(game_time_val, datetime):
+                        resolved_game_date = game_time_val.strftime("%Y-%m-%d")
+                    elif isinstance(game_time_val, str) and game_time_val:
+                        # ISO format string - extract date portion
+                        resolved_game_date = (
+                            game_time_val[:10] if len(game_time_val) >= 10 else None
+                        )
+            if not resolved_game_date:
+                # Fallback to game_time_utc (string) - used by some NBA events
+                if "game_time_utc" in event_dict:
+                    game_time_utc = event_dict["game_time_utc"]
+                    if isinstance(game_time_utc, str) and len(game_time_utc) >= 10:
+                        resolved_game_date = game_time_utc[:10]  # YYYY-MM-DD
+            if resolved_game_date:
+                tags["game.date"] = resolved_game_date
 
             # trial_id is guaranteed non-None here because _emit_event_span is only
             # called when self.trial_id is truthy (checked in receive_event)
@@ -324,13 +358,23 @@ class DataHub:
         # Capture store info for use in emit_wrapper closure
         store_id = store.store_id
         store_sport_type = store.sport_type
+        # Get game_id from store's poll_identifier (authoritative source)
+        store_game_id = store._poll_identifier.get(
+            "espn_game_id", store._poll_identifier.get("game_id", "")
+        )
+        # Get game_date from store's poll_identifier (for trace metadata)
+        store_game_date = store._poll_identifier.get("game_date", "")
 
         # Set the store's event emitter to this hub's receive_event
         # Note: event_emitter is sync callback, but we schedule async work
         def emit_wrapper(event: DataEvent) -> None:
             task = asyncio.create_task(
                 self.receive_event(
-                    event, source_actor_id=store_id, sport_type=store_sport_type
+                    event,
+                    source_actor_id=store_id,
+                    sport_type=store_sport_type,
+                    game_id=store_game_id,
+                    game_date=store_game_date,
                 )
             )
             task.add_done_callback(self._handle_task_exception)

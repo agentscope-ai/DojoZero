@@ -268,6 +268,9 @@ _EVENT_FORMATTERS: dict[str, Any] = {
 def format_event(event: DataEvent) -> str:
     """Format a DataEvent into LLM-friendly text."""
     event_type = getattr(event, "event_type", "unknown")
+    # Strip "event." prefix if present (new format: event.nfl_game_update -> nfl_game_update)
+    if event_type.startswith("event."):
+        event_type = event_type[6:]
     formatter = _EVENT_FORMATTERS.get(event_type, _format_default)
     return formatter(event)
 

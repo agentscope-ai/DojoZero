@@ -27,7 +27,7 @@ from dojozero.agents import (
 )
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
-from dojozero.data._models import DataEvent
+from dojozero.data._models import DataEvent, extract_game_id
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +248,23 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             "agent '%s' stopping after %d events", self.actor_id, self._event_count
         )
 
+    def _extract_game_id_from_events(self, events: list[StreamEvent[Any]]) -> str:
+        """Extract game_id from event payloads.
+
+        Args:
+            events: List of StreamEvent objects
+
+        Returns:
+            game_id string, or empty string if not found
+        """
+        for event in events:
+            payload = event.payload
+            if isinstance(payload, DataEvent):
+                game_id = extract_game_id(payload.to_dict())
+                if game_id:
+                    return game_id
+        return ""
+
     def _emit_agent_span(
         self,
         stream_id: str,
@@ -255,11 +272,11 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         role: str,
         content: str,
         tool_calls: list[dict] | None = None,
+        game_id: str = "",
     ) -> None:
         """Emit a span for an agent message to the OTel exporter."""
         tags: dict[str, Any] = {
-            "dojozero.event.type": operation_name,
-            "dojozero.event.sequence": self._event_count,
+            "sequence": self._event_count,
             "event.stream_id": stream_id,
             "event.role": role,
             "event.name": self.name,
@@ -268,6 +285,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         if tool_calls:
             tags["event.tool_calls"] = json.dumps(tool_calls, default=str)
+
+        if game_id:
+            tags["game.id"] = game_id
 
         span = create_span_from_event(
             trial_id=self.trial_id,
@@ -342,11 +362,13 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         # Emit span for user input (use first event's stream_id for tracing)
         primary_stream_id = events[0].stream_id
+        game_id = self._extract_game_id_from_events(events)
         self._emit_agent_span(
             stream_id=primary_stream_id,
             operation_name="agent.input",
             role="user",
             content=input_content,
+            game_id=game_id,
         )
 
         # Call agent
@@ -362,6 +384,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 role="assistant",
                 content=text_content,
                 tool_calls=tool_calls,
+                game_id=game_id,
             )
 
         # Update state

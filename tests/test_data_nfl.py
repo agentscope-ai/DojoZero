@@ -232,7 +232,7 @@ class TestNFLEvents:
     def test_game_initialize_event(self):
         """Test NFLGameInitializeEvent creation."""
         event = NFLGameInitializeEvent(
-            event_id="401671827",
+            game_id="401671827",
             home_team="Kansas City Chiefs",
             away_team="San Francisco 49ers",
             home_team_abbreviation="KC",
@@ -242,15 +242,15 @@ class TestNFLEvents:
             season_type=3,
         )
 
-        assert event.event_id == "401671827"
+        assert event.game_id == "401671827"
         assert event.home_team == "Kansas City Chiefs"
         assert event.away_team == "San Francisco 49ers"
-        assert event.event_type == "nfl_game_initialize"
+        assert event.event_type == "event.nfl_game_initialize"
 
     def test_game_result_event(self):
         """Test NFLGameResultEvent creation."""
         event = NFLGameResultEvent(
-            event_id="401671827",
+            game_id="401671827",
             winner="home",
             final_score={"home": 25, "away": 22},
             home_team="Kansas City Chiefs",
@@ -259,12 +259,12 @@ class TestNFLEvents:
 
         assert event.winner == "home"
         assert event.final_score["home"] == 25
-        assert event.event_type == "nfl_game_result"
+        assert event.event_type == "event.nfl_game_result"
 
     def test_play_event(self):
         """Test NFLPlayEvent creation."""
         event = NFLPlayEvent(
-            event_id="401671827",
+            game_id="401671827",
             play_id="12345",
             sequence_number=100,
             quarter=3,
@@ -281,12 +281,12 @@ class TestNFLEvents:
 
         assert event.play_type == "Pass"
         assert event.yards_gained == 15
-        assert event.event_type == "nfl_play"
+        assert event.event_type == "event.nfl_play"
 
     def test_drive_event(self):
         """Test NFLDriveEvent creation."""
         event = NFLDriveEvent(
-            event_id="401671827",
+            game_id="401671827",
             drive_id="1",
             drive_number=5,
             team_abbreviation="KC",
@@ -306,12 +306,12 @@ class TestNFLEvents:
 
         assert event.result == "Touchdown"
         assert event.is_score is True
-        assert event.event_type == "nfl_drive"
+        assert event.event_type == "event.nfl_drive"
 
     def test_odds_update_event(self):
         """Test NFLOddsUpdateEvent creation."""
         event = NFLOddsUpdateEvent(
-            event_id="401671827",
+            game_id="401671827",
             provider="Draft Kings",
             spread=-3.5,
             over_under=47.5,
@@ -323,7 +323,7 @@ class TestNFLEvents:
 
         assert event.spread == -3.5
         assert event.over_under == 47.5
-        assert event.event_type == "nfl_odds_update"
+        assert event.event_type == "event.nfl_odds_update"
 
 
 # =============================================================================

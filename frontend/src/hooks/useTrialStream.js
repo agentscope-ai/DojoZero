@@ -206,7 +206,7 @@ function spanToEvent(span) {
 
   // Build event object
   const event = {
-    event_type: span.operationName || "unknown",
+    event_type: (span.operationName || "unknown").replace(/^event\./, ""),
     timestamp,
     span_id: span.spanID,
     trace_id: span.traceID,

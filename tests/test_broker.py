@@ -95,7 +95,7 @@ async def initialized_event(broker):
     game_init_event = StreamEvent(
         stream_id="nba_game_stream",
         payload=GameInitializeEvent(
-            event_id="lakers_vs_warriors",
+            game_id="lakers_vs_warriors",
             home_team="Lakers",
             away_team="Warriors",
             game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -108,7 +108,7 @@ async def initialized_event(broker):
     odds_event = StreamEvent(
         stream_id="nba_odds_stream",
         payload=OddsUpdateEvent(
-            event_id="lakers_vs_warriors",
+            game_id="lakers_vs_warriors",
             home_odds=1.95,
             away_odds=2.10,
         ),
@@ -205,7 +205,7 @@ class TestEventManagement:
         game_init = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="game1",
+                game_id="game1",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
@@ -218,7 +218,7 @@ class TestEventManagement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="game1",
+                game_id="game1",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -297,7 +297,7 @@ class TestEventManagement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id=event_id,
+                game_id=event_id,
                 home_odds=2.00,
                 away_odds=2.20,
             ),
@@ -328,7 +328,7 @@ class TestEventManagement:
 
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id=event_id),
+            payload=GameStartEvent(game_id=event_id),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -345,7 +345,7 @@ class TestEventManagement:
         # First transition to LIVE
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id=event_id),
+            payload=GameStartEvent(game_id=event_id),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -354,7 +354,7 @@ class TestEventManagement:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id=event_id,
+                game_id=event_id,
                 winner="home",
                 final_score={"home": 110, "away": 105},
             ),
@@ -372,7 +372,7 @@ class TestEventManagement:
         game1_init = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="game1",
+                game_id="game1",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
@@ -384,7 +384,7 @@ class TestEventManagement:
         odds1 = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="game1",
+                game_id="game1",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -396,7 +396,7 @@ class TestEventManagement:
         game2_init = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="game2",
+                game_id="game2",
                 home_team="Celtics",
                 away_team="Heat",
                 game_time=datetime.now(),
@@ -408,7 +408,7 @@ class TestEventManagement:
         odds2 = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="game2",
+                game_id="game2",
                 home_odds=1.85,
                 away_odds=2.00,
             ),
@@ -419,7 +419,7 @@ class TestEventManagement:
         # Close one event via game start + result
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id="game2"),
+            payload=GameStartEvent(game_id="game2"),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -427,7 +427,7 @@ class TestEventManagement:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="game2",
+                game_id="game2",
                 winner="home",
                 final_score={"home": 100, "away": 95},
             ),
@@ -459,7 +459,7 @@ class TestBetPlacement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -474,7 +474,7 @@ class TestBetPlacement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -516,7 +516,7 @@ class TestBetPlacement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -531,7 +531,7 @@ class TestBetPlacement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -574,7 +574,7 @@ class TestBetPlacement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -589,7 +589,7 @@ class TestBetPlacement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -615,7 +615,7 @@ class TestBetPlacement:
         odds_update = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.90,
                 away_odds=2.25,  # Now >= 2.20, should trigger
             ),
@@ -642,7 +642,7 @@ class TestBetPlacement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -657,7 +657,7 @@ class TestBetPlacement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -693,7 +693,7 @@ class TestBetPlacement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -708,7 +708,7 @@ class TestBetPlacement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -720,7 +720,7 @@ class TestBetPlacement:
         # Close event via game start + result
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id="test_event"),
+            payload=GameStartEvent(game_id="test_event"),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -728,7 +728,7 @@ class TestBetPlacement:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="test_event",
+                game_id="test_event",
                 winner="home",
                 final_score={"home": 110, "away": 105},
             ),
@@ -759,7 +759,7 @@ class TestBetPlacement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -774,7 +774,7 @@ class TestBetPlacement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -822,7 +822,7 @@ class TestBetPlacement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -837,7 +837,7 @@ class TestBetPlacement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -885,7 +885,7 @@ class TestBetSettlement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -900,7 +900,7 @@ class TestBetSettlement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -924,7 +924,7 @@ class TestBetSettlement:
         # Start game
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id="test_event"),
+            payload=GameStartEvent(game_id="test_event"),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -933,7 +933,7 @@ class TestBetSettlement:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="test_event",
+                game_id="test_event",
                 winner="home",
                 final_score={"home": 110, "away": 105},
             ),
@@ -962,7 +962,7 @@ class TestBetSettlement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -977,7 +977,7 @@ class TestBetSettlement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -1001,7 +1001,7 @@ class TestBetSettlement:
         # Start game
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id="test_event"),
+            payload=GameStartEvent(game_id="test_event"),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -1010,7 +1010,7 @@ class TestBetSettlement:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="test_event",
+                game_id="test_event",
                 winner="away",
                 final_score={"home": 105, "away": 110},
             ),
@@ -1038,7 +1038,7 @@ class TestBetSettlement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1053,7 +1053,7 @@ class TestBetSettlement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -1078,7 +1078,7 @@ class TestBetSettlement:
         # Start game
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id="test_event"),
+            payload=GameStartEvent(game_id="test_event"),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -1109,7 +1109,7 @@ class TestStatistics:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1124,7 +1124,7 @@ class TestStatistics:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -1159,7 +1159,7 @@ class TestStatistics:
         # Start game and settle with home team winning
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id="test_event"),
+            payload=GameStartEvent(game_id="test_event"),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -1167,7 +1167,7 @@ class TestStatistics:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="test_event",
+                game_id="test_event",
                 winner="home",
                 final_score={"home": 110, "away": 105},
             ),
@@ -1221,7 +1221,7 @@ class TestStateManagement:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1236,7 +1236,7 @@ class TestStateManagement:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -1293,7 +1293,7 @@ class TestIntegration:
         game_init = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="game1",
+                game_id="game1",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1306,7 +1306,7 @@ class TestIntegration:
         odds_init = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="game1",
+                game_id="game1",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -1345,7 +1345,7 @@ class TestIntegration:
         odds_update = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="game1",
+                game_id="game1",
                 home_odds=1.90,
                 away_odds=2.25,
             ),
@@ -1360,7 +1360,7 @@ class TestIntegration:
         # 6. Start game
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id="game1"),
+            payload=GameStartEvent(game_id="game1"),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -1369,7 +1369,7 @@ class TestIntegration:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="game1",
+                game_id="game1",
                 winner="home",
                 final_score={"home": 110, "away": 105},
             ),
@@ -1416,7 +1416,7 @@ def create_odds_event_with_spreads_totals(
 
     class OddsEvent:
         def __init__(self):
-            self.event_id = event_id
+            self.game_id = event_id  # Changed from event_id to game_id
             self.home_odds = home_odds
             self.away_odds = away_odds
             self.spread_updates = spread_updates or []
@@ -1437,7 +1437,7 @@ class TestSpreadBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1496,7 +1496,7 @@ class TestSpreadBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1534,7 +1534,7 @@ class TestSpreadBetting:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="test_event",
+                game_id="test_event",
                 winner="home",
                 final_score={"home": 110, "away": 105},
             ),
@@ -1556,7 +1556,7 @@ class TestSpreadBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1594,7 +1594,7 @@ class TestSpreadBetting:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="test_event",
+                game_id="test_event",
                 winner="home",
                 final_score={"home": 105, "away": 103},
             ),
@@ -1616,7 +1616,7 @@ class TestSpreadBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1676,7 +1676,7 @@ class TestSpreadBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1753,7 +1753,7 @@ class TestTotalBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1808,7 +1808,7 @@ class TestTotalBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1846,7 +1846,7 @@ class TestTotalBetting:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="test_event",
+                game_id="test_event",
                 winner="home",
                 final_score={"home": 115, "away": 110},  # Total = 225
             ),
@@ -1868,7 +1868,7 @@ class TestTotalBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1906,7 +1906,7 @@ class TestTotalBetting:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id="test_event",
+                game_id="test_event",
                 winner="home",
                 final_score={"home": 115, "away": 110},  # Total = 225
             ),
@@ -1928,7 +1928,7 @@ class TestTotalBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -1988,7 +1988,7 @@ class TestTotalBetting:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -2066,7 +2066,7 @@ class TestMultipleSpreadsTotals:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -2135,7 +2135,7 @@ class TestMultipleSpreadsTotals:
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
@@ -2148,7 +2148,7 @@ class TestMultipleSpreadsTotals:
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
-                event_id="test_event",
+                game_id="test_event",
                 home_odds=1.95,
                 away_odds=2.10,
             ),
@@ -2265,7 +2265,7 @@ class TestEventOrdering:
         # 1. GameStartEvent arrives BEFORE GameInitializeEvent (out of order)
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id=event_id),
+            payload=GameStartEvent(game_id=event_id),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -2278,7 +2278,7 @@ class TestEventOrdering:
         game_init = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id=event_id,
+                game_id=event_id,
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
@@ -2304,7 +2304,7 @@ class TestEventOrdering:
         # 1. GameStartEvent arrives first (buffered)
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id=event_id),
+            payload=GameStartEvent(game_id=event_id),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -2313,7 +2313,7 @@ class TestEventOrdering:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id=event_id,
+                game_id=event_id,
                 winner="home",
                 final_score={"home": 110, "away": 105},
             ),
@@ -2329,7 +2329,7 @@ class TestEventOrdering:
         game_init = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id=event_id,
+                game_id=event_id,
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
@@ -2351,7 +2351,7 @@ class TestEventOrdering:
         game_init = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
-                event_id=event_id,
+                game_id=event_id,
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
@@ -2368,7 +2368,7 @@ class TestEventOrdering:
         # 2. GameStartEvent second
         game_start = StreamEvent(
             stream_id="nba_game_stream",
-            payload=GameStartEvent(event_id=event_id),
+            payload=GameStartEvent(game_id=event_id),
             emitted_at=datetime.now(),
         )
         await broker.handle_stream_event(game_start)
@@ -2382,7 +2382,7 @@ class TestEventOrdering:
         game_result = StreamEvent(
             stream_id="nba_results_stream",
             payload=GameResultEvent(
-                event_id=event_id,
+                game_id=event_id,
                 winner="home",
                 final_score={"home": 110, "away": 105},
             ),

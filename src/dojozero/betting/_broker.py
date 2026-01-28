@@ -441,6 +441,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         if not event_type:
             return None
 
+        # Handle event.* prefix (new format)
+        # e.g., "event.nfl_game_initialize" -> "nfl_game_initialize"
+        if event_type.startswith("event."):
+            event_type = event_type[6:]  # Strip "event." prefix
+
         # Handle sport-specific prefixes (e.g., "nfl_game_initialize" -> "game_initialize")
         # This allows the broker to work with any sport's events
         for prefix in ["nba_", "nfl_", "mlb_", "nhl_"]:
@@ -458,17 +463,18 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             data_event = event.payload
 
             # Type check - ensure it's one of our game events
-            if not hasattr(data_event, "event_id"):
+            # Events use game_id to identify the game they belong to
+            if not hasattr(data_event, "game_id"):
                 logger.warning(
-                    "Event missing event_id attribute: type=%s, payload=%s",
+                    "Event missing game_id attribute: type=%s, payload=%s",
                     type(data_event),
                     data_event,
                 )
                 return
 
-            event_id = data_event.event_id
+            event_id = data_event.game_id
             if not event_id:
-                logger.error("Event missing event_id: %s", data_event)
+                logger.error("Event missing game_id: %s", data_event)
                 return
 
             async with self._event_locks[

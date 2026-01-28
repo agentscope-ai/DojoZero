@@ -53,7 +53,13 @@ class NBAStoreFactory(StoreFactory):
             )
 
         # Set poll identifier - espn_game_id is used to fetch game data from ESPN API
-        store.set_poll_identifier({"espn_game_id": espn_game_id})
+        # game_date is used for trace emission metadata
+        store.set_poll_identifier(
+            {
+                "espn_game_id": espn_game_id,
+                "game_date": metadata.game_date,
+            }
+        )
 
         # Connect to hub
         hub.connect_store(store)

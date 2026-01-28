@@ -252,7 +252,7 @@ class NFLGameInitializeEvent(DataEvent):
     to initialize a betting event.
     """
 
-    event_id: str = field(default="")  # ESPN event ID
+    game_id: str = field(default="")  # ESPN event ID for the game
     home_team: str = field(default="")  # Full team name (e.g., "Kansas City Chiefs")
     away_team: str = field(default="")  # Full team name (e.g., "San Francisco 49ers")
     home_team_id: str = field(default="")
@@ -266,7 +266,7 @@ class NFLGameInitializeEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_game_initialize"
+        return "event.nfl_game_initialize"
 
 
 @register_event
@@ -274,11 +274,11 @@ class NFLGameInitializeEvent(DataEvent):
 class NFLGameStartEvent(DataEvent):
     """NFL game start event signaling kickoff."""
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
 
     @property
     def event_type(self) -> str:
-        return "nfl_game_start"
+        return "event.nfl_game_start"
 
 
 @register_event
@@ -286,7 +286,7 @@ class NFLGameStartEvent(DataEvent):
 class NFLGameResultEvent(DataEvent):
     """NFL game result event with winner and final score."""
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
     winner: str = field(default="")  # "home" or "away" or "" for tie
     final_score: dict[str, int] = field(
         default_factory=dict
@@ -296,7 +296,7 @@ class NFLGameResultEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_game_result"
+        return "event.nfl_game_result"
 
 
 @register_event
@@ -307,7 +307,7 @@ class NFLGameUpdateEvent(DataEvent):
     Contains team stats and current game state.
     """
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
     quarter: int = field(default=0)  # 1-4 for regulation, 5+ for OT
     game_clock: str = field(default="")  # e.g., "12:34"
     possession: str = field(default="")  # Team abbreviation with possession
@@ -322,7 +322,7 @@ class NFLGameUpdateEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_game_update"
+        return "event.nfl_game_update"
 
     @property
     def home_team_stats(self) -> NFLTeamStats:
@@ -348,7 +348,7 @@ class NFLPlayEvent(DataEvent):
     Contains detailed information about a single play.
     """
 
-    event_id: str = field(default="")  # ESPN event ID
+    game_id: str = field(default="")  # ESPN event ID for the game
     play_id: str = field(default="")  # Unique play ID
     sequence_number: int = field(default=0)  # Play sequence in game
     quarter: int = field(default=0)
@@ -369,7 +369,7 @@ class NFLPlayEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_play"
+        return "event.nfl_play"
 
 
 @register_event
@@ -380,7 +380,7 @@ class NFLDriveEvent(DataEvent):
     Contains information about a complete drive.
     """
 
-    event_id: str = field(default="")  # ESPN event ID
+    game_id: str = field(default="")  # ESPN event ID for the game
     drive_id: str = field(default="")  # Unique drive ID
     drive_number: int = field(default=0)  # Drive sequence in game
     team_id: str = field(default="")  # Driving team
@@ -406,7 +406,7 @@ class NFLDriveEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_drive"
+        return "event.nfl_drive"
 
 
 # =============================================================================
@@ -422,7 +422,7 @@ class NFLOddsUpdateEvent(DataEvent):
     Contains spread, over/under, and moneyline odds from sportsbooks.
     """
 
-    event_id: str = field(default="")  # ESPN event ID
+    game_id: str = field(default="")  # ESPN event ID for the game
     provider: str = field(default="")  # e.g., "Draft Kings", "FanDuel"
     # Spread betting
     spread: float = field(default=0.0)  # Positive = home team favored
@@ -441,4 +441,4 @@ class NFLOddsUpdateEvent(DataEvent):
 
     @property
     def event_type(self) -> str:
-        return "nfl_odds_update"
+        return "event.nfl_odds_update"

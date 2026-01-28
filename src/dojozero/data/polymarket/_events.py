@@ -14,7 +14,7 @@ class OddsUpdateEvent(DataEvent):
     Raw probabilities are also included for reference.
     """
 
-    event_id: str = field(default="")
+    game_id: str = field(default="")  # ESPN event ID for the game
     home_tricode: str = field(default="")  # Home team code (e.g., "LAL", "KC")
     away_tricode: str = field(default="")  # Away team code (e.g., "BOS", "SF")
     home_odds: float = field(default=1.0)  # Computed: 1 / home_probability

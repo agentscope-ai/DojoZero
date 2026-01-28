@@ -53,13 +53,15 @@ logger = logging.getLogger(__name__)
 # Mapping from event_type to (processor_class, source_event_types)
 # This defines which processors are needed for each event type and what they depend on.
 # Used to auto-register processors on stores when event types are requested.
+# Note: source_event_types must use full event type values (e.g., "event.raw_web_search")
+# to match the event_type property of DataEvent subclasses
 EVENT_TYPE_PROCESSOR_MAP: dict[str, tuple[type[Any] | None, list[str]]] = {
     # Raw stream: no processor, emitted directly from store
     "raw_web_search": (None, []),
     # Processed streams: processor class and source event types
-    "injury_summary": (InjurySummaryProcessor, ["raw_web_search"]),
-    "power_ranking": (PowerRankingProcessor, ["raw_web_search"]),
-    "expert_prediction": (ExpertPredictionProcessor, ["raw_web_search"]),
+    "injury_summary": (InjurySummaryProcessor, ["event.raw_web_search"]),
+    "power_ranking": (PowerRankingProcessor, ["event.raw_web_search"]),
+    "expert_prediction": (ExpertPredictionProcessor, ["event.raw_web_search"]),
 }
 
 # Mapping from synthetic event types to actual event types
@@ -496,7 +498,7 @@ register_trial_builder(
         "data_streams": [
             {
                 "id": "raw_web_search_stream",
-                "event_type": "raw_web_search",
+                "event_type": "event.raw_web_search",
                 "initializer": {
                     "search_queries": [
                         {
@@ -513,31 +515,31 @@ register_trial_builder(
             },
             {
                 "id": "injury_summary_stream",
-                "event_type": "injury_summary",
+                "event_type": "event.injury_summary",
             },
             {
                 "id": "power_ranking_stream",
-                "event_type": "power_ranking",
+                "event_type": "event.power_ranking",
             },
             {
                 "id": "expert_prediction_stream",
-                "event_type": "expert_prediction",
+                "event_type": "event.expert_prediction",
             },
             {
                 "id": "game_status_change_stream",
-                "event_type": "game_status_change",
+                "event_type": "event.game_status_change",
             },
             {
                 "id": "game_update_stream",
-                "event_type": "game_update",
+                "event_type": "event.game_update",
             },
             {
                 "id": "odds_update_stream",
-                "event_type": "odds_update",
+                "event_type": "event.odds_update",
             },
             {
                 "id": "play_by_play_stream",
-                "event_type": "play_by_play",
+                "event_type": "event.play_by_play",
             },
         ],
         "operators": [

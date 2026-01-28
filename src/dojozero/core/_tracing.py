@@ -417,11 +417,11 @@ class SLSTraceReader:
             start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
 
         # SLS query for trial.started spans
-        # Note: Field names use underscores in SLS (operation_name, dojozero_trial_id)
+        # Note: Infrastructure fields use _ prefix (_service, _operation_name, _trace_id)
         query = (
-            f'service:"{self._service_name}" AND '
-            f'operation_name:"trial.started" | '
-            f"SELECT DISTINCT dojozero_trial_id as trial_id LIMIT {limit}"
+            f'_service:"{self._service_name}" AND '
+            f'_operation_name:"trial.started" | '
+            f"SELECT DISTINCT _trace_id as trial_id LIMIT {limit}"
         )
 
         params = {
@@ -487,9 +487,9 @@ class SLSTraceReader:
             from_time = start_time
 
         # SLS query for spans with specific trial_id
-        # Note: Field names use underscores in SLS (dojozero_trial_id not dojozero.trial.id)
+        # Note: _trace_id contains the trial_id
         # Simple search query without SQL - results are returned in time order by default
-        query = f'service:"{self._service_name}" AND dojozero_trial_id:"{trial_id}"'
+        query = f'_service:"{self._service_name}" AND _trace_id:"{trial_id}"'
 
         params = {
             "type": "log",
@@ -538,18 +538,28 @@ class SLSTraceReader:
     def _convert_sls_row_to_span(self, row: dict[str, Any]) -> SpanData | None:
         """Convert an SLS log row to SpanData.
 
-        SLS stores spans with underscore-separated field names:
-        - trace_id, span_id, parent_span_id
-        - operation_name
-        - __time__ (Unix seconds), duration_us (microseconds)
-        - tags/attributes as flattened fields (dojozero_*, event_*)
+        SLS stores spans with _ prefixed infrastructure fields:
+        - _trace_id, _span_id, _parent_span_id
+        - _operation_name, _service
+        - __time__ (Unix seconds), _duration_us (microseconds)
+        - Domain tags as flattened fields (game_id, sport_type, event_*)
+        - Infrastructure tags with _ prefix (_actor_id, _sequence)
         """
         try:
-            # Support both underscore (our format) and camelCase (OTLP format)
-            trace_id = row.get("trace_id", row.get("traceId", row.get("traceID", "")))
-            span_id = row.get("span_id", row.get("spanId", row.get("spanID", "")))
+            # Support _ prefix (current), underscore (legacy), and camelCase (OTLP)
+            trace_id = row.get(
+                "_trace_id",
+                row.get("trace_id", row.get("traceId", row.get("traceID", ""))),
+            )
+            span_id = row.get(
+                "_span_id",
+                row.get("span_id", row.get("spanId", row.get("spanID", ""))),
+            )
             operation_name = row.get(
-                "operation_name", row.get("operationName", row.get("name", ""))
+                "_operation_name",
+                row.get(
+                    "operation_name", row.get("operationName", row.get("name", ""))
+                ),
             )
 
             # Handle start time: __time__ is Unix seconds, startTime may be microseconds
@@ -564,10 +574,15 @@ class SLSTraceReader:
                 # __time__ is in seconds, convert to microseconds
                 start_time = int(start_time_raw) * 1_000_000
 
-            # duration_us is already in microseconds
-            duration = int(row.get("duration_us", row.get("duration", 0)))
+            # _duration_us is already in microseconds
+            duration = int(
+                row.get("_duration_us", row.get("duration_us", row.get("duration", 0)))
+            )
             parent_span_id = row.get(
-                "parent_span_id", row.get("parentSpanId", row.get("parentSpanID"))
+                "_parent_span_id",
+                row.get(
+                    "parent_span_id", row.get("parentSpanId", row.get("parentSpanID"))
+                ),
             )
 
             # Extract tags from flattened fields or nested tags object
@@ -580,10 +595,21 @@ class SLSTraceReader:
                     if isinstance(tag, dict):
                         tags[tag.get("key", "")] = tag.get("value")
 
-            # Also check for dojozero.* and event.* fields directly in the row
-            # SLS log exporter flattens dots to underscores, so check both formats
+            # Also check for domain and infrastructure fields directly in the row
+            # Domain fields: game_id, sport_type, game_date, event_*
+            # Infrastructure fields with _ prefix: _actor_id, _sequence
             for key, value in row.items():
-                if key.startswith("dojozero."):
+                # Skip infrastructure fields (already extracted above)
+                if key.startswith("_"):
+                    # Infrastructure tag - normalize to dot notation for internal use
+                    if key in ("_actor_id", "_sequence"):
+                        normalized_key = key[1:].replace(
+                            "_", "."
+                        )  # _actor_id -> actor.id
+                        if key == "_actor_id":
+                            normalized_key = "actor.id"
+                        tags[normalized_key] = value
+                elif key.startswith("dojozero."):
                     tags[key] = value
                 elif key.startswith("dojozero_"):
                     # Convert dojozero_x_y to dojozero.x.y
@@ -594,6 +620,10 @@ class SLSTraceReader:
                 elif key.startswith("event_"):
                     # Convert event_x to event.x (only first underscore)
                     normalized_key = "event." + key[6:]
+                    tags[normalized_key] = value
+                elif key in ("game_id", "sport_type", "game_date"):
+                    # Domain fields - convert to dot notation
+                    normalized_key = key.replace("_", ".")
                     tags[normalized_key] = value
 
             return SpanData(
@@ -764,9 +794,8 @@ def create_span_from_event(
     start_us = int(now.timestamp() * 1_000_000)
     duration_us = duration_ms * 1000
 
-    tags = {
-        "dojozero.trial.id": trial_id,
-        "dojozero.actor.id": actor_id,
+    tags: dict[str, Any] = {
+        "actor.id": actor_id,
     }
     if extra_tags:
         tags.update(extra_tags)
@@ -811,9 +840,8 @@ def convert_actor_registration_to_span(
     operation_name = f"{actor_type}.registered"
 
     tags: dict[str, Any] = {
-        "dojozero.trial.id": trial_id,
-        "dojozero.actor.id": actor_id,
-        "dojozero.actor.type": actor_type,
+        "actor.id": actor_id,
+        "actor.type": actor_type,
     }
 
     # Add resource.* tags from metadata
@@ -874,10 +902,8 @@ def convert_checkpoint_event_to_span(
         "sequence",
     }
     tags: dict[str, Any] = {
-        "dojozero.trial.id": trial_id,
-        "dojozero.actor.id": event_actor_id,
-        "dojozero.event.type": event_type,
-        "dojozero.event.sequence": event.get("sequence", sequence),
+        "actor.id": event_actor_id,
+        "sequence": event.get("sequence", sequence),
     }
     # Add remaining event data as tags
     for key, value in event.items():
@@ -1005,10 +1031,8 @@ def convert_agent_message_to_span(
 
     # Use event.* prefix so arena UI spanToEvent can extract fields
     tags: dict[str, Any] = {
-        "dojozero.trial.id": trial_id,
-        "dojozero.actor.id": actor_id,
-        "dojozero.event.type": operation_name,
-        "dojozero.event.sequence": sequence,
+        "actor.id": actor_id,
+        "sequence": sequence,
         "event.stream_id": stream_id,
         "event.role": role,
         "event.name": name,
@@ -1617,24 +1641,35 @@ class SLSLogExporter:
         import time as _time
 
         # Build flat log entry
+        # Infrastructure fields use _ prefix for easy identification/indexing
         log_entry: dict[str, Any] = {
             "__time__": int(_time.time()),
-            "event_time": span_data.start_time // 1_000_000,
-            "trace_id": span_data.trace_id,
-            "span_id": span_data.span_id,
-            "operation_name": span_data.operation_name,
-            "duration_us": span_data.duration,
-            "service": self._service_name,
+            "_event_time": span_data.start_time // 1_000_000,
+            "_trace_id": span_data.trace_id,
+            "_span_id": span_data.span_id,
+            "_operation_name": span_data.operation_name,
+            "_duration_us": span_data.duration,
+            "_service": self._service_name,
         }
 
         if span_data.parent_span_id:
-            log_entry["parent_span_id"] = span_data.parent_span_id
+            log_entry["_parent_span_id"] = span_data.parent_span_id
 
         # Flatten tags to top-level fields
+        # Infrastructure tags (actor.*, sequence) get _ prefix
+        # Domain tags (sport.*, game.*, event.*) keep no prefix
+        infra_tag_prefixes = ("actor.",)
+        infra_tag_names = {"sequence"}
         for key, value in span_data.tags.items():
+            if value is None:
+                continue
             flat_key = key.replace(".", "_")
-            if value is not None:
-                log_entry[flat_key] = value
+            # Add _ prefix for infrastructure tags
+            if key in infra_tag_names or any(
+                key.startswith(p) for p in infra_tag_prefixes
+            ):
+                flat_key = f"_{flat_key}"
+            log_entry[flat_key] = value
 
         # Non-blocking put on queue
         try:

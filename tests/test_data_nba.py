@@ -118,7 +118,7 @@ class TestNBAStoreParseBoxscore:
         assert len(init_events) == 1
 
         update = update_events[0]
-        assert update.event_id == "401810001"
+        assert update.game_id == "401810001"
         assert update.home_team["score"] == 110
         assert update.away_team["score"] == 105
         assert update.home_team["teamTricode"] == "LAL"
@@ -127,7 +127,7 @@ class TestNBAStoreParseBoxscore:
         assert len(update.player_stats["away"]) == 1
 
         init = init_events[0]
-        assert init.event_id == "401810001"
+        assert init.game_id == "401810001"
         assert init.home_team == "Los Angeles Lakers"
         assert init.away_team == "Golden State Warriors"
 
@@ -230,7 +230,7 @@ class TestNBAStoreParsePlayByPlay:
         pbp_events = [e for e in events if isinstance(e, PlayByPlayEvent)]
 
         assert len(start_events) == 1
-        assert start_events[0].event_id == "401810001"
+        assert start_events[0].game_id == "401810001"
         assert len(pbp_events) == 1
         assert pbp_events[0].action_type == "jumpball"
         assert pbp_events[0].action_number == 1
@@ -479,8 +479,8 @@ class TestNBAStoreStateTransitions:
 
         assert len(start_events1) == 1
         assert len(start_events2) == 1
-        assert start_events1[0].event_id == "401810002"
-        assert start_events2[0].event_id == "401810003"
+        assert start_events1[0].game_id == "401810002"
+        assert start_events2[0].game_id == "401810003"
 
 
 class TestNBAStoreExtractPlayerStats:
@@ -670,7 +670,7 @@ class TestGetGameInfoByIdIntegration:
             result = get_game_info_by_id(recent_id)
 
             assert result is not None, f"Recent game {recent_id} should be found"
-            assert result.event_id == recent_id
+            assert result.game_id == recent_id
             assert result.home_team.tricode != ""
             assert result.away_team.tricode != ""
             assert result.home_team.name != ""
@@ -683,7 +683,7 @@ class TestGetGameInfoByIdIntegration:
             assert hasattr(result, "game_time_utc")
 
             # Check types
-            assert isinstance(result.event_id, str)
+            assert isinstance(result.game_id, str)
             assert isinstance(result.home_team.name, str)
             assert isinstance(result.away_team.name, str)
             assert isinstance(result.home_team.tricode, str)
@@ -695,7 +695,7 @@ class TestGetGameInfoByIdIntegration:
             result = get_game_info_by_id(hist_id)
 
             assert result is not None, f"Historical game {hist_id} should be found"
-            assert result.event_id == hist_id
+            assert result.game_id == hist_id
             assert result.home_team.tricode != ""
             assert result.away_team.tricode != ""
 
@@ -705,7 +705,7 @@ class TestGetGameInfoByIdIntegration:
             result = get_game_info_by_id(old_id)
 
             assert result is not None, f"Old game {old_id} should be found"
-            assert result.event_id == old_id
+            assert result.game_id == old_id
             assert result.home_team.tricode != ""
             assert result.away_team.tricode != ""
 
@@ -724,7 +724,7 @@ class TestGetGameInfoByIdIntegration:
         result = get_game_info_by_id(future_id)
 
         assert result is not None, f"Game {future_id} should be found"
-        assert result.event_id == future_id
+        assert result.game_id == future_id
         assert result.home_team.tricode != ""
         assert result.away_team.tricode != ""
         assert result.home_team.name != ""
@@ -764,7 +764,7 @@ class TestGetGameInfoByIdIntegration:
         result = get_game_info_by_id(game_id, proxy=proxy)
 
         assert result is not None, f"Game {game_id} should be found with proxy"
-        assert result.event_id == game_id
+        assert result.game_id == game_id
 
     def test_consistency_across_calls(self, test_game_ids):
         """Test that multiple calls return consistent data."""
@@ -781,7 +781,7 @@ class TestGetGameInfoByIdIntegration:
         assert result2 is not None
 
         # Results should be identical
-        assert result1.event_id == result2.event_id
+        assert result1.game_id == result2.game_id
         assert result1.home_team.name == result2.home_team.name
         assert result1.away_team.name == result2.away_team.name
         assert result1.home_team.tricode == result2.home_team.tricode
@@ -881,40 +881,40 @@ class TestNBAEvents:
         assert event.event_id == "401810001_pbp_10"
         assert event.action_type == "2pt"
         assert event.player_name == "LeBron James"
-        assert event.event_type == "play_by_play"
+        assert event.event_type == "event.play_by_play"
 
     def test_game_initialize_event_creation(self):
         """Test GameInitializeEvent creation and properties."""
         from datetime import datetime, timezone
 
         event = GameInitializeEvent(
-            event_id="401810001",
+            game_id="401810001",
             home_team="Los Angeles Lakers",
             away_team="Golden State Warriors",
             game_time=datetime(2024, 1, 15, 3, 0, 0, tzinfo=timezone.utc),
         )
 
-        assert event.event_id == "401810001"
+        assert event.game_id == "401810001"
         assert event.home_team == "Los Angeles Lakers"
         assert event.away_team == "Golden State Warriors"
-        assert event.event_type == "game_initialize"
+        assert event.event_type == "event.game_initialize"
 
     def test_game_start_event_creation(self):
         """Test GameStartEvent creation and properties."""
-        event = GameStartEvent(event_id="401810001")
+        event = GameStartEvent(game_id="401810001")
 
-        assert event.event_id == "401810001"
-        assert event.event_type == "game_start"
+        assert event.game_id == "401810001"
+        assert event.event_type == "event.game_start"
 
     def test_game_result_event_creation(self):
         """Test GameResultEvent creation and properties."""
         event = GameResultEvent(
-            event_id="401810001",
+            game_id="401810001",
             winner="home",
             final_score={"home": 110, "away": 105},
         )
 
-        assert event.event_id == "401810001"
+        assert event.game_id == "401810001"
         assert event.winner == "home"
         assert event.final_score["home"] == 110
-        assert event.event_type == "game_result"
+        assert event.event_type == "event.game_result"

@@ -99,7 +99,7 @@ class GameInfo(BaseModel):
     Used by trial builders and dashboard for game discovery.
 
     Key fields for trial metadata:
-        - event_id: ESPN game/event ID (maps to espn_game_id in metadata)
+        - game_id: ESPN game/event ID (maps to espn_game_id in metadata)
         - home_team.tricode: Home team code (maps to home_tricode)
         - away_team.tricode: Away team code (maps to away_tricode)
         - home_team.name: Full home team name (maps to home_team_name)
@@ -109,7 +109,7 @@ class GameInfo(BaseModel):
 
     model_config = {"populate_by_name": True}
 
-    event_id: str = Field(default="", alias="gameId")
+    game_id: str = Field(default="", alias="gameId")
     sport_type: str = ""
     status: int = Field(default=1, alias="gameStatus")
     status_text: str = Field(default="", alias="gameStatusText")
@@ -129,9 +129,9 @@ class GameInfo(BaseModel):
     season_year: int = Field(default=0, alias="seasonYear")
     season_type: str = Field(default="", alias="seasonType")
 
-    @field_validator("event_id", mode="before")
+    @field_validator("game_id", mode="before")
     @classmethod
-    def coerce_event_id(cls, v: Any) -> str:
+    def coerce_game_id(cls, v: Any) -> str:
         return str(v) if v is not None else ""
 
     @field_validator("status", mode="before")
