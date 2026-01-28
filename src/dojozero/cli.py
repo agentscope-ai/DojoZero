@@ -737,12 +737,30 @@ def _setup_otel_exporter(
 
 
 def _shutdown_otel_exporter(otel_exporter: Any) -> None:
-    """Shutdown OTel exporter and clear global reference.
+    """Shutdown OTel and SLS exporters and clear global references.
 
     Args:
         otel_exporter: The OTelSpanExporter instance to shutdown
     """
-    _shutdown_otel_exporter(otel_exporter)
+    if otel_exporter is None:
+        return
+
+    from dojozero.core._tracing import (
+        get_sls_log_exporter,
+        set_otel_exporter,
+        set_sls_log_exporter,
+    )
+
+    otel_exporter.shutdown()
+    set_otel_exporter(None)
+    LOGGER.info("OTel exporter shutdown complete")
+
+    # Shutdown SLS log exporter if configured
+    sls_log_exporter = get_sls_log_exporter()
+    if sls_log_exporter is not None:
+        sls_log_exporter.shutdown()
+        set_sls_log_exporter(None)
+        LOGGER.info("SLS Log exporter shutdown complete")
 
 
 def _default_example_filename(builder_name: str) -> str:
@@ -1010,23 +1028,7 @@ async def _run_command(args: argparse.Namespace) -> int:
             )
     finally:
         # Clean up exporters if configured
-        if otel_exporter is not None:
-            from dojozero.core._tracing import (
-                get_sls_log_exporter,
-                set_otel_exporter,
-                set_sls_log_exporter,
-            )
-
-            otel_exporter.shutdown()
-            set_otel_exporter(None)
-            LOGGER.info("OTel exporter shutdown complete")
-
-            # Shutdown SLS log exporter if configured
-            sls_log_exporter = get_sls_log_exporter()
-            if sls_log_exporter is not None:
-                sls_log_exporter.shutdown()
-                set_sls_log_exporter(None)
-                LOGGER.info("SLS Log exporter shutdown complete")
+        _shutdown_otel_exporter(otel_exporter)
 
     return 0
 
@@ -1433,23 +1435,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
 
     finally:
         # Clean up exporters if configured
-        if otel_exporter is not None:
-            from dojozero.core._tracing import (
-                get_sls_log_exporter,
-                set_otel_exporter,
-                set_sls_log_exporter,
-            )
-
-            otel_exporter.shutdown()
-            set_otel_exporter(None)
-            LOGGER.info("OTel exporter shutdown complete")
-
-            # Shutdown SLS log exporter if configured
-            sls_log_exporter = get_sls_log_exporter()
-            if sls_log_exporter is not None:
-                sls_log_exporter.shutdown()
-                set_sls_log_exporter(None)
-                LOGGER.info("SLS Log exporter shutdown complete")
+        _shutdown_otel_exporter(otel_exporter)
 
     # Summary
     LOGGER.info(

@@ -91,7 +91,7 @@ class BacktestBettingTrialMetadata(BettingTrialMetadata):
 
     # Backtest fields (required)
     backtest_mode: bool = True
-    backtest_file: str = ""
+    backtest_file: str | None = None
     backtest_speed: float = 1.0
     backtest_max_sleep: float = 20.0
 
