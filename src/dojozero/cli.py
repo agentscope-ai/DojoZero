@@ -569,7 +569,10 @@ async def _prepare_trial_spec(trial_id: str, payload: Mapping[str, Any]) -> Tria
     if metadata is not None:
         if not isinstance(metadata, Mapping):
             raise DojoZeroCLIError("spec.metadata must be a mapping when provided")
-        spec.metadata.update(metadata)
+        # Update metadata fields from user-provided values
+        for key, value in metadata.items():
+            if hasattr(spec.metadata, key):
+                setattr(spec.metadata, key, value)
 
     resume_cfg = payload.get("resume")
     if resume_cfg is not None:
@@ -663,8 +666,10 @@ def _setup_otel_exporter(
 
     from dojozero.core._tracing import (
         OTelSpanExporter,
+        SLSLogExporter,
         get_sls_exporter_headers,
         set_otel_exporter,
+        set_sls_log_exporter,
     )
 
     if trace_backend == "sls":
@@ -690,6 +695,29 @@ def _setup_otel_exporter(
             otlp_endpoint,
             service_name,
         )
+
+        # Also initialize SLS Log exporter for flat field indexing
+        sls_logstore = os.environ.get("DOJOZERO_SLS_LOGSTORE", "")
+        if sls_logstore:
+            sls_log_exporter = SLSLogExporter(
+                project=sls_project,
+                endpoint=sls_endpoint,
+                logstore=sls_logstore,
+                service_name=service_name,
+            )
+            sls_log_exporter.start()
+            set_sls_log_exporter(sls_log_exporter)
+            LOGGER.info(
+                "SLS Log exporter configured: %s/%s (flat fields)",
+                sls_project,
+                sls_logstore,
+            )
+        else:
+            LOGGER.warning(
+                "DOJOZERO_SLS_LOGSTORE not set - spans will only be exported via OTLP. "
+                "Set DOJOZERO_SLS_LOGSTORE for flat field indexing and better querying."
+            )
+
         return otel_exporter
     elif trace_backend == "jaeger":
         otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
@@ -981,13 +1009,24 @@ async def _run_command(args: argparse.Namespace) -> int:
                 start_fn=lambda: orchestrator.resume_trial(trial_id, resume_checkpoint),
             )
     finally:
-        # Clean up OTLP exporter if configured
+        # Clean up exporters if configured
         if otel_exporter is not None:
-            from dojozero.core._tracing import set_otel_exporter
+            from dojozero.core._tracing import (
+                get_sls_log_exporter,
+                set_otel_exporter,
+                set_sls_log_exporter,
+            )
 
             otel_exporter.shutdown()
             set_otel_exporter(None)
             LOGGER.info("OTel exporter shutdown complete")
+
+            # Shutdown SLS log exporter if configured
+            sls_log_exporter = get_sls_log_exporter()
+            if sls_log_exporter is not None:
+                sls_log_exporter.shutdown()
+                set_sls_log_exporter(None)
+                LOGGER.info("SLS Log exporter shutdown complete")
 
     return 0
 
@@ -1149,12 +1188,21 @@ async def _backtest_single_file(
     # Prepare trial spec from params
     spec = await _prepare_trial_spec(trial_id, params_payload)
 
-    # Add backtest metadata
-    spec.metadata["backtest_file"] = str(event_file)
-    spec.metadata["backtest_mode"] = True
-    spec.metadata["backtest_speed"] = speed
-    spec.metadata["backtest_max_sleep"] = max_sleep
-    spec.metadata["builder_name"] = builder_name
+    # Convert metadata to backtest-specific type with required backtest fields
+    from dataclasses import asdict
+
+    from dojozero.betting import BacktestBettingTrialMetadata
+
+    # Create BacktestBettingTrialMetadata from existing metadata
+    metadata_dict = asdict(spec.metadata)
+    spec.metadata = BacktestBettingTrialMetadata(
+        **metadata_dict,
+        backtest_mode=True,
+        backtest_file=str(event_file),
+        backtest_speed=speed,
+        backtest_max_sleep=max_sleep,
+    )
+    spec.builder_name = builder_name
 
     # Extract hub_id from spec (from stream configs)
     hub_id = None
@@ -1384,13 +1432,24 @@ async def _backtest_command(args: argparse.Namespace) -> int:
                 continue
 
     finally:
-        # Clean up OTLP exporter if configured
+        # Clean up exporters if configured
         if otel_exporter is not None:
-            from dojozero.core._tracing import set_otel_exporter
+            from dojozero.core._tracing import (
+                get_sls_log_exporter,
+                set_otel_exporter,
+                set_sls_log_exporter,
+            )
 
             otel_exporter.shutdown()
             set_otel_exporter(None)
             LOGGER.info("OTel exporter shutdown complete")
+
+            # Shutdown SLS log exporter if configured
+            sls_log_exporter = get_sls_log_exporter()
+            if sls_log_exporter is not None:
+                sls_log_exporter.shutdown()
+                set_sls_log_exporter(None)
+                LOGGER.info("SLS Log exporter shutdown complete")
 
     # Summary
     LOGGER.info(
