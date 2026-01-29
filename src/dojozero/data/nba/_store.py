@@ -186,6 +186,14 @@ class NBAStore(DataStore):
                 # Extract all player stats from BoxScore (pass through raw data)
                 player_stats = self._extract_player_stats_from_boxscore(boxscore_data)
 
+                # Get latest period/clock from play-by-play state tracker
+                # (boxscore endpoint doesn't carry period/clock reliably)
+                period = self._state.get_current_period(game_id)
+                game_clock = self._state.get_current_clock(game_id)
+                # Game time from header status (if available)
+                status_data = boxscore_data.get("status", {})
+                game_time_utc = status_data.get("date", "") or ""
+
                 # Emit GameUpdateEvent with complete BoxScore data
                 # Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay
                 events.append(
@@ -193,6 +201,9 @@ class NBAStore(DataStore):
                         timestamp=timestamp,
                         game_id=game_id,
                         sport="nba",
+                        period=period,
+                        game_clock=game_clock,
+                        game_time_utc=game_time_utc,
                         home_score=home_score,
                         away_score=away_score,
                         home_team_stats=NBATeamGameStats(
@@ -214,6 +225,7 @@ class NBAStore(DataStore):
                                 NBAPlayerStats(
                                     player_id=p.get("personId", 0),
                                     name=p.get("name", ""),
+                                    position=p.get("position", ""),
                                     statistics=p.get("statistics", {}),
                                 )
                                 for p in player_stats.get("home", [])
@@ -222,6 +234,7 @@ class NBAStore(DataStore):
                                 NBAPlayerStats(
                                     player_id=p.get("personId", 0),
                                     name=p.get("name", ""),
+                                    position=p.get("position", ""),
                                     statistics=p.get("statistics", {}),
                                 )
                                 for p in player_stats.get("away", [])
@@ -415,6 +428,9 @@ class NBAStore(DataStore):
                 action_number = action.get("actionNumber", 0)
                 period = action.get("period", 0)
                 clock = action.get("clock", "")
+                # Track latest period/clock for boxscore updates
+                if period:
+                    self._state.update_game_clock(game_id, period, clock)
                 person_id = action.get("personId", 0)
                 player_name = action.get("playerName", "") or action.get("name", "")
                 team_id = str(action.get("teamId", ""))

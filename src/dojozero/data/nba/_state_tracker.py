@@ -29,6 +29,9 @@ class GameStateTracker:
         self._initialized_games: set[str] = (
             set()
         )  # game_id -> True when GameInitializeEvent emitted
+        # Latest period/clock from play-by-play (used by boxscore updates)
+        self._current_period: dict[str, int] = {}
+        self._current_clock: dict[str, str] = {}
 
     def get_previous_status(self, game_id: str) -> int | None:
         """Get previous game status for transition detection.
@@ -126,6 +129,25 @@ class GameStateTracker:
             game_id: NBA game ID
         """
         self._initialized_games.add(game_id)
+
+    def update_game_clock(self, game_id: str, period: int, clock: str) -> None:
+        """Update the latest period and clock from play-by-play.
+
+        Args:
+            game_id: NBA game ID
+            period: Current period number (1-4, 5+ for OT)
+            clock: Display clock string (e.g., "5:42")
+        """
+        self._current_period[game_id] = period
+        self._current_clock[game_id] = clock
+
+    def get_current_period(self, game_id: str) -> int:
+        """Get latest period from play-by-play."""
+        return self._current_period.get(game_id, 0)
+
+    def get_current_clock(self, game_id: str) -> str:
+        """Get latest game clock from play-by-play."""
+        return self._current_clock.get(game_id, "")
 
     def filter_new_actions(
         self, game_id: str, actions: list[dict[str, Any]]

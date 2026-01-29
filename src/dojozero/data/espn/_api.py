@@ -212,14 +212,18 @@ class ESPNExternalAPI(ExternalAPI):
             return {"summary": {"eventId": event_id}}
 
     async def _fetch_plays(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Fetch play-by-play data.
+        """Fetch play-by-play data with automatic pagination.
+
+        The ESPN core API returns at most ``limit`` plays per page.  This
+        method fetches all pages so that a full game (~500+ plays) is
+        returned in a single call.
 
         Params:
             event_id: ESPN event ID (required)
-            limit: Max number of plays (default 300)
+            limit: Per-page limit (default 300)
 
         Returns:
-            {"plays": {...}} with items array of plays
+            {"plays": {...}} with items array of **all** plays
         """
         event_id = params.get("event_id")
         if not event_id:
@@ -228,27 +232,47 @@ class ESPNExternalAPI(ExternalAPI):
 
         limit = params.get("limit", 300)
         url = f"{self.core_api_url}/events/{event_id}/competitions/{event_id}/plays"
-        query_params = {"limit": str(limit)}
+
+        all_items: list[dict[str, Any]] = []
+        page = 1
+        total_count = 0
 
         session = await self._get_session()
         try:
-            async with session.get(
-                url, params=query_params, proxy=self._proxy
-            ) as response:
-                if response.status != 200:
-                    logger.warning(
-                        "Plays request failed: status=%d, event_id=%s",
-                        response.status,
-                        event_id,
-                    )
-                    return {"plays": {"items": [], "eventId": event_id}}
+            while True:
+                query_params = {"limit": str(limit), "page": str(page)}
+                async with session.get(
+                    url, params=query_params, proxy=self._proxy
+                ) as response:
+                    if response.status != 200:
+                        logger.warning(
+                            "Plays request failed: status=%d, event_id=%s, page=%d",
+                            response.status,
+                            event_id,
+                            page,
+                        )
+                        break
 
-                data = await response.json()
-                data["eventId"] = event_id
-                return {"plays": data}
+                    data = await response.json()
+                    items = data.get("items", [])
+                    all_items.extend(items)
+                    total_count = data.get("count", len(all_items))
+                    page_count = data.get("pageCount", 1)
+
+                    if page >= page_count:
+                        break
+                    page += 1
+
         except Exception as e:
             logger.error("Error fetching plays for event %s: %s", event_id, e)
-            return {"plays": {"items": [], "eventId": event_id}}
+
+        return {
+            "plays": {
+                "items": all_items,
+                "count": total_count,
+                "eventId": event_id,
+            }
+        }
 
     async def _fetch_teams(self) -> dict[str, Any]:
         """Fetch all teams for the league.

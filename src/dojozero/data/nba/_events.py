@@ -37,12 +37,6 @@ class NBATeamGameStats(BaseModel):
     team_city: str = ""
     team_tricode: str = ""
     score: int = 0
-    wins: int = 0
-    losses: int = 0
-    seed: int = 0
-    timeouts_remaining: int = 0
-    in_bonus: bool | None = None
-    periods: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class NBAPlayerStats(BaseModel):
@@ -52,6 +46,7 @@ class NBAPlayerStats(BaseModel):
 
     player_id: int = 0
     name: str = ""
+    position: str = ""
     statistics: dict[str, Any] = Field(default_factory=dict)
 
 
