@@ -308,6 +308,7 @@ class NBAExternalAPI(ExternalAPI):
         # Extract team info
         team = play.get("team", {})
         team_tricode = team.get("abbreviation", "") if team else ""
+        team_id = team.get("id", "") if team else ""
 
         # Extract period and clock
         period = play.get("period", {})
@@ -336,6 +337,13 @@ class NBAExternalAPI(ExternalAPI):
             action_type = "game"
             description = "Game End"
 
+        # Extract scoring info
+        scoring_play = play.get("scoringPlay", False)
+        score_value = play.get("scoreValue", 0) or 0
+
+        # Play ID from ESPN (sequenceNumber or id)
+        play_id = str(play.get("sequenceNumber", "")) or str(play.get("id", ""))
+
         return {
             "actionNumber": index,
             "actionType": action_type.lower() if action_type else "",
@@ -343,11 +351,15 @@ class NBAExternalAPI(ExternalAPI):
             "clock": clock_str,
             "personId": person_id,
             "playerName": player_name,
+            "teamId": str(team_id),
             "teamTricode": team_tricode,
             "scoreHome": home_score,
             "scoreAway": away_score,
             "description": description,
             "timeActual": play.get("wallclock", ""),
+            "scoringPlay": scoring_play,
+            "scoreValue": int(score_value) if score_value else 0,
+            "playId": play_id,
         }
 
     async def close(self) -> None:

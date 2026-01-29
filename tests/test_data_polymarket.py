@@ -14,6 +14,7 @@ from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.data._hub import DataHub
 from dojozero.data._models import OddsUpdateEvent
 from dojozero.data.polymarket._factory import PolymarketStoreFactory
+from dojozero.data.polymarket._models import MarketOddsData
 from dojozero.data.polymarket._store import PolymarketStore
 
 
@@ -43,7 +44,7 @@ def factory():
 
 
 # =============================================================================
-# PolymarketStoreFactory Tests
+# Helper Functions
 # =============================================================================
 
 
@@ -75,6 +76,79 @@ def _make_metadata(
         market_url=market_url,
         polymarket_poll_intervals=polymarket_poll_intervals,
     )
+
+
+def _make_moneyline_odds(
+    market_id: str = "market_123",
+    slug: str = "nba-lal-bos-2025-01-15",
+    home_odds: float = 1.5,
+    away_odds: float = 2.5,
+    home_probability: float = 0.6,
+    away_probability: float = 0.4,
+) -> MarketOddsData:
+    """Create a MarketOddsData for moneyline tests."""
+    return MarketOddsData(
+        market_id=market_id,
+        slug=slug,
+        market_type="moneyline",
+        line=None,
+        home_odds=home_odds,
+        away_odds=away_odds,
+        home_probability=home_probability,
+        away_probability=away_probability,
+        token_ids=["token1", "token2"],
+    )
+
+
+def _make_spread_odds(
+    market_id: str = "spread_market_123",
+    slug: str = "nba-lal-bos-2025-01-15-spread",
+    line: float = -4.5,
+    home_odds: float = 1.91,
+    away_odds: float = 1.91,
+    home_probability: float = 0.52,
+    away_probability: float = 0.48,
+) -> MarketOddsData:
+    """Create a MarketOddsData for spread tests."""
+    return MarketOddsData(
+        market_id=market_id,
+        slug=slug,
+        market_type="spreads",
+        line=line,
+        home_odds=home_odds,
+        away_odds=away_odds,
+        home_probability=home_probability,
+        away_probability=away_probability,
+        token_ids=["token3", "token4"],
+    )
+
+
+def _make_total_odds(
+    market_id: str = "total_market_123",
+    slug: str = "nba-lal-bos-2025-01-15-total",
+    line: float = 220.5,
+    home_odds: float = 1.87,  # over odds
+    away_odds: float = 1.95,  # under odds
+    home_probability: float = 0.53,  # over probability
+    away_probability: float = 0.47,  # under probability
+) -> MarketOddsData:
+    """Create a MarketOddsData for totals tests."""
+    return MarketOddsData(
+        market_id=market_id,
+        slug=slug,
+        market_type="totals",
+        line=line,
+        home_odds=home_odds,
+        away_odds=away_odds,
+        home_probability=home_probability,
+        away_probability=away_probability,
+        token_ids=["token5", "token6"],
+    )
+
+
+# =============================================================================
+# PolymarketStoreFactory Tests
+# =============================================================================
 
 
 class TestPolymarketStoreFactory:
@@ -182,18 +256,18 @@ class TestPolymarketStoreFactory:
 class TestPolymarketStoreParseResponse:
     """Tests for PolymarketStore._parse_api_response."""
 
-    def test_parse_odds_update_uses_espn_game_id_from_identifier(
-        self, polymarket_store
-    ):
+    def test_parse_moneyline_uses_espn_game_id_from_identifier(self, polymarket_store):
         """Test that parsing uses espn_game_id from identifier as event_id."""
+        moneyline = _make_moneyline_odds(
+            home_odds=1.5,
+            away_odds=2.5,
+            home_probability=0.6,
+            away_probability=0.4,
+        )
         data = {
-            "odds_update": {
-                "home_odds": 1.5,
-                "away_odds": 2.5,
-                "home_probability": 0.6,
-                "away_probability": 0.4,
-                "market_id": "should_not_use_this",
-            }
+            "moneyline": moneyline,
+            "spreads": [],
+            "totals": [],
         }
         identifier = {"espn_game_id": "401810490"}
 
@@ -203,51 +277,40 @@ class TestPolymarketStoreParseResponse:
         assert isinstance(events[0], OddsUpdateEvent)
         assert events[0].game_id == "401810490"
 
-    def test_parse_odds_update_falls_back_to_api_data_without_identifier(
+    def test_parse_moneyline_uses_empty_game_id_without_identifier(
         self, polymarket_store
     ):
-        """Test that parsing falls back to API data when no identifier provided."""
+        """Test that parsing uses empty string when no identifier provided."""
+        moneyline = _make_moneyline_odds(
+            home_odds=1.5,
+            away_odds=2.5,
+            home_probability=0.6,
+            away_probability=0.4,
+        )
         data = {
-            "odds_update": {
-                "home_odds": 1.5,
-                "away_odds": 2.5,
-                "home_probability": 0.6,
-                "away_probability": 0.4,
-                "event_id": "api_event_id",
-            }
+            "moneyline": moneyline,
+            "spreads": [],
+            "totals": [],
         }
 
         events = polymarket_store._parse_api_response(data, identifier=None)
 
         assert len(events) == 1
-        assert events[0].game_id == "api_event_id"
+        # Without identifier, game_id should be empty string (with warning logged)
+        assert events[0].game_id == ""
 
-    def test_parse_odds_update_falls_back_to_market_id(self, polymarket_store):
-        """Test that parsing falls back to market_id when event_id not in API data."""
-        data = {
-            "odds_update": {
-                "home_odds": 1.5,
-                "away_odds": 2.5,
-                "home_probability": 0.6,
-                "away_probability": 0.4,
-                "market_id": "market_123",
-            }
-        }
-
-        events = polymarket_store._parse_api_response(data, identifier=None)
-
-        assert len(events) == 1
-        assert events[0].game_id == "market_123"
-
-    def test_parse_odds_update_extracts_probabilities(self, polymarket_store):
+    def test_parse_moneyline_extracts_probabilities(self, polymarket_store):
         """Test that odds and probabilities are correctly extracted."""
+        moneyline = _make_moneyline_odds(
+            home_odds=1.67,
+            away_odds=2.5,
+            home_probability=0.6,
+            away_probability=0.4,
+        )
         data = {
-            "odds_update": {
-                "home_odds": 1.67,
-                "away_odds": 2.5,
-                "home_probability": 0.6,
-                "away_probability": 0.4,
-            }
+            "moneyline": moneyline,
+            "spreads": [],
+            "totals": [],
         }
         identifier = {"espn_game_id": "401810490"}
 
@@ -260,17 +323,18 @@ class TestPolymarketStoreParseResponse:
         assert event.odds.moneyline.home_probability == pytest.approx(0.6)
         assert event.odds.moneyline.away_probability == pytest.approx(0.4)
 
-    def test_parse_odds_update_extracts_tricodes_from_identifier(
-        self, polymarket_store
-    ):
+    def test_parse_moneyline_extracts_tricodes_from_identifier(self, polymarket_store):
         """Test that tricodes are extracted from identifier."""
+        moneyline = _make_moneyline_odds(
+            home_odds=1.5,
+            away_odds=2.5,
+            home_probability=0.6,
+            away_probability=0.4,
+        )
         data = {
-            "odds_update": {
-                "home_odds": 1.5,
-                "away_odds": 2.5,
-                "home_probability": 0.6,
-                "away_probability": 0.4,
-            }
+            "moneyline": moneyline,
+            "spreads": [],
+            "totals": [],
         }
         identifier = {
             "espn_game_id": "401810490",
@@ -285,17 +349,18 @@ class TestPolymarketStoreParseResponse:
         assert event.home_tricode == "LAL"
         assert event.away_tricode == "BOS"
 
-    def test_parse_odds_update_empty_tricodes_without_identifier(
-        self, polymarket_store
-    ):
+    def test_parse_moneyline_empty_tricodes_without_identifier(self, polymarket_store):
         """Test that tricodes are empty when identifier not provided."""
+        moneyline = _make_moneyline_odds(
+            home_odds=1.5,
+            away_odds=2.5,
+            home_probability=0.6,
+            away_probability=0.4,
+        )
         data = {
-            "odds_update": {
-                "home_odds": 1.5,
-                "away_odds": 2.5,
-                "home_probability": 0.6,
-                "away_probability": 0.4,
-            }
+            "moneyline": moneyline,
+            "spreads": [],
+            "totals": [],
         }
 
         events = polymarket_store._parse_api_response(data, identifier=None)
@@ -305,17 +370,20 @@ class TestPolymarketStoreParseResponse:
         assert event.home_tricode == ""
         assert event.away_tricode == ""
 
-    def test_parse_odds_update_empty_tricodes_when_missing_from_identifier(
+    def test_parse_moneyline_empty_tricodes_when_missing_from_identifier(
         self, polymarket_store
     ):
         """Test that tricodes are empty when not in identifier."""
+        moneyline = _make_moneyline_odds(
+            home_odds=1.5,
+            away_odds=2.5,
+            home_probability=0.6,
+            away_probability=0.4,
+        )
         data = {
-            "odds_update": {
-                "home_odds": 1.5,
-                "away_odds": 2.5,
-                "home_probability": 0.6,
-                "away_probability": 0.4,
-            }
+            "moneyline": moneyline,
+            "spreads": [],
+            "totals": [],
         }
         identifier = {"espn_game_id": "401810490"}  # No tricodes
 
@@ -331,11 +399,206 @@ class TestPolymarketStoreParseResponse:
         events = polymarket_store._parse_api_response({}, identifier=None)
         assert events == []
 
-    def test_parse_data_without_odds_update_returns_empty_list(self, polymarket_store):
-        """Test that data without odds_update key returns empty list."""
-        data = {"some_other_key": {"value": 123}}
+    def test_parse_data_without_any_odds_returns_empty_list(self, polymarket_store):
+        """Test that data without any odds returns empty list."""
+        data = {
+            "moneyline": None,
+            "spreads": [],
+            "totals": [],
+        }
         events = polymarket_store._parse_api_response(data, identifier=None)
         assert events == []
+
+    def test_parse_spreads_only_creates_event(self, polymarket_store):
+        """Test that spread data alone creates an event."""
+        spread = _make_spread_odds(line=-4.5, home_odds=1.91, away_odds=1.91)
+        data = {
+            "moneyline": None,
+            "spreads": [spread],
+            "totals": [],
+        }
+        identifier = {"espn_game_id": "401810490"}
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.game_id == "401810490"
+        # Without moneyline, home_odds/away_odds return None
+        assert event.home_odds is None
+        assert event.away_odds is None
+        # Spread should be populated in OddsInfo
+        assert event.odds.spread is not None
+        assert event.odds.spread.spread == -4.5
+
+    def test_parse_totals_only_creates_event(self, polymarket_store):
+        """Test that totals data alone creates an event (totals not yet in OddsInfo)."""
+        total = _make_total_odds(line=220.5, home_odds=1.87, away_odds=1.95)
+        data = {
+            "moneyline": None,
+            "spreads": [],
+            "totals": [total],
+        }
+        identifier = {"espn_game_id": "401810490"}
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.game_id == "401810490"
+        # Totals not yet modeled in OddsInfo; event is created but no totals field
+        assert event.odds.moneyline is None
+
+    def test_parse_combined_moneyline_spreads_totals(self, polymarket_store):
+        """Test parsing with moneyline, spreads, and totals."""
+        moneyline = _make_moneyline_odds(
+            home_odds=1.5, away_odds=2.5, home_probability=0.6, away_probability=0.4
+        )
+        spread = _make_spread_odds(line=-4.5, home_odds=1.91, away_odds=1.91)
+        total = _make_total_odds(line=220.5, home_odds=1.87, away_odds=1.95)
+        data = {
+            "moneyline": moneyline,
+            "spreads": [spread],
+            "totals": [total],
+        }
+        identifier = {
+            "espn_game_id": "401810490",
+            "home_tricode": "LAL",
+            "away_tricode": "BOS",
+        }
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.game_id == "401810490"
+        assert event.home_tricode == "LAL"
+        assert event.away_tricode == "BOS"
+        assert event.home_odds == 1.5
+        assert event.away_odds == 2.5
+        assert event.odds.moneyline is not None
+        assert event.odds.moneyline.home_probability == 0.6
+        assert event.odds.moneyline.away_probability == 0.4
+        assert event.odds.spread is not None
+        assert event.odds.spread.spread == -4.5
+
+    def test_parse_multiple_spreads(self, polymarket_store):
+        """Test parsing with multiple spread lines uses first (primary) line."""
+        spread1 = _make_spread_odds(
+            market_id="spread1", line=-4.5, home_odds=1.91, away_odds=1.91
+        )
+        spread2 = _make_spread_odds(
+            market_id="spread2", line=-5.5, home_odds=2.0, away_odds=1.83
+        )
+        data = {
+            "moneyline": None,
+            "spreads": [spread1, spread2],
+            "totals": [],
+        }
+        identifier = {"espn_game_id": "401810490"}
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        # Unified model uses first spread as the primary line
+        assert event.odds.spread is not None
+        assert event.odds.spread.spread == -4.5
+
+    def test_parse_multiple_totals(self, polymarket_store):
+        """Test parsing with multiple total lines creates event (totals not yet in OddsInfo)."""
+        total1 = _make_total_odds(
+            market_id="total1", line=220.5, home_odds=1.87, away_odds=1.95
+        )
+        total2 = _make_total_odds(
+            market_id="total2", line=221.5, home_odds=1.91, away_odds=1.91
+        )
+        data = {
+            "moneyline": None,
+            "spreads": [],
+            "totals": [total1, total2],
+        }
+        identifier = {"espn_game_id": "401810490"}
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.game_id == "401810490"
+
+    def test_parse_deduplicates_spreads_by_line(self, polymarket_store):
+        """Test that duplicate spread lines are deduplicated (uses first)."""
+        spread1 = _make_spread_odds(
+            market_id="spread1", line=-4.5, home_odds=1.91, away_odds=1.91
+        )
+        spread2 = _make_spread_odds(
+            market_id="spread2", line=-4.5, home_odds=1.92, away_odds=1.90
+        )  # Same line
+        data = {
+            "moneyline": None,
+            "spreads": [spread1, spread2],
+            "totals": [],
+        }
+        identifier = {"espn_game_id": "401810490"}
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        # Should use first deduplicated spread
+        assert event.odds.spread is not None
+        assert event.odds.spread.spread == -4.5
+
+    def test_parse_deduplicates_totals_by_line(self, polymarket_store):
+        """Test that duplicate total lines are deduplicated."""
+        total1 = _make_total_odds(
+            market_id="total1", line=220.5, home_odds=1.87, away_odds=1.95
+        )
+        total2 = _make_total_odds(
+            market_id="total2", line=220.5, home_odds=1.88, away_odds=1.94
+        )  # Same line
+        data = {
+            "moneyline": None,
+            "spreads": [],
+            "totals": [total1, total2],
+        }
+        identifier = {"espn_game_id": "401810490"}
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.game_id == "401810490"
+
+    def test_parse_filters_spreads_with_none_line(self, polymarket_store):
+        """Test that spreads with None line are filtered out."""
+        spread_valid = _make_spread_odds(
+            market_id="spread1", line=-4.5, home_odds=1.91, away_odds=1.91
+        )
+        spread_invalid = MarketOddsData(
+            market_id="spread2",
+            slug="test",
+            market_type="spreads",
+            line=None,  # None line should be filtered
+            home_odds=1.91,
+            away_odds=1.91,
+            home_probability=0.52,
+            away_probability=0.48,
+        )
+        data = {
+            "moneyline": None,
+            "spreads": [spread_valid, spread_invalid],
+            "totals": [],
+        }
+        identifier = {"espn_game_id": "401810490"}
+
+        events = polymarket_store._parse_api_response(data, identifier=identifier)
+
+        assert len(events) == 1
+        event = events[0]
+        # Only valid spread should be used
+        assert event.odds.spread is not None
+        assert event.odds.spread.spread == -4.5
 
 
 class TestPolymarketStoreInit:
@@ -402,13 +665,13 @@ class TestMetadataFlow:
         assert store._poll_identifier["game_date"] == "2025-01-15"
 
         # Verify event parsing uses espn_game_id and tricodes
+        moneyline = _make_moneyline_odds(
+            home_odds=1.82, away_odds=2.22, home_probability=0.55, away_probability=0.45
+        )
         data = {
-            "odds_update": {
-                "home_probability": 0.55,
-                "away_probability": 0.45,
-                "home_odds": 1.82,
-                "away_odds": 2.22,
-            }
+            "moneyline": moneyline,
+            "spreads": [],
+            "totals": [],
         }
         events = store._parse_api_response(data, identifier=store._poll_identifier)
         assert events[0].game_id == "401810490"
@@ -434,13 +697,13 @@ class TestMetadataFlow:
         assert store._poll_identifier["away_tricode"] == "SF"
 
         # Verify event parsing uses espn_game_id and tricodes
+        moneyline = _make_moneyline_odds(
+            home_odds=1.92, away_odds=2.08, home_probability=0.52, away_probability=0.48
+        )
         data = {
-            "odds_update": {
-                "home_probability": 0.52,
-                "away_probability": 0.48,
-                "home_odds": 1.92,
-                "away_odds": 2.08,
-            }
+            "moneyline": moneyline,
+            "spreads": [],
+            "totals": [],
         }
         events = store._parse_api_response(data, identifier=store._poll_identifier)
         assert events[0].game_id == "401671827"

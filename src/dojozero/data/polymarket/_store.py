@@ -1,10 +1,20 @@
 """Polymarket data store implementation."""
 
+import logging
 from typing import Any, Sequence
 
-from dojozero.data._models import DataEvent, MoneylineOdds, OddsInfo, OddsUpdateEvent
+from dojozero.data._models import (
+    DataEvent,
+    MoneylineOdds,
+    OddsInfo,
+    OddsUpdateEvent,
+    SpreadOdds,
+)
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.polymarket._api import PolymarketAPI
+from dojozero.data.polymarket._models import MarketOddsData
+
+logger = logging.getLogger(__name__)
 
 
 class PolymarketStore(DataStore):
@@ -79,39 +89,94 @@ class PolymarketStore(DataStore):
         self._game_started: bool = False
 
     def _parse_api_response(
-        self, data: dict[str, Any], identifier: dict[str, Any] | None = None
+        self, all_odds: dict[str, Any], identifier: dict[str, Any] | None = None
     ) -> Sequence[DataEvent]:
         """Parse Polymarket API response into DataEvents.
 
         Args:
-            data: API response data
+            all_odds: Dictionary from fetch_odds_from_event() with structure:
+                     {
+                         "moneyline": MarketOddsData | None,
+                         "spreads": list[MarketOddsData],
+                         "totals": list[MarketOddsData]
+                     }
             identifier: Optional identifier dict (e.g., {"espn_game_id": "401810490"})
-                       Used to ensure event_id matches espn_game_id for consistency
+                       Used to ensure game_id matches espn_game_id for consistency
         """
+        import math
         from datetime import datetime, timezone
 
         events = []
 
-        # Handle odds update events (for broker)
-        if "odds_update" in data:
-            odds_data = data["odds_update"]
+        # Extract Pydantic models directly from the structure
+        moneyline_data: MarketOddsData | None = all_odds.get("moneyline")
+        spread_odds_list: list[MarketOddsData] = all_odds.get("spreads", [])
+        total_odds_list: list[MarketOddsData] = all_odds.get("totals", [])
+
+        # Deduplicate spreads and totals by line value
+        seen_spreads: set[float] = set()
+        deduplicated_spreads: list[MarketOddsData] = []
+        for spread_odds in spread_odds_list:
+            if spread_odds.line is not None:
+                # Pydantic ensures line is a float, but check for NaN/inf
+                if math.isfinite(spread_odds.line):
+                    if spread_odds.line not in seen_spreads:
+                        seen_spreads.add(spread_odds.line)
+                        deduplicated_spreads.append(spread_odds)
+
+        seen_totals: set[float] = set()
+        deduplicated_totals: list[MarketOddsData] = []
+        for total_odds in total_odds_list:
+            if total_odds.line is not None:
+                # Pydantic ensures line is a float, but check for NaN/inf
+                if math.isfinite(total_odds.line):
+                    if total_odds.line not in seen_totals:
+                        seen_totals.add(total_odds.line)
+                        deduplicated_totals.append(total_odds)
+
+        # Use the deduplicated lists
+        spread_odds_list = deduplicated_spreads
+        total_odds_list = deduplicated_totals
+
+        # Create a single OddsUpdateEvent with all the data combined
+        if moneyline_data or spread_odds_list or total_odds_list:
             timestamp = datetime.now(timezone.utc)
 
-            # Use espn_game_id from identifier to ensure consistency with game events
+            # Use espn_game_id from identifier - this is the ESPN game ID, not Polymarket market_id
+            # The game_id in OddsUpdateEvent should always be the ESPN game ID for consistency
             if identifier and "espn_game_id" in identifier:
                 game_id = identifier["espn_game_id"]
             else:
-                # Fallback to API response data
-                game_id = odds_data.get("event_id") or odds_data.get("market_id", "")
+                # If no ESPN game ID is provided, use empty string (should not happen in normal operation)
+                game_id = ""
+                logger.warning(
+                    "No espn_game_id in identifier when creating OddsUpdateEvent. "
+                    "Using empty string for game_id."
+                )
 
             # Extract tricodes from identifier (set by trial metadata)
             home_tricode = (identifier or {}).get("home_tricode", "")
             away_tricode = (identifier or {}).get("away_tricode", "")
 
-            home_prob = float(odds_data.get("home_probability", 0.0))
-            away_prob = float(odds_data.get("away_probability", 0.0))
-            home_odds_val = float(odds_data.get("home_odds", 1.0))
-            away_odds_val = float(odds_data.get("away_odds", 1.0))
+            # Build MoneylineOdds from moneyline data
+            moneyline: MoneylineOdds | None = None
+            if moneyline_data:
+                moneyline = MoneylineOdds(
+                    home_probability=moneyline_data.home_probability,
+                    away_probability=moneyline_data.away_probability,
+                    home_odds=moneyline_data.home_odds,
+                    away_odds=moneyline_data.away_odds,
+                )
+
+            # Build SpreadOdds from the first deduplicated spread (primary line)
+            spread: SpreadOdds | None = None
+            if spread_odds_list:
+                primary = spread_odds_list[0]
+                spread = SpreadOdds(
+                    spread=primary.line or 0.0,
+                    home_probability=primary.home_probability,
+                    away_probability=primary.away_probability,
+                )
 
             events.append(
                 OddsUpdateEvent(
@@ -121,12 +186,8 @@ class PolymarketStore(DataStore):
                     away_tricode=away_tricode,
                     odds=OddsInfo(
                         provider="polymarket",
-                        moneyline=MoneylineOdds(
-                            home_probability=home_prob,
-                            away_probability=away_prob,
-                            home_odds=home_odds_val,
-                            away_odds=away_odds_val,
-                        ),
+                        moneyline=moneyline,
+                        spread=spread,
                     ),
                 )
             )
@@ -174,13 +235,32 @@ class PolymarketStore(DataStore):
                     f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
                 )
             elif "espn_game_id" in identifier:
-                params["event_id"] = identifier["espn_game_id"]
+                # Only fetch if we can construct a slug (game_id cannot be used to fetch odds)
+                # Try to construct slug if we have the required info
+                if (
+                    "away_tricode" in identifier
+                    and "home_tricode" in identifier
+                    and "game_date" in identifier
+                ):
+                    away_tricode = PolymarketAPI.normalize_tricode(
+                        identifier["away_tricode"], self._sport
+                    )
+                    home_tricode = PolymarketAPI.normalize_tricode(
+                        identifier["home_tricode"], self._sport
+                    )
+                    game_date = identifier["game_date"]
+                    params["slug"] = (
+                        f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
+                    )
+                    # Store game_id for metadata in the result (not for fetching)
+                    params["game_id"] = identifier["espn_game_id"]
+                # If we can't construct a slug, don't set any params (will skip fetching)
 
         # Fetch odds from API
-        data = await self._api.fetch("odds", params if params else None)
+        all_odds = await self._api.fetch("odds", params if params else None)
 
-        # Convert to DataEvents (pass identifier to ensure consistent event_id)
-        events = self._parse_api_response(data, identifier=identifier)
+        # Convert to DataEvents (pass identifier to ensure consistent game_id)
+        events = self._parse_api_response(all_odds, identifier=identifier)
 
         # Record poll time after API call (regardless of whether events were returned)
         # This ensures we don't poll too frequently even if API returns no events
@@ -192,9 +272,6 @@ class PolymarketStore(DataStore):
         """Start polling and subscribe to game status events for dynamic interval adjustment."""
         # Subscribe to game status events to adjust polling interval
         if self._data_hub:
-            import logging
-
-            logger = logging.getLogger(__name__)
 
             def game_status_callback(event: DataEvent) -> None:
                 """Callback to adjust polling interval based on game status."""

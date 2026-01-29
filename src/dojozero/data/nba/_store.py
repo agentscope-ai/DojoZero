@@ -341,10 +341,14 @@ class NBAStore(DataStore):
                 clock = action.get("clock", "")
                 person_id = action.get("personId", 0)
                 player_name = action.get("playerName", "") or action.get("name", "")
+                team_id = str(action.get("teamId", ""))
                 team_tricode = action.get("teamTricode", "")
                 home_score = int(action.get("scoreHome", 0) or 0)
                 away_score = int(action.get("scoreAway", 0) or 0)
                 description = action.get("description", "")
+                is_scoring_play = bool(action.get("scoringPlay", False))
+                score_value = int(action.get("scoreValue", 0) or 0)
+                play_id = action.get("playId", "")
 
                 # Generate unique event_id for deduplication
                 pbp_event_id = f"{game_id}_pbp_{action_number}"
@@ -362,10 +366,14 @@ class NBAStore(DataStore):
                         clock=clock,
                         player_id=person_id,
                         player_name=player_name,
+                        team_id=team_id,
                         team_tricode=team_tricode,
                         home_score=home_score,
                         away_score=away_score,
                         description=description,
+                        play_id=play_id,
+                        is_scoring_play=is_scoring_play,
+                        score_value=score_value,
                     )
                 )
 

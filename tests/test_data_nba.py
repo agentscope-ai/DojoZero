@@ -401,6 +401,67 @@ class TestNBAStoreParsePlayByPlay:
         assert event.home_score == 2
         assert event.away_score == 0
 
+    def test_parse_pbp_extracts_scoring_and_team_fields(self, nba_store):
+        """Test that team_id, play_id, is_scoring_play, score_value are extracted."""
+        pbp_data = {
+            "play_by_play": {
+                "gameId": "401810001",
+                "actions": [
+                    {
+                        "actionNumber": 10,
+                        "actionType": "2pt",
+                        "description": "LeBron James makes layup",
+                        "personId": 2544,
+                        "playerName": "LeBron James",
+                        "teamId": "1610612747",
+                        "teamTricode": "LAL",
+                        "playId": "play_123",
+                        "scoringPlay": True,
+                        "scoreValue": 2,
+                        "period": 1,
+                        "clock": "PT10M30.00S",
+                        "scoreHome": "2",
+                        "scoreAway": "0",
+                    },
+                    {
+                        "actionNumber": 11,
+                        "actionType": "substitution",
+                        "description": "Substitution",
+                        "personId": 0,
+                        "playerName": "",
+                        "teamId": "",
+                        "teamTricode": "",
+                        "playId": "",
+                        "scoringPlay": False,
+                        "scoreValue": 0,
+                        "period": 1,
+                        "clock": "PT10M00.00S",
+                        "scoreHome": "2",
+                        "scoreAway": "0",
+                    },
+                ],
+            }
+        }
+
+        events = nba_store._parse_api_response(pbp_data)
+        pbp_events = [e for e in events if isinstance(e, PlayByPlayEvent)]
+
+        assert len(pbp_events) == 2
+
+        # Scoring play should have all fields populated
+        scoring = pbp_events[0]
+        assert scoring.team_id == "1610612747"
+        assert scoring.play_id == "play_123"
+        assert scoring.is_scoring_play is True
+        assert scoring.score_value == 2
+
+        # Non-scoring play should have defaults
+        sub = pbp_events[1]
+        assert sub.team_id == ""
+        assert sub.play_id == ""
+        assert sub.is_scoring_play is False
+        assert sub.score_value == 0
+
 
 class TestNBAStoreStateTransitions:
     """Tests for game state transition handling."""
@@ -874,16 +935,61 @@ class TestNBAEvents:
             clock="PT10M30.00S",
             player_id=2544,
             player_name="LeBron James",
+            team_id="1610612747",
             team_tricode="LAL",
             home_score=2,
             away_score=0,
             description="LeBron James makes layup",
+            play_id="play_123",
+            is_scoring_play=True,
+            score_value=2,
         )
 
         assert event.event_id == "401810001_pbp_10"
         assert event.action_type == "2pt"
         assert event.player_name == "LeBron James"
         assert event.event_type == "event.nba_play"
+        assert event.team_id == "1610612747"
+        assert event.play_id == "play_123"
+        assert event.is_scoring_play is True
+        assert event.score_value == 2
+
+    def test_play_by_play_event_round_trip(self):
+        """Test PlayByPlayEvent to_dict() / from_dict() round-trip."""
+        original = PlayByPlayEvent(
+            event_id="401810001_pbp_10",
+            game_id="401810001",
+            sport="nba",
+            action_type="2pt",
+            action_number=10,
+            period=1,
+            clock="PT10M30.00S",
+            player_id=2544,
+            player_name="LeBron James",
+            team_id="1610612747",
+            team_tricode="LAL",
+            home_score=2,
+            away_score=0,
+            description="LeBron James makes layup",
+            play_id="play_123",
+            is_scoring_play=True,
+            score_value=2,
+        )
+
+        event_dict = original.to_dict()
+        restored = PlayByPlayEvent.from_dict(event_dict)
+        assert isinstance(restored, PlayByPlayEvent)
+
+        assert restored.game_id == "401810001"
+        assert restored.team_id == "1610612747"
+        assert restored.play_id == "play_123"
+        assert restored.is_scoring_play is True
+        assert restored.score_value == 2
+        assert restored.player_id == 2544
+        assert restored.player_name == "LeBron James"
+        assert restored.team_tricode == "LAL"
+        assert restored.action_type == "2pt"
+        assert restored.event_type == "event.nba_play"
 
     def test_game_initialize_event_creation(self):
         """Test GameInitializeEvent creation and properties."""
