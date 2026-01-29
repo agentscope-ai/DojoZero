@@ -55,7 +55,10 @@ from ._registry import (
     register_trial_builder,
     unregister_trial_builder,
 )
-from ._span_models import (
+from ._models import (
+    AgentAction,
+    AgentInfo,
+    LeaderboardEntry,
     ActorRegistrationSpan,
     AgentMessageSpan,
     BettingResultSpan,
@@ -120,6 +123,10 @@ __all__ = [
     "TrialRecord",
     "TrialSpec",
     "TrialStatus",
+    # API Models
+    "AgentAction",
+    "AgentInfo",
+    "LeaderboardEntry",
     # Span Models
     "ActorRegistrationSpan",
     "AgentMessageSpan",

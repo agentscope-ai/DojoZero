@@ -1,4 +1,4 @@
-"""Tests for core._span_models: typed span deserialization.
+"""Tests for core._models: typed span deserialization.
 
 Verifies that each span category is correctly deserialized from raw SpanData
 into the appropriate Pydantic model via deserialize_span().
@@ -6,7 +6,7 @@ into the appropriate Pydantic model via deserialize_span().
 
 import json
 
-from dojozero.core._span_models import (
+from dojozero.core._models import (
     ActorRegistrationSpan,
     AgentMessageSpan,
     BettingResultSpan,

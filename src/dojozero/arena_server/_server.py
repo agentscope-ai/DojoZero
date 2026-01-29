@@ -40,8 +40,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from dojozero.core._span_models import (
+from dojozero.core._models import (
+    AgentAction,
+    AgentInfo,
     BettingResultSpan,
+    LeaderboardEntry,
     TrialLifecycleSpan,
     deserialize_span,
     serialize_span_for_ws,
@@ -125,23 +128,22 @@ _AGENT_COLORS = [
 ]
 
 
-def _get_agent_info(agent_id: str, agent_name: str | None = None) -> dict[str, Any]:
+def _get_agent_info(agent_id: str, agent_name: str | None = None) -> AgentInfo:
     """Get agent info with consistent display fields.
 
-    Returns dict with id, name, avatar, color, model for frontend display.
+    Returns AgentInfo with id, name, avatar, color, model for frontend display.
     """
     name = agent_name or agent_id
     # Generate consistent color based on agent_id hash
     color_idx = hash(agent_id) % len(_AGENT_COLORS)
     avatar = name[0].upper() if name else "?"
 
-    return {
-        "id": agent_id,
-        "name": name,
-        "avatar": avatar,
-        "color": _AGENT_COLORS[color_idx],
-        "model": "AI Agent",  # Default model name
-    }
+    return AgentInfo(
+        id=agent_id,
+        name=name,
+        avatar=avatar,
+        color=_AGENT_COLORS[color_idx],
+    )
 
 
 def _team_identity_to_dict(team: TeamIdentity | str) -> dict[str, str]:
@@ -416,7 +418,7 @@ class LandingPageCache:
     async def get_leaderboard(
         self,
         fetcher: Any,
-    ) -> list[dict[str, Any]]:
+    ) -> list[LeaderboardEntry]:
         """Get cached leaderboard or fetch if expired."""
         async with self._lock:
             if self._leaderboard is not None and self._leaderboard.is_valid():
@@ -448,7 +450,7 @@ class LandingPageCache:
     async def get_agent_actions(
         self,
         fetcher: Any,
-    ) -> list[dict[str, Any]]:
+    ) -> list[AgentAction]:
         """Get cached agent actions or fetch if expired."""
         async with self._lock:
             if self._agent_actions is not None and self._agent_actions.is_valid():
@@ -713,7 +715,7 @@ async def _extract_agent_actions(
     trace_reader: TraceReader,
     trial_ids: list[str],
     limit: int = 20,
-) -> list[dict[str, Any]]:
+) -> list[AgentAction]:
     """Extract recent agent actions from trial spans.
 
     Looks for spans like "agent.action", "bet.placed", "agent.thinking" etc.
@@ -721,7 +723,7 @@ async def _extract_agent_actions(
     Returns:
         List of recent agent actions sorted by time (newest first)
     """
-    all_actions: list[dict[str, Any]] = []
+    all_actions: list[AgentAction] = []
 
     # Limit to checking the 10 most recent trials for live actions to improve performance.
     RECENT_TRIALS_LIMIT = 10
@@ -775,17 +777,17 @@ async def _extract_agent_actions(
                 time_ago = f"{int(seconds_ago // 3600)}h ago"
 
             all_actions.append(
-                {
-                    "id": span.span_id,
-                    "agent": _get_agent_info(agent_id, agent_name),
-                    "action": action_text,
-                    "time": time_ago,
-                    "timestamp": span.start_time,
-                }
+                AgentAction(
+                    id=span.span_id,
+                    agent=_get_agent_info(agent_id, agent_name),
+                    action=action_text,
+                    time=time_ago,
+                    timestamp=span.start_time,
+                )
             )
 
     # Sort by timestamp (newest first) and limit
-    all_actions.sort(key=lambda x: x["timestamp"], reverse=True)
+    all_actions.sort(key=lambda x: x.timestamp, reverse=True)
     return all_actions[:limit]
 
 
@@ -832,7 +834,7 @@ async def _compute_leaderboard(
     trace_reader: TraceReader,
     trial_ids: list[str],
     limit: int = 20,
-) -> list[dict[str, Any]]:
+) -> list[LeaderboardEntry]:
     """Compute agent leaderboard from trial results.
 
     Returns:
@@ -861,43 +863,42 @@ async def _compute_leaderboard(
                     "agent": _get_agent_info(agent_id, typed.agent_name or agent_id),
                     "winnings": 0.0,
                     "wins": 0,
-                    "totalBets": 0,
-                    "totalWagered": 0.0,
+                    "total_bets": 0,
+                    "total_wagered": 0.0,
                 }
 
             agent_stats[agent_id]["winnings"] += typed.payout
-            agent_stats[agent_id]["totalBets"] += 1
-            agent_stats[agent_id]["totalWagered"] += typed.wager
+            agent_stats[agent_id]["total_bets"] += 1
+            agent_stats[agent_id]["total_wagered"] += typed.wager
             if typed.won:
                 agent_stats[agent_id]["wins"] += 1
 
     # Convert to sorted list
-    leaderboard: list[dict[str, Any]] = []
+    leaderboard: list[LeaderboardEntry] = []
     for agent_id, stats in agent_stats.items():
-        total_bets = stats["totalBets"]
+        total_bets = stats["total_bets"]
         win_rate = (stats["wins"] / total_bets * 100) if total_bets > 0 else 0
-        roi = (
-            (stats["winnings"] / stats["totalWagered"] * 100)
-            if stats["totalWagered"] > 0
-            else 0
-        )
+        total_wagered = stats["total_wagered"]
+        roi = (stats["winnings"] / total_wagered * 100) if total_wagered > 0 else 0
 
         leaderboard.append(
-            {
-                "agent": stats["agent"],
-                "winnings": round(stats["winnings"], 2),
-                "winRate": round(win_rate, 1),
-                "totalBets": total_bets,
-                "roi": round(roi, 1),
-            }
+            LeaderboardEntry(
+                agent=stats["agent"],
+                winnings=round(stats["winnings"], 2),
+                winRate=round(win_rate, 1),
+                totalBets=total_bets,
+                roi=round(roi, 1),
+            )
         )
 
     # Sort by winnings (descending) and add rank
-    leaderboard.sort(key=lambda x: x["winnings"], reverse=True)
-    for i, entry in enumerate(leaderboard[:limit]):
-        entry["rank"] = i + 1
+    leaderboard.sort(key=lambda x: x.winnings, reverse=True)
+    ranked = [
+        entry.model_copy(update={"rank": i + 1})
+        for i, entry in enumerate(leaderboard[:limit])
+    ]
 
-    return leaderboard[:limit]
+    return ranked
 
 
 def create_arena_app(
@@ -1098,7 +1099,7 @@ def create_arena_app(
         games = await state.cache.get_games(fetch_games)
 
         # Fetch agent actions (cached, short TTL)
-        async def fetch_actions() -> list[dict[str, Any]]:
+        async def fetch_actions() -> list[AgentAction]:
             return await _extract_agent_actions(state.trace_reader, trial_ids, limit=12)
 
         agent_actions = await state.cache.get_agent_actions(fetch_actions)
@@ -1112,7 +1113,9 @@ def create_arena_app(
                     + games["upcomingGames"]
                     + games["completedGames"]
                 ),
-                "liveAgentActions": agent_actions,
+                "liveAgentActions": [
+                    a.model_dump(by_alias=True) for a in agent_actions
+                ],
             }
         )
 
@@ -1247,7 +1250,7 @@ def create_arena_app(
 
         trial_ids = await state.cache.get_trials_list(fetch_trials)
 
-        async def fetch_leaderboard() -> list[dict[str, Any]]:
+        async def fetch_leaderboard() -> list[LeaderboardEntry]:
             return await _compute_leaderboard(state.trace_reader, trial_ids, limit)
 
         leaderboard = await state.cache.get_leaderboard(fetch_leaderboard)
@@ -1255,7 +1258,11 @@ def create_arena_app(
         # Filter by league if specified (would need to track in agent stats)
         # For now, return all agents
 
-        return JSONResponse(content={"leaderboard": leaderboard})
+        return JSONResponse(
+            content={
+                "leaderboard": [e.model_dump(by_alias=True) for e in leaderboard],
+            }
+        )
 
     @app.get("/api/agent-actions")
     async def get_agent_actions(
@@ -1278,12 +1285,14 @@ def create_arena_app(
 
         trial_ids = await state.cache.get_trials_list(fetch_trials)
 
-        async def fetch_actions() -> list[dict[str, Any]]:
+        async def fetch_actions() -> list[AgentAction]:
             return await _extract_agent_actions(state.trace_reader, trial_ids, limit)
 
         actions = await state.cache.get_agent_actions(fetch_actions)
 
-        return JSONResponse(content={"actions": actions})
+        return JSONResponse(
+            content={"actions": [a.model_dump(by_alias=True) for a in actions]},
+        )
 
     # -------------------------------------------------------------------------
     # WebSocket Endpoint for Real-time Streaming

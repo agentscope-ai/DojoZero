@@ -37,7 +37,7 @@ from dojozero.betting._metadata import (
     BacktestBettingTrialMetadata,
     BettingTrialMetadata,
 )
-from dojozero.betting._broker import (
+from dojozero.betting._models import (
     Account,
     Bet,
     BetExecutedPayload,
@@ -51,11 +51,13 @@ from dojozero.betting._broker import (
     BetType,
     BettingEvent,
     BettingPhase,
-    BrokerOperator,
-    BrokerOperatorConfig,
     EventStatus,
     OrderType,
     Statistics,
+)
+from dojozero.betting._broker import (
+    BrokerOperator,
+    BrokerOperatorConfig,
 )
 
 __all__ = [

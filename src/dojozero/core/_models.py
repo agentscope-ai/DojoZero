@@ -1,8 +1,14 @@
-"""Typed Pydantic models for all span categories.
+"""Typed Pydantic models for spans, API responses, and display.
 
-Provides deserialization from raw ``SpanData`` into typed models so consumers
-(arena server, dashboards, analytics) can access span data with IDE
-autocomplete and type safety instead of manual ``span.tags.get()`` calls.
+This module provides typed models for two complementary purposes:
+
+**Span deserialization** — converting raw ``SpanData`` from the tracing layer
+into typed models so consumers (arena server, dashboards) get IDE autocomplete
+and type safety instead of manual ``span.tags.get()`` calls.
+
+**API contracts** — shared models (AgentInfo, AgentAction, LeaderboardEntry)
+used by both agents (to assemble structured span data) and the arena server
+(to serve typed JSON to the frontend).
 
 Span Categories
 ---------------
@@ -28,6 +34,48 @@ if TYPE_CHECKING:
     from dojozero.data._models import DataEvent
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# API / Display Models
+# ============================================================================
+
+
+class AgentInfo(BaseModel):
+    """Agent display info for frontend."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str
+    avatar: str
+    color: str
+    model: str = "AI Agent"
+
+
+class AgentAction(BaseModel):
+    """A single agent action for the live ticker."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    agent: AgentInfo
+    action: str
+    time: str  # "5s ago", "2m ago"
+    timestamp: int  # microseconds since epoch (for sorting)
+
+
+class LeaderboardEntry(BaseModel):
+    """An agent's leaderboard row."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    agent: AgentInfo
+    winnings: float
+    win_rate: float = Field(alias="winRate")
+    total_bets: int = Field(alias="totalBets")
+    roi: float
+    rank: int = 0
+
 
 # ============================================================================
 # Trial Lifecycle
@@ -386,12 +434,18 @@ def serialize_span_for_ws(model: SpanModel) -> dict[str, Any]:
 
 
 __all__ = [
+    # API / Display Models
+    "AgentAction",
+    "AgentInfo",
+    "LeaderboardEntry",
+    # Span Models
     "ActorRegistrationSpan",
     "AgentMessageSpan",
     "BettingResultSpan",
     "BrokerStateSpan",
     "SpanModel",
     "TrialLifecycleSpan",
+    # Helpers
     "deserialize_span",
     "serialize_span_for_ws",
 ]
