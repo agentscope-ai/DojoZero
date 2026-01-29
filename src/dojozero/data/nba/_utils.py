@@ -723,7 +723,8 @@ def _extract_game_info_from_summary(
     """Extract game info from ESPN summary response.
 
     Returns:
-        GameInfo with team info and game date, or None if extraction fails.
+        GameInfo with team info, venue, broadcast, season, and game date,
+        or None if extraction fails.
     """
     header = summary.get("header", {})
     competitions = header.get("competitions", [])
@@ -739,6 +740,20 @@ def _extract_game_info_from_summary(
 
     for competitor in competitors:
         team = competitor.get("team", {})
+        # Extract record from competitor data
+        records = competitor.get("record", [])
+        if not records:
+            records = competitor.get("records", [])
+        record_summary = ""
+        if records and isinstance(records, list) and records:
+            first_record = records[0]
+            if isinstance(first_record, dict):
+                record_summary = first_record.get("summary", "") or first_record.get(
+                    "displayValue", ""
+                )
+            elif isinstance(first_record, str):
+                record_summary = first_record
+
         # Build team data dict with aliases that TeamInfo expects
         team_data = {
             "teamId": str(team.get("id", "")),
@@ -749,6 +764,7 @@ def _extract_game_info_from_summary(
             "color": team.get("color", ""),
             "alternateColor": team.get("alternateColor", ""),
             "logo": team.get("logo", ""),
+            "record": record_summary,
         }
 
         if competitor.get("homeAway") == "home":
@@ -762,13 +778,48 @@ def _extract_game_info_from_summary(
     # Get game date/time
     game_time_utc_str = comp.get("date", "")
 
+    # Extract venue info
+    venue_data = comp.get("venue", {})
+    venue_address = venue_data.get("address", {})
+    venue = {
+        "venueId": str(venue_data.get("id", "")),
+        "name": venue_data.get("fullName", "") or venue_data.get("name", ""),
+        "city": venue_address.get("city", ""),
+        "state": venue_address.get("state", ""),
+        "indoor": venue_data.get("indoor", True),
+    }
+
+    # Extract broadcast info
+    broadcasts_raw = comp.get("broadcasts", [])
+    broadcasts: list[dict[str, Any]] = []
+    broadcast_names: list[str] = []
+    for b in broadcasts_raw:
+        market = b.get("market", "")
+        names = b.get("names", [])
+        broadcasts.append({"market": market, "names": names})
+        if names:
+            broadcast_names.extend(names)
+    broadcast = ", ".join(broadcast_names) if broadcast_names else ""
+
+    # Extract season info from header
+    season = header.get("season", {})
+    season_year = season.get("year", 0)
+    season_type_id = season.get("type", 0)
+    season_type_map = {1: "preseason", 2: "regular", 3: "postseason", 4: "offseason"}
+    season_type = season_type_map.get(season_type_id, "")
+
     # Build GameInfo using dict with aliases for Pydantic validation
-    game_data = {
+    game_data: dict[str, Any] = {
         "gameId": game_id,
         "sport_type": "nba",
         "homeTeam": home_team_data,
         "awayTeam": away_team_data,
         "gameTimeUTC": game_time_utc_str,
+        "venue": venue,
+        "broadcasts": broadcasts,
+        "broadcast": broadcast,
+        "seasonYear": season_year,
+        "seasonType": season_type,
     }
 
     return GameInfo.model_validate(game_data)

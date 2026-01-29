@@ -7,8 +7,9 @@ from dojozero.data._models import (
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
+    TeamIdentity,
+    VenueInfo,
 )
-from dojozero.data._models import TeamIdentity
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.nba._api import NBAExternalAPI
 from dojozero.data.nba._events import (
@@ -110,25 +111,52 @@ class NBAStore(DataStore):
 
             # Emit GameInitializeEvent on first call when team data is not yet available
             if not self._state.is_game_initialized(game_id) and not has_team_data:
-                # Try to get game info from scoreboard API
+                # Try to get game info from ESPN summary API
                 try:
                     from dojozero.data.nba._utils import get_game_info_by_id
 
                     game_info = get_game_info_by_id(game_id)
                     if game_info:
-                        home_team_str = game_info.home_team.name
-                        away_team_str = game_info.away_team.name
-                        # GameInfo.game_time_utc is already a datetime or None
-                        game_time_dt = game_info.game_time_utc or timestamp
+                        home = game_info.home_team
+                        away = game_info.away_team
 
-                        if home_team_str and away_team_str:
+                        if home.name and away.name:
                             events.append(
                                 GameInitializeEvent(
                                     timestamp=timestamp,
                                     game_id=game_id,
-                                    home_team=home_team_str,
-                                    away_team=away_team_str,
-                                    game_time=game_time_dt,
+                                    sport="nba",
+                                    home_team=TeamIdentity(
+                                        team_id=home.team_id,
+                                        name=home.name,
+                                        tricode=home.tricode,
+                                        location=home.location,
+                                        color=home.color,
+                                        alternate_color=home.alternate_color,
+                                        logo_url=home.logo,
+                                        record=home.record,
+                                    ),
+                                    away_team=TeamIdentity(
+                                        team_id=away.team_id,
+                                        name=away.name,
+                                        tricode=away.tricode,
+                                        location=away.location,
+                                        color=away.color,
+                                        alternate_color=away.alternate_color,
+                                        logo_url=away.logo,
+                                        record=away.record,
+                                    ),
+                                    venue=VenueInfo(
+                                        venue_id=game_info.venue.venue_id,
+                                        name=game_info.venue.name,
+                                        city=game_info.venue.city,
+                                        state=game_info.venue.state,
+                                        indoor=game_info.venue.indoor,
+                                    ),
+                                    game_time=game_info.game_time_utc or timestamp,
+                                    broadcast=game_info.broadcast,
+                                    season_year=game_info.season_year,
+                                    season_type=game_info.season_type,
                                 )
                             )
                             self._state.mark_game_initialized(game_id)
@@ -220,16 +248,48 @@ class NBAStore(DataStore):
                     )
 
                     if home_team_str and away_team_str:
-                        # Try to get game time from game info
-                        game_time_dt = timestamp  # Default to current time
+                        # Get enriched game info (venue, broadcast, season, record)
+                        game_time_dt = timestamp
+                        venue = VenueInfo()
+                        broadcast = ""
+                        season_year = 0
+                        season_type = ""
+                        home_record = ""
+                        away_record = ""
+                        home_color = ""
+                        home_alt_color = ""
+                        home_logo = ""
+                        away_color = ""
+                        away_alt_color = ""
+                        away_logo = ""
+
                         try:
                             from dojozero.data.nba._utils import get_game_info_by_id
 
                             game_info = get_game_info_by_id(game_id)
-                            if game_info and game_info.game_time_utc:
-                                game_time_dt = game_info.game_time_utc
+                            if game_info:
+                                if game_info.game_time_utc:
+                                    game_time_dt = game_info.game_time_utc
+                                venue = VenueInfo(
+                                    venue_id=game_info.venue.venue_id,
+                                    name=game_info.venue.name,
+                                    city=game_info.venue.city,
+                                    state=game_info.venue.state,
+                                    indoor=game_info.venue.indoor,
+                                )
+                                broadcast = game_info.broadcast
+                                season_year = game_info.season_year
+                                season_type = game_info.season_type
+                                home_record = game_info.home_team.record
+                                away_record = game_info.away_team.record
+                                home_color = game_info.home_team.color
+                                home_alt_color = game_info.home_team.alternate_color
+                                home_logo = game_info.home_team.logo
+                                away_color = game_info.away_team.color
+                                away_alt_color = game_info.away_team.alternate_color
+                                away_logo = game_info.away_team.logo
                         except (KeyError, TypeError, ValueError, AttributeError):
-                            pass  # Use timestamp as fallback
+                            pass  # Use defaults
 
                         events.append(
                             GameInitializeEvent(
@@ -240,15 +300,27 @@ class NBAStore(DataStore):
                                     team_id=str(home_team_data.get("teamId", "")),
                                     name=home_team_str,
                                     tricode=home_team_data.get("teamTricode", ""),
-                                    location=home_team_data.get("teamCity", ""),
+                                    location=home_city,
+                                    color=home_color,
+                                    alternate_color=home_alt_color,
+                                    logo_url=home_logo,
+                                    record=home_record,
                                 ),
                                 away_team=TeamIdentity(
                                     team_id=str(away_team_data.get("teamId", "")),
                                     name=away_team_str,
                                     tricode=away_team_data.get("teamTricode", ""),
-                                    location=away_team_data.get("teamCity", ""),
+                                    location=away_city,
+                                    color=away_color,
+                                    alternate_color=away_alt_color,
+                                    logo_url=away_logo,
+                                    record=away_record,
                                 ),
+                                venue=venue,
                                 game_time=game_time_dt,
+                                broadcast=broadcast,
+                                season_year=season_year,
+                                season_type=season_type,
                             )
                         )
                         self._state.mark_game_initialized(game_id)

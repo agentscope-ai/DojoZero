@@ -170,30 +170,70 @@ class NFLStore(DataStore):
                     except ValueError:
                         pass
 
-                # Get venue
-                venue = competition.get("venue", {}).get("fullName", "")
+                # Get venue details
+                venue_data = competition.get("venue", {})
+                venue_address = venue_data.get("address", {})
 
-                # Get season type
+                # Extract team records
+                home_records = home_team_data.get("records", [])
+                home_record = home_records[0].get("summary", "") if home_records else ""
+                away_records = away_team_data.get("records", [])
+                away_record = away_records[0].get("summary", "") if away_records else ""
+
+                # Extract broadcast info
+                broadcasts_raw = competition.get("broadcasts", [])
+                broadcast_names: list[str] = []
+                for b in broadcasts_raw:
+                    names = b.get("names", [])
+                    if names:
+                        broadcast_names.extend(names)
+                broadcast = ", ".join(broadcast_names)
+
+                # Get season info
                 season = game.get("season", {})
-                season_type = season.get("type", 2) if isinstance(season, dict) else 2
+                season_type_code = (
+                    season.get("type", 2) if isinstance(season, dict) else 2
+                )
+                season_type_map = {1: "preseason", 2: "regular", 3: "postseason"}
+                season_type = season_type_map.get(season_type_code, "regular")
+                season_year = season.get("year", 0) if isinstance(season, dict) else 0
 
                 events.append(
                     GameInitializeEvent(
                         timestamp=timestamp,
                         game_id=event_id,
+                        sport="nfl",
                         home_team=TeamIdentity(
                             team_id=str(home_team_info.get("id", "")),
                             name=home_team_info.get("displayName", ""),
                             tricode=home_team_info.get("abbreviation", ""),
+                            location=home_team_info.get("location", ""),
+                            color=home_team_info.get("color", ""),
+                            alternate_color=home_team_info.get("alternateColor", ""),
+                            logo_url=home_team_info.get("logo", ""),
+                            record=home_record,
                         ),
                         away_team=TeamIdentity(
                             team_id=str(away_team_info.get("id", "")),
                             name=away_team_info.get("displayName", ""),
                             tricode=away_team_info.get("abbreviation", ""),
+                            location=away_team_info.get("location", ""),
+                            color=away_team_info.get("color", ""),
+                            alternate_color=away_team_info.get("alternateColor", ""),
+                            logo_url=away_team_info.get("logo", ""),
+                            record=away_record,
                         ),
-                        venue=VenueInfo(name=venue),
+                        venue=VenueInfo(
+                            venue_id=str(venue_data.get("id", "")),
+                            name=venue_data.get("fullName", ""),
+                            city=venue_address.get("city", ""),
+                            state=venue_address.get("state", ""),
+                            indoor=venue_data.get("indoor", True),
+                        ),
                         game_time=game_time,
-                        season_type=str(season_type),
+                        broadcast=broadcast,
+                        season_year=season_year,
+                        season_type=season_type,
                     )
                 )
                 self._state.mark_game_initialized(event_id)

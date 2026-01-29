@@ -332,7 +332,6 @@ class GameInitializeEvent(GameEvent):
     venue: VenueInfo = Field(default_factory=VenueInfo)
     game_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     broadcast: str = ""
-    odds: OddsInfo | None = None
     season_year: int = 0
     season_type: str = ""  # "regular", "postseason", "preseason"
 

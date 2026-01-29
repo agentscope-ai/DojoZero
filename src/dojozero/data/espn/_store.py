@@ -159,7 +159,23 @@ class ESPNStore(DataStore):
                     except ValueError:
                         pass
 
-                venue = competition.get("venue", {}).get("fullName", "")
+                venue_data = competition.get("venue", {})
+                venue_address = venue_data.get("address", {})
+
+                # Extract team records from competitor data
+                home_records = home_data.get("records", [])
+                home_record = home_records[0].get("summary", "") if home_records else ""
+                away_records = away_data.get("records", [])
+                away_record = away_records[0].get("summary", "") if away_records else ""
+
+                # Extract broadcast info
+                broadcasts_raw = competition.get("broadcasts", [])
+                broadcast_names: list[str] = []
+                for b in broadcasts_raw:
+                    names = b.get("names", [])
+                    if names:
+                        broadcast_names.extend(names)
+                broadcast = ", ".join(broadcast_names)
 
                 # Build metadata with sport-specific info
                 metadata: dict[str, Any] = {}
@@ -190,6 +206,7 @@ class ESPNStore(DataStore):
                             color=home_team.get("color", ""),
                             alternate_color=home_team.get("alternateColor", ""),
                             logo_url=home_team.get("logo", ""),
+                            record=home_record,
                         ),
                         away_team=TeamIdentity(
                             team_id=str(away_team.get("id", "")),
@@ -199,11 +216,17 @@ class ESPNStore(DataStore):
                             color=away_team.get("color", ""),
                             alternate_color=away_team.get("alternateColor", ""),
                             logo_url=away_team.get("logo", ""),
+                            record=away_record,
                         ),
                         venue=VenueInfo(
-                            name=venue,
+                            venue_id=str(venue_data.get("id", "")),
+                            name=venue_data.get("fullName", ""),
+                            city=venue_address.get("city", ""),
+                            state=venue_address.get("state", ""),
+                            indoor=venue_data.get("indoor", True),
                         ),
                         game_time=game_time,
+                        broadcast=broadcast,
                         season_year=season_year,
                         season_type=season_type,
                     )
