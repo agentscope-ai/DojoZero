@@ -336,7 +336,7 @@ deserialize_span(span) dispatches by operation_name:
 
 The arena server assembles presentation-layer view models from deserialized spans, static lookups, and computed aggregations. These are **not** SLS span types — they are cross-trial, frontend-facing models.
 
-All arena models live in `src/dojozero/core/_models.py`:
+Arena models live in `src/dojozero/arena_server/_models.py`:
 
 ```
 API Response Models

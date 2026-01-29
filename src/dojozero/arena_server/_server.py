@@ -40,24 +40,26 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from dojozero.core._models import (
-    AgentAction,
+from dojozero.arena_server._models import (
     AgentActionsResponse,
-    AgentInfo,
-    BettingResultSpan,
     GameCardData,
     GamesResponse,
     LandingResponse,
-    LeaderboardEntry,
     LeaderboardResponse,
     StatsResponse,
     TrialDetailResponse,
-    TrialLifecycleSpan,
     TrialListItem,
     WSHeartbeatMessage,
     WSSnapshotMessage,
     WSSpanMessage,
     WSTrialEndedMessage,
+)
+from dojozero.core._models import (
+    AgentAction,
+    AgentInfo,
+    BettingResultSpan,
+    LeaderboardEntry,
+    TrialLifecycleSpan,
     deserialize_span,
     serialize_span_for_ws,
 )
