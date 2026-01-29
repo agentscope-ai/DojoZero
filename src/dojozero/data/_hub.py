@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from dojozero.data._models import (
     DataEvent,
@@ -121,6 +121,9 @@ class DataHub:
         self._game_phases: dict[str, _GamePhase] = {}
         self._pending_dispatch: dict[str, list[_EventEnvelope]] = defaultdict(list)
         self._max_pending_per_game: int = 200
+
+        # Pregame callback: invoked after GameInitializeEvent with stores paused
+        self._on_game_initialized: Callable[[str], Awaitable[None]] | None = None
 
     def subscribe_agent(
         self,
@@ -357,6 +360,14 @@ class DataHub:
             if phase == _GamePhase.PENDING:
                 self._game_phases[event_game_id] = _GamePhase.PREGAME
                 await self._deliver_event(envelope)
+                # Run pregame callback with stores paused so web searches
+                # complete before any new poll events arrive.
+                if self._on_game_initialized:
+                    self._pause_connected_stores()
+                    try:
+                        await self._on_game_initialized(event_game_id)
+                    finally:
+                        self._resume_connected_stores()
                 await self._flush_pending_dispatch(event_game_id)
             else:
                 # Already initialized — deliver normally
@@ -550,6 +561,27 @@ class DataHub:
         # Track connected store for lifecycle management
         if store not in self._connected_stores:
             self._connected_stores.append(store)
+
+    def set_on_game_initialized(
+        self, callback: Callable[[str], Awaitable[None]]
+    ) -> None:
+        """Register a callback invoked after ``GameInitializeEvent``.
+
+        The callback receives the ``game_id`` string.  While the callback
+        runs, all connected stores are paused so no new poll events race
+        with pre-game work (e.g., web searches).
+        """
+        self._on_game_initialized = callback
+
+    def _pause_connected_stores(self) -> None:
+        """Pause polling on all connected stores."""
+        for store in self._connected_stores:
+            store.pause_polling()
+
+    def _resume_connected_stores(self) -> None:
+        """Resume polling on all connected stores."""
+        for store in self._connected_stores:
+            store.resume_polling()
 
     def _handle_task_exception(self, task: asyncio.Task[None]) -> None:
         """Handle exceptions from background tasks.

@@ -94,20 +94,24 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         self._search_initialized = False
 
     async def start(self) -> None:
-        """Subscribe to DataHub events and trigger web searches in background."""
+        """Subscribe to DataHub events and register pregame callback."""
         # Call parent start() which handles DataHub subscription
         await super().start()
 
-        # Run web searches and await completion so all pre-game insights
-        # are emitted to the hub before stores start polling.  The hub's
-        # lifecycle gate holds back GameStartEvent / play events until
-        # PREGAME insights have been delivered.
+        # Register a callback on the hub so that when GameInitializeEvent
+        # fires, stores are paused and web searches run before polling
+        # resumes.  This replaces the old approach of blocking start().
         if (
             self._websearch_event_types
             and self._search_api
             and self._game_context
-            and not self._search_initialized
+            and self._hub
         ):
+            self._hub.set_on_game_initialized(self._on_game_initialized)
+
+    async def _on_game_initialized(self, _game_id: str) -> None:
+        """Hub callback: run pre-game web searches while stores are paused."""
+        if not self._search_initialized:
             self._search_initialized = True
             await self._run_web_searches()
 

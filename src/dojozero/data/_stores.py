@@ -85,6 +85,8 @@ class DataStore(ABC):
         # Polling state
         self._running = False
         self._poll_task: asyncio.Task[None] | None = None  # Reference to polling task
+        self._poll_gate = asyncio.Event()
+        self._poll_gate.set()  # Open by default (not paused)
         self._last_poll_time: datetime | None = None
         self._last_poll_times: dict[str, datetime] = {}  # Per-endpoint last poll times
         self._poll_identifier: dict[
@@ -160,6 +162,18 @@ class DataStore(ABC):
 
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
+
+    def pause_polling(self) -> None:
+        """Pause polling without stopping the task.
+
+        The poll loop will block at the top of the next iteration until
+        ``resume_polling()`` is called.
+        """
+        self._poll_gate.clear()
+
+    def resume_polling(self) -> None:
+        """Resume a previously paused poll loop."""
+        self._poll_gate.set()
 
     async def stop_polling(self) -> None:
         """Stop polling the API and close any open connections."""
@@ -293,6 +307,9 @@ class DataStore(ABC):
         runtime interval updates (e.g., switching from pre-game to in-game polling).
         """
         while self._running:
+            # Block here while paused (pause_polling / resume_polling)
+            await self._poll_gate.wait()
+
             try:
                 # Poll for updates (pass poll identifier)
                 raw_events = await self._poll_api(identifier=self._poll_identifier)
