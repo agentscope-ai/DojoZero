@@ -21,7 +21,7 @@ class BettingAgent(BaseBettingAgent):
     """NFL-specific BettingAgent with NFL event formatting.
 
     This class extends the shared BettingAgent to use NFL-specific
-    event formatters by default.
+    event formatters by default and provides NFL-specific context tracking.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -38,9 +38,9 @@ class BettingAgent(BaseBettingAgent):
     ) -> "BettingAgent":
         """Create NFL BettingAgent from config dict with NFL formatter.
 
-        Note: agent_config_path is no longer supported here - the trial builder
-        handles YAML loading and expansion. This method expects inline configs
-        with a single LLMConfig.
+        Note: persona_config_path and llm_config_path are no longer supported here -
+        the trial builder handles YAML loading and expansion. This method expects
+        inline configs with a single LLMConfig.
         """
         from dojozero.agents import (
             create_model,

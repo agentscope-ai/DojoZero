@@ -21,7 +21,8 @@ from dojozero.ray_runtime import RayActorRuntimeProvider
 # Import shared fixtures - conftest.py is auto-loaded by pytest
 sys.path.insert(0, str(Path(__file__).parent))
 from conftest import (
-    BASIC_CONFIG_PATH,
+    BASIC_PERSONA_PATH,
+    DEFAULT_LLM_CONFIG_PATH,
     TEST_API_KEY_ENV,
     TEST_BASE_URL_ENV,
     create_broker_fixture,
@@ -41,7 +42,7 @@ def broker():
 @pytest.fixture
 def agent():
     """Create BettingAgent with test-specific env vars."""
-    return create_nba_test_agent(BASIC_CONFIG_PATH)
+    return create_nba_test_agent(BASIC_PERSONA_PATH, DEFAULT_LLM_CONFIG_PATH)
 
 
 @pytest.mark.asyncio
@@ -164,7 +165,7 @@ def broker_spec() -> OperatorSpec:
 
 def _create_ray_agent_config() -> BettingAgentConfig:
     """Create agent config with test-specific env vars for Ray."""
-    config = load_agent_config(BASIC_CONFIG_PATH)
+    config = load_agent_config(BASIC_PERSONA_PATH, DEFAULT_LLM_CONFIG_PATH)
     # llm is a list of configs - use the first one for tests
     llm_config = config["llm"][0]
     return BettingAgentConfig(

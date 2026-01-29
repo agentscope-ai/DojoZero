@@ -75,7 +75,8 @@ config:
     agents:
     - id: basic_agent
       class: BettingAgent
-      agent_config_path: agents/basic.yaml
+      persona_config_path: agents/personas/basic.yaml
+      llm_config_path: agents/llms/qwen.yaml
       operators:
       - betting_broker
       data_streams:
@@ -88,7 +89,8 @@ config:
       - nfl_play_stream
     - id: shark_agent
       class: BettingAgent
-      agent_config_path: agents/shark.yaml
+      persona_config_path: agents/personas/shark.yaml
+      llm_config_path: agents/llms/qwen.yaml
       operators:
       - betting_broker
       data_streams:
@@ -101,7 +103,8 @@ config:
       - nfl_play_stream
     - id: sheep_agent
       class: BettingAgent
-      agent_config_path: agents/sheep.yaml
+      persona_config_path: agents/personas/sheep.yaml
+      llm_config_path: agents/llms/qwen.yaml
       operators:
       - betting_broker
       data_streams:
@@ -114,7 +117,8 @@ config:
       - nfl_play_stream
     - id: whale_agent
       class: BettingAgent
-      agent_config_path: agents/whale.yaml
+      persona_config_path: agents/personas/whale.yaml
+      llm_config_path: agents/llms/qwen.yaml
       operators:
       - betting_broker
       data_streams:

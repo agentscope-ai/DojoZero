@@ -38,7 +38,6 @@ scenario:
       initial_balance: "1000.00"
       allowed_tools:
       - get_balance
-      - get_event
       - place_bet_moneyline
       - cancel_bet
       - get_active_bets
@@ -51,9 +50,11 @@ scenario:
       - game_update_stream
 
     agents:
-    - id: basic_agent
+    - id: degen_agent
+      name: degen
       class: BettingAgent
-      agent_config_path: agents/basic.yaml
+      persona_config_path: agents/personas/degen.yaml
+      llm_config_path: agents/llms/qwen.yaml
       operators:
       - betting_broker
       data_streams:
@@ -64,9 +65,41 @@ scenario:
       - odds_update_stream
       - game_status_change_stream
       - play_by_play_stream
-    - id: shark_agent
+    - id: oracle_agent
+      name: oracle
       class: BettingAgent
-      agent_config_path: agents/shark.yaml
+      persona_config_path: agents/personas/oracle.yaml
+      llm_config_path: agents/llms/qwen.yaml
+      operators:
+        - betting_broker
+      data_streams:
+        - injury_summary_stream
+        - power_ranking_stream
+        - expert_prediction_stream
+        - game_update_stream
+        - odds_update_stream
+        - game_status_change_stream
+        - play_by_play_stream
+    - id: professor_agent
+      name: professor
+      class: BettingAgent
+      persona_config_path: agents/personas/professor.yaml
+      llm_config_path: agents/llms/qwen.yaml
+      operators:
+        - betting_broker
+      data_streams:
+        - injury_summary_stream
+        - power_ranking_stream
+        - expert_prediction_stream
+        - game_update_stream
+        - odds_update_stream
+        - game_status_change_stream
+        - play_by_play_stream
+    - id: shark_agent
+      name: shark
+      class: BettingAgent
+      persona_config_path: agents/personas/shark.yaml
+      llm_config_path: agents/llms/qwen.yaml
       operators:
       - betting_broker
       data_streams:
@@ -78,8 +111,10 @@ scenario:
       - game_status_change_stream
       - play_by_play_stream
     - id: sheep_agent
+      name: sheep
       class: BettingAgent
-      agent_config_path: agents/sheep.yaml
+      persona_config_path: agents/personas/sheep.yaml
+      llm_config_path: agents/llms/qwen.yaml
       operators:
       - betting_broker
       data_streams:
@@ -91,8 +126,10 @@ scenario:
       - game_status_change_stream
       - play_by_play_stream
     - id: whale_agent
+      name: whale
       class: BettingAgent
-      agent_config_path: agents/whale.yaml
+      persona_config_path: agents/personas/whale.yaml
+      llm_config_path: agents/llms/qwen.yaml
       operators:
       - betting_broker
       data_streams:

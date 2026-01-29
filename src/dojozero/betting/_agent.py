@@ -9,7 +9,7 @@ import asyncio
 import inspect
 import json
 import logging
-from collections import Counter, deque
+from collections import deque
 from typing import Any, Callable, Mapping, Sequence, TypedDict
 
 from agentscope.agent import ReActAgent
@@ -27,7 +27,7 @@ from dojozero.agents import (
 )
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
-from dojozero.data._models import DataEvent, extract_game_id
+from dojozero.data._models import DataEvent
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class BettingAgentConfig(_ActorIdConfig, total=False):
     """Betting agent configuration.
 
     Supports two modes:
-    1. agent_config_path: Load config from YAML file
+    1. Config paths: Load config from separate persona and LLM YAML files
     2. Inline config: Use llm field with LLMConfig
     """
 
@@ -52,9 +52,8 @@ class BettingAgentConfig(_ActorIdConfig, total=False):
     sys_prompt: str
     tools: list[str]  # List of tool names to enable
     llm: LLMConfig  # LLM configuration
-    agent_config_path: (
-        str  # Path to agent YAML config file (alternative to inline config)
-    )
+    persona_config_path: str  # Path to persona YAML config file
+    llm_config_path: str  # Path to LLM YAML config file
 
 
 def _default_format_event(event: DataEvent) -> str:
@@ -147,8 +146,17 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         self._is_processing: bool = False
         self._processing_lock = asyncio.Lock()
         self._max_event_retry_count = 3
+        self._retry_sleep_time = 3
         # Event formatter for converting DataEvents to LLM-friendly text
         self._event_formatter = event_formatter or _default_format_event
+
+        # Memory compression settings
+        self._event_history: deque[str] = deque(maxlen=1000)
+        self._compressed_context: str | None = None
+        self._compression_threshold: int = 20
+        self._head_events: int = 10
+        self._tail_events: int = 10
+        self._max_event_chars: int = 200
 
     @property
     def name(self) -> str:
@@ -178,6 +186,96 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         """
         self._event_formatter = formatter
 
+    def _truncate_event(self, text: str) -> str:
+        """Truncate event text to max chars."""
+        if len(text) <= self._max_event_chars:
+            return text
+        return text[: self._max_event_chars - 3] + "..."
+
+    def _build_events_summary(self) -> str:
+        """Build a sparse summary of event history.
+
+        Returns first N + last N events with ellipsis in between if too many.
+        """
+        events = list(self._event_history)
+        if not events:
+            return ""
+
+        total = len(events)
+        head_n = self._head_events
+        tail_n = self._tail_events
+
+        if total <= head_n + tail_n:
+            # Few events, keep all
+            return "\n".join(events)
+
+        # Sparse: first N + ellipsis + last N
+        head = events[:head_n]
+        tail = events[-tail_n:]
+        skipped = total - head_n - tail_n
+
+        return "\n".join(
+            [
+                *head,
+                f"... ({skipped} events omitted) ...",
+                *tail,
+            ]
+        )
+
+    async def _get_bet_history_summary(self) -> str:
+        """Get bet history from broker operator if available."""
+        for op in self._operator_registry.values():
+            if hasattr(op, "get_bet_history"):
+                try:
+                    history = await op.get_bet_history(self.actor_id, limit=50)  # type: ignore[attr-defined]
+                    if history:
+                        # Format bets simply: last 20 bets
+                        summaries = []
+                        for bet in history[-20:]:
+                            outcome_str = (
+                                f" -> {bet.outcome.value}" if bet.outcome else ""
+                            )
+                            summaries.append(
+                                f"{bet.selection}: {bet.amount} @ {bet.odds}{outcome_str} [{bet.status.value}]"
+                            )
+                        return "\n".join(summaries)
+                except Exception as e:
+                    logger.warning("Failed to get bet history: %s", e)
+        return "No betting history available."
+
+    async def _offload(self) -> None:
+        """Compress memory by summarizing events and clearing assistant messages.
+
+        Compression strategy:
+        1. Build sparse summary from _event_history: first N + last N events + ellipsis
+        2. Get bet history from broker (replaces assistant action memory)
+        3. Store compressed context for injection in next _process_events call
+        4. Clear ReActAgent memory
+
+        Note: Events are added to _event_history in _process_events BEFORE
+        prepending compressed context, to avoid nesting/duplication.
+        """
+        # Build compressed context
+        events_summary = self._build_events_summary()
+        bet_history = await self._get_bet_history_summary()
+
+        self._compressed_context = (
+            "[Historical Event Summary]\n"
+            f"{events_summary}\n\n"
+            "[Your Betting History]\n"
+            f"{bet_history}"
+        )
+
+        # Clear the ReActAgent's memory
+        self._react_agent.memory = InMemoryMemory()
+
+        logger.info(
+            "agent '%s' offloaded memory: %d events in history, compressed to %d chars",
+            self.actor_id,
+            len(self._event_history),
+            len(self._compressed_context),
+        )
+
     @classmethod
     def from_dict(
         cls,
@@ -186,9 +284,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
     ) -> "BettingAgent":
         """Create agent from config dict.
 
-        Note: agent_config_path is no longer supported here - the trial builder
-        handles YAML loading and expansion. This method expects inline configs
-        with a single LLMConfig.
+        Note: persona_config_path and llm_config_path are no longer supported here -
+        the trial builder handles YAML loading and expansion. This method expects
+        inline configs with a single LLMConfig.
         """
         actor_id = config["actor_id"]
 
@@ -248,46 +346,28 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             "agent '%s' stopping after %d events", self.actor_id, self._event_count
         )
 
-    def _extract_game_id_from_events(self, events: list[StreamEvent[Any]]) -> str:
-        """Extract game_id from event payloads.
-
-        Args:
-            events: List of StreamEvent objects
-
-        Returns:
-            game_id string, or empty string if not found
-        """
-        for event in events:
-            payload = event.payload
-            if isinstance(payload, DataEvent):
-                game_id = extract_game_id(payload.to_dict())
-                if game_id:
-                    return game_id
-        return ""
-
     def _emit_agent_span(
         self,
         stream_id: str,
         operation_name: str,
-        role: str,
         content: str,
+        session_history: str,
+        latest_event: str,
         tool_calls: list[dict] | None = None,
-        game_id: str = "",
     ) -> None:
-        """Emit a span for an agent message to the OTel exporter."""
+        """Emit a span for an agent response to the OTel exporter."""
         tags: dict[str, Any] = {
-            "sequence": self._event_count,
+            "dojozero.event.type": operation_name,
+            "dojozero.event.sequence": self._event_count,
             "event.stream_id": stream_id,
-            "event.role": role,
             "event.name": self.name,
             "event.content": content,
+            "event.session_history": session_history,
+            "event.latest_event": latest_event,
         }
 
         if tool_calls:
             tags["event.tool_calls"] = json.dumps(tool_calls, default=str)
-
-        if game_id:
-            tags["game.id"] = game_id
 
         span = create_span_from_event(
             trial_id=self.trial_id,
@@ -318,7 +398,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Multiple events: consolidate with headers
         lines = [f"[{len(events)} New Events Received]\n"]
 
-        for i, event in enumerate(events, 1):
+        for event in events:
             payload = event.payload
             if isinstance(payload, DataEvent):
                 formatted = self._event_formatter(payload)
@@ -327,9 +407,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                     f"[Data]: {json.dumps(payload, default=str, ensure_ascii=False)}"
                 )
 
-            lines.append(f"--- Event {i} (from {event.stream_id}) ---")
             lines.append(formatted)
-            lines.append("")
 
         return "\n".join(lines)
 
@@ -345,34 +423,50 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Update event count
         self._event_count += len(events)
 
+        # update event history
+        for event in events:
+            payload = event.payload
+            if isinstance(payload, DataEvent):
+                formatted = self._event_formatter(payload)
+            else:
+                formatted = (
+                    f"[Data]: {json.dumps(payload, default=str, ensure_ascii=False)}"
+                )
+            truncated = self._truncate_event(formatted)
+            self._event_history.append(truncated)
+
         # Format events for LLM
         input_content = self._format_events_for_llm(events)
 
+        # If we have compressed context, prepend it to the current event input
+        # (as part of the same user message to maintain user-assistant pairing)
+        if self._compressed_context:
+            input_content = (
+                f"{self._compressed_context}\n\n[New Events]\n{input_content}"
+            )
+            # Clear compressed context after use
+            self._compressed_context = None
+
         # Log event processing with stream count summary
-        stream_counts = Counter(e.stream_id for e in events)
-        stream_summary = ", ".join(f"{k}:{v}" for k, v in stream_counts.most_common())
         logger.info(
             "agent '%s' processing %d event(s) from streams: {%s}",
             self.actor_id,
             len(events),
-            stream_summary,
+            input_content[:500],  # Truncate for logging
         )
 
         msg = Msg(name="event_push", content=input_content, role="user")
 
-        # Emit span for user input (use first event's stream_id for tracing)
+        # Use first event's stream_id for tracing
         primary_stream_id = events[0].stream_id
-        game_id = self._extract_game_id_from_events(events)
-        self._emit_agent_span(
-            stream_id=primary_stream_id,
-            operation_name="agent.input",
-            role="user",
-            content=input_content,
-            game_id=game_id,
-        )
 
         # Call agent
         response = await self._react_agent(msg)
+
+        # Update state before compaction
+        memory = await self.memory.get_memory()
+        memory_dicts = [m.to_dict() for m in memory]
+        self._state = memory_dicts
 
         # Emit span for agent response
         if response is not None:
@@ -381,16 +475,15 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             self._emit_agent_span(
                 stream_id=primary_stream_id,
                 operation_name="agent.response",
-                role="assistant",
                 content=text_content,
+                session_history=json.dumps(memory_dicts),
+                latest_event=self._event_formatter(events[-1].payload),
                 tool_calls=tool_calls,
-                game_id=game_id,
             )
 
-        # Update state
-        memory = await self.memory.get_memory()
-        memory_dicts = [m.to_dict() for m in memory]
-        self._state = memory_dicts
+        # Compact memory for next iteration
+        if len(memory_dicts) >= self._compression_threshold:
+            await self._offload()
 
         logger.info(
             "agent '%s' processed %d event(s)",
@@ -424,6 +517,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                     self._max_event_retry_count,
                     e,
                 )
+                await asyncio.sleep(self._retry_sleep_time)
                 return await self._process_events_with_retry(events, retry_count + 1)
             else:
                 logger.error(
@@ -470,14 +564,29 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 )
                 return
 
-            # Mark as processing
+            # Mark as processing and queue the current event
             self._is_processing = True
 
-        try:
-            # Process the current event with retry
-            await self._process_events_with_retry([event])
+            # Skip processing if game is finished
+            payload = event.payload
+            if (
+                isinstance(payload, DataEvent)
+                and hasattr(payload, "winner")
+                and hasattr(payload, "final_score")
+            ):
+                logger.info(
+                    "agent '%s' skipping event processing - game finished",
+                    self.actor_id,
+                )
+                self._event_history.append(self._event_formatter(payload))
+                self._is_processing = False
+                return
 
-            # Process any queued events
+            # Add current event to queue with retry_count=0
+            self._event_queue.append((event, 0))
+
+        try:
+            # Process all queued events (including the current one)
             while True:
                 async with self._processing_lock:
                     if not self._event_queue:
@@ -513,7 +622,12 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
     async def save_state(self) -> Mapping[str, Any]:
         """Return serializable state for checkpointing."""
-        return {"events": self._event_count, "state": self._state}
+        return {
+            "events": self._event_count,
+            "state": self._state,
+            "event_history": list(self._event_history),
+            "compressed_context": self._compressed_context,
+        }
 
     async def load_state(self, state: Mapping[str, Any]) -> None:
         """Restore state from checkpoint.
@@ -522,10 +636,15 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         """
         self._event_count = int(state.get("events", 0))
         self._state = state.get("state", [])
+
+        # Restore memory compression state
+        self._event_history = deque(state.get("event_history", []), maxlen=1000)
+        self._compressed_context = state.get("compressed_context")
         logger.info(
-            "agent '%s' restored: events_processed=%d",
+            "agent '%s' restored: events_processed=%d, event_history=%d",
             self.actor_id,
             self._event_count,
+            len(self._event_history),
         )
 
     @property

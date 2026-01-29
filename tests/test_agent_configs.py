@@ -13,6 +13,8 @@ import pytest
 
 from dojozero.agents import (
     load_agent_config,
+    load_llm_file_config,
+    load_persona_config,
     create_model,
     create_formatter,
     expand_agent_config,
@@ -27,36 +29,48 @@ TEST_API_KEY_ENV = "DOJOZERO_OPENAI_API_KEY"
 TEST_BASE_URL_ENV = "DOJOZERO_OPENAI_BASE_URL"
 
 # Path to agent configs
-CONFIG_DIR = Path(__file__).parent.parent / "agents"
+AGENTS_DIR = Path(__file__).parent.parent / "agents"
+PERSONAS_DIR = AGENTS_DIR / "personas"
+LLMS_DIR = AGENTS_DIR / "llms"
+
+# Default LLM config for tests
+DEFAULT_LLM_CONFIG_PATH = LLMS_DIR / "qwen.yaml"
 
 
-def get_all_agent_config_files() -> list[Path]:
-    """Get all YAML config files in the agents directory."""
-    return list(CONFIG_DIR.glob("*.yaml"))
+def get_all_persona_files() -> list[Path]:
+    """Get all YAML config files in the personas directory."""
+    return list(PERSONAS_DIR.glob("*.yaml"))
+
+
+def get_all_llm_files() -> list[Path]:
+    """Get all YAML config files in the llms directory."""
+    return list(LLMS_DIR.glob("*.yaml"))
 
 
 @lru_cache(maxsize=None)
-def _load_agent_config_cached(config_path: Path) -> AgentConfig:
-    """Load and cache agent configuration from a YAML file.
+def _load_agent_config_cached(
+    persona_config_path: Path,
+    llm_config_path: Path,
+) -> AgentConfig:
+    """Load and cache agent configuration from YAML files.
 
     Uses lru_cache to avoid redundant file reads during test collection
     and execution.
     """
-    return load_agent_config(config_path)
+    return load_agent_config(persona_config_path, llm_config_path)
 
 
 def get_all_model_configs() -> list[tuple[str, LLMConfig]]:
-    """Get all (config_name, llm_config) pairs from all agent configs.
+    """Get all (llm_file_name, llm_config) pairs from all LLM config files.
 
-    Returns a list of tuples containing the config file name and
+    Returns a list of tuples containing the LLM config file name and
     each individual LLM configuration from that file.
     """
     configs: list[tuple[str, LLMConfig]] = []
-    for config_path in get_all_agent_config_files():
-        agent_config = _load_agent_config_cached(config_path)
-        expanded = expand_agent_config(agent_config)
-        for single_config in expanded:
-            configs.append((config_path.stem, single_config["llm"]))
+    for llm_path in get_all_llm_files():
+        llm_file_config = load_llm_file_config(llm_path)
+        for llm_config in llm_file_config["llm"]:
+            configs.append((llm_path.stem, llm_config))
     return configs
 
 
@@ -78,42 +92,96 @@ def _model_config_id(param: object) -> str:
 # =============================================================================
 
 
+class TestPersonaConfigLoading:
+    """Test that all persona configs can be loaded and parsed correctly."""
+
+    @pytest.mark.parametrize(
+        "persona_path",
+        get_all_persona_files(),
+        ids=lambda p: p.stem,
+    )
+    def test_persona_loads_successfully(self, persona_path: Path):
+        """Test that each persona config file loads without errors."""
+        persona_config = load_persona_config(persona_path)
+
+        assert "sys_prompt" in persona_config, (
+            f"Persona {persona_path} missing 'sys_prompt' field"
+        )
+        assert len(persona_config["sys_prompt"]) > 0, (
+            f"Persona {persona_path} 'sys_prompt' should not be empty"
+        )
+
+
+class TestLLMConfigLoading:
+    """Test that all LLM configs can be loaded and parsed correctly."""
+
+    @pytest.mark.parametrize(
+        "llm_path",
+        get_all_llm_files(),
+        ids=lambda p: p.stem,
+    )
+    def test_llm_config_loads_successfully(self, llm_path: Path):
+        """Test that each LLM config file loads without errors."""
+        llm_file_config = load_llm_file_config(llm_path)
+
+        assert "llm" in llm_file_config, f"LLM config {llm_path} missing 'llm' field"
+        assert isinstance(llm_file_config["llm"], list), (
+            f"LLM config {llm_path} 'llm' should be a list"
+        )
+        assert len(llm_file_config["llm"]) > 0, (
+            f"LLM config {llm_path} should have at least one LLM config"
+        )
+
+    @pytest.mark.parametrize(
+        "llm_path",
+        get_all_llm_files(),
+        ids=lambda p: p.stem,
+    )
+    def test_llm_configs_have_required_fields(self, llm_path: Path):
+        """Test that each LLM config has required fields."""
+        llm_file_config = load_llm_file_config(llm_path)
+
+        for i, llm_config in enumerate(llm_file_config["llm"]):
+            assert "model_type" in llm_config, (
+                f"LLM config {llm_path} LLM[{i}] missing 'model_type'"
+            )
+            assert "model_name" in llm_config, (
+                f"LLM config {llm_path} LLM[{i}] missing 'model_name'"
+            )
+            assert llm_config["model_type"] in ("openai", "dashscope"), (
+                f"LLM config {llm_path} LLM[{i}] has unknown model_type: {llm_config['model_type']}"
+            )
+
+
 class TestAgentConfigLoading:
-    """Test that all agent configs can be loaded and parsed correctly."""
+    """Test that agent configs can be loaded by combining persona and LLM configs."""
 
     @pytest.mark.parametrize(
-        "config_path",
-        get_all_agent_config_files(),
+        "persona_path",
+        get_all_persona_files(),
         ids=lambda p: p.stem,
     )
-    def test_config_loads_successfully(self, config_path: Path):
-        """Test that each config file loads without errors."""
-        config = _load_agent_config_cached(config_path)
+    def test_combined_config_loads_successfully(self, persona_path: Path):
+        """Test that persona + default LLM config loads without errors."""
+        config = _load_agent_config_cached(persona_path, DEFAULT_LLM_CONFIG_PATH)
 
-        assert "name" in config, f"Config {config_path} missing 'name' field"
-        assert "sys_prompt" in config, (
-            f"Config {config_path} missing 'sys_prompt' field"
-        )
-        assert "llm" in config, f"Config {config_path} missing 'llm' field"
-        assert isinstance(config["llm"], list), (
-            f"Config {config_path} 'llm' should be a list"
-        )
-        assert len(config["llm"]) > 0, (
-            f"Config {config_path} should have at least one LLM config"
-        )
+        assert "sys_prompt" in config, "Config missing 'sys_prompt' field"
+        assert "llm" in config, "Config missing 'llm' field"
+        assert isinstance(config["llm"], list), "Config 'llm' should be a list"
+        assert len(config["llm"]) > 0, "Config should have at least one LLM config"
 
     @pytest.mark.parametrize(
-        "config_path",
-        get_all_agent_config_files(),
+        "persona_path",
+        get_all_persona_files(),
         ids=lambda p: p.stem,
     )
-    def test_config_expands_correctly(self, config_path: Path):
+    def test_config_expands_correctly(self, persona_path: Path):
         """Test that each config expands to separate model configs."""
-        config = _load_agent_config_cached(config_path)
+        config = _load_agent_config_cached(persona_path, DEFAULT_LLM_CONFIG_PATH)
         expanded = expand_agent_config(config)
 
         assert len(expanded) == len(config["llm"]), (
-            f"Config {config_path} expansion should create one config per model"
+            "Config expansion should create one config per model"
         )
 
         for single_config in expanded:
@@ -122,26 +190,6 @@ class TestAgentConfigLoading:
             assert "llm" in single_config
             assert isinstance(single_config["llm"], dict), (
                 "Expanded config 'llm' should be a single dict"
-            )
-
-    @pytest.mark.parametrize(
-        "config_path",
-        get_all_agent_config_files(),
-        ids=lambda p: p.stem,
-    )
-    def test_llm_configs_have_required_fields(self, config_path: Path):
-        """Test that each LLM config has required fields."""
-        config = _load_agent_config_cached(config_path)
-
-        for i, llm_config in enumerate(config["llm"]):
-            assert "model_type" in llm_config, (
-                f"Config {config_path} LLM[{i}] missing 'model_type'"
-            )
-            assert "model_name" in llm_config, (
-                f"Config {config_path} LLM[{i}] missing 'model_name'"
-            )
-            assert llm_config["model_type"] in ("openai", "dashscope"), (
-                f"Config {config_path} LLM[{i}] has unknown model_type: {llm_config['model_type']}"
             )
 
 
@@ -273,62 +321,66 @@ class TestAllConfigsEndToEnd:
 
         This test attempts to validate all model endpoints and provides
         a summary report of which endpoints are working vs failing.
+        Tests each persona with each LLM config combination.
         """
         results: dict[str, list[tuple[str, str]]] = {"passed": [], "failed": []}
 
-        for config_path in get_all_agent_config_files():
-            config = _load_agent_config_cached(config_path)
-            expanded = expand_agent_config(config)
+        for persona_path in get_all_persona_files():
+            for llm_path in get_all_llm_files():
+                config = _load_agent_config_cached(persona_path, llm_path)
+                expanded = expand_agent_config(config)
 
-            for single_config in expanded:
-                llm_config = single_config["llm"].copy()
-                llm_config["api_key_env"] = TEST_API_KEY_ENV
-                llm_config["base_url_env"] = TEST_BASE_URL_ENV
+                for single_config in expanded:
+                    llm_config = single_config["llm"].copy()
+                    llm_config["api_key_env"] = TEST_API_KEY_ENV
+                    llm_config["base_url_env"] = TEST_BASE_URL_ENV
 
-                model_name = llm_config.get("model_name", "unknown")
-                test_id = f"{config_path.stem}/{model_name}"
+                    model_name = llm_config.get("model_name", "unknown")
+                    test_id = f"{persona_path.stem}/{llm_path.stem}/{model_name}"
 
-                try:
-                    # Create and test BettingAgent
-                    agent = _create_test_agent(llm_config, config_path.stem)
-                    await agent.start()
+                    try:
+                        # Create and test BettingAgent
+                        agent = _create_test_agent(llm_config, persona_path.stem)
+                        await agent.start()
 
-                    # Send a simple test event
-                    test_event = StreamEvent(
-                        stream_id="test-stream",
-                        payload={"message": "Reply with 'ok'."},
-                        sequence=0,
-                    )
-                    await agent.handle_stream_event(test_event)
+                        # Send a simple test event
+                        test_event = StreamEvent(
+                            stream_id="test-stream",
+                            payload={"message": "Reply with 'ok'."},
+                            sequence=0,
+                        )
+                        await agent.handle_stream_event(test_event)
 
-                    # Check agent processed the event and got a response
-                    if agent._event_count >= 1 and len(agent._state) > 0:
-                        # Get the last assistant response from memory state
-                        assistant_responses = [
-                            msg
-                            for msg in agent._state
-                            if msg.get("role") == "assistant"
-                        ]
-                        if assistant_responses:
-                            last_response = assistant_responses[-1].get("content", "")
-                            # Truncate for display
-                            response_preview = str(last_response)[:50]
-                            results["passed"].append((test_id, response_preview))
+                        # Check agent processed the event and got a response
+                        if agent._event_count >= 1 and len(agent._state) > 0:
+                            # Get the last assistant response from memory state
+                            assistant_responses = [
+                                msg
+                                for msg in agent._state
+                                if msg.get("role") == "assistant"
+                            ]
+                            if assistant_responses:
+                                last_response = assistant_responses[-1].get(
+                                    "content", ""
+                                )
+                                # Truncate for display
+                                response_preview = str(last_response)[:50]
+                                results["passed"].append((test_id, response_preview))
+                            else:
+                                results["failed"].append(
+                                    (test_id, "No assistant response in memory")
+                                )
                         else:
                             results["failed"].append(
-                                (test_id, "No assistant response in memory")
+                                (test_id, "No events processed or empty state")
                             )
-                    else:
+
+                        await agent.stop()
+
+                    except Exception as e:
                         results["failed"].append(
-                            (test_id, "No events processed or empty state")
+                            (test_id, f"{type(e).__name__}: {str(e)[:100]}")
                         )
-
-                    await agent.stop()
-
-                except Exception as e:
-                    results["failed"].append(
-                        (test_id, f"{type(e).__name__}: {str(e)[:100]}")
-                    )
 
         # Print summary
         print("\n" + "=" * 60)
