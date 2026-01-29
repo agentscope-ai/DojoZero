@@ -153,7 +153,24 @@ class WebSearchEventMixin:
             return None
 
         # 5. Parse into typed event
-        return cls._parse_llm_response(response, query, context)
+        event = cls._parse_llm_response(response, query, context)
+
+        # 6. Populate game_id, sport, and source from context so the event
+        #    participates in the DataHub lifecycle gate.
+        #    All concrete subclasses are Pydantic models (via WebSearchInsightEvent)
+        #    with game_id/sport/source fields from SportEvent / PreGameInsightEvent.
+        if event is not None and hasattr(event, "model_copy"):
+            overrides: dict[str, Any] = {}
+            if context.game_id and not getattr(event, "game_id", ""):
+                overrides["game_id"] = context.game_id
+            if context.sport and not getattr(event, "sport", ""):
+                overrides["sport"] = context.sport
+            if not getattr(event, "source", ""):
+                overrides["source"] = "websearch"
+            if overrides:
+                event = event.model_copy(update=overrides)  # type: ignore[union-attr]
+
+        return event
 
     @classmethod
     def _format_search_results(cls, results: list[dict[str, Any]]) -> list[str]:

@@ -4,6 +4,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from dojozero.data._models import DataEvent
@@ -73,6 +74,7 @@ class DataStore(ABC):
             min(self.poll_intervals.values()) if self.poll_intervals else 5.0
         )
         self._event_emitter = event_emitter
+        self._async_event_emitter: Callable[[DataEvent], Awaitable[None]] | None = None
         # Track DataHub reference for event subscriptions (set by connect_store)
         self._data_hub: "DataHub | None" = None
 
@@ -109,12 +111,25 @@ class DataStore(ABC):
         return list(self._stream_registry.keys())
 
     def set_event_emitter(self, emitter: Callable[[DataEvent], None]) -> None:
-        """Set the event emitter callback (called by DataHub).
+        """Set the sync event emitter callback (called by DataHub).
 
         Args:
             emitter: Function to call when emitting events
         """
         self._event_emitter = emitter
+
+    def set_async_event_emitter(
+        self, emitter: Callable[[DataEvent], Awaitable[None]]
+    ) -> None:
+        """Set the async event emitter callback (called by DataHub).
+
+        When set, emit_event() will await this instead of the sync emitter,
+        ensuring events from a single poll cycle are processed in order.
+
+        Args:
+            emitter: Async function to call when emitting events
+        """
+        self._async_event_emitter = emitter
 
     def set_poll_identifier(self, identifier: dict[str, Any]) -> None:
         """Set identifier for polling (e.g., game_id, event_id).
@@ -127,10 +142,15 @@ class DataStore(ABC):
     async def emit_event(self, event: DataEvent) -> None:
         """Emit an event to DataHub.
 
+        Prefers the async emitter (sequential, preserves ordering within a poll
+        cycle) over the sync emitter (fire-and-forget, no ordering guarantee).
+
         Args:
             event: Event to emit
         """
-        if self._event_emitter:
+        if self._async_event_emitter:
+            await self._async_event_emitter(event)
+        elif self._event_emitter:
             self._event_emitter(event)
 
     async def start_polling(self) -> None:

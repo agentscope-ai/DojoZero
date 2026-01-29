@@ -202,6 +202,7 @@ async def _build_trial_spec(
 
         if websearch_suffixes:
             cfg["websearch_event_types"] = websearch_suffixes
+            cfg["game_id"] = params.espn_game_id
             if home_team_name:
                 cfg["home_team_name"] = home_team_name
             if away_team_name:

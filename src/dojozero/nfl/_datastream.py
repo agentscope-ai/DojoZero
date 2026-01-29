@@ -53,6 +53,7 @@ class NFLPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
     home_team_name: str  # Full team name for search queries
     away_team_name: str
     game_date: str
+    game_id: str  # ESPN game ID for populating event.game_id
     websearch_event_types: list[
         str
     ]  # Canonical suffixes that need web search (e.g., ["injury_report"])
@@ -97,7 +98,10 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         # Call parent start() which handles DataHub subscription
         await super().start()
 
-        # Trigger web searches in background (after subscription is set up)
+        # Run web searches and await completion so all pre-game insights
+        # are emitted to the hub before stores start polling.  The hub's
+        # lifecycle gate holds back GameStartEvent / play events until
+        # PREGAME insights have been delivered.
         if (
             self._websearch_event_types
             and self._search_api
@@ -105,26 +109,32 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             and not self._search_initialized
         ):
             self._search_initialized = True
-            task = asyncio.create_task(self._run_web_searches())
-            task.add_done_callback(self._handle_task_exception)
+            await self._run_web_searches()
 
     async def _run_web_searches(self) -> None:
-        """Trigger web searches for all configured event classes.
+        """Trigger web searches for all configured event classes in parallel.
 
         Discovers event classes via ``WebSearchEventMixin.__subclasses__()``
-        and matches against the configured event type suffixes.
+        and matches against the configured event type suffixes.  All searches
+        run concurrently via ``asyncio.gather``; results are published to
+        the hub sequentially after all searches complete.
         """
         assert self._search_api is not None
         assert self._game_context is not None
+        search_api = self._search_api
+        game_context = self._game_context
 
         # Resolve event classes from mixin subclass tree
         event_classes = _resolve_websearch_classes(self._websearch_event_types)
         logger.info(
-            "stream '%s' triggering web searches for %d event classes",
+            "stream '%s' triggering %d web searches in parallel",
             self.actor_id,
             len(event_classes),
         )
-        for event_cls in event_classes:
+
+        async def _fetch_one(
+            event_cls: type[WebSearchEventMixin],
+        ) -> DataEvent | None:
             try:
                 logger.info(
                     "stream '%s' running %s.from_web_search()",
@@ -132,16 +142,11 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
                     event_cls.__name__,
                 )
                 event = await event_cls.from_web_search(
-                    api=self._search_api,
-                    context=self._game_context,
+                    api=search_api,
+                    context=game_context,
                 )
-                if event and self._hub and isinstance(event, DataEvent):
-                    await self._hub.receive_event(event)
-                    logger.info(
-                        "stream '%s' published %s event",
-                        self.actor_id,
-                        event_cls.__name__,
-                    )
+                if event and isinstance(event, DataEvent):
+                    return event
             except Exception as e:
                 logger.error(
                     "stream '%s' failed to fetch %s: %s",
@@ -149,6 +154,20 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
                     event_cls.__name__,
                     e,
                     exc_info=True,
+                )
+            return None
+
+        # Run all searches concurrently
+        results = await asyncio.gather(*[_fetch_one(cls) for cls in event_classes])
+
+        # Publish results sequentially to the hub
+        for event_cls, event in zip(event_classes, results):
+            if event and self._hub:
+                await self._hub.receive_event(event)
+                logger.info(
+                    "stream '%s' published %s event",
+                    self.actor_id,
+                    event_cls.__name__,
                 )
 
     @classmethod
@@ -180,6 +199,7 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
                 home_tricode=config.get("home_team_abbreviation", ""),
                 away_tricode=config.get("away_team_abbreviation", ""),
                 game_date=config.get("game_date", ""),
+                game_id=config.get("game_id", ""),
             )
 
         return cls(
