@@ -84,96 +84,70 @@ class PolymarketStore(DataStore):
         self._game_started: bool = False
 
     def _parse_api_response(
-        self, data: dict[str, Any], identifier: dict[str, Any] | None = None
+        self, all_odds: dict[str, Any], identifier: dict[str, Any] | None = None
     ) -> Sequence[DataEvent]:
         """Parse Polymarket API response into DataEvents.
 
         Args:
-            data: API response data
+            all_odds: Dictionary from fetch_odds_from_event() with structure:
+                     {
+                         "moneyline": MarketOddsData | None,
+                         "spreads": list[MarketOddsData],
+                         "totals": list[MarketOddsData]
+                     }
             identifier: Optional identifier dict (e.g., {"espn_game_id": "401810490"})
-                       Used to ensure event_id matches espn_game_id for consistency
+                       Used to ensure game_id matches espn_game_id for consistency
         """
+        import math
         from datetime import datetime, timezone
 
         events = []
 
-        # Collect all odds data (moneyline, spreads, totals) and combine into a single OddsUpdateEvent
-        moneyline_data = None
-        spread_odds_list: list[MarketOddsData] = []
-        total_odds_list: list[MarketOddsData] = []
+        # Extract Pydantic models directly from the structure
+        moneyline_data: MarketOddsData | None = all_odds.get("moneyline")
+        spread_odds_list: list[MarketOddsData] = all_odds.get("spreads", [])
+        total_odds_list: list[MarketOddsData] = all_odds.get("totals", [])
 
-        # Check for odds_update (backward compatibility - moneyline only)
-        if "odds_update" in data:
-            odds_data = data["odds_update"]
-            # Only use if it doesn't have market_type or if market_type is moneyline
-            market_type = odds_data.get("market_type", "moneyline")
-            if market_type == "moneyline" or "market_type" not in odds_data:
-                moneyline_data = odds_data
-
-        # Check for odds_update_moneyline
-        if "odds_update_moneyline" in data:
-            moneyline_data = data["odds_update_moneyline"]
-
-        # Check for odds_update_spreads (handle both single entry and multiple indexed entries)
-        # Look for all keys matching odds_update_spreads_* pattern
-        # Use a set to track seen spread values to avoid duplicates
+        # Deduplicate spreads and totals by line value
         seen_spreads: set[float] = set()
-        spread_keys = [k for k in data.keys() if k.startswith("odds_update_spreads")]
-        for spread_key in spread_keys:
-            spread_data = data[spread_key]
-            line = spread_data.get("line")
-            if line is not None:
-                try:
-                    spread_value = float(line)
-                    # Skip if we've already seen this spread value (deduplicate)
-                    if spread_value in seen_spreads:
-                        continue
-                    seen_spreads.add(spread_value)
+        deduplicated_spreads: list[MarketOddsData] = []
+        for spread_odds in spread_odds_list:
+            if spread_odds.line is not None:
+                # Pydantic ensures line is a float, but check for NaN/inf
+                if math.isfinite(spread_odds.line):
+                    if spread_odds.line not in seen_spreads:
+                        seen_spreads.add(spread_odds.line)
+                        deduplicated_spreads.append(spread_odds)
 
-                    # Create MarketOddsData from the spread data
-                    spread_odds = MarketOddsData.model_validate(spread_data)
-                    spread_odds_list.append(spread_odds)
-                except (ValueError, TypeError) as e:
-                    logger.debug(
-                        "Failed to create MarketOddsData from %s: %s", spread_key, e
-                    )
-                    pass
-
-        # Check for odds_update_totals (handle both single entry and multiple indexed entries)
-        # Look for all keys matching odds_update_totals_* pattern
-        # Use a set to track seen total values to avoid duplicates
         seen_totals: set[float] = set()
-        total_keys = [k for k in data.keys() if k.startswith("odds_update_totals")]
-        for total_key in total_keys:
-            total_data = data[total_key]
-            line = total_data.get("line")
-            if line is not None:
-                try:
-                    total_value = float(line)
-                    # Skip if we've already seen this total value (deduplicate)
-                    if total_value in seen_totals:
-                        continue
-                    seen_totals.add(total_value)
+        deduplicated_totals: list[MarketOddsData] = []
+        for total_odds in total_odds_list:
+            if total_odds.line is not None:
+                # Pydantic ensures line is a float, but check for NaN/inf
+                if math.isfinite(total_odds.line):
+                    if total_odds.line not in seen_totals:
+                        seen_totals.add(total_odds.line)
+                        deduplicated_totals.append(total_odds)
 
-                    # Create MarketOddsData from the total data
-                    total_odds = MarketOddsData.model_validate(total_data)
-                    total_odds_list.append(total_odds)
-                except (ValueError, TypeError) as e:
-                    logger.debug(
-                        "Failed to create MarketOddsData from %s: %s", total_key, e
-                    )
-                    pass
+        # Use the deduplicated lists
+        spread_odds_list = deduplicated_spreads
+        total_odds_list = deduplicated_totals
 
         # Create a single OddsUpdateEvent with all the data combined
         if moneyline_data or spread_odds_list or total_odds_list:
             timestamp = datetime.now(timezone.utc)
 
-            # Use espn_game_id from identifier to ensure consistency with game events
+            # Use espn_game_id from identifier - this is the ESPN game ID, not Polymarket market_id
+            # The game_id in OddsUpdateEvent should always be the ESPN game ID for consistency
             if identifier and "espn_game_id" in identifier:
                 game_id = identifier["espn_game_id"]
             else:
-                # Fallback to API response data
-                game_id = odds_data.get("event_id") or odds_data.get("market_id", "")
+                # If no ESPN game ID is provided, use empty string (should not happen in normal operation)
+                game_id = ""
+                logger.warning(
+                    "No espn_game_id in identifier when creating OddsUpdateEvent. "
+                    "Using empty string for game_id."
+                )
 
             # Extract tricodes from identifier (set by trial metadata)
             home_tricode = (identifier or {}).get("home_tricode", "")
@@ -186,40 +160,20 @@ class PolymarketStore(DataStore):
             away_probability = 0.0
 
             if moneyline_data:
-                home_odds = float(moneyline_data.get("home_odds", 1.0))
-                away_odds = float(moneyline_data.get("away_odds", 1.0))
-                home_probability = float(moneyline_data.get("home_probability", 0.0))
-                away_probability = float(moneyline_data.get("away_probability", 0.0))
-                # Use event_id from moneyline data if not set
-                if not event_id:
-                    event_id = moneyline_data.get("event_id") or moneyline_data.get(
-                        "market_id", ""
-                    )
+                # moneyline_data is now a MarketOddsData model
+                home_odds = moneyline_data.home_odds
+                away_odds = moneyline_data.away_odds
+                home_probability = moneyline_data.home_probability
+                away_probability = moneyline_data.away_probability
+                # game_id is already set from identifier (ESPN game ID) above
 
-            # Convert MarketOddsData to broker-expected format
-            # For spreads: {"spread": line, "home_odds": home_odds, "away_odds": away_odds}
-            # For totals: {"total": line, "over_odds": home_odds, "under_odds": away_odds}
-            spread_updates_dict: list[dict[str, Any]] = []
-            for spread_odds in spread_odds_list:
-                if spread_odds.line is not None:
-                    spread_updates_dict.append(
-                        {
-                            "spread": spread_odds.line,
-                            "home_odds": spread_odds.home_odds,
-                            "away_odds": spread_odds.away_odds,
-                        }
-                    )
-
-            total_updates_dict: list[dict[str, Any]] = []
-            for total_odds in total_odds_list:
-                if total_odds.line is not None:
-                    total_updates_dict.append(
-                        {
-                            "total": total_odds.line,
-                            "over_odds": total_odds.home_odds,  # home_odds = over_odds for totals
-                            "under_odds": total_odds.away_odds,  # away_odds = under_odds for totals
-                        }
-                    )
+            # Pass MarketOddsData models directly (type validation happens in MarketOddsData)
+            spread_updates_list: list[MarketOddsData] = [
+                s for s in spread_odds_list if s.line is not None
+            ]
+            total_updates_list: list[MarketOddsData] = [
+                t for t in total_odds_list if t.line is not None
+            ]
 
             events.append(
                 OddsUpdateEvent(
@@ -231,8 +185,8 @@ class PolymarketStore(DataStore):
                     away_odds=away_odds,
                     home_probability=home_probability,
                     away_probability=away_probability,
-                    spread_updates=spread_updates_dict,
-                    total_updates=total_updates_dict,
+                    spread_updates=spread_updates_list,
+                    total_updates=total_updates_list,
                 )
             )
 
@@ -279,10 +233,8 @@ class PolymarketStore(DataStore):
                     f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
                 )
             elif "espn_game_id" in identifier:
-                # For backward compatibility, we can still use event_id
-                # But prefer slug if we can construct it
-                params["event_id"] = identifier["espn_game_id"]
-                # Also try to construct slug if we have the info
+                # Only fetch if we can construct a slug (game_id cannot be used to fetch odds)
+                # Try to construct slug if we have the required info
                 if (
                     "away_tricode" in identifier
                     and "home_tricode" in identifier
@@ -298,12 +250,15 @@ class PolymarketStore(DataStore):
                     params["slug"] = (
                         f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
                     )
+                    # Store game_id for metadata in the result (not for fetching)
+                    params["game_id"] = identifier["espn_game_id"]
+                # If we can't construct a slug, don't set any params (will skip fetching)
 
         # Fetch odds from API
-        data = await self._api.fetch("odds", params if params else None)
+        all_odds = await self._api.fetch("odds", params if params else None)
 
-        # Convert to DataEvents (pass identifier to ensure consistent event_id)
-        events = self._parse_api_response(data, identifier=identifier)
+        # Convert to DataEvents (pass identifier to ensure consistent game_id)
+        events = self._parse_api_response(all_odds, identifier=identifier)
 
         # Record poll time after API call (regardless of whether events were returned)
         # This ensures we don't poll too frequently even if API returns no events

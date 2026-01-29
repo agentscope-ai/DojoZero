@@ -627,18 +627,8 @@ class PolymarketAPI(ExternalAPI):
                     )
                     if odds_data:
                         # Extract line information from the market (for spreads and totals)
-                        line = market.line
-                        if line is not None:
-                            # Update the odds_data with the line value
-                            odds_dict = odds_data.model_dump()
-                            odds_dict["line"] = (
-                                float(line)
-                                if isinstance(line, (int, float, str))
-                                else None
-                            )
-                            odds_data = MarketOddsData(**odds_dict)
-                        # If line is None, odds_data already has line=None, so no update needed
-
+                        # and assign it to the odds data. `market.line` is already `float | None`.
+                        odds_data.line = market.line
                         odds_list.append(odds_data)
                     else:
                         logger.debug(
@@ -660,136 +650,36 @@ class PolymarketAPI(ExternalAPI):
             params = params or {}
             market_url = params.get("market_url")
             slug = params.get("slug")
-            event_id = params.get("event_id")  # Keep for backward compatibility
+            game_id = params.get("game_id")  # Keep for backward compatibility
 
-            # If slug is provided, fetch odds for all market types (moneyline, spreads, totals)
+            # Only fetch if slug is provided (game_id cannot be used to fetch odds)
             if slug:
                 try:
                     all_odds = await self.fetch_odds_from_event(slug)
                     if all_odds:
-                        # Return odds for all market types
-                        result: dict[str, Any] = {}
-                        event_id_value = params.get("event_id") or slug
-
-                        for market_type, odds_data in all_odds.items():
-                            # Handle lists (for spreads and totals) vs single values (for moneyline)
-                            if isinstance(odds_data, list):
-                                # For spreads and totals, create multiple entries
-                                # The store will collect all of them into spread_updates/total_updates lists
-                                for idx, odds_item in enumerate(odds_data):
-                                    odds_dict = odds_item.model_dump()
-                                    result[f"odds_update_{market_type}_{idx}"] = {
-                                        "event_id": event_id_value,
-                                        "market_type": market_type,
-                                        **odds_dict,
-                                    }
-                                # Also create a combined entry for backward compatibility (first one)
-                                if odds_data:
-                                    first_odds_dict = odds_data[0].model_dump()
-                                    result[f"odds_update_{market_type}"] = {
-                                        "event_id": event_id_value,
-                                        "market_type": market_type,
-                                        **first_odds_dict,
-                                    }
-                            else:
-                                # Single MarketOddsData (for moneyline)
-                                odds_dict = odds_data.model_dump()
-                                result[f"odds_update_{market_type}"] = {
-                                    "event_id": event_id_value,
-                                    "market_type": market_type,
-                                    **odds_dict,
-                                }
-
-                        # Also include a general odds_update for backward compatibility (moneyline if available)
-                        if "moneyline" in all_odds:
-                            ml_odds = all_odds["moneyline"]
-                            if isinstance(ml_odds, MarketOddsData):
-                                ml_dict = ml_odds.model_dump()
-                                result["odds_update"] = {
-                                    "event_id": event_id_value,
-                                    "market_type": "moneyline",
-                                    **ml_dict,
-                                }
-                        return result
+                        # Return the result directly - fetch_odds_from_event already returns
+                        # the correct structure: {"moneyline": MarketOddsData, "spreads": [...], "totals": [...]}
+                        return all_odds
                 except Exception as e:
                     logger.error("Failed to fetch odds from slug %s: %s", slug, e)
 
-            # Fallback: if event_id is provided (for backward compatibility), try to use it as slug
-            if event_id and not slug:
-                try:
-                    all_odds = await self.fetch_odds_from_event(event_id)
-                    if all_odds:
-                        # Return odds for all market types
-                        result_fallback: dict[str, Any] = {}
-
-                        for market_type, odds_data in all_odds.items():
-                            # Handle lists (for spreads and totals) vs single values (for moneyline)
-                            if isinstance(odds_data, list):
-                                # For spreads and totals, create multiple entries
-                                for idx, odds_item in enumerate(odds_data):
-                                    odds_dict = odds_item.model_dump()
-                                    result_fallback[
-                                        f"odds_update_{market_type}_{idx}"
-                                    ] = {
-                                        "event_id": event_id,
-                                        "market_type": market_type,
-                                        **odds_dict,
-                                    }
-                                # Also create a combined entry for backward compatibility (first one)
-                                if odds_data:
-                                    first_odds_dict = odds_data[0].model_dump()
-                                    result_fallback[f"odds_update_{market_type}"] = {
-                                        "event_id": event_id,
-                                        "market_type": market_type,
-                                        **first_odds_dict,
-                                    }
-                            else:
-                                # Single MarketOddsData (for moneyline)
-                                odds_dict = odds_data.model_dump()
-                                result_fallback[f"odds_update_{market_type}"] = {
-                                    "event_id": event_id,
-                                    "market_type": market_type,
-                                    **odds_dict,
-                                }
-
-                        if "moneyline" in all_odds:
-                            ml_odds = all_odds["moneyline"]
-                            if isinstance(ml_odds, MarketOddsData):
-                                ml_dict = ml_odds.model_dump()
-                                result_fallback["odds_update"] = {
-                                    "event_id": event_id,
-                                    "market_type": "moneyline",
-                                    **ml_dict,
-                                }
-                        return result_fallback
-                except Exception as e:
-                    logger.error(
-                        "Failed to fetch odds from event_id %s: %s", event_id, e
-                    )
-
-            # Fallback to market_url or slug (for backward compatibility)
-            if market_url or slug:
-                odds_data = await self.fetch_odds_from_market(
-                    market_url=market_url, slug=slug
-                )
+            # Fallback to market_url only (for backward compatibility with market URLs)
+            if market_url:
+                odds_data = await self.fetch_odds_from_market(market_url=market_url)
                 if odds_data:
-                    # Use event_id from params if provided, otherwise use market_id
-                    if not event_id:
-                        event_id = odds_data.market_id
-                    odds_dict = odds_data.model_dump()
+                    # Return in the same format as fetch_odds_from_event
                     return {
-                        "odds_update": {
-                            "event_id": event_id,
-                            **odds_dict,
-                        }
+                        "moneyline": odds_data,
+                        "spreads": [],
+                        "totals": [],
                     }
 
             # No market found - log warning and return empty (don't crash poll loop)
             # This is expected for games without Polymarket markets
             logger.warning(
-                "No Polymarket market found for event_id=%r (market_url=%r, slug=%r). "
-                "This is normal if the market doesn't exist yet or team info is missing.",
-                event_id,
+                "No Polymarket market found (game_id=%r, market_url=%r, slug=%r). "
+                "Slug is required to fetch odds. This is normal if the market doesn't exist yet or team info is missing.",
+                game_id,
                 market_url,
                 slug,
             )

@@ -55,6 +55,13 @@ class GameInitializeEvent(DataEvent):
 
     The broker can initialize the event without odds, then update
     when OddsUpdateEvent arrives.
+
+    Note:
+    - Historically this event used the ``event_id`` field to store the ESPN
+      game identifier.
+    - The betting broker now expects a ``game_id`` attribute on all events.
+    - To keep backward compatibility, both ``game_id`` and ``event_id`` are
+      present and kept in sync.
     """
 
     game_id: str = field(default="")  # ESPN event ID for the game

@@ -32,7 +32,7 @@ async def main():
     # Set up identifier (as would be done by trial metadata)
     store.set_poll_identifier(
         {
-            "espn_game_id": "nfl-sea-ne-2026-02-08",
+            "espn_game_id": "123",
             "home_tricode": "NE",
             "away_tricode": "SEA",
         }
@@ -51,24 +51,37 @@ async def main():
 
     try:
         # Fetch odds for all market types
-        api_response = await api.fetch("odds", {"slug": event_slug})
+        # The API returns: {"moneyline": MarketOddsData | None, "spreads": [...], "totals": [...]}
+        all_odds = await api.fetch("odds", {"slug": event_slug})
 
-        if not api_response:
+        if not all_odds:
             print("⚠ No data returned from API")
             return
 
-        print(f"✓ API returned {len(api_response)} result(s)\n")
-        print("API Response Structure:")
+        print(f"✓ API returned odds data with {len(all_odds)} market type(s)\n")
+        print("API Response Structure (all_odds):")
         print("-" * 80)
+        print("Structure: {")
+        print('  "moneyline": MarketOddsData | None,')
+        print('  "spreads": list[MarketOddsData],')
+        print('  "totals": list[MarketOddsData]')
+        print("}\n")
 
-        # Show the structure of the API response
-        for key, value in sorted(api_response.items()):
-            print(f"\n{key}:")
-            if isinstance(value, dict):
-                # Pretty print the dictionary
-                print(json.dumps(value, indent=2, default=str))
-            else:
-                print(f"  {value}")
+        # Show the actual data
+        for key in ["moneyline", "spreads", "totals"]:
+            value = all_odds.get(key)
+            print(f"{key}:")
+            if key == "moneyline" and value is not None:
+                # Pretty print the MarketOddsData model
+                print(json.dumps(value.model_dump(), indent=2, default=str))
+            elif key in ["spreads", "totals"] and value:
+                print(f"  [{len(value)} item(s)]")
+                for idx, item in enumerate(value):
+                    print(f"  [{idx}]:")
+                    print(json.dumps(item.model_dump(), indent=4, default=str))
+            elif value is None or (isinstance(value, list) and len(value) == 0):
+                print("  None / Empty")
+            print()
 
     except Exception as e:
         print(f"✗ Error fetching from API: {e}")
@@ -83,13 +96,11 @@ async def main():
     print()
 
     # =============================================================================
-    # Part 2: Show how API response is converted to OddsUpdateEvent
+    # Part 2: Show how API response (all_odds) is converted to OddsUpdateEvent
     # =============================================================================
     try:
-        # Parse the API response into events (as the store would do)
-        events = store._parse_api_response(
-            api_response, identifier=store._poll_identifier
-        )
+        # Parse the API response (all_odds) into events (as the store would do)
+        events = store._parse_api_response(all_odds, identifier=store._poll_identifier)
 
         if not events:
             print("⚠ No events generated from API response")
@@ -101,7 +112,7 @@ async def main():
             if isinstance(event, OddsUpdateEvent):
                 print("OddsUpdateEvent:")
                 print("-" * 80)
-                print(f"  Event ID: {event.event_id}")
+                print(f"  GAME ID: {event.game_id}")
                 print(f"  Timestamp: {event.timestamp}")
                 print(f"  Home Tricode: {event.home_tricode}")
                 print(f"  Away Tricode: {event.away_tricode}")
@@ -113,18 +124,18 @@ async def main():
                 print(f"\n  Spread Updates: {len(event.spread_updates)}")
                 if event.spread_updates:
                     for spread in event.spread_updates:
-                        print(f"    - Spread: {spread['spread']}")
-                        print(f"      Home Odds: {spread['home_odds']:.4f}")
-                        print(f"      Away Odds: {spread['away_odds']:.4f}")
+                        print(f"    - Spread: {spread.line}")
+                        print(f"      Home Odds: {spread.home_odds:.4f}")
+                        print(f"      Away Odds: {spread.away_odds:.4f}")
                 else:
                     print("    (none)")
 
                 print(f"\n  Total Updates: {len(event.total_updates)}")
                 if event.total_updates:
                     for total in event.total_updates:
-                        print(f"    - Total: {total['total']}")
-                        print(f"      Over Odds: {total['over_odds']:.4f}")
-                        print(f"      Under Odds: {total['under_odds']:.4f}")
+                        print(f"    - Total: {total.line}")
+                        print(f"      Over Odds: {total.home_odds:.4f}")
+                        print(f"      Under Odds: {total.away_odds:.4f}")
                 else:
                     print("    (none)")
 
@@ -134,15 +145,15 @@ async def main():
                 event_dict = {
                     "event_type": event.event_type,
                     "timestamp": event.timestamp.isoformat(),
-                    "event_id": event.event_id,
+                    "game_id": event.game_id,
                     "home_tricode": event.home_tricode,
                     "away_tricode": event.away_tricode,
                     "home_odds": event.home_odds,
                     "away_odds": event.away_odds,
                     "home_probability": event.home_probability,
                     "away_probability": event.away_probability,
-                    "spread_updates": event.spread_updates,
-                    "total_updates": event.total_updates,
+                    "spread_updates": [s.model_dump() for s in event.spread_updates],
+                    "total_updates": [t.model_dump() for t in event.total_updates],
                 }
                 print(json.dumps(event_dict, indent=2, default=str))
 
