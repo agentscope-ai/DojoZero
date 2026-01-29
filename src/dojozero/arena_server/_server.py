@@ -26,7 +26,6 @@ Configuration:
 """
 
 import asyncio
-import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -39,13 +38,26 @@ from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from dojozero.core._models import (
     AgentAction,
+    AgentActionsResponse,
     AgentInfo,
     BettingResultSpan,
+    GameCardData,
+    GamesResponse,
+    LandingResponse,
     LeaderboardEntry,
+    LeaderboardResponse,
+    StatsResponse,
+    TrialDetailResponse,
     TrialLifecycleSpan,
+    TrialListItem,
+    WSHeartbeatMessage,
+    WSSnapshotMessage,
+    WSSpanMessage,
+    WSTrialEndedMessage,
     deserialize_span,
     serialize_span_for_ws,
 )
@@ -54,65 +66,134 @@ from dojozero.core._tracing import (
     TraceReader,
     create_trace_reader,
 )
-from dojozero.data._models import GameInitializeEvent
-from dojozero.data._models import TeamIdentity
+from dojozero.data._models import GameInitializeEvent, TeamIdentity
 
-# NBA team data lookup: tricode -> {name, city, color}
+# NBA team data lookup: tricode -> TeamIdentity
 # Used to fill in team details when not available in trial metadata
-_NBA_TEAMS: dict[str, dict[str, str]] = {
-    "ATL": {"name": "Hawks", "city": "Atlanta", "color": "#E03A3E"},
-    "BOS": {"name": "Celtics", "city": "Boston", "color": "#007A33"},
-    "BKN": {"name": "Nets", "city": "Brooklyn", "color": "#000000"},
-    "CHA": {"name": "Hornets", "city": "Charlotte", "color": "#1D1160"},
-    "CHI": {"name": "Bulls", "city": "Chicago", "color": "#CE1141"},
-    "CLE": {"name": "Cavaliers", "city": "Cleveland", "color": "#860038"},
-    "DAL": {"name": "Mavericks", "city": "Dallas", "color": "#00538C"},
-    "DEN": {"name": "Nuggets", "city": "Denver", "color": "#0E2240"},
-    "DET": {"name": "Pistons", "city": "Detroit", "color": "#C8102E"},
-    "GSW": {"name": "Warriors", "city": "Golden State", "color": "#1D428A"},
-    "HOU": {"name": "Rockets", "city": "Houston", "color": "#CE1141"},
-    "IND": {"name": "Pacers", "city": "Indiana", "color": "#002D62"},
-    "LAC": {"name": "Clippers", "city": "Los Angeles", "color": "#C8102E"},
-    "LAL": {"name": "Lakers", "city": "Los Angeles", "color": "#552583"},
-    "MEM": {"name": "Grizzlies", "city": "Memphis", "color": "#5D76A9"},
-    "MIA": {"name": "Heat", "city": "Miami", "color": "#98002E"},
-    "MIL": {"name": "Bucks", "city": "Milwaukee", "color": "#00471B"},
-    "MIN": {"name": "Timberwolves", "city": "Minnesota", "color": "#0C2340"},
-    "NOP": {"name": "Pelicans", "city": "New Orleans", "color": "#0C2340"},
-    "NYK": {"name": "Knicks", "city": "New York", "color": "#F58426"},
-    "OKC": {"name": "Thunder", "city": "Oklahoma City", "color": "#007AC1"},
-    "ORL": {"name": "Magic", "city": "Orlando", "color": "#0077C0"},
-    "PHI": {"name": "76ers", "city": "Philadelphia", "color": "#006BB6"},
-    "PHX": {"name": "Suns", "city": "Phoenix", "color": "#1D1160"},
-    "POR": {"name": "Trail Blazers", "city": "Portland", "color": "#E03A3E"},
-    "SAC": {"name": "Kings", "city": "Sacramento", "color": "#5A2D81"},
-    "SAS": {"name": "Spurs", "city": "San Antonio", "color": "#C4CED4"},
-    "TOR": {"name": "Raptors", "city": "Toronto", "color": "#CE1141"},
-    "UTA": {"name": "Jazz", "city": "Utah", "color": "#002B5C"},
-    "WAS": {"name": "Wizards", "city": "Washington", "color": "#002B5C"},
+_NBA_TEAMS: dict[str, TeamIdentity] = {
+    "ATL": TeamIdentity(
+        name="Hawks", tricode="ATL", location="Atlanta", color="#E03A3E"
+    ),
+    "BOS": TeamIdentity(
+        name="Celtics", tricode="BOS", location="Boston", color="#007A33"
+    ),
+    "BKN": TeamIdentity(
+        name="Nets", tricode="BKN", location="Brooklyn", color="#000000"
+    ),
+    "CHA": TeamIdentity(
+        name="Hornets", tricode="CHA", location="Charlotte", color="#1D1160"
+    ),
+    "CHI": TeamIdentity(
+        name="Bulls", tricode="CHI", location="Chicago", color="#CE1141"
+    ),
+    "CLE": TeamIdentity(
+        name="Cavaliers", tricode="CLE", location="Cleveland", color="#860038"
+    ),
+    "DAL": TeamIdentity(
+        name="Mavericks", tricode="DAL", location="Dallas", color="#00538C"
+    ),
+    "DEN": TeamIdentity(
+        name="Nuggets", tricode="DEN", location="Denver", color="#0E2240"
+    ),
+    "DET": TeamIdentity(
+        name="Pistons", tricode="DET", location="Detroit", color="#C8102E"
+    ),
+    "GSW": TeamIdentity(
+        name="Warriors", tricode="GSW", location="Golden State", color="#1D428A"
+    ),
+    "HOU": TeamIdentity(
+        name="Rockets", tricode="HOU", location="Houston", color="#CE1141"
+    ),
+    "IND": TeamIdentity(
+        name="Pacers", tricode="IND", location="Indiana", color="#002D62"
+    ),
+    "LAC": TeamIdentity(
+        name="Clippers", tricode="LAC", location="Los Angeles", color="#C8102E"
+    ),
+    "LAL": TeamIdentity(
+        name="Lakers", tricode="LAL", location="Los Angeles", color="#552583"
+    ),
+    "MEM": TeamIdentity(
+        name="Grizzlies", tricode="MEM", location="Memphis", color="#5D76A9"
+    ),
+    "MIA": TeamIdentity(name="Heat", tricode="MIA", location="Miami", color="#98002E"),
+    "MIL": TeamIdentity(
+        name="Bucks", tricode="MIL", location="Milwaukee", color="#00471B"
+    ),
+    "MIN": TeamIdentity(
+        name="Timberwolves", tricode="MIN", location="Minnesota", color="#0C2340"
+    ),
+    "NOP": TeamIdentity(
+        name="Pelicans", tricode="NOP", location="New Orleans", color="#0C2340"
+    ),
+    "NYK": TeamIdentity(
+        name="Knicks", tricode="NYK", location="New York", color="#F58426"
+    ),
+    "OKC": TeamIdentity(
+        name="Thunder", tricode="OKC", location="Oklahoma City", color="#007AC1"
+    ),
+    "ORL": TeamIdentity(
+        name="Magic", tricode="ORL", location="Orlando", color="#0077C0"
+    ),
+    "PHI": TeamIdentity(
+        name="76ers", tricode="PHI", location="Philadelphia", color="#006BB6"
+    ),
+    "PHX": TeamIdentity(
+        name="Suns", tricode="PHX", location="Phoenix", color="#1D1160"
+    ),
+    "POR": TeamIdentity(
+        name="Trail Blazers", tricode="POR", location="Portland", color="#E03A3E"
+    ),
+    "SAC": TeamIdentity(
+        name="Kings", tricode="SAC", location="Sacramento", color="#5A2D81"
+    ),
+    "SAS": TeamIdentity(
+        name="Spurs", tricode="SAS", location="San Antonio", color="#C4CED4"
+    ),
+    "TOR": TeamIdentity(
+        name="Raptors", tricode="TOR", location="Toronto", color="#CE1141"
+    ),
+    "UTA": TeamIdentity(name="Jazz", tricode="UTA", location="Utah", color="#002B5C"),
+    "WAS": TeamIdentity(
+        name="Wizards", tricode="WAS", location="Washington", color="#002B5C"
+    ),
 }
 
-# NFL team data lookup (for future NFL support)
-_NFL_TEAMS: dict[str, dict[str, str]] = {
-    "KC": {"name": "Chiefs", "city": "Kansas City", "color": "#E31837"},
-    "SF": {"name": "49ers", "city": "San Francisco", "color": "#AA0000"},
-    "BUF": {"name": "Bills", "city": "Buffalo", "color": "#00338D"},
-    "PHI": {"name": "Eagles", "city": "Philadelphia", "color": "#004C54"},
-    "DAL": {"name": "Cowboys", "city": "Dallas", "color": "#003594"},
-    "GB": {"name": "Packers", "city": "Green Bay", "color": "#203731"},
+# NFL team data lookup
+_NFL_TEAMS: dict[str, TeamIdentity] = {
+    "KC": TeamIdentity(
+        name="Chiefs", tricode="KC", location="Kansas City", color="#E31837"
+    ),
+    "SF": TeamIdentity(
+        name="49ers", tricode="SF", location="San Francisco", color="#AA0000"
+    ),
+    "BUF": TeamIdentity(
+        name="Bills", tricode="BUF", location="Buffalo", color="#00338D"
+    ),
+    "PHI": TeamIdentity(
+        name="Eagles", tricode="PHI", location="Philadelphia", color="#004C54"
+    ),
+    "DAL": TeamIdentity(
+        name="Cowboys", tricode="DAL", location="Dallas", color="#003594"
+    ),
+    "GB": TeamIdentity(
+        name="Packers", tricode="GB", location="Green Bay", color="#203731"
+    ),
 }
 
+_DEFAULT_TEAM_COLOR = "#666666"
 
-def _get_team_info(tricode: str, league: str = "NBA") -> dict[str, str]:
-    """Get team info by tricode.
 
-    Returns dict with name, city, color. Falls back to defaults if not found.
+def _get_team_identity(tricode: str, league: str = "NBA") -> TeamIdentity:
+    """Get team identity by tricode.
+
+    Returns TeamIdentity from static lookup. Falls back to a minimal identity
+    with the tricode as the name if not found.
     """
     teams = _NBA_TEAMS if league == "NBA" else _NFL_TEAMS
     if tricode in teams:
-        return {**teams[tricode], "abbrev": tricode}
-    # Fallback for unknown teams
-    return {"name": tricode, "city": "", "color": "#666666", "abbrev": tricode}
+        return teams[tricode]
+    return TeamIdentity(name=tricode, tricode=tricode, color=_DEFAULT_TEAM_COLOR)
 
 
 # Agent color palette for visual distinction
@@ -144,25 +225,6 @@ def _get_agent_info(agent_id: str, agent_name: str | None = None) -> AgentInfo:
         avatar=avatar,
         color=_AGENT_COLORS[color_idx],
     )
-
-
-def _team_identity_to_dict(team: TeamIdentity | str) -> dict[str, str]:
-    """Convert TeamIdentity to the camelCase dict format the frontend expects.
-
-    Falls back to a minimal dict if team is a plain string (legacy path).
-    """
-    if isinstance(team, str):
-        return {"name": team, "city": "", "color": "#666666", "abbrev": ""}
-    return {
-        "name": team.name or "",
-        "city": team.location or "",
-        "color": team.color or "#666666",
-        "abbrev": team.tricode or "",
-        "alternateColor": team.alternate_color or "",
-        "logoUrl": team.logo_url or "",
-        "record": team.record or "",
-        "teamId": team.team_id or "",
-    }
 
 
 LOGGER = logging.getLogger("dojozero.arena_server")
@@ -207,28 +269,26 @@ class SpanBroadcaster:
         """Broadcast a span to all clients subscribed to a trial.
 
         Deserializes the raw SpanData into a typed model and sends
-        ``{type, trial_id, timestamp, category, data}`` to clients.
-        Unrecognized spans are silently dropped.
+        a WSSpanMessage to clients. Unrecognized spans are silently dropped.
         """
         typed = deserialize_span(span)
         if typed is None:
             return
         ws_payload = serialize_span_for_ws(typed)
-        message = {
-            "type": WSMessageType.SPAN,
-            "trial_id": trial_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            **ws_payload,
-        }
+        message = WSSpanMessage(
+            trial_id=trial_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            category=ws_payload.get("category", ""),
+            data=ws_payload.get("data", {}),
+        )
         await self._send_to_trial(trial_id, message)
 
     async def broadcast_trial_ended(self, trial_id: str) -> None:
         """Notify all clients that a trial has ended."""
-        message = {
-            "type": WSMessageType.TRIAL_ENDED,
-            "trial_id": trial_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
+        message = WSTrialEndedMessage(
+            trial_id=trial_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
         await self._send_to_trial(trial_id, message)
 
     async def send_snapshot(
@@ -240,25 +300,21 @@ class SpanBroadcaster:
         """Send a snapshot of recent spans to a specific client.
 
         Deserializes each raw SpanData into a typed model and sends
-        ``{type, trial_id, timestamp, data: {items: [...]}}`` where each
-        item is ``{category, data}``.
+        a WSSnapshotMessage with all items.
         """
         items = []
         for span in spans:
             typed = deserialize_span(span)
             if typed is not None:
                 items.append(serialize_span_for_ws(typed))
-        message = {
-            "type": WSMessageType.SNAPSHOT,
-            "trial_id": trial_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "data": {
-                "items": items,
-            },
-        }
+        message = WSSnapshotMessage(
+            trial_id=trial_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            data={"items": items},
+        )
         await self._send_to_client(websocket, message)
 
-    async def _send_to_trial(self, trial_id: str, message: dict[str, Any]) -> None:
+    async def _send_to_trial(self, trial_id: str, message: BaseModel) -> None:
         """Send a message to all clients subscribed to a trial."""
         async with self._lock:
             clients = list(self._clients.get(trial_id, set()))
@@ -266,7 +322,7 @@ class SpanBroadcaster:
         if not clients:
             return
 
-        text = json.dumps(message, default=str)
+        text = message.model_dump_json(by_alias=True)
         disconnected: list[WebSocket] = []
 
         for websocket in clients:
@@ -281,11 +337,11 @@ class SpanBroadcaster:
     async def _send_to_client(
         self,
         websocket: WebSocket,
-        message: dict[str, Any],
+        message: BaseModel,
     ) -> None:
         """Send a message to a specific client."""
         try:
-            text = json.dumps(message, default=str)
+            text = message.model_dump_json(by_alias=True)
             await websocket.send_text(text)
         except Exception as e:
             LOGGER.warning("Failed to send message to client: %s", e)
@@ -388,17 +444,17 @@ class LandingPageCache:
     async def get_stats(
         self,
         fetcher: Any,
-    ) -> dict[str, Any]:
+    ) -> StatsResponse:
         """Get cached stats or fetch if expired."""
         async with self._lock:
             if self._stats is not None and self._stats.is_valid():
                 LOGGER.debug("Cache hit: stats")
                 return self._stats.data
 
-        data = await fetcher()
+        data: StatsResponse = await fetcher()
 
         # Only cache non-empty results
-        if data and any(data.values()):
+        if data.games_played or data.live_now or data.wagered_today:
             async with self._lock:
                 self._stats = CacheEntry(
                     data=data,
@@ -482,19 +538,17 @@ class LandingPageCache:
     async def get_games(
         self,
         fetcher: Any,
-    ) -> dict[str, Any]:
+    ) -> GamesResponse:
         """Get cached games list or fetch if expired."""
         async with self._lock:
             if self._games is not None and self._games.is_valid():
                 LOGGER.debug("Cache hit: games")
                 return self._games.data
 
-        data = await fetcher()
+        data: GamesResponse = await fetcher()
 
-        # Only cache non-empty results (check if any game lists have data)
-        has_data = data and any(
-            data.get(key) for key in ["liveGames", "upcomingGames", "completedGames"]
-        )
+        # Only cache non-empty results
+        has_data = data.live_games or data.upcoming_games or data.completed_games
         if has_data:
             async with self._lock:
                 self._games = CacheEntry(
@@ -634,17 +688,32 @@ async def _extract_trial_info_from_traces(
     return {"phase": phase, "metadata": metadata, "game_init": game_init}
 
 
+def _resolve_team_identity(
+    team: TeamIdentity | str,
+    fallback_tricode: str,
+    fallback_name: str,
+    league: str,
+) -> TeamIdentity:
+    """Resolve a team to a TeamIdentity, applying fallbacks as needed."""
+    if isinstance(team, TeamIdentity) and team:
+        # Ensure tricode is populated
+        if not team.tricode and fallback_tricode:
+            return team.model_copy(update={"tricode": fallback_tricode})
+        return team
+    # Fallback to static lookup, then override name if provided
+    identity = _get_team_identity(fallback_tricode, league)
+    if fallback_name and fallback_name != identity.name:
+        return identity.model_copy(update={"name": fallback_name})
+    return identity
+
+
 async def _extract_games_from_trials(
     trace_reader: TraceReader,
     trial_ids: list[str],
-) -> dict[str, Any]:
-    """Extract games list from trials for landing page.
-
-    Returns:
-        dict with "live", "upcoming", "completed" game lists
-    """
-    live_games: list[dict[str, Any]] = []
-    completed_games: list[dict[str, Any]] = []
+) -> GamesResponse:
+    """Extract games list from trials for landing page."""
+    live_games: list[GameCardData] = []
+    completed_games: list[GameCardData] = []
 
     for trial_id in trial_ids:
         try:
@@ -657,58 +726,50 @@ async def _extract_games_from_trials(
         metadata = trial_info["metadata"]
         league = metadata.get("league", "NBA")
 
-        # Extract team tricodes from metadata (default to "TBD" if not present)
         home_tricode = metadata.get("home_team_tricode", "TBD")
         away_tricode = metadata.get("away_team_tricode", "TBD")
 
         # Prefer rich team data from GameInitializeEvent (full TeamIdentity)
         game_init = trial_info.get("game_init")
         if isinstance(game_init, GameInitializeEvent):
-            home_team_info = _team_identity_to_dict(game_init.home_team)
-            away_team_info = _team_identity_to_dict(game_init.away_team)
-            # Ensure abbrev is populated from metadata if missing
-            if not home_team_info.get("abbrev"):
-                home_team_info["abbrev"] = home_tricode
-            if not away_team_info.get("abbrev"):
-                away_team_info["abbrev"] = away_tricode
+            home_team = _resolve_team_identity(
+                game_init.home_team, home_tricode, "", league
+            )
+            away_team = _resolve_team_identity(
+                game_init.away_team, away_tricode, "", league
+            )
         else:
-            # Fallback to static team lookup (legacy spans without GameInitializeEvent)
-            home_team_info = _get_team_info(home_tricode, league)
-            away_team_info = _get_team_info(away_tricode, league)
-            # Override with metadata team names if provided
-            if metadata.get("home_team_name"):
-                home_team_info["name"] = metadata["home_team_name"]
-            if metadata.get("away_team_name"):
-                away_team_info["name"] = metadata["away_team_name"]
+            home_team = _resolve_team_identity(
+                "", home_tricode, metadata.get("home_team_name", ""), league
+            )
+            away_team = _resolve_team_identity(
+                "", away_tricode, metadata.get("away_team_name", ""), league
+            )
 
-        # Extract game data from trial metadata
-        game_data: dict[str, Any] = {
-            "id": trial_id,
-            "league": league,
-            "homeTeam": home_team_info,
-            "awayTeam": away_team_info,
-            "homeScore": metadata.get("home_score", 0),
-            "awayScore": metadata.get("away_score", 0),
-            "status": phase,
-            "date": metadata.get("game_date", ""),
-        }
+        game_card = GameCardData(
+            id=trial_id,
+            league=league,
+            home_team=home_team,
+            away_team=away_team,
+            home_score=metadata.get("home_score", 0),
+            away_score=metadata.get("away_score", 0),
+            status=phase,
+            date=metadata.get("game_date", ""),
+            quarter=metadata.get("quarter", "") if phase == "running" else "",
+            clock=metadata.get("clock", "") if phase == "running" else "",
+            winner=metadata.get("winner_agent") if phase == "completed" else None,
+            win_amount=metadata.get("win_amount", 0) if phase == "completed" else 0,
+        )
 
         if phase == "running":
-            game_data["quarter"] = metadata.get("quarter", "")
-            game_data["clock"] = metadata.get("clock", "")
-            game_data["bets"] = []  # Will be populated from spans
-            live_games.append(game_data)
+            live_games.append(game_card)
         elif phase == "completed":
-            # Extract winner info from game result spans
-            game_data["winner"] = metadata.get("winner_agent", None)
-            game_data["winAmount"] = metadata.get("win_amount", 0)
-            completed_games.append(game_data)
+            completed_games.append(game_card)
 
-    return {
-        "liveGames": live_games,
-        "upcomingGames": [],  # Would need to query from a different source
-        "completedGames": completed_games,
-    }
+    return GamesResponse(
+        live_games=live_games,
+        completed_games=completed_games,
+    )
 
 
 async def _extract_agent_actions(
@@ -794,12 +855,8 @@ async def _extract_agent_actions(
 async def _compute_stats(
     trace_reader: TraceReader,
     trial_ids: list[str],
-) -> dict[str, Any]:
-    """Compute aggregate stats for landing page.
-
-    Returns:
-        dict with gamesPlayed, liveNow, wageredToday
-    """
+) -> StatsResponse:
+    """Compute aggregate stats for landing page."""
     games_played = 0
     live_now = 0
     wagered_today = 0.0
@@ -823,11 +880,11 @@ async def _compute_stats(
         if wagered:
             wagered_today += float(wagered)
 
-    return {
-        "gamesPlayed": games_played,
-        "liveNow": live_now,
-        "wageredToday": int(wagered_today),
-    }
+    return StatsResponse(
+        games_played=games_played,
+        live_now=live_now,
+        wagered_today=int(wagered_today),
+    )
 
 
 async def _compute_leaderboard(
@@ -840,7 +897,17 @@ async def _compute_leaderboard(
     Returns:
         List of agents sorted by winnings (highest first)
     """
-    agent_stats: dict[str, dict[str, Any]] = {}
+
+    # Accumulator for per-agent stats
+    @dataclass
+    class _AgentStats:
+        agent: AgentInfo
+        winnings: float = 0.0
+        wins: int = 0
+        total_bets: int = 0
+        total_wagered: float = 0.0
+
+    agent_stats: dict[str, _AgentStats] = {}
 
     for trial_id in trial_ids:
         try:
@@ -859,34 +926,33 @@ async def _compute_leaderboard(
                 continue
 
             if agent_id not in agent_stats:
-                agent_stats[agent_id] = {
-                    "agent": _get_agent_info(agent_id, typed.agent_name or agent_id),
-                    "winnings": 0.0,
-                    "wins": 0,
-                    "total_bets": 0,
-                    "total_wagered": 0.0,
-                }
+                agent_stats[agent_id] = _AgentStats(
+                    agent=_get_agent_info(agent_id, typed.agent_name or agent_id),
+                )
 
-            agent_stats[agent_id]["winnings"] += typed.payout
-            agent_stats[agent_id]["total_bets"] += 1
-            agent_stats[agent_id]["total_wagered"] += typed.wager
+            acc = agent_stats[agent_id]
+            acc.winnings += typed.payout
+            acc.total_bets += 1
+            acc.total_wagered += typed.wager
             if typed.won:
-                agent_stats[agent_id]["wins"] += 1
+                acc.wins += 1
 
     # Convert to sorted list
     leaderboard: list[LeaderboardEntry] = []
-    for agent_id, stats in agent_stats.items():
-        total_bets = stats["total_bets"]
-        win_rate = (stats["wins"] / total_bets * 100) if total_bets > 0 else 0
-        total_wagered = stats["total_wagered"]
-        roi = (stats["winnings"] / total_wagered * 100) if total_wagered > 0 else 0
+    for stats in agent_stats.values():
+        win_rate = (stats.wins / stats.total_bets * 100) if stats.total_bets > 0 else 0
+        roi = (
+            (stats.winnings / stats.total_wagered * 100)
+            if stats.total_wagered > 0
+            else 0
+        )
 
         leaderboard.append(
             LeaderboardEntry(
-                agent=stats["agent"],
-                winnings=round(stats["winnings"], 2),
+                agent=stats.agent,
+                winnings=round(stats.winnings, 2),
                 winRate=round(win_rate, 1),
-                totalBets=total_bets,
+                totalBets=stats.total_bets,
                 roi=round(roi, 1),
             )
         )
@@ -1017,19 +1083,20 @@ def create_arena_app(
         )
 
         # Build result with phase and metadata extracted from traces
-        result = []
+        result: list[TrialListItem] = []
         for tid in trial_ids:
             trial_info_extracted = await _extract_trial_info_from_traces(
                 state.trace_reader, tid
             )
-            trial_info = {
-                "id": tid,
-                "phase": trial_info_extracted["phase"],
-                "metadata": trial_info_extracted["metadata"],
-            }
-            result.append(trial_info)
+            result.append(
+                TrialListItem(
+                    id=tid,
+                    phase=trial_info_extracted["phase"],
+                    metadata=trial_info_extracted.get("metadata", {}),
+                )
+            )
 
-        return JSONResponse(content=result)
+        return JSONResponse(content=[item.model_dump() for item in result])
 
     @app.get("/api/trials/{trial_id}")
     async def get_trial(trial_id: str) -> JSONResponse:
@@ -1052,12 +1119,8 @@ def create_arena_app(
             if typed is not None:
                 items.append(serialize_span_for_ws(typed))
 
-        return JSONResponse(
-            content={
-                "trial_id": trial_id,
-                "items": items,
-            }
-        )
+        response = TrialDetailResponse(trial_id=trial_id, items=items)
+        return JSONResponse(content=response.model_dump())
 
     # -------------------------------------------------------------------------
     # Landing Page Endpoints (with caching)
@@ -1087,13 +1150,13 @@ def create_arena_app(
         trial_ids = await state.cache.get_trials_list(fetch_trials)
 
         # Fetch stats (cached)
-        async def fetch_stats() -> dict[str, Any]:
+        async def fetch_stats() -> StatsResponse:
             return await _compute_stats(state.trace_reader, trial_ids)
 
         stats = await state.cache.get_stats(fetch_stats)
 
         # Fetch games (cached)
-        async def fetch_games() -> dict[str, Any]:
+        async def fetch_games() -> GamesResponse:
             return await _extract_games_from_trials(state.trace_reader, trial_ids)
 
         games = await state.cache.get_games(fetch_games)
@@ -1104,20 +1167,14 @@ def create_arena_app(
 
         agent_actions = await state.cache.get_agent_actions(fetch_actions)
 
-        return JSONResponse(
-            content={
-                "stats": stats,
-                "liveGames": games["liveGames"],
-                "allGames": (
-                    games["liveGames"]
-                    + games["upcomingGames"]
-                    + games["completedGames"]
-                ),
-                "liveAgentActions": [
-                    a.model_dump(by_alias=True) for a in agent_actions
-                ],
-            }
+        all_games = games.live_games + games.upcoming_games + games.completed_games
+        response = LandingResponse(
+            stats=stats,
+            live_games=games.live_games,
+            all_games=all_games,
+            live_agent_actions=agent_actions,
         )
+        return JSONResponse(content=response.model_dump(by_alias=True))
 
     @app.get("/api/stats")
     async def get_stats(
@@ -1143,11 +1200,11 @@ def create_arena_app(
 
         trial_ids = await state.cache.get_trials_list(fetch_trials)
 
-        async def fetch_stats() -> dict[str, Any]:
+        async def fetch_stats() -> StatsResponse:
             return await _compute_stats(state.trace_reader, trial_ids)
 
         stats = await state.cache.get_stats(fetch_stats)
-        return JSONResponse(content=stats)
+        return JSONResponse(content=stats.model_dump(by_alias=True))
 
     @app.get("/api/games")
     async def get_games(
@@ -1186,16 +1243,16 @@ def create_arena_app(
 
         trial_ids = await state.cache.get_trials_list(fetch_trials)
 
-        async def fetch_games() -> dict[str, Any]:
+        async def fetch_games() -> GamesResponse:
             return await _extract_games_from_trials(state.trace_reader, trial_ids)
 
         games_data = await state.cache.get_games(fetch_games)
 
         # Apply filters
-        all_games = (
-            games_data["liveGames"]
-            + games_data["upcomingGames"]
-            + games_data["completedGames"]
+        all_games: list[GameCardData] = (
+            games_data.live_games
+            + games_data.upcoming_games
+            + games_data.completed_games
         )
 
         if status:
@@ -1205,16 +1262,15 @@ def create_arena_app(
                 "completed": "completed",
             }
             target_status = status_map.get(status, status)
-            all_games = [g for g in all_games if g.get("status") == target_status]
+            all_games = [g for g in all_games if g.status == target_status]
 
         if league:
-            all_games = [
-                g for g in all_games if g.get("league", "").upper() == league.upper()
-            ]
+            all_games = [g for g in all_games if g.league.upper() == league.upper()]
 
+        filtered = all_games[:limit]
         return JSONResponse(
             content={
-                "games": all_games[:limit],
+                "games": [g.model_dump(by_alias=True) for g in filtered],
                 "total": len(all_games),
             }
         )
@@ -1258,10 +1314,9 @@ def create_arena_app(
         # Filter by league if specified (would need to track in agent stats)
         # For now, return all agents
 
+        response = LeaderboardResponse(leaderboard=leaderboard)
         return JSONResponse(
-            content={
-                "leaderboard": [e.model_dump(by_alias=True) for e in leaderboard],
-            }
+            content=response.model_dump(by_alias=True),
         )
 
     @app.get("/api/agent-actions")
@@ -1290,8 +1345,9 @@ def create_arena_app(
 
         actions = await state.cache.get_agent_actions(fetch_actions)
 
+        response = AgentActionsResponse(actions=actions)
         return JSONResponse(
-            content={"actions": [a.model_dump(by_alias=True) for a in actions]},
+            content=response.model_dump(by_alias=True),
         )
 
     # -------------------------------------------------------------------------
@@ -1365,11 +1421,10 @@ def create_arena_app(
                         )
 
                     # Send heartbeat
-                    heartbeat = {
-                        "type": WSMessageType.HEARTBEAT,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-                    await websocket.send_text(json.dumps(heartbeat))
+                    heartbeat = WSHeartbeatMessage(
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                    )
+                    await websocket.send_text(heartbeat.model_dump_json(by_alias=True))
 
         except WebSocketDisconnect:
             LOGGER.info("WebSocket disconnected for trial '%s'", trial_id)

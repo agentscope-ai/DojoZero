@@ -206,12 +206,10 @@ class TestDeserializeEventFromSpan:
 # ---------------------------------------------------------------------------
 
 
-class TestTeamIdentityToDict:
-    """_team_identity_to_dict converts TeamIdentity to frontend dict."""
+class TestTeamIdentitySerialization:
+    """TeamIdentity.model_dump(by_alias=True) produces camelCase frontend dict."""
 
     def test_full_identity(self):
-        from dojozero.arena_server._server import _team_identity_to_dict
-
         team = TeamIdentity(
             team_id="1610612738",
             name="Boston Celtics",
@@ -222,7 +220,7 @@ class TestTeamIdentityToDict:
             logo_url="https://cdn.nba.com/logos/nba/1610612738/primary/L/logo.svg",
             record="42-18",
         )
-        d = _team_identity_to_dict(team)
+        d = team.model_dump(by_alias=True)
         assert d["name"] == "Boston Celtics"
         assert d["city"] == "Boston"
         assert d["color"] == "#007A33"
@@ -231,16 +229,8 @@ class TestTeamIdentityToDict:
         assert d["logoUrl"].startswith("https://")
         assert d["record"] == "42-18"
 
-    def test_string_fallback(self):
-        from dojozero.arena_server._server import _team_identity_to_dict
-
-        d = _team_identity_to_dict("Lakers")
-        assert d["name"] == "Lakers"
-        assert d["color"] == "#666666"
-
     def test_empty_identity(self):
-        from dojozero.arena_server._server import _team_identity_to_dict
-
-        d = _team_identity_to_dict(TeamIdentity())
+        d = TeamIdentity().model_dump(by_alias=True)
         assert d["name"] == ""
-        assert d["color"] == "#666666"
+        assert d["city"] == ""
+        assert d["color"] == ""

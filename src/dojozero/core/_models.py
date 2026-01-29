@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from dojozero.core._tracing import SpanData, deserialize_event_from_span
 
 if TYPE_CHECKING:
-    from dojozero.data._models import DataEvent
+    from dojozero.data._models import DataEvent, TeamIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -433,11 +433,184 @@ def serialize_span_for_ws(model: SpanModel) -> dict[str, Any]:
         return {"category": model.category, "data": model.model_dump(mode="json")}
 
 
+# ============================================================================
+# Arena API Response Models
+# ============================================================================
+
+
+class StatsResponse(BaseModel):
+    """Hero section stats for /api/stats and /api/landing."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    games_played: int = Field(default=0, serialization_alias="gamesPlayed")
+    live_now: int = Field(default=0, serialization_alias="liveNow")
+    wagered_today: int = Field(default=0, serialization_alias="wageredToday")
+
+
+def _empty_team_identity() -> TeamIdentity:
+    """Lazy factory for TeamIdentity default to avoid circular import."""
+    from dojozero.data._models import TeamIdentity as _TI
+
+    return _TI()
+
+
+class GameCardData(BaseModel):
+    """Single game card for landing/games pages."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    id: str
+    league: str = ""
+    home_team: TeamIdentity = Field(
+        default_factory=_empty_team_identity,
+        serialization_alias="homeTeam",
+    )
+    away_team: TeamIdentity = Field(
+        default_factory=_empty_team_identity,
+        serialization_alias="awayTeam",
+    )
+    home_score: int = Field(default=0, serialization_alias="homeScore")
+    away_score: int = Field(default=0, serialization_alias="awayScore")
+    status: str = ""
+    date: str = ""
+    # Live-only fields
+    quarter: str = ""
+    clock: str = ""
+    bets: list[dict[str, Any]] = Field(default_factory=list)
+    # Completed-only fields
+    winner: str | None = None
+    win_amount: float = Field(default=0, serialization_alias="winAmount")
+
+
+class GamesResponse(BaseModel):
+    """Response for /api/games and internal games extraction."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    live_games: list[GameCardData] = Field(
+        default_factory=list, serialization_alias="liveGames"
+    )
+    upcoming_games: list[GameCardData] = Field(
+        default_factory=list, serialization_alias="upcomingGames"
+    )
+    completed_games: list[GameCardData] = Field(
+        default_factory=list, serialization_alias="completedGames"
+    )
+
+
+class TrialListItem(BaseModel):
+    """Single item in /api/trials response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    phase: str = "unknown"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TrialDetailResponse(BaseModel):
+    """Response for /api/trials/{trial_id}."""
+
+    model_config = ConfigDict(frozen=True)
+
+    trial_id: str
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class LandingResponse(BaseModel):
+    """Response for /api/landing."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    stats: StatsResponse
+    live_games: list[GameCardData] = Field(
+        default_factory=list, serialization_alias="liveGames"
+    )
+    all_games: list[GameCardData] = Field(
+        default_factory=list, serialization_alias="allGames"
+    )
+    live_agent_actions: list[AgentAction] = Field(
+        default_factory=list, serialization_alias="liveAgentActions"
+    )
+
+
+class LeaderboardResponse(BaseModel):
+    """Response for /api/leaderboard."""
+
+    model_config = ConfigDict(frozen=True)
+
+    leaderboard: list[LeaderboardEntry] = Field(default_factory=list)
+
+
+class AgentActionsResponse(BaseModel):
+    """Response for /api/agent-actions."""
+
+    model_config = ConfigDict(frozen=True)
+
+    actions: list[AgentAction] = Field(default_factory=list)
+
+
+# ============================================================================
+# WebSocket Message Models
+# ============================================================================
+
+
+class WSSpanMessage(BaseModel):
+    """WebSocket message wrapping a single span."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["span"] = "span"
+    trial_id: str
+    timestamp: str
+    category: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class WSTrialEndedMessage(BaseModel):
+    """WebSocket notification that a trial has ended."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["trial_ended"] = "trial_ended"
+    trial_id: str
+    timestamp: str
+
+
+class WSSnapshotMessage(BaseModel):
+    """WebSocket initial snapshot of all spans."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["snapshot"] = "snapshot"
+    trial_id: str
+    timestamp: str
+    data: dict[str, list[dict[str, Any]]]
+
+
+class WSHeartbeatMessage(BaseModel):
+    """WebSocket keepalive."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["heartbeat"] = "heartbeat"
+    timestamp: str
+
+
 __all__ = [
     # API / Display Models
     "AgentAction",
+    "AgentActionsResponse",
     "AgentInfo",
+    "GameCardData",
+    "GamesResponse",
+    "LandingResponse",
     "LeaderboardEntry",
+    "LeaderboardResponse",
+    "StatsResponse",
+    "TrialDetailResponse",
+    "TrialListItem",
     # Span Models
     "ActorRegistrationSpan",
     "AgentMessageSpan",
@@ -445,6 +618,11 @@ __all__ = [
     "BrokerStateSpan",
     "SpanModel",
     "TrialLifecycleSpan",
+    # WebSocket Models
+    "WSHeartbeatMessage",
+    "WSSnapshotMessage",
+    "WSSpanMessage",
+    "WSTrialEndedMessage",
     # Helpers
     "deserialize_span",
     "serialize_span_for_ws",

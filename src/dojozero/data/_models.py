@@ -48,17 +48,20 @@ class TeamIdentity(BaseModel):
     Used in events, trial metadata, arena server responses, and frontend data.
     Captures all team data from ESPN API at discovery time so downstream
     components never need to re-fetch or hardcode team info.
+
+    Serialization aliases produce camelCase keys matching the frontend contract
+    when serialized with ``model_dump(by_alias=True)``.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    team_id: str = ""
+    team_id: str = Field(default="", serialization_alias="teamId")
     name: str = ""  # Full display name, e.g., "Boston Celtics"
-    tricode: str = ""  # Abbreviation, e.g., "BOS"
-    location: str = ""  # City, e.g., "Boston"
+    tricode: str = Field(default="", serialization_alias="abbrev")  # e.g., "BOS"
+    location: str = Field(default="", serialization_alias="city")  # e.g., "Boston"
     color: str = ""  # Primary hex color
-    alternate_color: str = ""
-    logo_url: str = ""
+    alternate_color: str = Field(default="", serialization_alias="alternateColor")
+    logo_url: str = Field(default="", serialization_alias="logoUrl")
     record: str = ""  # Win-loss record, e.g., "42-18"
 
     def __str__(self) -> str:
@@ -327,8 +330,8 @@ class GameInitializeEvent(GameEvent):
     and ESPN ESPNGameInitializeEvent.
     """
 
-    home_team: TeamIdentity | str = Field(default_factory=TeamIdentity)
-    away_team: TeamIdentity | str = Field(default_factory=TeamIdentity)
+    home_team: TeamIdentity | str = Field(default_factory=lambda: TeamIdentity())
+    away_team: TeamIdentity | str = Field(default_factory=lambda: TeamIdentity())
     venue: VenueInfo = Field(default_factory=VenueInfo)
     game_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     broadcast: str = ""
