@@ -48,6 +48,30 @@ _STRUCTURED_DATA_JSON_PATTERN = re.compile(
 )
 
 
+def _filter_teams(
+    injured_players: dict[str, list[str]],
+    home_team: str,
+    away_team: str,
+) -> dict[str, list[str]]:
+    """Filter injured_players dict to only teams matching the game context.
+
+    Uses case-insensitive substring matching to handle variations like
+    "Grizzlies" vs "Memphis Grizzlies".
+    """
+    relevant = [t.lower() for t in (home_team, away_team) if t]
+    if not relevant:
+        return injured_players
+
+    def _matches(team_key: str) -> bool:
+        key_lower = team_key.lower()
+        for r in relevant:
+            if r in key_lower or key_lower in r:
+                return True
+        return False
+
+    return {k: v for k, v in injured_players.items() if _matches(k)}
+
+
 class WebSearchIntent(str, Enum):
     """Web search query intent types.
 
@@ -69,7 +93,7 @@ class WebSearchEventMixin:
     Subclasses must implement:
     - ``default_search_template`` (ClassVar[str]) — query template with placeholders
     - ``_build_llm_prompt(context_text)`` — returns the LLM prompt string
-    - ``_parse_llm_response(response, query)`` — returns a typed event instance or None
+    - ``_parse_llm_response(response, query, context)`` — returns a typed event instance or None
     """
 
     default_search_template: ClassVar[str]
@@ -129,7 +153,7 @@ class WebSearchEventMixin:
             return None
 
         # 5. Parse into typed event
-        return cls._parse_llm_response(response, query)
+        return cls._parse_llm_response(response, query, context)
 
     @classmethod
     def _format_search_results(cls, results: list[dict[str, Any]]) -> list[str]:
@@ -161,12 +185,15 @@ class WebSearchEventMixin:
         raise NotImplementedError(f"{cls.__name__} must implement _build_llm_prompt()")
 
     @classmethod
-    def _parse_llm_response(cls, response: dict[str, Any], query: str) -> Self | None:
+    def _parse_llm_response(
+        cls, response: dict[str, Any], query: str, context: GameContext
+    ) -> Self | None:
         """Parse Dashscope LLM response into a typed event.
 
         Args:
             response: Dashscope API response dict.
             query: Original search query string.
+            context: GameContext with team/date info for filtering.
 
         Returns:
             Typed event instance or None if parsing failed.
@@ -211,12 +238,12 @@ STRUCTURED_DATA:
   "team2": ["player3", "player4"]
 }}
 
-If a team or player name is not clearly mentioned, use empty lists or omit the team.
+IMPORTANT: ONLY include players from the teams mentioned in the search query above. Do NOT include players from other teams.
 Only include players who are confirmed to be injured/out."""
 
     @classmethod
     def _parse_llm_response(
-        cls, response: dict[str, Any], query: str
+        cls, response: dict[str, Any], query: str, context: GameContext
     ) -> InjuryReportEvent | None:
         summary = ""
         injured_players: dict[str, list[str]] = {}
@@ -265,6 +292,12 @@ Only include players who are confirmed to be injured/out."""
             )
             summary = f"Error generating summary: {error_msg}"
 
+        # Filter to only teams in the game context
+        if injured_players and (context.home_team or context.away_team):
+            injured_players = _filter_teams(
+                injured_players, context.home_team, context.away_team
+            )
+
         return cls(
             query=query,
             summary=summary,
@@ -306,7 +339,7 @@ Rules:
 
     @classmethod
     def _parse_llm_response(
-        cls, response: dict[str, Any], query: str
+        cls, response: dict[str, Any], query: str, context: GameContext
     ) -> PowerRankingEvent | None:
         extracted = extract_json_from_dashscope_response(response, expected_type=dict)
 
@@ -394,7 +427,7 @@ Focus on game predictions, matchup analysis, and expert picks."""
 
     @classmethod
     def _parse_llm_response(
-        cls, response: dict[str, Any], query: str
+        cls, response: dict[str, Any], query: str, context: GameContext
     ) -> ExpertPredictionEvent | None:
         extracted = extract_json_from_dashscope_response(response, expected_type=list)
 
