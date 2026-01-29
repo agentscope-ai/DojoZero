@@ -9,6 +9,12 @@ from dojozero.data.websearch._events import (
     WebSearchEventMixin,
     WebSearchIntent,
 )
+from dojozero.data.websearch._formatters import (
+    WEBSEARCH_EVENT_FORMATTERS,
+    format_expert_prediction,
+    format_injury_report,
+    format_power_ranking,
+)
 from dojozero.data.websearch._store import WebSearchStore
 from dojozero.data.websearch._factory import (
     WebSearchStoreFactory,
@@ -25,4 +31,8 @@ __all__ = [
     "WebSearchIntent",
     "WebSearchStore",
     "WebSearchStoreFactory",
+    "WEBSEARCH_EVENT_FORMATTERS",
+    "format_injury_report",
+    "format_power_ranking",
+    "format_expert_prediction",
 ]

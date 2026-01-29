@@ -11,62 +11,7 @@ from dojozero.data._models import (
     OddsUpdateEvent,
 )
 from dojozero.data.nba._events import NBAGameUpdateEvent, NBAPlayEvent
-from dojozero.data.websearch._events import (
-    ExpertPredictionEvent,
-    InjuryReportEvent,
-    PowerRankingEvent,
-)
-
-
-def _format_injury_summary(event: InjuryReportEvent) -> str:
-    """Format InjuryReportEvent to readable text."""
-    lines = ["[Injury Report Update]"]
-    if event.summary:
-        lines.append(f"\n{event.summary}")
-
-    if event.injured_players:
-        lines.append("\n**Injured Players by Team:**")
-        for team, players in event.injured_players.items():
-            if players:
-                players_str = ", ".join(players)
-                lines.append(f"- {team}: {players_str}")
-
-    return "\n".join(lines)
-
-
-def _format_power_ranking(event: PowerRankingEvent) -> str:
-    """Format PowerRankingEvent to readable text."""
-    lines = ["[Power Rankings Update]"]
-
-    for source, team_rankings in event.rankings.items():
-        lines.append(f"\n**Source: {source}**")
-        for rank_info in team_rankings[:10]:
-            rank = rank_info.get("rank", "?")
-            team = rank_info.get("team", "Unknown")
-            record = rank_info.get("record", "")
-            record_str = f" ({record})" if record else ""
-            lines.append(f"{rank}. {team}{record_str}")
-
-    return "\n".join(lines)
-
-
-def _format_expert_prediction(event: ExpertPredictionEvent) -> str:
-    """Format ExpertPredictionEvent to readable text."""
-    lines = ["[Expert Predictions]"]
-
-    for pred in event.predictions:
-        source = pred.get("source", "Unknown")
-        expert = pred.get("expert", "")
-        prediction = pred.get("prediction", "")
-        confidence = pred.get("confidence", "")
-
-        expert_str = f" ({expert})" if expert else ""
-        conf_str = f" [Confidence: {confidence}]" if confidence else ""
-        lines.append(f"\n**{source}{expert_str}**{conf_str}")
-        if prediction:
-            lines.append(f"{prediction}")
-
-    return "\n".join(lines)
+from dojozero.data.websearch._formatters import WEBSEARCH_EVENT_FORMATTERS
 
 
 def _format_game_initialize(event: GameInitializeEvent) -> str:
@@ -171,9 +116,8 @@ def _format_default(event: DataEvent) -> str:
 
 
 _EVENT_FORMATTERS: dict[str, Any] = {
-    "injury_report": _format_injury_summary,
-    "power_ranking": _format_power_ranking,
-    "expert_prediction": _format_expert_prediction,
+    # Shared web search event formatters
+    **WEBSEARCH_EVENT_FORMATTERS,
     "game_initialize": _format_game_initialize,
     "game_start": _format_game_start,
     "game_result": _format_game_result,
