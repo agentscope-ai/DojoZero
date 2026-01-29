@@ -11,20 +11,22 @@ from dojozero.data._models import (
     OddsUpdateEvent,
 )
 from dojozero.data.nba._events import NBAGameUpdateEvent, NBAPlayEvent
+from dojozero.data.websearch._events import (
+    ExpertPredictionEvent,
+    InjuryReportEvent,
+    PowerRankingEvent,
+)
 
 
-def _format_injury_summary(event: DataEvent) -> str:
-    """Format InjurySummaryEvent to readable text."""
-    summary = getattr(event, "summary", "")
-    injured_players = getattr(event, "injured_players", {})
-
+def _format_injury_summary(event: InjuryReportEvent) -> str:
+    """Format InjuryReportEvent to readable text."""
     lines = ["[Injury Report Update]"]
-    if summary:
-        lines.append(f"\n{summary}")
+    if event.summary:
+        lines.append(f"\n{event.summary}")
 
-    if injured_players:
+    if event.injured_players:
         lines.append("\n**Injured Players by Team:**")
-        for team, players in injured_players.items():
+        for team, players in event.injured_players.items():
             if players:
                 players_str = ", ".join(players)
                 lines.append(f"- {team}: {players_str}")
@@ -32,13 +34,11 @@ def _format_injury_summary(event: DataEvent) -> str:
     return "\n".join(lines)
 
 
-def _format_power_ranking(event: DataEvent) -> str:
+def _format_power_ranking(event: PowerRankingEvent) -> str:
     """Format PowerRankingEvent to readable text."""
-    rankings = getattr(event, "rankings", {})
-
     lines = ["[Power Rankings Update]"]
 
-    for source, team_rankings in rankings.items():
+    for source, team_rankings in event.rankings.items():
         lines.append(f"\n**Source: {source}**")
         for rank_info in team_rankings[:10]:
             rank = rank_info.get("rank", "?")
@@ -50,13 +50,11 @@ def _format_power_ranking(event: DataEvent) -> str:
     return "\n".join(lines)
 
 
-def _format_expert_prediction(event: DataEvent) -> str:
+def _format_expert_prediction(event: ExpertPredictionEvent) -> str:
     """Format ExpertPredictionEvent to readable text."""
-    predictions = getattr(event, "predictions", [])
-
     lines = ["[Expert Predictions]"]
 
-    for pred in predictions:
+    for pred in event.predictions:
         source = pred.get("source", "Unknown")
         expert = pred.get("expert", "")
         prediction = pred.get("prediction", "")
