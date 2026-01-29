@@ -28,10 +28,8 @@ Example:
 
 from dojozero.data.espn._api import ESPNExternalAPI, get_espn_game_url, get_proxy
 from dojozero.data.espn._events import (
-    ESPNCompetitor,
     ESPNGameUpdateEvent,
     ESPNPlayEvent,
-    ESPNTeamInfo,
 )
 from dojozero.data.espn._state_tracker import ESPNStateTracker
 from dojozero.data.espn._stats_events import (
@@ -67,9 +65,6 @@ __all__ = [
     # Events (generic ESPN, lifecycle events are now unified in _models)
     "ESPNGameUpdateEvent",
     "ESPNPlayEvent",
-    # Utility Types
-    "ESPNTeamInfo",
-    "ESPNCompetitor",
     # Stats Insight Events
     "HeadToHeadEvent",
     "TeamStatsEvent",
