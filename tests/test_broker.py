@@ -2229,10 +2229,10 @@ class TestAllowedTools:
         # Should have all tools
         expected_tools = [
             "get_balance",
-            # "get_event",
+            "get_event",
             "place_bet_moneyline",
-            # "place_bet_spread",
-            # "place_bet_total",
+            "place_bet_spread",
+            "place_bet_total",
             "cancel_bet",
             "get_active_bets",
             "get_pending_orders",

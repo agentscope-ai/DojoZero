@@ -10,8 +10,7 @@ from dojozero.betting import (
     BettingAgent as BaseBettingAgent,
     BettingAgentConfig,
 )
-from dojozero.core import RuntimeContext, StreamEvent
-from dojozero.data._models import DataEvent
+from dojozero.core import RuntimeContext
 
 from dojozero.nba._formatters import format_event
 
@@ -30,62 +29,6 @@ class BettingAgent(BaseBettingAgent):
         if kwargs.get("event_formatter") is None:
             kwargs["event_formatter"] = format_event
         super().__init__(*args, **kwargs)
-        # Initialize NBA-specific game context
-        self._game_context = {
-            "home_team": "",
-            "away_team": "",
-            "period": 0,
-            "game_clock": "",
-            "home_score": 0,
-            "away_score": 0,
-            "game_status": "not_started",
-            "latest_odds": {},
-        }
-
-    def _update_game_context(self, events: list[StreamEvent[Any]]) -> None:
-        """Update NBA game context from events."""
-        for event in events:
-            payload = event.payload
-            if not isinstance(payload, DataEvent):
-                continue
-
-            event_type = getattr(payload, "event_type", "")
-
-            if event_type == "game_initialize":
-                self._game_context["home_team"] = getattr(payload, "home_team", "")
-                self._game_context["away_team"] = getattr(payload, "away_team", "")
-                self._game_context["game_status"] = "initialized"
-
-            elif event_type == "game_start":
-                self._game_context["game_status"] = "in_progress"
-
-            elif event_type == "game_update":
-                self._game_context["period"] = getattr(payload, "period", 0)
-                self._game_context["game_clock"] = getattr(payload, "game_clock", "")
-                home_team = getattr(payload, "home_team", {})
-                away_team = getattr(payload, "away_team", {})
-                if isinstance(home_team, dict):
-                    self._game_context["home_score"] = home_team.get("score", 0)
-                if isinstance(away_team, dict):
-                    self._game_context["away_score"] = away_team.get("score", 0)
-
-            elif event_type == "play_by_play":
-                self._game_context["home_score"] = getattr(payload, "home_score", 0)
-                self._game_context["away_score"] = getattr(payload, "away_score", 0)
-                self._game_context["period"] = getattr(payload, "period", 0)
-                self._game_context["game_clock"] = getattr(payload, "clock", "")
-
-            elif event_type == "odds_update":
-                self._game_context["latest_odds"] = {
-                    "home": getattr(payload, "home_odds", 0),
-                    "away": getattr(payload, "away_odds", 0),
-                }
-
-            elif event_type == "game_result":
-                self._game_context["game_status"] = "finished"
-                final_score = getattr(payload, "final_score", {})
-                self._game_context["home_score"] = final_score.get("home", 0)
-                self._game_context["away_score"] = final_score.get("away", 0)
 
     @classmethod
     def from_dict(

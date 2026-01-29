@@ -149,10 +149,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         self._retry_sleep_time = 3
         # Event formatter for converting DataEvents to LLM-friendly text
         self._event_formatter = event_formatter or _default_format_event
-        # Betting history tracking
-        self._bet_log: list[str] = []
-        # Game context for subclasses to populate
-        self._game_context: dict[str, Any] = {}
 
         # Memory compression settings
         self._event_history: deque[str] = deque(maxlen=1000)
@@ -189,10 +185,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             formatter: Function that takes a DataEvent and returns a string
         """
         self._event_formatter = formatter
-
-    def _update_game_context(self, events: list[StreamEvent[Any]]) -> None:
-        """Update game context from events. Subclasses may override."""
-        pass
 
     def _truncate_event(self, text: str) -> str:
         """Truncate event text to max chars."""
@@ -431,9 +423,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Update event count
         self._event_count += len(events)
 
-        # Update game context from events (subclasses may override)
-        self._update_game_context(events)
-
         # update event history
         for event in events:
             payload = event.payload
@@ -575,14 +564,29 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 )
                 return
 
-            # Mark as processing
+            # Mark as processing and queue the current event
             self._is_processing = True
 
-        try:
-            # Process the current event with retry
-            await self._process_events_with_retry([event])
+            # Skip processing if game is finished
+            payload = event.payload
+            if (
+                isinstance(payload, DataEvent)
+                and hasattr(payload, "winner")
+                and hasattr(payload, "final_score")
+            ):
+                logger.info(
+                    "agent '%s' skipping event processing - game finished",
+                    self.actor_id,
+                )
+                self._event_history.append(self._event_formatter(payload))
+                self._is_processing = False
+                return
 
-            # Process any queued events
+            # Add current event to queue with retry_count=0
+            self._event_queue.append((event, 0))
+
+        try:
+            # Process all queued events (including the current one)
             while True:
                 async with self._processing_lock:
                     if not self._event_queue:
@@ -621,8 +625,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         return {
             "events": self._event_count,
             "state": self._state,
-            "bet_log": self._bet_log,
-            "game_context": self._game_context,
             "event_history": list(self._event_history),
             "compressed_context": self._compressed_context,
         }
@@ -634,16 +636,14 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         """
         self._event_count = int(state.get("events", 0))
         self._state = state.get("state", [])
-        self._bet_log = state.get("bet_log", [])
-        self._game_context = state.get("game_context", {})
+
         # Restore memory compression state
         self._event_history = deque(state.get("event_history", []), maxlen=1000)
         self._compressed_context = state.get("compressed_context")
         logger.info(
-            "agent '%s' restored: events_processed=%d, bets=%d, event_history=%d",
+            "agent '%s' restored: events_processed=%d, event_history=%d",
             self.actor_id,
             self._event_count,
-            len(self._bet_log),
             len(self._event_history),
         )
 
