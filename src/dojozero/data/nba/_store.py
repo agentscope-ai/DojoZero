@@ -173,8 +173,13 @@ class NBAStore(DataStore):
                         e,
                     )
 
-            # Only emit GameUpdateEvent if we have team data
-            if has_team_data:
+            # Skip emitting game updates if game is concluded and we've already emitted the final update
+            game_concluded = self._state.is_game_concluded(game_id)
+            final_update_emitted = self._state.has_final_update_emitted(game_id)
+            should_emit_update = not (game_concluded and final_update_emitted)
+
+            # Only emit GameUpdateEvent if we have team data and game hasn't already concluded
+            if has_team_data and should_emit_update:
                 # Get team statistics
                 home_stats = home_team_data.get("statistics", {})
                 away_stats = away_team_data.get("statistics", {})
@@ -242,6 +247,9 @@ class NBAStore(DataStore):
                         ),
                     )
                 )
+                # Mark final update as emitted if game is concluded
+                if game_concluded:
+                    self._state.mark_final_update_emitted(game_id)
 
                 # Also emit GameInitializeEvent if not already emitted (when data becomes available)
                 if not self._state.is_game_initialized(game_id):

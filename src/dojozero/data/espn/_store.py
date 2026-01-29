@@ -343,6 +343,12 @@ class ESPNStore(DataStore):
             else:
                 away_team_data["statistics"] = team_stats.get("statistics", [])
 
+        # Skip emitting game updates if game is concluded and we've already emitted the final update
+        game_concluded = self._state.is_game_concluded(event_id)
+        final_update_emitted = self._state.has_final_update_emitted(event_id)
+        if game_concluded and final_update_emitted:
+            return events
+
         events.append(
             ESPNGameUpdateEvent(
                 timestamp=timestamp,
@@ -359,6 +365,9 @@ class ESPNStore(DataStore):
                 metadata={},
             )
         )
+        # Mark final update as emitted if game is concluded
+        if game_concluded:
+            self._state.mark_final_update_emitted(event_id)
 
         return events
 

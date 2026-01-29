@@ -16,6 +16,11 @@ class GameStateTracker:
     This separation of concerns improves testability and makes state management explicit.
     """
 
+    # Game status codes
+    STATUS_SCHEDULED = 1
+    STATUS_IN_PROGRESS = 2
+    STATUS_FINAL = 3
+
     def __init__(self):
         """Initialize all state tracking variables."""
         self._previous_game_status: dict[str, int] = {}  # game_id -> gameStatus
@@ -29,6 +34,9 @@ class GameStateTracker:
         self._initialized_games: set[str] = (
             set()
         )  # game_id -> True when GameInitializeEvent emitted
+        self._final_update_emitted: set[str] = (
+            set()
+        )  # game_id -> True when final NBAGameUpdateEvent emitted
         # Latest period/clock from play-by-play (used by boxscore updates)
         self._current_period: dict[str, int] = {}
         self._current_clock: dict[str, str] = {}
@@ -52,6 +60,36 @@ class GameStateTracker:
             status: Game status code (1=pre-game, 2=live, 3=finished)
         """
         self._previous_game_status[game_id] = status
+
+    def is_game_concluded(self, game_id: str) -> bool:
+        """Check if game has concluded (status = FINAL).
+
+        Args:
+            game_id: NBA game ID
+
+        Returns:
+            True if game status is FINAL
+        """
+        return self._previous_game_status.get(game_id) == self.STATUS_FINAL
+
+    def has_final_update_emitted(self, game_id: str) -> bool:
+        """Check if final game update has been emitted.
+
+        Args:
+            game_id: NBA game ID
+
+        Returns:
+            True if final NBAGameUpdateEvent has been emitted
+        """
+        return game_id in self._final_update_emitted
+
+    def mark_final_update_emitted(self, game_id: str) -> None:
+        """Mark that final game update has been emitted.
+
+        Args:
+            game_id: NBA game ID
+        """
+        self._final_update_emitted.add(game_id)
 
     def has_seen_event(self, event_id: str) -> bool:
         """Check if event has been processed (deduplication).
