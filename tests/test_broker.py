@@ -1406,7 +1406,7 @@ class TestIntegration:
 
 
 def create_odds_event_with_spreads_totals(
-    event_id: str,
+    game_id: str,
     home_odds: float = 1.95,
     away_odds: float = 2.10,
     spread_updates: list | None = None,
@@ -1416,7 +1416,7 @@ def create_odds_event_with_spreads_totals(
 
     class OddsEvent:
         def __init__(self):
-            self.game_id = event_id  # Changed from event_id to game_id
+            self.game_id = game_id  # Changed from event_id to game_id
             self.home_odds = home_odds
             self.away_odds = away_odds
             self.spread_updates = spread_updates or []
@@ -1448,7 +1448,7 @@ class TestSpreadBetting:
 
         # Set odds with spread updates
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             spread_updates=[
                 {"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90},
                 {"spread": -4.5, "home_odds": 1.85, "away_odds": 1.95},
@@ -1507,7 +1507,7 @@ class TestSpreadBetting:
 
         # Set odds with spread
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             spread_updates=[{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}],
         )
         odds_event = StreamEvent(
@@ -1567,7 +1567,7 @@ class TestSpreadBetting:
 
         # Set odds with spread
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             spread_updates=[{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}],
         )
         odds_event = StreamEvent(
@@ -1627,7 +1627,7 @@ class TestSpreadBetting:
 
         # Set initial spread odds
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             spread_updates=[{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}],
         )
         odds_event = StreamEvent(
@@ -1647,7 +1647,7 @@ class TestSpreadBetting:
 
         # Update spread odds
         updated_odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             spread_updates=[{"spread": -3.5, "home_odds": 1.95, "away_odds": 1.85}],
         )
         updated_odds_event = StreamEvent(
@@ -1687,7 +1687,7 @@ class TestSpreadBetting:
 
         # Set initial spread odds
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             spread_updates=[{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}],
         )
         odds_event = StreamEvent(
@@ -1718,7 +1718,7 @@ class TestSpreadBetting:
 
         # Update spread odds to trigger execution
         updated_odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             spread_updates=[
                 {"spread": -3.5, "home_odds": 1.96, "away_odds": 1.84}
             ],  # 1.96 >= 1.95
@@ -1764,7 +1764,7 @@ class TestTotalBetting:
 
         # Set odds with totals
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             total_updates=[
                 {"total": 220.5, "over_odds": 1.88, "under_odds": 1.88},
                 {"total": 221.5, "over_odds": 1.90, "under_odds": 1.86},
@@ -1819,7 +1819,7 @@ class TestTotalBetting:
 
         # Set odds with totals
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             total_updates=[{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}],
         )
         odds_event = StreamEvent(
@@ -1879,7 +1879,7 @@ class TestTotalBetting:
 
         # Set odds with totals
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             total_updates=[{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}],
         )
         odds_event = StreamEvent(
@@ -1939,7 +1939,7 @@ class TestTotalBetting:
 
         # Set initial total odds
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             total_updates=[{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}],
         )
         odds_event = StreamEvent(
@@ -1959,7 +1959,7 @@ class TestTotalBetting:
 
         # Update total odds
         updated_odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             total_updates=[{"total": 220.5, "over_odds": 1.92, "under_odds": 1.84}],
         )
         updated_odds_event = StreamEvent(
@@ -1999,7 +1999,7 @@ class TestTotalBetting:
 
         # Set initial total odds
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             total_updates=[{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}],
         )
         odds_event = StreamEvent(
@@ -2030,7 +2030,7 @@ class TestTotalBetting:
 
         # Update total odds to trigger execution
         updated_odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             total_updates=[
                 {"total": 220.5, "over_odds": 1.92, "under_odds": 1.84}
             ],  # 1.92 >= 1.90
@@ -2077,7 +2077,7 @@ class TestMultipleSpreadsTotals:
 
         # Set odds with multiple spreads
         odds_payload = create_odds_event_with_spreads_totals(
-            event_id="test_event",
+            game_id="test_event",
             spread_updates=[
                 {"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90},
                 {"spread": -4.5, "home_odds": 1.85, "away_odds": 1.95},
