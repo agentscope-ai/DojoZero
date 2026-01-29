@@ -111,6 +111,9 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             self._search_initialized = True
             await self._run_web_searches()
 
+    # Timeout (seconds) for each individual web search (search + LLM).
+    _WEB_SEARCH_TIMEOUT: float = 120.0
+
     async def _run_web_searches(self) -> None:
         """Trigger web searches for all configured event classes in parallel.
 
@@ -118,6 +121,9 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         and matches against the configured event type suffixes.  All searches
         run concurrently via ``asyncio.gather``; results are published to
         the hub sequentially after all searches complete.
+
+        Each individual search is guarded by ``_WEB_SEARCH_TIMEOUT`` so that
+        a hanging search never blocks the pipeline.
         """
         assert self._search_api is not None
         assert self._game_context is not None
@@ -141,12 +147,22 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
                     self.actor_id,
                     event_cls.__name__,
                 )
-                event = await event_cls.from_web_search(
-                    api=search_api,
-                    context=game_context,
+                event = await asyncio.wait_for(
+                    event_cls.from_web_search(
+                        api=search_api,
+                        context=game_context,
+                    ),
+                    timeout=self._WEB_SEARCH_TIMEOUT,
                 )
                 if event and isinstance(event, DataEvent):
                     return event
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "stream '%s' timed out fetching %s after %.0fs",
+                    self.actor_id,
+                    event_cls.__name__,
+                    self._WEB_SEARCH_TIMEOUT,
+                )
             except Exception as e:
                 logger.error(
                     "stream '%s' failed to fetch %s: %s",
@@ -161,14 +177,23 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         results = await asyncio.gather(*[_fetch_one(cls) for cls in event_classes])
 
         # Publish results sequentially to the hub
+        succeeded = 0
         for event_cls, event in zip(event_classes, results):
             if event and self._hub:
                 await self._hub.receive_event(event)
+                succeeded += 1
                 logger.info(
                     "stream '%s' published %s event",
                     self.actor_id,
                     event_cls.__name__,
                 )
+
+        logger.info(
+            "stream '%s' web searches complete: %d/%d succeeded",
+            self.actor_id,
+            succeeded,
+            len(event_classes),
+        )
 
     @classmethod
     def from_dict(
