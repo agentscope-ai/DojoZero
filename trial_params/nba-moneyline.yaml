@@ -1,10 +1,10 @@
 scenario:
   name: nba
   config:
-    espn_game_id: '401810525'  # ESPN game ID - overridden by nba_trial_runner.py
+    espn_game_id: '401810490'  # ESPN game ID - overridden by nba_trial_runner.py
 
     hub:
-      persistence_file: outputs/401810525.jsonl
+      persistence_file: outputs/nba_betting_events.jsonl
 
     data_streams:
     - id: raw_web_search_stream
