@@ -23,6 +23,7 @@ from dojozero.data._models import (
     OddsUpdateEvent,
     PreGameInsightEvent,
     SpreadOdds,
+    TotalOdds,
     SportEvent,
     StatsInsightEvent,
     TeamIdentity,
@@ -180,6 +181,7 @@ __all__ = [
     "OddsInfo",
     "MoneylineOdds",
     "SpreadOdds",
+    "TotalOdds",
     # Game info models (legacy)
     "GameInfo",
     "TeamInfo",

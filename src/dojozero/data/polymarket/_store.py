@@ -9,6 +9,7 @@ from dojozero.data._models import (
     OddsInfo,
     OddsUpdateEvent,
     SpreadOdds,
+    TotalOdds,
 )
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.polymarket._api import PolymarketAPI
@@ -168,14 +169,30 @@ class PolymarketStore(DataStore):
                     away_odds=moneyline_data.away_odds,
                 )
 
-            # Build SpreadOdds from the first deduplicated spread (primary line)
-            spread: SpreadOdds | None = None
-            if spread_odds_list:
-                primary = spread_odds_list[0]
-                spread = SpreadOdds(
-                    spread=primary.line or 0.0,
-                    home_probability=primary.home_probability,
-                    away_probability=primary.away_probability,
+            # Build SpreadOdds list from all deduplicated spreads
+            spreads: list[SpreadOdds] = []
+            for spread_data in spread_odds_list:
+                spreads.append(
+                    SpreadOdds(
+                        spread=spread_data.line or 0.0,
+                        home_probability=spread_data.home_probability,
+                        away_probability=spread_data.away_probability,
+                        home_odds=spread_data.home_odds,
+                        away_odds=spread_data.away_odds,
+                    )
+                )
+
+            # Build TotalOdds list from all deduplicated totals
+            totals: list[TotalOdds] = []
+            for total_data in total_odds_list:
+                totals.append(
+                    TotalOdds(
+                        total=total_data.line or 0.0,
+                        over_probability=total_data.home_probability,
+                        under_probability=total_data.away_probability,
+                        over_odds=total_data.home_odds,
+                        under_odds=total_data.away_odds,
+                    )
                 )
 
             events.append(
@@ -187,7 +204,8 @@ class PolymarketStore(DataStore):
                     odds=OddsInfo(
                         provider="polymarket",
                         moneyline=moneyline,
-                        spread=spread,
+                        spreads=spreads,
+                        totals=totals,
                     ),
                 )
             )

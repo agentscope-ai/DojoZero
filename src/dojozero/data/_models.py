@@ -107,6 +107,24 @@ class SpreadOdds(BaseModel):
     spread: float = 0.0  # e.g., -6.5 means home favored by 6.5
     home_probability: float = 0.0  # Probability of home covering
     away_probability: float = 0.0
+    home_odds: float = 1.0  # Decimal odds (1 / home_probability)
+    away_odds: float = 1.0  # Decimal odds (1 / away_probability)
+
+
+class TotalOdds(BaseModel):
+    """Over/under (totals) market odds.
+
+    The total line is the combined score threshold.
+    Probabilities and odds describe the over/under outcomes.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    total: float = 0.0  # e.g., 220.5
+    over_probability: float = 0.0
+    under_probability: float = 0.0
+    over_odds: float = 1.0  # Decimal odds (1 / over_probability)
+    under_odds: float = 1.0  # Decimal odds (1 / under_probability)
 
 
 class OddsInfo(BaseModel):
@@ -114,14 +132,15 @@ class OddsInfo(BaseModel):
 
     Each market is optional since providers may not offer all market types,
     and updates may arrive for individual markets independently.
+    Spreads and totals are lists since providers may offer multiple lines.
     """
 
     model_config = ConfigDict(frozen=True)
 
     provider: str = ""  # e.g., "polymarket"
     moneyline: MoneylineOdds | None = None
-    spread: SpreadOdds | None = None
-    # Future: total: TotalOdds | None = None
+    spreads: list[SpreadOdds] = Field(default_factory=list)
+    totals: list[TotalOdds] = Field(default_factory=list)
 
 
 # Type variable for event classes

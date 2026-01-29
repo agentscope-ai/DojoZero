@@ -222,7 +222,7 @@ class NFLStore(DataStore):
                             game_id=event_id,
                             odds=OddsInfo(
                                 provider=provider,
-                                spread=SpreadOdds(spread=spread),
+                                spreads=[SpreadOdds(spread=spread)],
                                 moneyline=MoneylineOdds(
                                     home_odds=float(moneyline_home),
                                     away_odds=float(moneyline_away),

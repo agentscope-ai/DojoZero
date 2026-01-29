@@ -30,7 +30,7 @@ from dojozero.data._models import (
     GameResultEvent,
     OddsUpdateEvent,
 )
-from dojozero.data._models import MoneylineOdds, OddsInfo
+from dojozero.data._models import MoneylineOdds, SpreadOdds, TotalOdds, OddsInfo
 
 pytestmark = pytest.mark.asyncio
 
@@ -1402,18 +1402,53 @@ def create_odds_event_with_spreads_totals(
     spread_updates: list | None = None,
     total_updates: list | None = None,
 ):
-    """Helper to create an OddsUpdateEvent with spread/total updates for testing"""
+    """Helper to create an OddsUpdateEvent with spread/total updates for testing."""
+    moneyline = MoneylineOdds(
+        home_odds=home_odds,
+        away_odds=away_odds,
+        home_probability=1.0 / home_odds if home_odds > 0 else 0.0,
+        away_probability=1.0 / away_odds if away_odds > 0 else 0.0,
+    )
 
-    class OddsEvent:
-        def __init__(self):
-            self.game_id = game_id  # Changed from event_id to game_id
-            self.home_odds = home_odds
-            self.away_odds = away_odds
-            self.spread_updates = spread_updates or []
-            self.total_updates = total_updates or []
-            self.event_type = "odds_update"
+    spreads: list[SpreadOdds] = []
+    if spread_updates:
+        for su in spread_updates:
+            h_odds = su.get("home_odds", 1.0)
+            a_odds = su.get("away_odds", 1.0)
+            spreads.append(
+                SpreadOdds(
+                    spread=su["spread"],
+                    home_probability=1.0 / h_odds if h_odds > 0 else 0.0,
+                    away_probability=1.0 / a_odds if a_odds > 0 else 0.0,
+                    home_odds=h_odds,
+                    away_odds=a_odds,
+                )
+            )
 
-    return OddsEvent()
+    totals: list[TotalOdds] = []
+    if total_updates:
+        for tu in total_updates:
+            over_odds = tu.get("over_odds", 1.0)
+            under_odds = tu.get("under_odds", 1.0)
+            totals.append(
+                TotalOdds(
+                    total=tu["total"],
+                    over_probability=1.0 / over_odds if over_odds > 0 else 0.0,
+                    under_probability=1.0 / under_odds if under_odds > 0 else 0.0,
+                    over_odds=over_odds,
+                    under_odds=under_odds,
+                )
+            )
+
+    return OddsUpdateEvent(
+        game_id=game_id,
+        odds=OddsInfo(
+            provider="test",
+            moneyline=moneyline,
+            spreads=spreads,
+            totals=totals,
+        ),
+    )
 
 
 class TestSpreadBetting:

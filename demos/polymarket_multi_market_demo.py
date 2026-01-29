@@ -130,14 +130,26 @@ async def main():
                     print("\n  Moneyline: (none)")
 
                 # Spread odds
-                sp = event.odds.spread
-                if sp:
-                    print("\n  Spread:")
-                    print(f"    Line: {sp.spread}")
-                    print(f"    Home Probability: {sp.home_probability:.4f}")
-                    print(f"    Away Probability: {sp.away_probability:.4f}")
+                if event.odds.spreads:
+                    for sp in event.odds.spreads:
+                        print(f"\n  Spread (line {sp.spread}):")
+                        print(f"    Home Odds: {sp.home_odds:.4f}")
+                        print(f"    Away Odds: {sp.away_odds:.4f}")
+                        print(f"    Home Probability: {sp.home_probability:.4f}")
+                        print(f"    Away Probability: {sp.away_probability:.4f}")
                 else:
                     print("\n  Spread: (none)")
+
+                # Total odds
+                if event.odds.totals:
+                    for tot in event.odds.totals:
+                        print(f"\n  Total (line {tot.total}):")
+                        print(f"    Over Odds: {tot.over_odds:.4f}")
+                        print(f"    Under Odds: {tot.under_odds:.4f}")
+                        print(f"    Over Probability: {tot.over_probability:.4f}")
+                        print(f"    Under Probability: {tot.under_probability:.4f}")
+                else:
+                    print("\n  Total: (none)")
 
                 # Show the event as it would appear in the stream
                 print("\n  Event Stream Representation:")

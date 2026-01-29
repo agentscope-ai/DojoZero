@@ -428,11 +428,11 @@ class TestPolymarketStoreParseResponse:
         assert event.home_odds is None
         assert event.away_odds is None
         # Spread should be populated in OddsInfo
-        assert event.odds.spread is not None
-        assert event.odds.spread.spread == -4.5
+        assert len(event.odds.spreads) > 0
+        assert event.odds.spreads[0].spread == -4.5
 
     def test_parse_totals_only_creates_event(self, polymarket_store):
-        """Test that totals data alone creates an event (totals not yet in OddsInfo)."""
+        """Test that totals data alone creates an event with TotalOdds in OddsInfo."""
         total = _make_total_odds(line=220.5, home_odds=1.87, away_odds=1.95)
         data = {
             "moneyline": None,
@@ -446,8 +446,11 @@ class TestPolymarketStoreParseResponse:
         assert len(events) == 1
         event = events[0]
         assert event.game_id == "401810490"
-        # Totals not yet modeled in OddsInfo; event is created but no totals field
         assert event.odds.moneyline is None
+        assert len(event.odds.totals) == 1
+        assert event.odds.totals[0].total == 220.5
+        assert event.odds.totals[0].over_odds == 1.87
+        assert event.odds.totals[0].under_odds == 1.95
 
     def test_parse_combined_moneyline_spreads_totals(self, polymarket_store):
         """Test parsing with moneyline, spreads, and totals."""
@@ -479,8 +482,8 @@ class TestPolymarketStoreParseResponse:
         assert event.odds.moneyline is not None
         assert event.odds.moneyline.home_probability == 0.6
         assert event.odds.moneyline.away_probability == 0.4
-        assert event.odds.spread is not None
-        assert event.odds.spread.spread == -4.5
+        assert len(event.odds.spreads) > 0
+        assert event.odds.spreads[0].spread == -4.5
 
     def test_parse_multiple_spreads(self, polymarket_store):
         """Test parsing with multiple spread lines uses first (primary) line."""
@@ -501,12 +504,12 @@ class TestPolymarketStoreParseResponse:
 
         assert len(events) == 1
         event = events[0]
-        # Unified model uses first spread as the primary line
-        assert event.odds.spread is not None
-        assert event.odds.spread.spread == -4.5
+        assert len(event.odds.spreads) == 2
+        assert event.odds.spreads[0].spread == -4.5
+        assert event.odds.spreads[1].spread == -5.5
 
     def test_parse_multiple_totals(self, polymarket_store):
-        """Test parsing with multiple total lines creates event (totals not yet in OddsInfo)."""
+        """Test parsing with multiple total lines populates OddsInfo.totals."""
         total1 = _make_total_odds(
             market_id="total1", line=220.5, home_odds=1.87, away_odds=1.95
         )
@@ -525,6 +528,11 @@ class TestPolymarketStoreParseResponse:
         assert len(events) == 1
         event = events[0]
         assert event.game_id == "401810490"
+        assert len(event.odds.totals) == 2
+        assert event.odds.totals[0].total == 220.5
+        assert event.odds.totals[0].over_odds == 1.87
+        assert event.odds.totals[0].under_odds == 1.95
+        assert event.odds.totals[1].total == 221.5
 
     def test_parse_deduplicates_spreads_by_line(self, polymarket_store):
         """Test that duplicate spread lines are deduplicated (uses first)."""
@@ -546,8 +554,8 @@ class TestPolymarketStoreParseResponse:
         assert len(events) == 1
         event = events[0]
         # Should use first deduplicated spread
-        assert event.odds.spread is not None
-        assert event.odds.spread.spread == -4.5
+        assert len(event.odds.spreads) > 0
+        assert event.odds.spreads[0].spread == -4.5
 
     def test_parse_deduplicates_totals_by_line(self, polymarket_store):
         """Test that duplicate total lines are deduplicated."""
@@ -569,6 +577,9 @@ class TestPolymarketStoreParseResponse:
         assert len(events) == 1
         event = events[0]
         assert event.game_id == "401810490"
+        # Duplicates deduplicated to 1 total
+        assert len(event.odds.totals) == 1
+        assert event.odds.totals[0].total == 220.5
 
     def test_parse_filters_spreads_with_none_line(self, polymarket_store):
         """Test that spreads with None line are filtered out."""
@@ -597,8 +608,8 @@ class TestPolymarketStoreParseResponse:
         assert len(events) == 1
         event = events[0]
         # Only valid spread should be used
-        assert event.odds.spread is not None
-        assert event.odds.spread.spread == -4.5
+        assert len(event.odds.spreads) > 0
+        assert event.odds.spreads[0].spread == -4.5
 
 
 class TestPolymarketStoreInit:

@@ -321,14 +321,14 @@ class TestNFLEvents:
             game_id="401671827",
             odds=OddsInfo(
                 provider="Draft Kings",
-                spread=SpreadOdds(spread=-3.5),
+                spreads=[SpreadOdds(spread=-3.5)],
                 moneyline=MoneylineOdds(home_odds=-150.0, away_odds=130.0),
             ),
             home_tricode="KC",
             away_tricode="SF",
         )
 
-        assert event.odds.spread is not None and event.odds.spread.spread == -3.5
+        assert len(event.odds.spreads) > 0 and event.odds.spreads[0].spread == -3.5
         assert event.odds.provider == "Draft Kings"
         assert event.event_type == "event.odds_update"
 
@@ -394,8 +394,8 @@ class TestNFLStoreParseScoreboard:
         odds_events = [e for e in events if isinstance(e, OddsUpdateEvent)]
         assert len(odds_events) == 1
         assert (
-            odds_events[0].odds.spread is not None
-            and odds_events[0].odds.spread.spread == -2.5
+            len(odds_events[0].odds.spreads) > 0
+            and odds_events[0].odds.spreads[0].spread == -2.5
         )
         assert odds_events[0].odds.provider == "Draft Kings"
 
