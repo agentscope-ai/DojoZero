@@ -136,6 +136,7 @@ class WebSearchEventMixin:
         if not results:
             logger.warning("No search results for %s query: '%s'", cls.__name__, query)
             return None
+        logger.info("%s web search returned %d results", cls.__name__, len(results))
 
         # 3. Build LLM prompt from results
         result_texts = cls._format_search_results(results)
@@ -151,6 +152,7 @@ class WebSearchEventMixin:
                 "Dashscope call failed for %s: %s", cls.__name__, e, exc_info=True
             )
             return None
+        logger.info("%s LLM processing complete", cls.__name__)
 
         # 5. Parse into typed event
         event = cls._parse_llm_response(response, query, context)

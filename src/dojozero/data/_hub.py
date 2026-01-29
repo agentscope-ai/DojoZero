@@ -363,11 +363,19 @@ class DataHub:
                 # Run pregame callback with stores paused so web searches
                 # complete before any new poll events arrive.
                 if self._on_game_initialized:
+                    logger.info(
+                        "Pausing stores — waiting on pre-game events for game_id=%s",
+                        event_game_id,
+                    )
                     self._pause_connected_stores()
                     try:
                         await self._on_game_initialized(event_game_id)
                     finally:
                         self._resume_connected_stores()
+                        logger.info(
+                            "Pre-game events complete — resuming stores for game_id=%s",
+                            event_game_id,
+                        )
                 await self._flush_pending_dispatch(event_game_id)
             else:
                 # Already initialized — deliver normally
