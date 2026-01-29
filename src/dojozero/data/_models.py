@@ -194,16 +194,6 @@ class EventTypes(str, Enum):
     PLAYER_STATS = "event.player_stats"
     RECENT_FORM = "event.recent_form"
 
-    # =========================================================================
-    # Legacy aliases (for backward compatibility with existing JSONL files)
-    # =========================================================================
-    PLAY_BY_PLAY = "event.play_by_play"  # Old NBA play event type
-    GAME_UPDATE = "event.game_update"  # Old NBA game update type
-    NFL_GAME_INITIALIZE = "event.nfl_game_initialize"  # Old NFL-specific
-    NFL_GAME_START = "event.nfl_game_start"
-    NFL_GAME_RESULT = "event.nfl_game_result"
-    NFL_ODDS_UPDATE = "event.nfl_odds_update"
-
 
 def register_event(event_class: type[EventT]) -> type[EventT]:
     """No-op decorator, retained for source compatibility.
@@ -212,14 +202,6 @@ def register_event(event_class: type[EventT]) -> type[EventT]:
     ``deserialize_data_event()`` in ``dojozero.data``.
     """
     return event_class
-
-
-def register_legacy_event_type(event_type: str, cls: type["DataEvent"]) -> None:
-    """No-op, retained for source compatibility.
-
-    Legacy event_type mapping is now handled by ``_LEGACY_EVENT_TYPE_MAP``
-    in ``dojozero.data.__init__``.
-    """
 
 
 def convert_datetime_to_iso(obj: Any) -> Any:

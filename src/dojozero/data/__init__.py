@@ -31,7 +31,6 @@ from dojozero.data._models import (
     WebSearchInsightEvent,
     extract_game_id,
     register_event,
-    register_legacy_event_type,
 )
 from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data._processors import CompositeProcessor, DataProcessor
@@ -118,32 +117,15 @@ AnyDataEvent = Annotated[
 
 _data_event_adapter: TypeAdapter[AnyDataEvent] = TypeAdapter(AnyDataEvent)  # type: ignore[type-arg]
 
-# Legacy event_type strings → current canonical strings
-_LEGACY_EVENT_TYPE_MAP: dict[str, str] = {
-    "event.play_by_play": "event.nba_play",
-    "event.game_update": "event.nba_game_update",
-    "event.nfl_game_initialize": "event.game_initialize",
-    "event.nfl_game_start": "event.game_start",
-    "event.nfl_game_result": "event.game_result",
-    "event.nfl_odds_update": "event.odds_update",
-    "event.espn_game_initialize": "event.game_initialize",
-    "event.espn_game_start": "event.game_start",
-    "event.espn_game_end": "event.game_result",
-    "event.espn_odds_update": "event.odds_update",
-}
-
 
 def deserialize_data_event(data: dict) -> DataEvent | None:
     """Deserialize a dict to a typed DataEvent via Pydantic discriminated union.
 
-    Handles legacy event_type strings by mapping them to current canonical values.
     Returns None if event_type is missing or unrecognized.
     """
     event_type = data.get("event_type")
     if not event_type:
         return None
-    if event_type in _LEGACY_EVENT_TYPE_MAP:
-        data = {**data, "event_type": _LEGACY_EVENT_TYPE_MAP[event_type]}
     try:
         return _data_event_adapter.validate_python(data)
     except Exception:
@@ -157,7 +139,6 @@ __all__ = [
     "EventTypes",
     "extract_game_id",
     "register_event",
-    "register_legacy_event_type",
     # Discriminated union + deserializer
     "AnyDataEvent",
     "deserialize_data_event",

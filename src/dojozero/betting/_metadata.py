@@ -15,7 +15,7 @@ Usage:
         hub_id="nba_hub",
         persistence_file="outputs/events.jsonl",
         store_types=("nba", "websearch", "polymarket"),
-        event_types=("event.game_update", "event.odds_update"),
+        event_types=("event.nba_game_update", "event.odds_update"),
     )
 """
 
