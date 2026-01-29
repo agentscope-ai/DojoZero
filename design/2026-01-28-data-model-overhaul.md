@@ -271,9 +271,90 @@ Trial Builder --> BettingTrialMetadata (carries TeamIdentity)
                    Frontend (no hardcoded team lookups needed)
 ```
 
-### Backward Compatibility
+### Betting Domain Models
 
-- Old `event_type` strings (e.g., `"event.play_by_play"`, `"event.nfl_game_initialize"`) are mapped to canonical types via `_LEGACY_EVENT_TYPE_MAP` in `deserialize_data_event()`, so existing JSONL files remain loadable.
-- `to_dict()` and `from_dict()` maintain the same interface (backed by `model_dump()` and `model_validate()`).
-- Arena server response JSON shape is preserved using Pydantic aliases.
-- Legacy Python aliases (`GameInsightEvent`, `WebSearchEvent`, `IntelEvent`, `DataStreamConfig`) and legacy enum values (`EventTypes.INJURY_SUMMARY`, `WebSearchIntent.INJURY_SUMMARY`) have been removed. Use canonical names: `PreGameInsightEvent`, `WebSearchInsightEvent`, `TrialDataStreamConfig`, `injury_report`.
+Betting models live in `src/dojozero/betting/_models.py`, extracted from the broker operator so consumers can import lightweight data contracts without the full broker implementation.
+
+```
+Enums
+    EventStatus          SCHEDULED → LIVE → CLOSED → SETTLED
+    OrderType            MARKET | LIMIT
+    BettingPhase         PRE_GAME | IN_GAME
+    BetStatus            PENDING → ACTIVE → SETTLED | CANCELLED
+    BetOutcome           WIN | LOSS
+    BetType              MONEYLINE | SPREAD | TOTAL
+
+Account (Pydantic)
+    agent_id, balance, created_at, last_updated
+
+BettingEvent (Pydantic)
+    event_id, home_team, away_team, game_time, status
+    home_odds, away_odds, spread_lines, total_lines
+
+BetRequest = BetRequestMoneyline | BetRequestSpread | BetRequestTotal
+    (dataclasses with amount, selection, event_id, order_type, phase)
+
+Bet (Pydantic)
+    bet_id, agent_id, event_id, amount, selection, odds
+    order_type, betting_phase, bet_type, status, outcome, payout
+
+BetExecutedPayload / BetSettledPayload (dataclasses)
+    Lightweight payloads for broker → span emission
+
+Statistics (Pydantic)
+    total_bets, total_wagered, wins, losses, win_rate, net_profit, roi
+```
+
+### Agent & Display Models
+
+Display and API contract models live in `src/dojozero/core/_models.py`, shared between agents (for assembling span data) and the arena server (for serving typed JSON).
+
+```
+AgentInfo               id, name, avatar, color, model
+AgentAction             id, agent: AgentInfo, action, time, timestamp
+LeaderboardEntry        agent, winnings, winRate, totalBets, roi, rank
+```
+
+### Span Deserialization Models
+
+Raw `SpanData` from the tracing layer (SLS/Jaeger) is deserialized into typed models in `src/dojozero/core/_models.py`:
+
+```
+SpanModel = Union[TrialLifecycleSpan, AgentMessageSpan, BrokerStateSpan,
+                  ActorRegistrationSpan, BettingResultSpan, DataEvent]
+
+deserialize_span(span) dispatches by operation_name:
+    trial.started/stopped/terminated  →  TrialLifecycleSpan
+    agent.input/response/tool_result  →  AgentMessageSpan
+    broker.state_update               →  BrokerStateSpan
+    *.registered                      →  ActorRegistrationSpan
+    *result* / *payout*               →  BettingResultSpan
+    event.*                           →  DataEvent (via Pydantic discriminated union)
+```
+
+### Arena Server Response Models
+
+The arena server assembles presentation-layer view models from deserialized spans, static lookups, and computed aggregations. These are **not** SLS span types — they are cross-trial, frontend-facing models.
+
+All arena models live in `src/dojozero/core/_models.py`:
+
+```
+API Response Models
+    StatsResponse           gamesPlayed, liveNow, wageredToday
+    GameCardData            id, league, homeTeam, awayTeam, scores, status, date,
+                            quarter, clock (live), winner, winAmount (completed)
+    GamesResponse           liveGames, upcomingGames, completedGames
+    LandingResponse         stats, liveGames, allGames, liveAgentActions
+    LeaderboardResponse     leaderboard: list[LeaderboardEntry]
+    AgentActionsResponse    actions: list[AgentAction]
+    TrialListItem           id, phase, metadata
+    TrialDetailResponse     trial_id, items
+
+WebSocket Message Models
+    WSSpanMessage           type="span", trial_id, timestamp, category, data
+    WSTrialEndedMessage     type="trial_ended", trial_id, timestamp
+    WSSnapshotMessage       type="snapshot", trial_id, timestamp, data
+    WSHeartbeatMessage      type="heartbeat", timestamp
+```
+
+`TeamIdentity` uses `serialization_alias` so `model_dump(by_alias=True)` produces camelCase keys (`teamId`, `abbrev`, `city`, `alternateColor`, `logoUrl`) matching the frontend contract. The arena server's static team lookup tables (`_NBA_TEAMS`, `_NFL_TEAMS`) return `TeamIdentity` directly — no intermediate dict conversion.
