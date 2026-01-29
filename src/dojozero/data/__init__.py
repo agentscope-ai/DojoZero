@@ -1,12 +1,36 @@
-"""Data infrastructure: Events, Facts, Stores, Processors, and DataHub."""
+"""Data infrastructure: Events, Stores, Processors, and DataHub."""
 
-# Core base classes
+from __future__ import annotations
+
+import logging
+from typing import Annotated, Union
+
+from pydantic import Field, TypeAdapter
+
+# Core base classes and hierarchy
 from dojozero.data._models import (
+    BaseGameUpdateEvent,
+    BasePlayEvent,
+    BaseSegmentEvent,
     DataEvent,
-    DataEventFactory,
-    DataFact,
+    EventTypes,
+    GameEvent,
+    GameInitializeEvent,
+    GameResultEvent,
+    GameStartEvent,
+    MoneylineOdds,
+    OddsInfo,
+    OddsUpdateEvent,
+    PreGameInsightEvent,
+    SpreadOdds,
+    SportEvent,
+    StatsInsightEvent,
+    TeamIdentity,
+    VenueInfo as SharedVenueInfo,
+    WebSearchInsightEvent,
     extract_game_id,
     register_event,
+    register_legacy_event_type,
 )
 from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data._processors import CompositeProcessor, DataProcessor
@@ -16,7 +40,6 @@ from dojozero.data._hub import DataHub
 from dojozero.data._streams import (
     DataHubDataStream,
     DataHubDataStreamConfig,
-    StreamInitializer,
 )
 from dojozero.data._factory import (
     StoreFactory,
@@ -25,78 +48,185 @@ from dojozero.data._factory import (
     list_store_factories,
     build_runtime_context,
 )
-from dojozero.data._config import DataStreamConfig, HubConfig, TrialDataStreamConfig
+from dojozero.data._config import HubConfig, TrialDataStreamConfig
 
 # Domain-specific implementations
-# Import all event classes to trigger auto-registration
 from dojozero.data.nba import (
     NBAExternalAPI,
+    NBAGameUpdateEvent,
+    NBAPlayEvent,
     NBAStore,
-    PlayByPlayEvent,
+)
+from dojozero.data.nfl import (
+    NFLDriveEvent,
+    NFLGameUpdateEvent,
+    NFLPlayEvent,
 )
 from dojozero.data.polymarket import (
-    OddsUpdateEvent,
     PolymarketAPI,
     PolymarketStore,
 )
+from dojozero.data.espn import (
+    ESPNGameUpdateEvent,
+    ESPNPlayEvent,
+    HeadToHeadEvent,
+    PlayerStatsEvent,
+    RecentFormEvent,
+    TeamStatsEvent,
+)
 from dojozero.data.websearch import (
     ExpertPredictionEvent,
-    InjurySummaryEvent,
-    InjurySummaryProcessor,
+    InjuryReportEvent,
     PowerRankingEvent,
     WebSearchAPI,
     WebSearchStore,
-    RawWebSearchEvent,
 )
 
-# Event classes are auto-registered via @register_event decorator
-# No manual registration needed
+logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Pydantic Discriminated Union for all DataEvent subclasses
+# =============================================================================
+
+AnyDataEvent = Annotated[
+    Union[
+        GameInitializeEvent,
+        GameStartEvent,
+        GameResultEvent,
+        OddsUpdateEvent,
+        PreGameInsightEvent,
+        WebSearchInsightEvent,
+        StatsInsightEvent,
+        NBAPlayEvent,
+        NBAGameUpdateEvent,
+        NFLPlayEvent,
+        NFLDriveEvent,
+        NFLGameUpdateEvent,
+        ESPNGameUpdateEvent,
+        ESPNPlayEvent,
+        HeadToHeadEvent,
+        TeamStatsEvent,
+        PlayerStatsEvent,
+        RecentFormEvent,
+        InjuryReportEvent,
+        PowerRankingEvent,
+        ExpertPredictionEvent,
+    ],
+    Field(discriminator="event_type"),
+]
+
+_data_event_adapter: TypeAdapter[AnyDataEvent] = TypeAdapter(AnyDataEvent)  # type: ignore[type-arg]
+
+# Legacy event_type strings → current canonical strings
+_LEGACY_EVENT_TYPE_MAP: dict[str, str] = {
+    "event.play_by_play": "event.nba_play",
+    "event.game_update": "event.nba_game_update",
+    "event.nfl_game_initialize": "event.game_initialize",
+    "event.nfl_game_start": "event.game_start",
+    "event.nfl_game_result": "event.game_result",
+    "event.nfl_odds_update": "event.odds_update",
+    "event.espn_game_initialize": "event.game_initialize",
+    "event.espn_game_start": "event.game_start",
+    "event.espn_game_end": "event.game_result",
+    "event.espn_odds_update": "event.odds_update",
+}
+
+
+def deserialize_data_event(data: dict) -> DataEvent | None:
+    """Deserialize a dict to a typed DataEvent via Pydantic discriminated union.
+
+    Handles legacy event_type strings by mapping them to current canonical values.
+    Returns None if event_type is missing or unrecognized.
+    """
+    event_type = data.get("event_type")
+    if not event_type:
+        return None
+    if event_type in _LEGACY_EVENT_TYPE_MAP:
+        data = {**data, "event_type": _LEGACY_EVENT_TYPE_MAP[event_type]}
+    try:
+        return _data_event_adapter.validate_python(data)
+    except Exception:
+        logger.debug("Failed to deserialize event: %s", event_type, exc_info=True)
+        return None
+
 
 __all__ = [
     # Core base classes
     "DataEvent",
-    "DataEventFactory",
-    "DataFact",
+    "EventTypes",
     "extract_game_id",
     "register_event",
-    # Game info models
+    "register_legacy_event_type",
+    # Discriminated union + deserializer
+    "AnyDataEvent",
+    "deserialize_data_event",
+    # Event hierarchy
+    "SportEvent",
+    "GameEvent",
+    "PreGameInsightEvent",
+    "WebSearchInsightEvent",
+    "StatsInsightEvent",
+    "BasePlayEvent",
+    "BaseSegmentEvent",
+    "BaseGameUpdateEvent",
+    # Unified lifecycle events
+    "GameInitializeEvent",
+    "GameStartEvent",
+    "GameResultEvent",
+    "OddsUpdateEvent",
+    # Shared models
+    "TeamIdentity",
+    "SharedVenueInfo",
+    "OddsInfo",
+    "MoneylineOdds",
+    "SpreadOdds",
+    # Game info models (legacy)
     "GameInfo",
     "TeamInfo",
     "VenueInfo",
+    # Infrastructure
     "DataStore",
     "ExternalAPI",
     "DataProcessor",
     "CompositeProcessor",
     "DataHub",
     "BacktestCoordinator",
-    "ReplayCoordinator",  # Deprecated alias
+    "ReplayCoordinator",
     "DataHubDataStream",
     "DataHubDataStreamConfig",
-    "StreamInitializer",
     # Factory infrastructure
     "StoreFactory",
     "register_store_factory",
     "get_store_factory",
     "list_store_factories",
     "build_runtime_context",
-    # Shared configuration models for trial params
-    "DataStreamConfig",  # Alias for TrialDataStreamConfig
+    # Shared configuration models
     "HubConfig",
     "TrialDataStreamConfig",
     # NBA
-    "PlayByPlayEvent",
+    "NBAPlayEvent",
+    "NBAGameUpdateEvent",
     "NBAExternalAPI",
     "NBAStore",
+    # NFL
+    "NFLPlayEvent",
+    "NFLDriveEvent",
+    "NFLGameUpdateEvent",
+    # ESPN
+    "ESPNGameUpdateEvent",
+    "ESPNPlayEvent",
     # Polymarket
-    "OddsUpdateEvent",
     "PolymarketAPI",
     "PolymarketStore",
     # Web Search
-    "RawWebSearchEvent",
-    "InjurySummaryEvent",
+    "InjuryReportEvent",
     "PowerRankingEvent",
     "ExpertPredictionEvent",
-    "InjurySummaryProcessor",
     "WebSearchAPI",
     "WebSearchStore",
+    # Stats Insights (ESPN)
+    "HeadToHeadEvent",
+    "TeamStatsEvent",
+    "PlayerStatsEvent",
+    "RecentFormEvent",
 ]

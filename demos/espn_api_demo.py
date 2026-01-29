@@ -32,10 +32,9 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
+from dojozero.data._models import GameInitializeEvent
 from dojozero.data.espn import (
     ESPNExternalAPI,
-    ESPNGameInitializeEvent,
-    ESPNOddsUpdateEvent,
     ESPNPlayEvent,
     ESPNStore,
     get_proxy,
@@ -346,17 +345,11 @@ async def demo_store_parsing(sport: str, league: str, event_id: str | None) -> N
         print(f"\nParsed {len(events)} events from scoreboard:\n")
         for event in events[:10]:  # First 10
             print(f"  {event.__class__.__name__}:")
-            if isinstance(event, ESPNGameInitializeEvent):
-                print(f"    {event.away_team} @ {event.home_team}")
+            if isinstance(event, GameInitializeEvent):
+                print(f"    {str(event.away_team)} @ {str(event.home_team)}")
                 print(f"    Game ID: {event.game_id}")
-                print(f"    Sport: {event.sport}/{event.league}")
-                print(f"    Venue: {event.venue}")
-            elif isinstance(event, ESPNOddsUpdateEvent):
-                print(f"    Provider: {event.provider}")
-                print(f"    Spread: {event.spread:+.1f}, O/U: {event.over_under}")
-                print(
-                    f"    ML Home: {event.moneyline_home}, ML Away: {event.moneyline_away}"
-                )
+                print(f"    Sport: {event.sport}")
+                print(f"    Venue: {event.venue.name}")
             print()
 
         # If we have an event_id, parse plays too

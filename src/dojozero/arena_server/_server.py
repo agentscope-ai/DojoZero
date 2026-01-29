@@ -40,11 +40,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from dojozero.core._span_models import (
+    BettingResultSpan,
+    TrialLifecycleSpan,
+    deserialize_span,
+    serialize_span_for_ws,
+)
 from dojozero.core._tracing import (
     SpanData,
     TraceReader,
     create_trace_reader,
 )
+from dojozero.data._models import GameInitializeEvent
+from dojozero.data._models import TeamIdentity
 
 # NBA team data lookup: tricode -> {name, city, color}
 # Used to fill in team details when not available in trial metadata
@@ -136,6 +144,25 @@ def _get_agent_info(agent_id: str, agent_name: str | None = None) -> dict[str, A
     }
 
 
+def _team_identity_to_dict(team: TeamIdentity | str) -> dict[str, str]:
+    """Convert TeamIdentity to the camelCase dict format the frontend expects.
+
+    Falls back to a minimal dict if team is a plain string (legacy path).
+    """
+    if isinstance(team, str):
+        return {"name": team, "city": "", "color": "#666666", "abbrev": ""}
+    return {
+        "name": team.name or "",
+        "city": team.location or "",
+        "color": team.color or "#666666",
+        "abbrev": team.tricode or "",
+        "alternateColor": team.alternate_color or "",
+        "logoUrl": team.logo_url or "",
+        "record": team.record or "",
+        "teamId": team.team_id or "",
+    }
+
+
 LOGGER = logging.getLogger("dojozero.arena_server")
 
 
@@ -175,12 +202,21 @@ class SpanBroadcaster:
         LOGGER.debug("Client unsubscribed from trial '%s'", trial_id)
 
     async def broadcast_span(self, trial_id: str, span: SpanData) -> None:
-        """Broadcast a span to all clients subscribed to a trial."""
+        """Broadcast a span to all clients subscribed to a trial.
+
+        Deserializes the raw SpanData into a typed model and sends
+        ``{type, trial_id, timestamp, category, data}`` to clients.
+        Unrecognized spans are silently dropped.
+        """
+        typed = deserialize_span(span)
+        if typed is None:
+            return
+        ws_payload = serialize_span_for_ws(typed)
         message = {
             "type": WSMessageType.SPAN,
             "trial_id": trial_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "data": span.to_dict(),
+            **ws_payload,
         }
         await self._send_to_trial(trial_id, message)
 
@@ -199,13 +235,23 @@ class SpanBroadcaster:
         websocket: WebSocket,
         spans: list[SpanData],
     ) -> None:
-        """Send a snapshot of recent spans to a specific client."""
+        """Send a snapshot of recent spans to a specific client.
+
+        Deserializes each raw SpanData into a typed model and sends
+        ``{type, trial_id, timestamp, data: {items: [...]}}`` where each
+        item is ``{category, data}``.
+        """
+        items = []
+        for span in spans:
+            typed = deserialize_span(span)
+            if typed is not None:
+                items.append(serialize_span_for_ws(typed))
         message = {
             "type": WSMessageType.SNAPSHOT,
             "trial_id": trial_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "data": {
-                "spans": [span.to_dict() for span in spans],
+                "items": items,
             },
         }
         await self._send_to_client(websocket, message)
@@ -516,7 +562,7 @@ async def _extract_trial_info_from_traces(
     """Extract trial phase and metadata from trace spans.
 
     Returns:
-        dict with "phase" and "metadata" extracted from spans
+        dict with "phase", "metadata", and optional "game_init" extracted from spans
     """
     try:
         spans = await trace_reader.get_spans(trial_id)
@@ -532,31 +578,40 @@ async def _extract_trial_info_from_traces(
 
     # Metadata to extract from spans
     metadata: dict[str, Any] = {}
+    game_init: GameInitializeEvent | None = None
 
     for span in spans:
-        op_name = span.operation_name
-        tags = span.tags
+        typed = deserialize_span(span)
 
-        # Check lifecycle spans and extract metadata
-        if op_name == "trial.started":
-            has_started = True
-            if span.start_time > latest_start_time:
-                latest_start_time = span.start_time
+        if isinstance(typed, TrialLifecycleSpan):
+            if typed.phase == "started":
+                has_started = True
+                if typed.start_time > latest_start_time:
+                    latest_start_time = typed.start_time
+                # Build metadata from typed fields
+                metadata.update(
+                    {
+                        "home_team_tricode": typed.home_team_tricode,
+                        "away_team_tricode": typed.away_team_tricode,
+                        "home_team_name": typed.home_team_name,
+                        "away_team_name": typed.away_team_name,
+                        "league": typed.league,
+                        "game_date": typed.game_date,
+                        "sport_type": typed.sport_type,
+                        "espn_game_id": typed.espn_game_id,
+                        **typed.extra_metadata,
+                    }
+                )
+            elif typed.phase in ("stopped", "terminated"):
+                has_stopped = True
+                if typed.start_time > latest_stop_time:
+                    latest_stop_time = typed.start_time
 
-            # Extract metadata from trial.* tags (excluding system tags)
-            for key, value in tags.items():
-                if key.startswith("trial.") and key not in ("trial.phase",):
-                    # Convert trial.home_team_tricode -> home_team_tricode
-                    metadata_key = key[6:]  # Remove "trial." prefix
-                    metadata[metadata_key] = value
-
-        elif op_name in ("trial.stopped", "trial.terminated"):
-            has_stopped = True
-            if span.start_time > latest_stop_time:
-                latest_stop_time = span.start_time
+        elif isinstance(typed, GameInitializeEvent):
+            game_init = typed
 
         # Check for game completion spans (NBA/NFL game results)
-        elif op_name in ("game_result", "nfl_game_result") or "game_result" in op_name:
+        elif "game_result" in span.operation_name:
             has_game_result = True
 
     # Determine phase
@@ -574,7 +629,7 @@ async def _extract_trial_info_from_traces(
     else:
         phase = "unknown"
 
-    return {"phase": phase, "metadata": metadata}
+    return {"phase": phase, "metadata": metadata, "game_init": game_init}
 
 
 async def _extract_games_from_trials(
@@ -604,15 +659,25 @@ async def _extract_games_from_trials(
         home_tricode = metadata.get("home_team_tricode", "TBD")
         away_tricode = metadata.get("away_team_tricode", "TBD")
 
-        # Get full team info (with fallback lookup from static team data)
-        home_team_info = _get_team_info(home_tricode, league)
-        away_team_info = _get_team_info(away_tricode, league)
-
-        # Override with metadata team names if provided
-        if metadata.get("home_team_name"):
-            home_team_info["name"] = metadata["home_team_name"]
-        if metadata.get("away_team_name"):
-            away_team_info["name"] = metadata["away_team_name"]
+        # Prefer rich team data from GameInitializeEvent (full TeamIdentity)
+        game_init = trial_info.get("game_init")
+        if isinstance(game_init, GameInitializeEvent):
+            home_team_info = _team_identity_to_dict(game_init.home_team)
+            away_team_info = _team_identity_to_dict(game_init.away_team)
+            # Ensure abbrev is populated from metadata if missing
+            if not home_team_info.get("abbrev"):
+                home_team_info["abbrev"] = home_tricode
+            if not away_team_info.get("abbrev"):
+                away_team_info["abbrev"] = away_tricode
+        else:
+            # Fallback to static team lookup (legacy spans without GameInitializeEvent)
+            home_team_info = _get_team_info(home_tricode, league)
+            away_team_info = _get_team_info(away_tricode, league)
+            # Override with metadata team names if provided
+            if metadata.get("home_team_name"):
+                home_team_info["name"] = metadata["home_team_name"]
+            if metadata.get("away_team_name"):
+                away_team_info["name"] = metadata["away_team_name"]
 
         # Extract game data from trial metadata
         game_data: dict[str, Any] = {
@@ -673,42 +738,51 @@ async def _extract_agent_actions(
             op_name = span.operation_name
 
             # Look for action-related spans
-            if any(
+            if not any(
                 keyword in op_name
                 for keyword in ["bet.placed", "agent.action", "agent.thinking", "bet."]
             ):
+                continue
+
+            # Try typed deserialization for known span types
+            typed = deserialize_span(span)
+            if isinstance(typed, BettingResultSpan):
+                agent_id = typed.agent_id
+                agent_name = typed.agent_name or agent_id
+            else:
+                # Fallback to raw tags for custom action spans
                 agent_id = span.tags.get("agent.id", span.tags.get("agent_id", ""))
                 agent_name = span.tags.get(
                     "agent.name", span.tags.get("agent_name", agent_id)
                 )
 
-                action_text = span.tags.get(
-                    "action.description",
-                    span.tags.get("description", op_name),
-                )
+            action_text = span.tags.get(
+                "action.description",
+                span.tags.get("description", op_name),
+            )
 
-                # Calculate time ago
-                span_time = datetime.fromtimestamp(
-                    span.start_time / 1_000_000, tz=timezone.utc
-                )
-                seconds_ago = (datetime.now(timezone.utc) - span_time).total_seconds()
+            # Calculate time ago
+            span_time = datetime.fromtimestamp(
+                span.start_time / 1_000_000, tz=timezone.utc
+            )
+            seconds_ago = (datetime.now(timezone.utc) - span_time).total_seconds()
 
-                if seconds_ago < 60:
-                    time_ago = f"{int(seconds_ago)}s ago"
-                elif seconds_ago < 3600:
-                    time_ago = f"{int(seconds_ago // 60)}m ago"
-                else:
-                    time_ago = f"{int(seconds_ago // 3600)}h ago"
+            if seconds_ago < 60:
+                time_ago = f"{int(seconds_ago)}s ago"
+            elif seconds_ago < 3600:
+                time_ago = f"{int(seconds_ago // 60)}m ago"
+            else:
+                time_ago = f"{int(seconds_ago // 3600)}h ago"
 
-                all_actions.append(
-                    {
-                        "id": span.span_id,
-                        "agent": _get_agent_info(agent_id, agent_name),
-                        "action": action_text,
-                        "time": time_ago,
-                        "timestamp": span.start_time,
-                    }
-                )
+            all_actions.append(
+                {
+                    "id": span.span_id,
+                    "agent": _get_agent_info(agent_id, agent_name),
+                    "action": action_text,
+                    "time": time_ago,
+                    "timestamp": span.start_time,
+                }
+            )
 
     # Sort by timestamp (newest first) and limit
     all_actions.sort(key=lambda x: x["timestamp"], reverse=True)
@@ -773,34 +847,29 @@ async def _compute_leaderboard(
             continue
 
         for span in spans:
-            op_name = span.operation_name
-            tags = span.tags
+            typed = deserialize_span(span)
 
-            # Look for result spans
-            if "result" in op_name or "payout" in op_name:
-                agent_id = tags.get("agent.id", tags.get("agent_id", ""))
-                if not agent_id:
-                    continue
+            if not isinstance(typed, BettingResultSpan):
+                continue
 
-                payout = float(tags.get("payout", tags.get("profit", 0)))
-                wager = float(tags.get("wager", tags.get("amount", 0)))
-                won = tags.get("won", tags.get("result", "")) in ("win", "won", True)
+            agent_id = typed.agent_id
+            if not agent_id:
+                continue
 
-                if agent_id not in agent_stats:
-                    agent_name = tags.get("agent.name", agent_id)
-                    agent_stats[agent_id] = {
-                        "agent": _get_agent_info(agent_id, agent_name),
-                        "winnings": 0.0,
-                        "wins": 0,
-                        "totalBets": 0,
-                        "totalWagered": 0.0,
-                    }
+            if agent_id not in agent_stats:
+                agent_stats[agent_id] = {
+                    "agent": _get_agent_info(agent_id, typed.agent_name or agent_id),
+                    "winnings": 0.0,
+                    "wins": 0,
+                    "totalBets": 0,
+                    "totalWagered": 0.0,
+                }
 
-                agent_stats[agent_id]["winnings"] += payout
-                agent_stats[agent_id]["totalBets"] += 1
-                agent_stats[agent_id]["totalWagered"] += wager
-                if won:
-                    agent_stats[agent_id]["wins"] += 1
+            agent_stats[agent_id]["winnings"] += typed.payout
+            agent_stats[agent_id]["totalBets"] += 1
+            agent_stats[agent_id]["totalWagered"] += typed.wager
+            if typed.won:
+                agent_stats[agent_id]["wins"] += 1
 
     # Convert to sorted list
     leaderboard: list[dict[str, Any]] = []
@@ -976,10 +1045,16 @@ def create_arena_app(
                     status_code=404,
                 )
 
+        items = []
+        for span in spans:
+            typed = deserialize_span(span)
+            if typed is not None:
+                items.append(serialize_span_for_ws(typed))
+
         return JSONResponse(
             content={
                 "trial_id": trial_id,
-                "spans": [span.to_dict() for span in spans],
+                "items": items,
             }
         )
 

@@ -251,7 +251,7 @@ def _format_default(event: DataEvent) -> str:
 
 _EVENT_FORMATTERS: dict[str, Any] = {
     # Shared web search event types
-    "injury_summary": _format_injury_summary,
+    "injury_report": _format_injury_summary,
     "power_ranking": _format_power_ranking,
     "expert_prediction": _format_expert_prediction,
     # NFL-specific event types

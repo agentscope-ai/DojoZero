@@ -3,15 +3,18 @@
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
-from dojozero.data._models import DataEvent
+from dojozero.data._models import (
+    DataEvent,
+    GameInitializeEvent,
+    GameResultEvent,
+    GameStartEvent,
+    TeamIdentity,
+    VenueInfo,
+)
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.espn._api import ESPNExternalAPI
 from dojozero.data.espn._events import (
-    ESPNGameEndEvent,
-    ESPNGameInitializeEvent,
-    ESPNGameStartEvent,
     ESPNGameUpdateEvent,
-    ESPNOddsUpdateEvent,
     ESPNPlayEvent,
 )
 from dojozero.data.espn._state_tracker import ESPNStateTracker
@@ -106,10 +109,9 @@ class ESPNStore(DataStore):
         """Parse scoreboard data into events.
 
         Emits:
-        - ESPNGameInitializeEvent for new games
-        - ESPNOddsUpdateEvent when odds change
-        - ESPNGameStartEvent when game starts
-        - ESPNGameEndEvent when game ends
+        - GameInitializeEvent for new games
+        - GameStartEvent when game starts
+        - GameResultEvent when game ends
         """
         events: list[DataEvent] = []
 
@@ -170,59 +172,43 @@ class ESPNStore(DataStore):
                     metadata["season_type"] = season.get("type", 2)
                     metadata["season_year"] = season.get("year", 0)
 
+                season_year = metadata.get("season_year", 0)
+                season_type_code = metadata.get("season_type", 2)
+                season_type_map = {1: "preseason", 2: "regular", 3: "postseason"}
+                season_type = season_type_map.get(season_type_code, "regular")
+
                 events.append(
-                    ESPNGameInitializeEvent(
+                    GameInitializeEvent(
                         timestamp=timestamp,
                         game_id=event_id,
-                        sport=self.sport,
-                        league=self.league,
-                        home_team=home_team.get("displayName", ""),
-                        away_team=away_team.get("displayName", ""),
-                        home_team_id=str(home_team.get("id", "")),
-                        away_team_id=str(away_team.get("id", "")),
-                        home_team_abbreviation=home_team.get("abbreviation", ""),
-                        away_team_abbreviation=away_team.get("abbreviation", ""),
-                        venue=venue,
+                        sport=self.league,  # "nba", "nfl"
+                        home_team=TeamIdentity(
+                            team_id=str(home_team.get("id", "")),
+                            name=home_team.get("displayName", ""),
+                            tricode=home_team.get("abbreviation", ""),
+                            location=home_team.get("location", ""),
+                            color=home_team.get("color", ""),
+                            alternate_color=home_team.get("alternateColor", ""),
+                            logo_url=home_team.get("logo", ""),
+                        ),
+                        away_team=TeamIdentity(
+                            team_id=str(away_team.get("id", "")),
+                            name=away_team.get("displayName", ""),
+                            tricode=away_team.get("abbreviation", ""),
+                            location=away_team.get("location", ""),
+                            color=away_team.get("color", ""),
+                            alternate_color=away_team.get("alternateColor", ""),
+                            logo_url=away_team.get("logo", ""),
+                        ),
+                        venue=VenueInfo(
+                            name=venue,
+                        ),
                         game_time=game_time,
-                        metadata=metadata,
+                        season_year=season_year,
+                        season_type=season_type,
                     )
                 )
                 self._state.mark_game_initialized(event_id)
-
-            # Handle odds updates
-            odds_list = competition.get("odds", [])
-            if odds_list:
-                odds = odds_list[0]
-                if self._state.odds_changed(event_id, odds):
-                    provider = odds.get("provider", {}).get("name", "")
-                    spread = float(odds.get("spread", 0) or 0)
-                    home_odds = odds.get("homeTeamOdds", {})
-                    away_odds = odds.get("awayTeamOdds", {})
-
-                    events.append(
-                        ESPNOddsUpdateEvent(
-                            timestamp=timestamp,
-                            game_id=event_id,
-                            sport=self.sport,
-                            league=self.league,
-                            provider=provider,
-                            spread=spread,
-                            spread_odds_home=int(
-                                home_odds.get("spreadOdds", -110) or -110
-                            ),
-                            spread_odds_away=int(
-                                away_odds.get("spreadOdds", -110) or -110
-                            ),
-                            over_under=float(odds.get("overUnder", 0) or 0),
-                            over_odds=int(odds.get("overOdds", -110) or -110),
-                            under_odds=int(odds.get("underOdds", -110) or -110),
-                            moneyline_home=int(home_odds.get("moneyLine", 0) or 0),
-                            moneyline_away=int(away_odds.get("moneyLine", 0) or 0),
-                            home_team=home_team.get("displayName", ""),
-                            away_team=away_team.get("displayName", ""),
-                        )
-                    )
-                    self._state.set_last_odds(event_id, odds)
 
             # Handle game status transitions
             status = competition.get("status", {}).get("type", {})
@@ -237,11 +223,10 @@ class ESPNStore(DataStore):
                     and previous_status != ESPNStateTracker.STATUS_IN_PROGRESS
                 ):
                     events.append(
-                        ESPNGameStartEvent(
+                        GameStartEvent(
                             timestamp=timestamp,
                             game_id=event_id,
-                            sport=self.sport,
-                            league=self.league,
+                            sport=self.league,
                         )
                     )
 
@@ -258,16 +243,15 @@ class ESPNStore(DataStore):
                     )
 
                     events.append(
-                        ESPNGameEndEvent(
+                        GameResultEvent(
                             timestamp=timestamp,
                             game_id=event_id,
-                            sport=self.sport,
-                            league=self.league,
+                            sport=self.league,
                             winner=winner,
                             home_score=home_score,
                             away_score=away_score,
-                            home_team=home_team.get("displayName", ""),
-                            away_team=away_team.get("displayName", ""),
+                            home_team_name=home_team.get("displayName", ""),
+                            away_team_name=away_team.get("displayName", ""),
                         )
                     )
 
@@ -345,7 +329,7 @@ class ESPNStore(DataStore):
                 home_score=home_score,
                 away_score=away_score,
                 period=int(status.get("period", 0) or 0),
-                clock=status.get("displayClock", ""),
+                game_clock=status.get("displayClock", ""),
                 status=status.get("type", {}).get("description", ""),
                 home_team_data=home_team_data,
                 away_team_data=away_team_data,
@@ -378,11 +362,10 @@ class ESPNStore(DataStore):
         # Detect game start from first play
         if new_plays and not self._state.has_game_started(event_id):
             events.append(
-                ESPNGameStartEvent(
+                GameStartEvent(
                     timestamp=timestamp,
                     game_id=event_id,
-                    sport=self.sport,
-                    league=self.league,
+                    sport=self.league,
                 )
             )
             self._state.mark_game_started(event_id)

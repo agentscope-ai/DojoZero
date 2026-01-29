@@ -12,7 +12,7 @@ import pytest
 
 from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.data._hub import DataHub
-from dojozero.data.polymarket._events import OddsUpdateEvent
+from dojozero.data._models import OddsUpdateEvent
 from dojozero.data.polymarket._factory import PolymarketStoreFactory
 from dojozero.data.polymarket._store import PolymarketStore
 
@@ -255,10 +255,10 @@ class TestPolymarketStoreParseResponse:
 
         assert len(events) == 1
         event = events[0]
-        assert event.home_odds == 1.67
-        assert event.away_odds == 2.5
-        assert event.home_probability == 0.6
-        assert event.away_probability == 0.4
+        assert event.home_odds == pytest.approx(1.67)
+        assert event.away_odds == pytest.approx(2.5)
+        assert event.odds.moneyline.home_probability == pytest.approx(0.6)
+        assert event.odds.moneyline.away_probability == pytest.approx(0.4)
 
     def test_parse_odds_update_extracts_tricodes_from_identifier(
         self, polymarket_store

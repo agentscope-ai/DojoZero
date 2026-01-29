@@ -2,77 +2,64 @@
 
 import json
 import tempfile
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import Field
 
 from dojozero.data._hub import DataHub
 from dojozero.data._models import DataEvent, extract_game_id, register_event
+from dojozero.data import GameStartEvent
 
 
-# Test event class - must be a frozen dataclass with kw_only=True for registration
+# Test event classes - Pydantic models with Literal event_type
 @register_event
-@dataclass(slots=True, frozen=True, kw_only=True)
 class TestEvent(DataEvent):
     """Simple event for testing."""
 
     __test__ = False  # Prevent pytest from collecting this as a test class
 
-    # timestamp is inherited from DataEvent
+    event_type: Literal["test_event"] = "test_event"
     event_id: str = ""
     value: str = ""
 
-    @property
-    def event_type(self) -> str:
-        return "test_event"
-
 
 @register_event
-@dataclass(slots=True, frozen=True, kw_only=True)
 class TestEventWithGameTime(DataEvent):
     """Event with game_time field for testing game_date extraction."""
 
     __test__ = False
 
+    event_type: Literal["test_event_with_game_time"] = "test_event_with_game_time"
     event_id: str = ""
-    game_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
-    @property
-    def event_type(self) -> str:
-        return "test_event_with_game_time"
+    game_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @register_event
-@dataclass(slots=True, frozen=True, kw_only=True)
 class TestEventWithGameTimeUtc(DataEvent):
     """Event with game_time_utc string field for testing fallback."""
 
     __test__ = False
 
+    event_type: Literal["test_event_with_game_time_utc"] = (
+        "test_event_with_game_time_utc"
+    )
     event_id: str = ""
     game_time_utc: str = ""
 
-    @property
-    def event_type(self) -> str:
-        return "test_event_with_game_time_utc"
-
 
 @register_event
-@dataclass(slots=True, frozen=True, kw_only=True)
 class TestEventWithGameTimeStr(DataEvent):
     """Event with game_time as string field for testing ISO string extraction."""
 
     __test__ = False
 
+    event_type: Literal["test_event_game_time_str"] = "test_event_game_time_str"
     event_id: str = ""
-    game_time: str = ""
-
-    @property
-    def event_type(self) -> str:
-        return "test_event_game_time_str"
+    game_time: str = ""  # type: ignore[assignment]
 
 
 @pytest.fixture
@@ -271,9 +258,9 @@ class TestDataHubBacktest:
     @pytest.mark.asyncio
     async def test_start_backtest_loads_events(self, hub, temp_persistence_file):
         """Test that start_backtest loads events from file."""
-        # First persist some events
+        # First persist some events (use a real union type so deserialization works)
         for i in range(3):
-            event = make_test_event(f"backtest_{i}")
+            event = GameStartEvent(game_id=f"backtest_{i}")
             await hub.receive_event(event)
 
         # Create new hub and start backtest (uses same file for consistency)
@@ -290,9 +277,9 @@ class TestDataHubBacktest:
         self, hub, temp_persistence_file
     ):
         """Test that backtest_next returns events in order."""
-        # Persist events
+        # Persist events (use a real union type so deserialization works)
         for i in range(3):
-            event = make_test_event(f"order_{i}")
+            event = GameStartEvent(game_id=f"order_{i}")
             await hub.receive_event(event)
 
         # Backtest (uses same file for consistency)
@@ -306,17 +293,17 @@ class TestDataHubBacktest:
         event3 = await backtest_hub.backtest_next()
         event4 = await backtest_hub.backtest_next()
 
-        assert isinstance(event1, TestEvent) and event1.value == "order_0"
-        assert isinstance(event2, TestEvent) and event2.value == "order_1"
-        assert isinstance(event3, TestEvent) and event3.value == "order_2"
+        assert isinstance(event1, GameStartEvent) and event1.game_id == "order_0"
+        assert isinstance(event2, GameStartEvent) and event2.game_id == "order_1"
+        assert isinstance(event3, GameStartEvent) and event3.game_id == "order_2"
         assert event4 is None  # No more events
 
     @pytest.mark.asyncio
     async def test_backtest_all_dispatches_all_events(self, hub, temp_persistence_file):
         """Test that backtest_all dispatches all events."""
-        # Persist events
+        # Persist events (use a real union type so deserialization works)
         for i in range(3):
-            event = make_test_event(f"all_{i}")
+            event = GameStartEvent(game_id=f"all_{i}")
             await hub.receive_event(event)
 
         # Setup backtest hub with callback (uses same file for consistency)
@@ -325,7 +312,7 @@ class TestDataHubBacktest:
         )
         callback = MagicMock()
         backtest_hub.subscribe_agent(
-            agent_id="agent1", event_types=["test_event"], callback=callback
+            agent_id="agent1", event_types=["event.game_start"], callback=callback
         )
 
         await backtest_hub.start_backtest(temp_persistence_file)

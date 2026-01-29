@@ -2,10 +2,9 @@
 
 from typing import Any, Sequence
 
-from dojozero.data._models import DataEvent
+from dojozero.data._models import DataEvent, MoneylineOdds, OddsInfo, OddsUpdateEvent
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.polymarket._api import PolymarketAPI
-from dojozero.data.polymarket._events import OddsUpdateEvent
 
 
 class PolymarketStore(DataStore):
@@ -109,16 +108,26 @@ class PolymarketStore(DataStore):
             home_tricode = (identifier or {}).get("home_tricode", "")
             away_tricode = (identifier or {}).get("away_tricode", "")
 
+            home_prob = float(odds_data.get("home_probability", 0.0))
+            away_prob = float(odds_data.get("away_probability", 0.0))
+            home_odds_val = float(odds_data.get("home_odds", 1.0))
+            away_odds_val = float(odds_data.get("away_odds", 1.0))
+
             events.append(
                 OddsUpdateEvent(
                     timestamp=timestamp,
                     game_id=game_id,
                     home_tricode=home_tricode,
                     away_tricode=away_tricode,
-                    home_odds=float(odds_data.get("home_odds", 1.0)),
-                    away_odds=float(odds_data.get("away_odds", 1.0)),
-                    home_probability=float(odds_data.get("home_probability", 0.0)),
-                    away_probability=float(odds_data.get("away_probability", 0.0)),
+                    odds=OddsInfo(
+                        provider="polymarket",
+                        moneyline=MoneylineOdds(
+                            home_probability=home_prob,
+                            away_probability=away_prob,
+                            home_odds=home_odds_val,
+                            away_odds=away_odds_val,
+                        ),
+                    ),
                 )
             )
 

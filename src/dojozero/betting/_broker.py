@@ -521,8 +521,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
     async def _handle_game_initialize(self, data_event: Any, event_id: str) -> None:
         """Handle game initialization event."""
-        home_team_str = getattr(data_event, "home_team", "")
-        away_team_str = getattr(data_event, "away_team", "")
+        home_team_raw = getattr(data_event, "home_team", "")
+        away_team_raw = getattr(data_event, "away_team", "")
+        # Support both str and TeamIdentity (Pydantic model with .name)
+        home_team_str = (
+            str(home_team_raw) if not isinstance(home_team_raw, str) else home_team_raw
+        )
+        away_team_str = (
+            str(away_team_raw) if not isinstance(away_team_raw, str) else away_team_raw
+        )
         game_time_dt = getattr(data_event, "game_time", None)
 
         if not home_team_str or not away_team_str:

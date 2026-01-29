@@ -451,10 +451,9 @@ class DataHub:
             return None
 
         try:
-            # Use DataEventFactory to deserialize
-            from dojozero.data._models import DataEventFactory
+            from dojozero.data import deserialize_data_event
 
-            return DataEventFactory.from_dict(event_dict)
+            return deserialize_data_event(event_dict)
         except Exception as e:
             logger.warning("Error reconstructing event: %s", e)
             return None

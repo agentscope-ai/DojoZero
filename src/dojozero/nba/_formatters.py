@@ -170,7 +170,7 @@ def _format_default(event: DataEvent) -> str:
 
 
 _EVENT_FORMATTERS: dict[str, Any] = {
-    "injury_summary": _format_injury_summary,
+    "injury_report": _format_injury_summary,
     "power_ranking": _format_power_ranking,
     "expert_prediction": _format_expert_prediction,
     "game_initialize": _format_game_initialize,

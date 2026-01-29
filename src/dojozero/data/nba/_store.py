@@ -2,15 +2,21 @@
 
 from typing import Any, Sequence
 
-from dojozero.data._models import DataEvent
-from dojozero.data._stores import DataStore, ExternalAPI
-from dojozero.data.nba._api import NBAExternalAPI
-from dojozero.data.nba._events import (
+from dojozero.data._models import (
+    DataEvent,
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
-    GameUpdateEvent,
-    PlayByPlayEvent,
+)
+from dojozero.data._models import TeamIdentity
+from dojozero.data._stores import DataStore, ExternalAPI
+from dojozero.data.nba._api import NBAExternalAPI
+from dojozero.data.nba._events import (
+    NBAGamePlayerStats,
+    NBAGameUpdateEvent,
+    NBAPlayEvent,
+    NBAPlayerStats,
+    NBATeamGameStats,
 )
 from dojozero.data.nba._state_tracker import GameStateTracker
 
@@ -154,39 +160,44 @@ class NBAStore(DataStore):
                 # Emit GameUpdateEvent with complete BoxScore data
                 # Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay
                 events.append(
-                    GameUpdateEvent(
+                    NBAGameUpdateEvent(
                         timestamp=timestamp,
                         game_id=game_id,
-                        period=0,  # BoxScore doesn't provide period info
-                        game_clock="",  # BoxScore doesn't provide clock info
-                        game_time_utc="",  # BoxScore doesn't provide game time
-                        home_team={
-                            "teamId": home_team_data.get("teamId", 0),
-                            "teamName": home_team_data.get("teamName", ""),
-                            "teamCity": home_team_data.get("teamCity", ""),
-                            "teamTricode": home_team_data.get("teamTricode", ""),
-                            "score": home_score,
-                            "wins": 0,  # Not available in BoxScore
-                            "losses": 0,  # Not available in BoxScore
-                            "seed": 0,  # Not available in BoxScore
-                            "timeoutsRemaining": 0,  # Not available in BoxScore
-                            "inBonus": None,  # Not available in BoxScore
-                            "periods": [],  # Not available in BoxScore
-                        },
-                        away_team={
-                            "teamId": away_team_data.get("teamId", 0),
-                            "teamName": away_team_data.get("teamName", ""),
-                            "teamCity": away_team_data.get("teamCity", ""),
-                            "teamTricode": away_team_data.get("teamTricode", ""),
-                            "score": away_score,
-                            "wins": 0,  # Not available in BoxScore
-                            "losses": 0,  # Not available in BoxScore
-                            "seed": 0,  # Not available in BoxScore
-                            "timeoutsRemaining": 0,  # Not available in BoxScore
-                            "inBonus": None,  # Not available in BoxScore
-                            "periods": [],  # Not available in BoxScore
-                        },
-                        player_stats=player_stats,
+                        sport="nba",
+                        home_score=home_score,
+                        away_score=away_score,
+                        home_team_stats=NBATeamGameStats(
+                            team_id=home_team_data.get("teamId", 0),
+                            team_name=home_team_data.get("teamName", ""),
+                            team_city=home_team_data.get("teamCity", ""),
+                            team_tricode=home_team_data.get("teamTricode", ""),
+                            score=home_score,
+                        ),
+                        away_team_stats=NBATeamGameStats(
+                            team_id=away_team_data.get("teamId", 0),
+                            team_name=away_team_data.get("teamName", ""),
+                            team_city=away_team_data.get("teamCity", ""),
+                            team_tricode=away_team_data.get("teamTricode", ""),
+                            score=away_score,
+                        ),
+                        player_stats=NBAGamePlayerStats(
+                            home=[
+                                NBAPlayerStats(
+                                    player_id=p.get("personId", 0),
+                                    name=p.get("name", ""),
+                                    statistics=p.get("statistics", {}),
+                                )
+                                for p in player_stats.get("home", [])
+                            ],
+                            away=[
+                                NBAPlayerStats(
+                                    player_id=p.get("personId", 0),
+                                    name=p.get("name", ""),
+                                    statistics=p.get("statistics", {}),
+                                )
+                                for p in player_stats.get("away", [])
+                            ],
+                        ),
                     )
                 )
 
@@ -224,8 +235,19 @@ class NBAStore(DataStore):
                             GameInitializeEvent(
                                 timestamp=timestamp,
                                 game_id=game_id,
-                                home_team=home_team_str,
-                                away_team=away_team_str,
+                                sport="nba",
+                                home_team=TeamIdentity(
+                                    team_id=str(home_team_data.get("teamId", "")),
+                                    name=home_team_str,
+                                    tricode=home_team_data.get("teamTricode", ""),
+                                    location=home_team_data.get("teamCity", ""),
+                                ),
+                                away_team=TeamIdentity(
+                                    team_id=str(away_team_data.get("teamId", "")),
+                                    name=away_team_str,
+                                    tricode=away_team_data.get("teamTricode", ""),
+                                    location=away_team_data.get("teamCity", ""),
+                                ),
                                 game_time=game_time_dt,
                             )
                         )
@@ -255,6 +277,7 @@ class NBAStore(DataStore):
                         GameStartEvent(
                             timestamp=datetime.now(timezone.utc),
                             game_id=game_id,
+                            sport="nba",
                         )
                     )
                     self._state.set_previous_status(game_id, 2)  # In Progress
@@ -287,8 +310,10 @@ class NBAStore(DataStore):
                             GameResultEvent(
                                 timestamp=datetime.now(timezone.utc),
                                 game_id=game_id,
+                                sport="nba",
                                 winner=winner,
-                                final_score={"home": home_score, "away": away_score},
+                                home_score=home_score,
+                                away_score=away_score,
                             )
                         )
                         self._state.set_previous_status(game_id, 3)  # Finished
@@ -326,15 +351,16 @@ class NBAStore(DataStore):
 
                 # Emit ALL play-by-play events
                 events.append(
-                    PlayByPlayEvent(
+                    NBAPlayEvent(
                         timestamp=timestamp,
-                        event_id=pbp_event_id,
                         game_id=game_id,
+                        sport="nba",
+                        event_id=pbp_event_id,
                         action_type=action_type,
                         action_number=action_number,
                         period=period,
                         clock=clock,
-                        person_id=person_id,
+                        player_id=person_id,
                         player_name=player_name,
                         team_tricode=team_tricode,
                         home_score=home_score,

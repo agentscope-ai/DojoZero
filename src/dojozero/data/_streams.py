@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, Mapping, Protocol, TypedDict
+from typing import Any, Mapping, TypedDict
 
 from dojozero.core import RuntimeContext, DataStream, DataStreamBase, StreamEvent
 from dojozero.data import DataHub
@@ -26,21 +26,6 @@ class DataHubDataStreamConfig(_ActorIdConfig, total=False):
     ]  # Which event_types to subscribe to (alternative to event_type)
 
 
-class StreamInitializer(Protocol):
-    """Protocol for stream initialization logic.
-
-    Implementations can trigger initial events, set up subscriptions, etc.
-    """
-
-    async def initialize(self, stream: "DataHubDataStream") -> None:
-        """Initialize the stream (e.g., trigger initial events).
-
-        Args:
-            stream: The DataHubDataStream instance to initialize
-        """
-        ...
-
-
 class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
     """Generic DataStream that bridges DataHub events to StreamEvent system.
 
@@ -57,14 +42,12 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
         hub: DataHub | None = None,
         event_type: str | None = None,
         event_types: list[str] | None = None,
-        initializer: StreamInitializer | None = None,
         sport_type: str = "",
     ) -> None:
         super().__init__(actor_id, trial_id, sport_type=sport_type)
         self._hub = hub
         self._event_type = event_type
         self._event_types = event_types or []
-        self._initializer = initializer
         self._sequence = 0
         self._received_events: list[DataEvent] = []
         self._initialized = False
@@ -138,16 +121,6 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
                 callback=event_callback,
             )
 
-        # Run initializer if provided (e.g., trigger initial searches)
-        # Do this AFTER subscribing so events aren't missed, but run it in background
-        # so it doesn't block pipeline setup
-        if self._initializer and not self._initialized:
-            self._initialized = True
-            # Schedule initializer to run in background - don't await it
-            # This allows pipeline setup to complete while searches happen asynchronously
-            task = asyncio.create_task(self._run_initializer())
-            task.add_done_callback(self._handle_task_exception)
-
     def _handle_task_exception(self, task: asyncio.Task[None]) -> None:
         """Handle exceptions from background tasks.
 
@@ -164,19 +137,6 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
                 exc,
                 exc_info=(type(exc), exc, exc.__traceback__),
             )
-
-    async def _run_initializer(self) -> None:
-        """Run the initializer in the background without blocking."""
-        if self._initializer:
-            try:
-                await self._initializer.initialize(self)
-            except Exception as e:
-                logger.error(
-                    "Initializer failed for stream '%s': %s",
-                    self.actor_id,
-                    e,
-                    exc_info=True,
-                )
 
     async def _publish_event(self, event: DataEvent) -> None:
         """Publish a DataEvent as a StreamEvent."""
@@ -212,7 +172,7 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
 
     async def load_state(self, state: Mapping[str, Any]) -> None:
         """Protocol hook: dashboard restores a checkpoint before resuming."""
-        from dojozero.data._models import DataEventFactory
+        from dojozero.data import deserialize_data_event
 
         self._sequence = int(state.get("sequence", 0))
         self._initialized = bool(state.get("initialized", False))
@@ -222,7 +182,7 @@ class DataHubDataStream(DataStreamBase, DataStream[DataHubDataStreamConfig]):
         self._received_events = []
         for event_dict in events_data:
             try:
-                event = DataEventFactory.from_dict(event_dict)
+                event = deserialize_data_event(event_dict)
                 if event is not None:
                     self._received_events.append(event)
             except Exception as e:

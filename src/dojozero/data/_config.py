@@ -10,8 +10,6 @@ Hierarchy:
 - Actor.from_dict() -> receives DataHubDataStreamConfig
 """
 
-from typing import Any
-
 from pydantic import BaseModel, Field
 
 
@@ -19,7 +17,7 @@ class HubConfig(BaseModel):
     """Configuration for DataHub persistence in trial params.
 
     Used by trial builders to configure event persistence to JSONL files.
-    This is for the `hub:` field in trial params YAML.
+    This is for the ``hub:`` field in trial params YAML.
 
     Note: Persistence is always enabled. The persistence_file is optional here
     because for auto-scheduled trials, it gets populated dynamically by the
@@ -39,8 +37,17 @@ class HubConfig(BaseModel):
 class TrialDataStreamConfig(BaseModel):
     """Configuration for a data stream in trial params.
 
-    Used in the `data_streams:` list in trial params YAML to define
+    Used in the ``data_streams:`` list in trial params YAML to define
     which event types each stream should subscribe to.
+
+    YAML example::
+
+        data_streams:
+          - id: pre_game_insights_stream
+            event_types:
+              - injury_report
+              - power_ranking
+              - expert_prediction
 
     Note: This is distinct from DataHubDataStreamConfig in _streams.py
     which is the actor config TypedDict used at instantiation time.
@@ -48,19 +55,16 @@ class TrialDataStreamConfig(BaseModel):
 
     id: str = Field(..., description="Unique identifier for this data stream")
     event_type: str = Field(
-        ..., description="Event type this stream subscribes to (e.g., 'play_by_play')"
+        default="",
+        description="Single event type (legacy). Prefer event_types list.",
     )
-    initializer: dict[str, Any] | None = Field(
-        default=None,
-        description="Optional initializer configuration (e.g., search_queries for websearch)",
+    event_types: list[str] = Field(
+        default_factory=list,
+        description="Event type suffixes this stream subscribes to (e.g., 'injury_report', 'espn_game_update').",
     )
 
-
-# Backwards compatibility alias
-DataStreamConfig = TrialDataStreamConfig
 
 __all__ = [
-    "DataStreamConfig",  # Alias for backwards compatibility
     "HubConfig",
     "TrialDataStreamConfig",
 ]

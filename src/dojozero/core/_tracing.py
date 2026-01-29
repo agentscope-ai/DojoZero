@@ -811,6 +811,42 @@ def create_span_from_event(
     )
 
 
+def deserialize_event_from_span(span: SpanData) -> Any:
+    """Reconstruct a DataEvent from a SpanData's tags.
+
+    Reverses the serialization done by DataHub._emit_event_span():
+    - operation_name → event_type
+    - event.* tags → event fields (JSON-parsed for complex values)
+
+    Args:
+        span: SpanData with operation_name as event_type and event.* tags
+
+    Returns:
+        A typed DataEvent instance, or None if the event_type is unrecognized
+    """
+    import json
+
+    from dojozero.data import deserialize_data_event
+
+    event_dict: dict[str, Any] = {"event_type": span.operation_name}
+    for key, value in span.tags.items():
+        if not key.startswith("event."):
+            continue
+        field_name = key[6:]  # Remove "event." prefix
+        if isinstance(value, str):
+            # Try JSON parse for complex fields (dicts, lists)
+            if value.startswith(("{", "[")):
+                try:
+                    event_dict[field_name] = json.loads(value)
+                except json.JSONDecodeError:
+                    event_dict[field_name] = value
+            else:
+                event_dict[field_name] = value
+        else:
+            event_dict[field_name] = value
+    return deserialize_data_event(event_dict)
+
+
 def convert_actor_registration_to_span(
     trial_id: str,
     actor_id: str,

@@ -4,7 +4,7 @@ This module provides data stores, events, and utilities for NFL game data
 using the ESPN API.
 
 Example usage:
-    from dojozero.data.nfl import NFLStore, NFLGameInitializeEvent
+    from dojozero.data.nfl import NFLStore
 
     # Create store
     store = NFLStore()
@@ -19,14 +19,10 @@ Example usage:
 from dojozero.data.nfl._api import NFLExternalAPI
 from dojozero.data.nfl._events import (
     NFLDriveEvent,
-    NFLGameInitializeEvent,
-    NFLGameResultEvent,
-    NFLGameStartEvent,
     NFLGameUpdateEvent,
-    NFLOddsUpdateEvent,
     NFLPlayEvent,
     NFLPlayerStats,
-    NFLTeamStats,
+    NFLTeamGameStats,
 )
 from dojozero.data.nfl._state_tracker import NFLGameStateTracker
 from dojozero.data.nfl._store import NFLStore
@@ -46,6 +42,14 @@ from dojozero.data.nfl._utils import (
     spread_to_favorite,
 )
 
+# Re-export unified lifecycle events for convenience
+from dojozero.data._models import (
+    GameInitializeEvent,
+    GameResultEvent,
+    GameStartEvent,
+    OddsUpdateEvent,
+)
+
 __all__ = [
     # API
     "NFLExternalAPI",
@@ -54,17 +58,18 @@ __all__ = [
     "NFLStoreFactory",
     # State Tracker
     "NFLGameStateTracker",
-    # Events
+    # NFL-specific events
     "NFLDriveEvent",
-    "NFLGameInitializeEvent",
-    "NFLGameResultEvent",
-    "NFLGameStartEvent",
     "NFLGameUpdateEvent",
-    "NFLOddsUpdateEvent",
     "NFLPlayEvent",
     # Supporting types
     "NFLPlayerStats",
-    "NFLTeamStats",
+    "NFLTeamGameStats",
+    # Unified lifecycle events (re-exported for convenience)
+    "GameInitializeEvent",
+    "GameStartEvent",
+    "GameResultEvent",
+    "OddsUpdateEvent",
     # Utils
     "ABBREV_TO_TEAM_NAME",
     "DIVISIONS",

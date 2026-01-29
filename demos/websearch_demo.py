@@ -1,194 +1,117 @@
-"""Demo: WebSearch stack with Tavily SDK integration.
+"""Demo: WebSearch stack with event-class lifecycle.
 
 This demo shows the complete flow:
 1. WebSearchAPI with Tavily SDK integration
-2. WebSearchStore polling and emitting events
+2. Event classes handle search -> LLM -> typed event via from_web_search()
 3. DataHub receiving and persisting events
 4. Agents subscribing to events
 """
 
 import asyncio
 
-from dojozero.core import AgentBase
-from dojozero.data import DataHub, WebSearchAPI, WebSearchStore
+from dojozero.data import DataHub, WebSearchAPI
+from dojozero.data._models import DataEvent
+from dojozero.data.websearch._context import GameContext
 from dojozero.data.websearch._events import (
-    WebSearchIntent,
-    RawWebSearchEvent,
-    InjurySummaryEvent,
+    InjuryReportEvent,
     PowerRankingEvent,
     ExpertPredictionEvent,
-)
-from dojozero.data.websearch._processors import (
-    ExpertPredictionProcessor,
-    InjurySummaryProcessor,
-    PowerRankingProcessor,
+    WebSearchEventMixin,
 )
 
 
 team1 = "Los Angeles Lakers"
 team2 = "San Antonio Spurs"
 game_date = "2025-12-10"
-game_info = f"{team1} vs {team2} on {game_date}"
 
 
-class DemoAgent(AgentBase):
+class DemoAgent:
     """Simple demo agent that subscribes to web search events."""
 
     def __init__(self, agent_id: str):
-        """Initialize demo agent."""
         self.agent_id = agent_id
-        self.received_events = []
+        self.received_events: list[DataEvent] = []
 
-    def handle_event(self, event):
-        """Handle received event."""
+    def handle_event(self, event: DataEvent) -> None:
         self.received_events.append(event)
-        if isinstance(event, RawWebSearchEvent):
-            print(
-                f"  [{self.agent_id}] {event.event_type}: '{event.query}' ({len(event.results)} results)"
-            )
+        print(f"  [{self.agent_id}] received {event.event_type}")
 
 
 async def demo_websearch_stack():
     """Demonstrate the complete websearch stack."""
     print("WebSearch Stack Demo\n")
 
-    # Setup
+    # Setup DataHub
     hub = DataHub(
         hub_id="demo_hub",
         persistence_file="outputs/demo_events.jsonl",
     )
-    print(f"✓ DataHub: {hub.hub_id} (persist: {hub.persistence_file})")
+    print(f"DataHub: {hub.hub_id} (persist: {hub.persistence_file})")
 
+    # Setup search API and game context
     api = WebSearchAPI()
-    store = WebSearchStore(store_id="demo_websearch_store", api=api)
+    context = GameContext(
+        sport="nba",
+        home_team=team1,
+        away_team=team2,
+        game_date=game_date,
+    )
+    print(f"GameContext: {context.teams}")
 
-    # Register processors
-    # Note: source_event_types must use full event type values (e.g., "event.raw_web_search")
-    store.register_stream(
-        "injury_summary", InjurySummaryProcessor(), ["event.raw_web_search"]
-    )
-    store.register_stream(
-        "power_ranking", PowerRankingProcessor(), ["event.raw_web_search"]
-    )
-    store.register_stream(
-        "expert_prediction", ExpertPredictionProcessor(), ["event.raw_web_search"]
-    )
-
-    # Connect store to DataHub
-    hub.connect_store(store)
-    print(
-        f"✓ WebSearchStore: {store.store_id} (streams: {', '.join(store.list_registered_streams())})"
-    )
-
-    # Agents
-    agent1 = DemoAgent("Agent1")
-    agent2 = DemoAgent("Agent2")
+    # Subscribe agent to typed event types
+    agent = DemoAgent("Agent1")
     hub.subscribe_agent(
         "Agent1",
         event_types=[
-            "raw_web_search",
-            "injury_summary",
+            "injury_report",
             "power_ranking",
             "expert_prediction",
         ],
-        callback=agent1.handle_event,
+        callback=agent.handle_event,
     )
-    hub.subscribe_agent(
-        "Agent2", event_types=["raw_web_search"], callback=agent2.handle_event
+    print(
+        "Agent subscribed: Agent1 (injury_report, power_ranking, expert_prediction)\n"
     )
-    print("✓ Agents subscribed: Agent1 (all events including raw), Agent2 (raw only)\n")
 
-    # Perform searches
-    print("Searching...")
-    search_queries = [
-        # (f"NBA betting odds for {game_info}", None, None),  # No intent - will use keyword matching
-        (
-            f"NBA injury updates for {game_info}",
-            WebSearchIntent.INJURY_SUMMARY,
-            {"time_range": "week"},
-        ),  # Explicit intent
-        (
-            "NBA power rankings",
-            WebSearchIntent.POWER_RANKING,
-            {"time_range": "week"},
-        ),  # Explicit intent
-        (
-            f"NBA expert predictions for {team1} and {team2}",
-            WebSearchIntent.EXPERT_PREDICTION,
-            {"time_range": "week"},
-        ),  # Explicit intent
-    ]
-
-    for query, intent, search_params in search_queries:
-        intent_str = intent.value if intent else None
-        print(f"  • {query}" + (f" [intent: {intent_str}]" if intent else ""))
-        await store.search(
-            query, intent=intent, **search_params if search_params else {}
-        )
-        await asyncio.sleep(0.3)
+    # Each event class owns the full lifecycle: build query -> search API -> LLM -> typed event
+    # Discover all WebSearchEventMixin subclasses automatically
+    print("Running web searches via event class from_web_search()...")
+    for event_cls in WebSearchEventMixin.__subclasses__():
+        print(f"  {event_cls.__name__}...")
+        try:
+            result = await event_cls.from_web_search(api=api, context=context)
+            if result is not None and isinstance(result, DataEvent):
+                await hub.receive_event(result)
+                print(f"    -> emitted {result.event_type}")
+            else:
+                print("    -> no results")
+        except Exception as e:
+            print(f"    -> error: {e}")
 
     # Results summary
-    print(
-        f"\nResults: Agent1={len(agent1.received_events)} events, Agent2={len(agent2.received_events)} events"
-    )
+    print(f"\nResults: {len(agent.received_events)} events received")
+    for event in agent.received_events:
+        if isinstance(event, InjuryReportEvent):
+            teams = list(event.injured_players.keys()) if event.injured_players else []
+            total_players = sum(len(p) for p in event.injured_players.values())
+            print(f"  Injury: {len(teams)} teams, {total_players} players")
+        elif isinstance(event, PowerRankingEvent):
+            sources = list(event.rankings.keys()) if event.rankings else []
+            total_teams = sum(len(t) for t in event.rankings.values())
+            print(f"  Rankings: {len(sources)} sources, {total_teams} teams")
+        elif isinstance(event, ExpertPredictionEvent):
+            print(f"  Predictions: {len(event.predictions)} predictions")
 
-    # Summary of processed events (non-raw)
-    processed_events = [
-        e for e in agent1.received_events if not isinstance(e, RawWebSearchEvent)
-    ]
-    if processed_events:
-        print(f"\nProcessed Events Summary ({len(processed_events)}):")
-        for event in processed_events:
-            if isinstance(event, InjurySummaryEvent):
-                teams = (
-                    list(event.injured_players.keys()) if event.injured_players else []
-                )
-                print(
-                    f"  • Injury: {len(teams)} teams, {sum(len(p) for p in event.injured_players.values())} players"
-                )
-            elif isinstance(event, PowerRankingEvent):
-                sources = list(event.rankings.keys()) if event.rankings else []
-                total_teams = sum(len(teams) for teams in event.rankings.values())
-                print(f"  • Rankings: {len(sources)} sources, {total_teams} teams")
-            elif isinstance(event, ExpertPredictionEvent):
-                print(f"  • Predictions: {len(event.predictions)} predictions")
-
-    # Persistence
+    # Persistence check
     if hub.persistence_file.exists():
         with open(hub.persistence_file, "r") as f:
             lines = f.readlines()
         print(
-            f"  Persisted: {len(lines)} events ({hub.persistence_file.stat().st_size} bytes)"
+            f"\nPersisted: {len(lines)} events ({hub.persistence_file.stat().st_size} bytes)"
         )
 
-    # Replay with a new hub instance
-    if hub.persistence_file.exists():
-        print("\nReplaying events with new hub...")
-        replay_hub = DataHub(
-            hub_id="replay_hub",
-            persistence_file=hub.persistence_file,
-        )
-        await replay_hub.start_replay(str(hub.persistence_file))
-        replay_agent_1 = DemoAgent("ReplayAgent1")
-        replay_hub.subscribe_agent(
-            "ReplayAgent1",
-            event_types=["raw_web_search"],
-            callback=replay_agent_1.handle_event,
-        )
-        replay_agent_2 = DemoAgent("ReplayAgent2")
-        replay_hub.subscribe_agent(
-            "ReplayAgent2",
-            event_types=["injury_summary", "power_ranking", "expert_prediction"],
-            callback=replay_agent_2.handle_event,
-        )
-        await replay_hub.replay_all()
-        print(f"  ReplayAgent1: {len(replay_agent_1.received_events)} events")
-        print(f"  ReplayAgent2: {len(replay_agent_2.received_events)} events")
-        replay_hub.stop_replay()
-
-    print("\n✓ Demo complete")
+    print("\nDone.")
 
 
 if __name__ == "__main__":
-    print("\n")
     asyncio.run(demo_websearch_stack())

@@ -15,12 +15,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from dojozero.data._game_info import GameInfo
-from dojozero.data.nba._events import (
+from dojozero.data._models import (
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
-    GameUpdateEvent,
-    PlayByPlayEvent,
+)
+from dojozero.data.nba._events import (
+    NBAGameUpdateEvent as GameUpdateEvent,
+    NBAPlayEvent as PlayByPlayEvent,
 )
 from dojozero.data.nba._store import NBAStore
 from dojozero.data.nba._utils import (
@@ -119,17 +121,17 @@ class TestNBAStoreParseBoxscore:
 
         update = update_events[0]
         assert update.game_id == "401810001"
-        assert update.home_team["score"] == 110
-        assert update.away_team["score"] == 105
-        assert update.home_team["teamTricode"] == "LAL"
-        assert update.away_team["teamTricode"] == "GSW"
-        assert len(update.player_stats["home"]) == 1
-        assert len(update.player_stats["away"]) == 1
+        assert update.home_team_stats.score == 110
+        assert update.away_team_stats.score == 105
+        assert update.home_team_stats.team_tricode == "LAL"
+        assert update.away_team_stats.team_tricode == "GSW"
+        assert len(update.player_stats.home) == 1
+        assert len(update.player_stats.away) == 1
 
         init = init_events[0]
         assert init.game_id == "401810001"
-        assert init.home_team == "Los Angeles Lakers"
-        assert init.away_team == "Golden State Warriors"
+        assert str(init.home_team) == "Los Angeles Lakers"
+        assert str(init.away_team) == "Golden State Warriors"
 
     def test_parse_boxscore_without_team_data(self, nba_store):
         """Test parsing boxscore before game starts (no team data)."""
@@ -169,7 +171,7 @@ class TestNBAStoreParseBoxscore:
         # Should emit GameInitializeEvent from get_game_info_by_id fallback
         init_events = [e for e in events if isinstance(e, GameInitializeEvent)]
         assert len(init_events) == 1
-        assert init_events[0].home_team == "Los Angeles Lakers"
+        assert str(init_events[0].home_team) == "Los Angeles Lakers"
 
     def test_parse_boxscore_empty_game_id(self, nba_store):
         """Test parsing boxscore with missing game ID returns empty."""
@@ -393,7 +395,7 @@ class TestNBAStoreParsePlayByPlay:
 
         assert len(pbp_events) == 1
         event = pbp_events[0]
-        assert event.person_id == 2544
+        assert event.player_id == 2544
         assert event.player_name == "LeBron James"
         assert event.team_tricode == "LAL"
         assert event.home_score == 2
@@ -870,7 +872,7 @@ class TestNBAEvents:
             action_number=10,
             period=1,
             clock="PT10M30.00S",
-            person_id=2544,
+            player_id=2544,
             player_name="LeBron James",
             team_tricode="LAL",
             home_score=2,
@@ -881,7 +883,7 @@ class TestNBAEvents:
         assert event.event_id == "401810001_pbp_10"
         assert event.action_type == "2pt"
         assert event.player_name == "LeBron James"
-        assert event.event_type == "event.play_by_play"
+        assert event.event_type == "event.nba_play"
 
     def test_game_initialize_event_creation(self):
         """Test GameInitializeEvent creation and properties."""
@@ -895,8 +897,8 @@ class TestNBAEvents:
         )
 
         assert event.game_id == "401810001"
-        assert event.home_team == "Los Angeles Lakers"
-        assert event.away_team == "Golden State Warriors"
+        assert str(event.home_team) == "Los Angeles Lakers"
+        assert str(event.away_team) == "Golden State Warriors"
         assert event.event_type == "event.game_initialize"
 
     def test_game_start_event_creation(self):
@@ -911,7 +913,8 @@ class TestNBAEvents:
         event = GameResultEvent(
             game_id="401810001",
             winner="home",
-            final_score={"home": 110, "away": 105},
+            home_score=110,
+            away_score=105,
         )
 
         assert event.game_id == "401810001"

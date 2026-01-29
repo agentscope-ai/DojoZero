@@ -55,6 +55,15 @@ from ._registry import (
     register_trial_builder,
     unregister_trial_builder,
 )
+from ._span_models import (
+    ActorRegistrationSpan,
+    AgentMessageSpan,
+    BettingResultSpan,
+    BrokerStateSpan,
+    SpanModel,
+    TrialLifecycleSpan,
+    deserialize_span,
+)
 from ._tracing import (
     JaegerTraceReader,
     SpanData,
@@ -62,6 +71,7 @@ from ._tracing import (
     convert_agent_message_to_span,
     convert_checkpoint_event_to_span,
     create_span_from_event,
+    deserialize_event_from_span,
     load_spans_from_checkpoint,
 )
 from ._types import (
@@ -110,6 +120,14 @@ __all__ = [
     "TrialRecord",
     "TrialSpec",
     "TrialStatus",
+    # Span Models
+    "ActorRegistrationSpan",
+    "AgentMessageSpan",
+    "BettingResultSpan",
+    "BrokerStateSpan",
+    "SpanModel",
+    "TrialLifecycleSpan",
+    "deserialize_span",
     # Trace Store
     "JaegerTraceReader",
     "SpanData",
@@ -117,6 +135,7 @@ __all__ = [
     "convert_agent_message_to_span",
     "convert_checkpoint_event_to_span",
     "create_span_from_event",
+    "deserialize_event_from_span",
     "load_spans_from_checkpoint",
     # Runtime
     "LocalActorHandler",

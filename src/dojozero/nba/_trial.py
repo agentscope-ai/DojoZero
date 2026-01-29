@@ -13,18 +13,14 @@ from dojozero.core import (
     register_trial_builder,
     TrialSpec,
 )
-from dojozero.data._config import DataStreamConfig, HubConfig
+from dojozero.data._config import HubConfig, TrialDataStreamConfig
 from dojozero.data._factory import build_runtime_context
 
 # Import factories to ensure they are registered
 import dojozero.data.nba._factory  # noqa: F401
 import dojozero.data.websearch._factory  # noqa: F401
 import dojozero.data.polymarket._factory  # noqa: F401
-from dojozero.data.websearch._processors import (
-    ExpertPredictionProcessor,
-    InjurySummaryProcessor,
-    PowerRankingProcessor,
-)
+from dojozero.data.websearch._events import WebSearchEventMixin
 from dojozero.nba._agent import (
     BettingAgent,
 )
@@ -37,7 +33,6 @@ from dojozero.nba._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
 )
-from dojozero.data._models import EventTypes
 from dojozero.data.nba._utils import get_game_info_by_id_async
 
 # Import shared operators and metadata from betting module
@@ -49,31 +44,6 @@ from dojozero.betting import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Mapping from event_type to (processor_class, source_event_types)
-# This defines which processors are needed for each event type and what they depend on.
-# Used to auto-register processors on stores when event types are requested.
-# Note: source_event_types must use full event type values (e.g., "event.raw_web_search")
-# to match the event_type property of DataEvent subclasses
-EVENT_TYPE_PROCESSOR_MAP: dict[str, tuple[type[Any] | None, list[str]]] = {
-    # Raw stream: no processor, emitted directly from store
-    "raw_web_search": (None, []),
-    # Processed streams: processor class and source event types
-    "injury_summary": (InjurySummaryProcessor, ["event.raw_web_search"]),
-    "power_ranking": (PowerRankingProcessor, ["event.raw_web_search"]),
-    "expert_prediction": (ExpertPredictionProcessor, ["event.raw_web_search"]),
-}
-
-# Mapping from synthetic event types to actual event types
-# Used when a stream subscribes to multiple event types
-SYNTHETIC_EVENT_TYPE_MAP: dict[str, list[str]] = {
-    "game_status_change": [
-        EventTypes.GAME_START.value,
-        EventTypes.GAME_RESULT.value,
-        EventTypes.GAME_INITIALIZE.value,
-    ],
-    # Other event types (game_update, odds_update) are direct mappings
-}
 
 
 class NBATrialParams(BaseModel):
@@ -95,21 +65,19 @@ class NBATrialParams(BaseModel):
     hub_id: str = Field(default="nba_hub")
 
     # Store configuration
-    websearch_store_id: str = Field(default="websearch_store")
     poll_interval_seconds: float = Field(default=30.0)
 
     # Data streams configuration (optional, hierarchical)
-    data_streams: list[DataStreamConfig] | None = Field(default=None)
+    data_streams: list[TrialDataStreamConfig] | None = Field(default=None)
 
     # Event type configuration (which event types to create streams for) - used if data_streams not provided
     event_types: list[str] = Field(
         default_factory=lambda: [
-            "raw_web_search",
-            "injury_summary",
+            "injury_report",
             "power_ranking",
             "expert_prediction",
         ],
-        description="List of event types to create streams for (used if data_streams not provided)",
+        description="List of canonical event type suffixes (e.g., 'espn_game_update'). 'event.' prefix added automatically.",
     )
 
     # Operators configuration (optional, hierarchical)
@@ -134,27 +102,6 @@ class NBATrialParams(BaseModel):
         description=(
             "Optional Polymarket market URL (e.g., 'https://polymarket.com/sports/nba/games/week/3/nba-sas-lal-2025-12-10'). "
             "If not provided, will auto-construct slug from game info (away_tricode, home_tricode, game_date)."
-        ),
-    )
-
-    # Search queries (optional, for triggering searches)
-    # If not provided, will be auto-generated based on espn_game_id
-    # Supports query templates with placeholders: {teams}, {home_team}, {away_team}, {date}, {home_tricode}, {away_tricode}
-    # Use "template" field for templates or "query" field for literal queries
-    search_queries: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description=(
-            "Custom search queries. Each dict can have:\n"
-            "  - 'template': str (optional) - Query template with placeholders\n"
-            "  - 'query': str (optional) - Literal query string (if no template)\n"
-            "  - 'intent': str (optional) - One of 'injury_summary', 'power_ranking', 'expert_prediction'\n"
-            "Available template placeholders:\n"
-            "  - {teams} - 'Away Team vs Home Team'\n"
-            "  - {home_team} - Home team full name\n"
-            "  - {away_team} - Away team full name\n"
-            "  - {date} - Game date\n"
-            "  - {home_tricode} - Home team tricode (e.g., 'LAL')\n"
-            "  - {away_tricode} - Away team tricode (e.g., 'SAS')"
         ),
     )
 
@@ -210,114 +157,85 @@ async def _build_trial_spec(
     # Extract hub configuration
     hub_id = params.hub_id
 
-    # Extract event_types from data_streams if provided, otherwise use event_types field
-    if params.data_streams:
-        event_types_list = [ds.event_type for ds in params.data_streams]
-        logger.info(
-            "Extracted event types from data_streams config: %s",
-            event_types_list,
-        )
-    else:
-        event_types_list = params.event_types
-        logger.info(
-            "Using event_types from params: %s",
-            event_types_list,
-        )
+    # Create stream specs — one per data_streams entry (or one per fallback event type)
+    stream_specs: list[DataStreamSpec[NBAPreGameBettingDataHubDataStreamConfig]] = []
 
-    # Create stream specs - multiple streams, one per event type (or group)
-    # All streams subscribe to the same DataHub
-    stream_specs = []
+    def _build_stream_config(
+        actor_id: str,
+        event_type_suffixes: list[str],
+    ) -> NBAPreGameBettingDataHubDataStreamConfig:
+        """Build a stream config dict from event type suffixes."""
+        actual_event_types = [f"event.{suffix}" for suffix in event_type_suffixes]
 
-    # Create streams for web search event types
+        cfg: NBAPreGameBettingDataHubDataStreamConfig = {
+            "actor_id": actor_id,
+            "hub_id": hub_id,
+            "persistence_file": persistence_file,
+            "event_type": actual_event_types[0] if actual_event_types else "",
+            "event_types": actual_event_types,
+        }
+        if home_tricode:
+            cfg["home_team_tricode"] = home_tricode
+        if away_tricode:
+            cfg["away_team_tricode"] = away_tricode
+
+        # Check which event types need web search (match a WebSearchEventMixin subclass)
+        _ws_suffixes = {
+            cls.model_fields["event_type"].default.removeprefix("event.")  # type: ignore[attr-defined]
+            for cls in WebSearchEventMixin.__subclasses__()
+        }
+        websearch_suffixes = [
+            suffix for suffix in event_type_suffixes if suffix in _ws_suffixes
+        ]
+
+        if websearch_suffixes:
+            cfg["websearch_event_types"] = websearch_suffixes
+            if home_team_name:
+                cfg["home_team_name"] = home_team_name
+            if away_team_name:
+                cfg["away_team_name"] = away_team_name
+            if game_date:
+                cfg["game_date"] = game_date
+
+        return cfg
+
     if params.data_streams:
-        # Use hierarchical data_streams config
         for ds_config in params.data_streams:
-            # Determine actual event types for this stream
-            # Check if it's a synthetic type that maps to multiple event types
-            if ds_config.event_type in SYNTHETIC_EVENT_TYPE_MAP:
-                actual_event_types = SYNTHETIC_EVENT_TYPE_MAP[ds_config.event_type]
-            else:
-                actual_event_types = [ds_config.event_type]
+            # Get event type suffixes from config
+            suffixes: list[str] = []
+            if ds_config.event_types:
+                suffixes = list(ds_config.event_types)
+            elif ds_config.event_type:
+                suffixes = [ds_config.event_type]
 
-            ds_stream_config: NBAPreGameBettingDataHubDataStreamConfig = {
-                "actor_id": ds_config.id,
-                "hub_id": hub_id,
-                "persistence_file": persistence_file,
-                "event_type": ds_config.event_type,
-                "event_types": actual_event_types,
-            }
+            if not suffixes:
+                logger.warning("Stream '%s' has no event types, skipping", ds_config.id)
+                continue
 
-            # Add optional fields
-            if home_tricode:
-                ds_stream_config["home_team_tricode"] = home_tricode
-            if away_tricode:
-                ds_stream_config["away_team_tricode"] = away_tricode
-
-            # Handle initializer config for raw_web_search stream
-            if ds_config.event_type == "raw_web_search":
-                ds_stream_config["websearch_store_id"] = params.websearch_store_id
-                if home_tricode:
-                    ds_stream_config["home_team_tricode"] = home_tricode
-                if away_tricode:
-                    ds_stream_config["away_team_tricode"] = away_tricode
-                if home_team_name:
-                    ds_stream_config["home_team_name"] = home_team_name
-                if away_team_name:
-                    ds_stream_config["away_team_name"] = away_team_name
-                if game_date:
-                    ds_stream_config["game_date"] = game_date
-                # Get search_queries from initializer if provided
-                if ds_config.initializer and "search_queries" in ds_config.initializer:
-                    ds_stream_config["search_queries"] = ds_config.initializer[
-                        "search_queries"
-                    ]
-
-            stream_spec = DataStreamSpec(
-                actor_id=ds_config.id,
-                actor_cls=NBAPreGameBettingDataHubDataStream,
-                config=ds_stream_config,
+            logger.info(
+                "Stream '%s' subscribes to: %s",
+                ds_config.id,
+                suffixes,
             )
-            stream_specs.append(stream_spec)
+            cfg = _build_stream_config(ds_config.id, suffixes)
+            stream_specs.append(
+                DataStreamSpec(
+                    actor_id=ds_config.id,
+                    actor_cls=NBAPreGameBettingDataHubDataStream,
+                    config=cfg,
+                )
+            )
     else:
-        # Fallback to flat event_types structure - create one stream per event type
-        for event_type in event_types_list:
-            flat_stream_config: NBAPreGameBettingDataHubDataStreamConfig = {
-                "actor_id": f"{event_type}_stream",
-                "hub_id": hub_id,
-                "persistence_file": persistence_file,
-                "event_type": event_type,
-                "event_types": [event_type],
-            }
-
-            # Add optional fields
-            if home_tricode:
-                flat_stream_config["home_team_tricode"] = home_tricode
-            if away_tricode:
-                flat_stream_config["away_team_tricode"] = away_tricode
-
-            # Handle initializer config for raw_web_search stream
-            if event_type == "raw_web_search":
-                flat_stream_config["websearch_store_id"] = params.websearch_store_id
-                if home_tricode:
-                    flat_stream_config["home_team_tricode"] = home_tricode
-                if away_tricode:
-                    flat_stream_config["away_team_tricode"] = away_tricode
-                if home_team_name:
-                    flat_stream_config["home_team_name"] = home_team_name
-                if away_team_name:
-                    flat_stream_config["away_team_name"] = away_team_name
-                if game_date:
-                    flat_stream_config["game_date"] = game_date
-                # Pass search_queries if provided
-                if params.search_queries:
-                    flat_stream_config["search_queries"] = params.search_queries
-
-            stream_spec = DataStreamSpec(
-                actor_id=f"{event_type}_stream",
-                actor_cls=NBAPreGameBettingDataHubDataStream,
-                config=flat_stream_config,
+        # Fallback: one stream per event type suffix from params.event_types
+        for suffix in params.event_types:
+            cfg = _build_stream_config(f"{suffix}_stream", [suffix])
+            stream_specs.append(
+                DataStreamSpec(
+                    actor_id=f"{suffix}_stream",
+                    actor_cls=NBAPreGameBettingDataHubDataStream,
+                    config=cfg,
+                )
             )
-            stream_specs.append(stream_spec)
 
     # Validate that all referenced streams exist
     # Collect all stream IDs that are defined in YAML
@@ -427,7 +345,7 @@ async def _build_trial_spec(
         # Base fields
         hub_id=hub_id,
         persistence_file=persistence_file,
-        store_types=("nba", "websearch", "polymarket"),
+        store_types=("nba", "polymarket"),
         # Betting fields
         sample="nba",
         sport_type="nba",
@@ -497,49 +415,37 @@ register_trial_builder(
         },
         "data_streams": [
             {
-                "id": "raw_web_search_stream",
-                "event_type": "event.raw_web_search",
-                "initializer": {
-                    "search_queries": [
-                        {
-                            "template": "NBA injury updates for {teams} on {date}",
-                            "intent": "injury_summary",
-                        },
-                        {"template": "NBA power rankings", "intent": "power_ranking"},
-                        {
-                            "template": "NBA expert predictions for {teams}",
-                            "intent": "expert_prediction",
-                        },
-                    ]
-                },
+                "id": "pre_game_insights_stream",
+                "event_types": [
+                    "injury_report",
+                    "power_ranking",
+                    "expert_prediction",
+                ],
             },
             {
-                "id": "injury_summary_stream",
-                "event_type": "event.injury_summary",
+                "id": "stats_stream",
+                "event_types": [
+                    "head_to_head",
+                    "team_stats",
+                    "player_stats",
+                    "recent_form",
+                ],
             },
             {
-                "id": "power_ranking_stream",
-                "event_type": "event.power_ranking",
-            },
-            {
-                "id": "expert_prediction_stream",
-                "event_type": "event.expert_prediction",
-            },
-            {
-                "id": "game_status_change_stream",
-                "event_type": "event.game_status_change",
+                "id": "game_lifecycle_stream",
+                "event_types": ["game_initialize", "game_start", "game_result"],
             },
             {
                 "id": "game_update_stream",
-                "event_type": "event.game_update",
+                "event_types": ["espn_game_update"],
             },
             {
                 "id": "odds_update_stream",
-                "event_type": "event.odds_update",
+                "event_types": ["odds_update"],
             },
             {
                 "id": "play_by_play_stream",
-                "event_type": "event.play_by_play",
+                "event_types": ["espn_play"],
             },
         ],
         "operators": [
@@ -548,7 +454,7 @@ register_trial_builder(
                 "class": "BrokerOperator",
                 "initial_balance": "1000.00",
                 "data_streams": [
-                    "game_status_change_stream",
+                    "game_lifecycle_stream",
                     "odds_update_stream",
                 ],
             },
@@ -559,12 +465,11 @@ register_trial_builder(
                 "class": "BettingAgent",
                 "operators": ["betting_broker"],
                 "data_streams": [
-                    "injury_summary_stream",
-                    "power_ranking_stream",
-                    "expert_prediction_stream",
+                    "pre_game_insights_stream",
+                    "stats_stream",
                     "game_update_stream",
                     "odds_update_stream",
-                    "game_status_change_stream",
+                    "game_lifecycle_stream",
                     "play_by_play_stream",
                 ],
             }

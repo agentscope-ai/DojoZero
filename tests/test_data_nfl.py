@@ -4,14 +4,23 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from dojozero.data._models import (
+    GameInitializeEvent,
+    GameResultEvent,
+    GameStartEvent,
+    OddsUpdateEvent,
+)
+from dojozero.data._models import (
+    MoneylineOdds,
+    OddsInfo,
+    SpreadOdds,
+    TeamIdentity,
+    VenueInfo,
+)
 from dojozero.data.nfl import (
     NFLDriveEvent,
     NFLExternalAPI,
-    NFLGameInitializeEvent,
-    NFLGameResultEvent,
-    NFLGameStartEvent,
     NFLGameStateTracker,
-    NFLOddsUpdateEvent,
     NFLPlayEvent,
     NFLStore,
     american_odds_to_probability,
@@ -230,36 +239,34 @@ class TestNFLEvents:
     """Tests for NFL event dataclasses."""
 
     def test_game_initialize_event(self):
-        """Test NFLGameInitializeEvent creation."""
-        event = NFLGameInitializeEvent(
+        """Test GameInitializeEvent creation."""
+        event = GameInitializeEvent(
             game_id="401671827",
-            home_team="Kansas City Chiefs",
-            away_team="San Francisco 49ers",
-            home_team_abbreviation="KC",
-            away_team_abbreviation="SF",
-            venue="Allegiant Stadium",
-            week=22,
-            season_type=3,
+            home_team=TeamIdentity(name="Kansas City Chiefs", tricode="KC"),
+            away_team=TeamIdentity(name="San Francisco 49ers", tricode="SF"),
+            venue=VenueInfo(name="Allegiant Stadium"),
+            season_type="3",
         )
 
         assert event.game_id == "401671827"
-        assert event.home_team == "Kansas City Chiefs"
-        assert event.away_team == "San Francisco 49ers"
-        assert event.event_type == "event.nfl_game_initialize"
+        assert str(event.home_team) == "Kansas City Chiefs"
+        assert str(event.away_team) == "San Francisco 49ers"
+        assert event.event_type == "event.game_initialize"
 
     def test_game_result_event(self):
-        """Test NFLGameResultEvent creation."""
-        event = NFLGameResultEvent(
+        """Test GameResultEvent creation."""
+        event = GameResultEvent(
             game_id="401671827",
             winner="home",
-            final_score={"home": 25, "away": 22},
-            home_team="Kansas City Chiefs",
-            away_team="San Francisco 49ers",
+            home_score=25,
+            away_score=22,
+            home_team_name="Kansas City Chiefs",
+            away_team_name="San Francisco 49ers",
         )
 
         assert event.winner == "home"
-        assert event.final_score["home"] == 25
-        assert event.event_type == "event.nfl_game_result"
+        assert event.home_score == 25
+        assert event.event_type == "event.game_result"
 
     def test_play_event(self):
         """Test NFLPlayEvent creation."""
@@ -267,8 +274,8 @@ class TestNFLEvents:
             game_id="401671827",
             play_id="12345",
             sequence_number=100,
-            quarter=3,
-            game_clock="12:34",
+            period=3,
+            clock="12:34",
             down=2,
             distance=7,
             yard_line=35,
@@ -289,14 +296,14 @@ class TestNFLEvents:
             game_id="401671827",
             drive_id="1",
             drive_number=5,
-            team_abbreviation="KC",
-            start_quarter=2,
+            team_tricode="KC",
+            start_period=2,
             start_clock="8:45",
             start_yard_line=25,
-            end_quarter=2,
+            end_period=2,
             end_clock="4:32",
             end_yard_line=100,
-            plays=8,
+            plays_count=8,
             yards=75,
             time_elapsed="4:13",
             result="Touchdown",
@@ -309,21 +316,21 @@ class TestNFLEvents:
         assert event.event_type == "event.nfl_drive"
 
     def test_odds_update_event(self):
-        """Test NFLOddsUpdateEvent creation."""
-        event = NFLOddsUpdateEvent(
+        """Test OddsUpdateEvent creation."""
+        event = OddsUpdateEvent(
             game_id="401671827",
-            provider="Draft Kings",
-            spread=-3.5,
-            over_under=47.5,
-            moneyline_home=-150,
-            moneyline_away=+130,
-            home_team="Kansas City Chiefs",
-            away_team="San Francisco 49ers",
+            odds=OddsInfo(
+                provider="Draft Kings",
+                spread=SpreadOdds(spread=-3.5),
+                moneyline=MoneylineOdds(home_odds=-150.0, away_odds=130.0),
+            ),
+            home_tricode="KC",
+            away_tricode="SF",
         )
 
-        assert event.spread == -3.5
-        assert event.over_under == 47.5
-        assert event.event_type == "event.nfl_odds_update"
+        assert event.odds.spread is not None and event.odds.spread.spread == -3.5
+        assert event.odds.provider == "Draft Kings"
+        assert event.event_type == "event.odds_update"
 
 
 # =============================================================================
@@ -340,13 +347,13 @@ class TestNFLStoreParseScoreboard:
         """Test that scoreboard parsing emits GameInitializeEvent."""
         events = nfl_store._parse_api_response(sample_scoreboard_data)
 
-        init_events = [e for e in events if isinstance(e, NFLGameInitializeEvent)]
+        init_events = [e for e in events if isinstance(e, GameInitializeEvent)]
         assert len(init_events) == 1
-        assert init_events[0].home_team == "Kansas City Chiefs"
-        assert init_events[0].away_team == "San Francisco 49ers"
+        assert str(init_events[0].home_team) == "Kansas City Chiefs"
+        assert str(init_events[0].away_team) == "San Francisco 49ers"
 
     def test_parse_scoreboard_emits_odds_update(self, nfl_store):
-        """Test that scoreboard parsing emits NFLOddsUpdateEvent from ESPN sportsbook data."""
+        """Test that scoreboard parsing emits OddsUpdateEvent from ESPN sportsbook data."""
         scoreboard_data = {
             "scoreboard": {
                 "events": [
@@ -383,11 +390,14 @@ class TestNFLStoreParseScoreboard:
 
         events = nfl_store._parse_api_response(scoreboard_data)
 
-        # Should emit NFLOddsUpdateEvent from ESPN sportsbook data
-        odds_events = [e for e in events if isinstance(e, NFLOddsUpdateEvent)]
+        # Should emit OddsUpdateEvent from ESPN sportsbook data
+        odds_events = [e for e in events if isinstance(e, OddsUpdateEvent)]
         assert len(odds_events) == 1
-        assert odds_events[0].spread == -2.5
-        assert odds_events[0].over_under == 47.5
+        assert (
+            odds_events[0].odds.spread is not None
+            and odds_events[0].odds.spread.spread == -2.5
+        )
+        assert odds_events[0].odds.provider == "Draft Kings"
 
     def test_parse_scoreboard_emits_game_result(self, nfl_store):
         """Test that scoreboard parsing emits GameResultEvent for finished games."""
@@ -425,10 +435,10 @@ class TestNFLStoreParseScoreboard:
         events = nfl_store._parse_api_response(scoreboard_data)
 
         # Should emit GameResultEvent
-        result_events = [e for e in events if isinstance(e, NFLGameResultEvent)]
+        result_events = [e for e in events if isinstance(e, GameResultEvent)]
         assert len(result_events) == 1
         assert result_events[0].winner == "home"
-        assert result_events[0].final_score["home"] == 25
+        assert result_events[0].home_score == 25
 
 
 class TestNFLStoreParsePlayByPlay:
@@ -450,7 +460,7 @@ class TestNFLStoreParsePlayByPlay:
         """Test that first play triggers GameStartEvent."""
         events = nfl_store._parse_api_response(sample_plays_data)
 
-        start_events = [e for e in events if isinstance(e, NFLGameStartEvent)]
+        start_events = [e for e in events if isinstance(e, GameStartEvent)]
         assert len(start_events) == 1
 
     def test_parse_plays_deduplication(self, nfl_store, sample_plays_data):
