@@ -115,7 +115,8 @@ class NBAStore(DataStore):
                 try:
                     from dojozero.data.nba._utils import get_game_info_by_id
 
-                    game_info = get_game_info_by_id(game_id)
+                    game_date = self._poll_identifier.get("game_date")
+                    game_info = get_game_info_by_id(game_id, game_date=game_date)
                     if game_info:
                         home = game_info.home_team
                         away = game_info.away_team
@@ -266,7 +267,10 @@ class NBAStore(DataStore):
                         try:
                             from dojozero.data.nba._utils import get_game_info_by_id
 
-                            game_info = get_game_info_by_id(game_id)
+                            game_date = self._poll_identifier.get("game_date")
+                            game_info = get_game_info_by_id(
+                                game_id, game_date=game_date
+                            )
                             if game_info:
                                 if game_info.game_time_utc:
                                     game_time_dt = game_info.game_time_utc
