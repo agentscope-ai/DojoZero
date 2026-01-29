@@ -1167,7 +1167,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             # Create span with all the data
             tags = {
-                "dojozero.event.type": "broker.state_update",
                 "broker.change_type": change_type,
                 "broker.accounts_count": len(self._accounts),
                 "broker.bets_count": len(self._bets),
