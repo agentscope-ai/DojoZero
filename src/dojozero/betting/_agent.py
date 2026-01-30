@@ -472,12 +472,18 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         if response is not None:
             content = getattr(response, "content", None)
             text_content, tool_calls = _parse_response_content(content)
+            # Format latest event for tracing - handle both DataEvent and other payload types
+            latest_payload = events[-1].payload
+            if isinstance(latest_payload, DataEvent):
+                latest_event_formatted = self._event_formatter(latest_payload)
+            else:
+                latest_event_formatted = f"[New data]: {json.dumps(latest_payload, default=str, ensure_ascii=False)}"
             self._emit_agent_span(
                 stream_id=primary_stream_id,
                 operation_name="agent.response",
                 content=text_content,
                 session_history=json.dumps(memory_dicts),
-                latest_event=self._event_formatter(events[-1].payload),
+                latest_event=latest_event_formatted,
                 tool_calls=tool_calls,
             )
 
