@@ -36,45 +36,41 @@ The Betting Broker is the central operator that coordinates betting activities b
 
 ## 3.1. Single Event Model
 
-The broker handles **one event at a time**. `get_event()` returns the current available event (SCHEDULED or LIVE) or `None`. All game context is embedded in tool outputs - agents call `get_event()` first and never provide event_id or team names. Critical parameters like `betting_phase` are required (no defaults) and use `Literal` types to prevent invalid values.
+The broker handles **one event at a time**. `get_event()` returns the current available event (SCHEDULED or LIVE) or `None`. All game context is embedded in tool outputs - agents call `get_event()` first and never provide event_id or team names.
 
 ## 4. Event Lifecycle
 
-**Pre-game Phase**
-- Event created with initial odds
-- Both pre-game market and limit orders accepted
-- Odds can be updated, triggering limit order matching
+**Betting Phase (SCHEDULED or LIVE)**
+- Event created with initial probabilities
+- Market and limit orders accepted at any time (no phase distinction)
+- Probabilities can be updated, triggering limit order matching
 
 **Game Start Transition**
 - Event status changes to LIVE
-- Pre-game betting closes
-- All unfilled pre-game limit orders are cancelled and refunded
-
-**In-game Phase**
-- Only in-game orders accepted (new betting phase)
-- Odds continue to update
-- Limit orders can still be placed and matched
+- Betting continues (no phase change)
+- All unfilled pending limit orders remain active
 
 **Game End Transition**
 - Event status changes to CLOSED
 - All betting stops immediately
-- All unfilled limit orders (both pre-game and in-game) are cancelled and refunded
+- All unfilled limit orders are cancelled and refunded
 
 **Settlement Phase**
 - Winner declared
 - All active (executed) bets are settled
-- Winning bets pay out: `gross_payout = amount × odds`
+- Winning bets pay out: `payout = shares × $1.00` (Polymarket model)
 - Event status changes to SETTLED
 
 ## 5. Order Types
 
 **Market Orders**
-- Execute immediately at current odds
+- Execute immediately at current probability
 - Funds locked and bet becomes active instantly
+- Shares calculated as `amount / probability`
 - Synchronous confirmation to agent
 
 **Limit Orders**
-- Execute only when odds reach or exceed specified threshold
+- Execute only when probability >= limit_probability (0-1 range)
 - Funds locked but bet remains pending
 - Added to order book for matching
 - Asynchronous notification when executed
@@ -87,37 +83,37 @@ The broker supports three bet types:
 **Moneyline Betting** (default)
 - Bet on which team will win
 - Selection: "home" or "away"
-- Uses `home_odds` and `away_odds`
+- Uses `home_probability` and `away_probability` (0-1 range, Polymarket model)
 
 **Spread Betting**
 - Bet on point spread outcomes
 - Selection: "home" or "away" with a spread value (e.g., -3.5)
-- Uses `spread_lines` with multiple spread options and their respective odds
+- Uses `spread_lines` with multiple spread options and their respective probabilities
 - Settlement based on final score adjusted by spread
 
 **Total Betting** (Over/Under)
 - Bet on total points scored
 - Selection: "over" or "under" with a total value (e.g., 220.5)
-- Uses `total_lines` with multiple total options and their respective odds
+- Uses `total_lines` with multiple total options and their respective probabilities
 - Settlement based on combined final score vs. total line
 
-All bet types support both market and limit orders, and odds can be updated dynamically for all types.
+All bet types support both market and limit orders, and probabilities can be updated dynamically for all types. The system uses a share-based model: `shares = amount / probability`, and payouts are `shares × $1.00` for wins.
 
 ## 6. Key Workflows
 
 ### Bet Placement
 1. Agent calls `get_event()` to get current game context and available betting options
 2. Agent sends bet request (no event_id needed - broker uses current event)
-3. Broker validates (balance, event status, betting phase match)
+3. Broker validates (balance, event status - must be SCHEDULED or LIVE)
 4. Funds are locked from agent balance
-5. Market orders → immediate execution
-6. Limit orders → added to order book, executed when odds match
+5. Market orders → immediate execution at current probability
+6. Limit orders → added to order book, executed when probability >= limit_probability
 
-### Odds Update
-1. Datastream sends new odds
+### Probability Update
+1. Datastream sends new probabilities
 2. Broker updates event
 3. Broker checks pending limit orders
-4. Orders with favorable odds are executed
+4. Orders with current probability >= limit_probability are executed
 5. Agents receive async execution notifications
 
 ### Event Settlement
@@ -145,7 +141,7 @@ All bet types support both market and limit orders, and odds can be updated dyna
 **Agent to Broker:**
 - Account operations: create_account, deposit, withdraw, get_balance
 - Bet operations: place_bet_moneyline, place_bet_spread, place_bet_total, cancel_bet
-- Query operations: get_event, get_active_bets, get_pending_orders, get_bet_history, get_statistics
+- Query operations: get_event, get_holdings, get_pending_orders, get_bet_history, get_statistics
 
 ## 9. Agent Tool Configuration
 
@@ -163,7 +159,7 @@ operators:
       - place_bet_spread
       - place_bet_total
       - cancel_bet
-      - get_active_bets
+      - get_holdings
       - get_pending_orders
       - get_bet_history
       - get_statistics
@@ -171,12 +167,12 @@ operators:
 
 **Available Tools:**
 - `get_balance()` - Get account balance
+- `get_holdings()` - Get active holdings (shares in active bets)
 - `get_event()` - Get current game info and betting options (call first). Returns JSON or "null"
-- `place_bet_moneyline(amount, selection, betting_phase, order_type="MARKET", limit_odds=None)` - Bet on winner. `betting_phase` required: "PRE_GAME" for SCHEDULED, "IN_GAME" for LIVE
-- `place_bet_spread(amount, selection, spread_value, betting_phase, ...)` - Bet on spread. `spread_value` from `get_event().spread_lines`
-- `place_bet_total(amount, selection, total_value, betting_phase, ...)` - Bet over/under. `total_value` from `get_event().total_lines`
+- `place_bet_moneyline(amount, selection, order_type="MARKET", limit_probability=None)` - Bet on winner. Can bet anytime while event is SCHEDULED or LIVE
+- `place_bet_spread(amount, selection, spread_value, ...)` - Bet on spread. `spread_value` from `get_event().spread_lines`
+- `place_bet_total(amount, selection, total_value, ...)` - Bet over/under. `total_value` from `get_event().total_lines`
 - `cancel_bet(bet_id)` - Cancel pending order using bet_id from `get_pending_orders()`
-- `get_active_bets()` - Get active bets
 - `get_pending_orders()` - Get pending limit orders
 - `get_bet_history(limit=20)` - Get settled bet history
 - `get_statistics()` - Get performance stats
