@@ -49,7 +49,7 @@ async def demo_fetch_pregame_stats(game_id: str, output_json: bool = False) -> N
     print()
 
     # Step 2: Fetch pregame stats
-    print("[2/3] Fetching pregame stats from ESPN API (7 parallel calls)...")
+    print("[2/3] Fetching pregame stats from ESPN API (9 parallel calls)...")
     api = ESPNExternalAPI(sport="basketball", league="nba")
 
     game_date = game_info.get_game_date_us() or "2025-01-15"
