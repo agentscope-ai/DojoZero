@@ -53,6 +53,13 @@ from dojozero.betting._models import (
     EventStatus,
     OrderType,
     Statistics,
+    # Agent Message Models
+    ReasoningStep,
+    ToolCallStep,
+    ToolResultStep,
+    CoTStep,
+    AgentResponseMessage,
+    AgentBetMessage,
 )
 from dojozero.betting._broker import (
     BrokerOperator,
@@ -88,4 +95,11 @@ __all__ = [
     "BetStatus",
     "BetOutcome",
     "BetType",
+    # Agent Message Models
+    "ReasoningStep",
+    "ToolCallStep",
+    "ToolResultStep",
+    "CoTStep",
+    "AgentResponseMessage",
+    "AgentBetMessage",
 ]
