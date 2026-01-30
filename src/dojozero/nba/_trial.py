@@ -129,6 +129,10 @@ async def _build_trial_spec(
     away_tricode = game_info.away_team.tricode
     home_team_name = game_info.home_team.name
     away_team_name = game_info.away_team.name
+    home_team_id = game_info.home_team.team_id
+    away_team_id = game_info.away_team.team_id
+    season_year = game_info.season_year
+    season_type = game_info.season_type
     # Use provided game_date if available, otherwise use from game_info
     game_date = params.game_date or game_info.get_game_date_us()
 
@@ -189,8 +193,14 @@ async def _build_trial_spec(
             suffix for suffix in event_type_suffixes if suffix in _ws_suffixes
         ]
 
-        if websearch_suffixes:
-            cfg["websearch_event_types"] = websearch_suffixes
+        # Check which event types need ESPN stats fetch
+        _stats_suffixes = {"pregame_stats"}
+        stats_suffixes = [
+            suffix for suffix in event_type_suffixes if suffix in _stats_suffixes
+        ]
+
+        # If either websearch or stats are needed, populate shared game context fields
+        if websearch_suffixes or stats_suffixes:
             cfg["game_id"] = params.espn_game_id
             if home_team_name:
                 cfg["home_team_name"] = home_team_name
@@ -198,6 +208,16 @@ async def _build_trial_spec(
                 cfg["away_team_name"] = away_team_name
             if game_date:
                 cfg["game_date"] = game_date
+
+        if websearch_suffixes:
+            cfg["websearch_event_types"] = websearch_suffixes
+
+        if stats_suffixes:
+            cfg["stats_event_types"] = stats_suffixes
+            cfg["home_team_id"] = home_team_id
+            cfg["away_team_id"] = away_team_id
+            cfg["season_year"] = season_year
+            cfg["season_type"] = season_type
 
         return cfg
 
@@ -240,10 +260,8 @@ async def _build_trial_spec(
             )
 
     # Validate that all referenced streams exist
-    # Collect all stream IDs that are defined in YAML
-    defined_stream_ids = set()
-    if params.data_streams:
-        defined_stream_ids = {ds.id for ds in params.data_streams}
+    # Collect all stream IDs from both YAML-defined and programmatically created streams
+    defined_stream_ids = {spec.actor_id for spec in stream_specs}
 
     # Collect all stream IDs referenced by operators and agents
     referenced_stream_ids = set()
@@ -427,10 +445,7 @@ register_trial_builder(
             {
                 "id": "stats_stream",
                 "event_types": [
-                    "head_to_head",
-                    "team_stats",
-                    "player_stats",
-                    "recent_form",
+                    "pregame_stats",
                 ],
             },
             {

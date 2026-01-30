@@ -18,6 +18,7 @@ from dojozero.data.espn._events import (
     ESPNPlayEvent,
 )
 from dojozero.data.espn._state_tracker import ESPNStateTracker
+from dojozero.data.espn._utils import safe_score as _safe_score
 
 
 class ESPNStore(DataStore):
@@ -255,8 +256,8 @@ class ESPNStore(DataStore):
 
                 # Game ended
                 if status_code == ESPNStateTracker.STATUS_FINAL:
-                    home_score = int(home_data.get("score", 0) or 0)
-                    away_score = int(away_data.get("score", 0) or 0)
+                    home_score = _safe_score(home_data)
+                    away_score = _safe_score(away_data)
                     winner = (
                         "home"
                         if home_score > away_score
@@ -314,7 +315,7 @@ class ESPNStore(DataStore):
 
         for comp in competitors:
             team = comp.get("team", {})
-            score = int(comp.get("score", 0) or 0)
+            score = _safe_score(comp)
             line_scores = [
                 int(ls.get("value", 0) or 0)
                 for ls in comp.get("linescores", [])

@@ -18,6 +18,10 @@ class GameContext:
     away_tricode: str = ""
     game_date: str = ""
     game_id: str = ""  # ESPN game ID for populating event.game_id
+    home_team_id: str = ""  # ESPN team ID for home team
+    away_team_id: str = ""  # ESPN team ID for away team
+    season_year: int = 0
+    season_type: str = ""  # "regular", "postseason", "preseason"
 
     @property
     def teams(self) -> str:

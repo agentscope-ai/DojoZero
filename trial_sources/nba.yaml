@@ -37,13 +37,10 @@ config:
       - power_ranking
       - expert_prediction
 
-    # ESPN stats (stubs — events defined but not yet emitted by store)
+    # ESPN pregame stats (fetched from ESPN API during pregame phase)
     - id: stats_stream
       event_types:
-      - head_to_head
-      - team_stats
-      - player_stats
-      - recent_form
+      - pregame_stats
 
     # Game lifecycle
     - id: game_lifecycle_stream

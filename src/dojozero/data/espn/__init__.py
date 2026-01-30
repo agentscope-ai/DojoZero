@@ -32,12 +32,8 @@ from dojozero.data.espn._events import (
     ESPNPlayEvent,
 )
 from dojozero.data.espn._state_tracker import ESPNStateTracker
-from dojozero.data.espn._stats_events import (
-    HeadToHeadEvent,
-    PlayerStatsEvent,
-    RecentFormEvent,
-    TeamStatsEvent,
-)
+from dojozero.data.espn._stats_events import PreGameStatsEvent
+from dojozero.data.espn._stats_fetcher import fetch_pregame_stats
 from dojozero.data.espn._store import ESPNStore
 
 # Game status constants (re-exported from ESPNStateTracker for convenience)
@@ -66,8 +62,6 @@ __all__ = [
     "ESPNGameUpdateEvent",
     "ESPNPlayEvent",
     # Stats Insight Events
-    "HeadToHeadEvent",
-    "TeamStatsEvent",
-    "PlayerStatsEvent",
-    "RecentFormEvent",
+    "PreGameStatsEvent",
+    "fetch_pregame_stats",
 ]
