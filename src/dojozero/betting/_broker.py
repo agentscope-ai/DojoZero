@@ -281,8 +281,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 home_team=home_team_str,
                 away_team=away_team_str,
                 game_time=game_time_dt,
-                initial_home_probability=None,
-                initial_away_probability=None,
             )
 
             # Apply any pending status events that arrived before this GameInitializeEvent
@@ -486,26 +484,25 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 away_probability,
                 len(spread_updates),
             )
-            # Initialize with moneyline probabilities (if available)
+            # Initialize event
             await self._initialize_event(
                 event_id=event_id,
                 home_team=team_info["home_team"],
                 away_team=team_info["away_team"],
                 game_time=team_info["game_time"],
-                initial_home_probability=Decimal(str(home_probability))
+            )
+            # Update probabilities (moneyline, spreads, totals) if provided
+            await self._update_probabilities(
+                event_id=event_id,
+                home_probability=Decimal(str(home_probability))
                 if home_probability
                 else None,
-                initial_away_probability=Decimal(str(away_probability))
+                away_probability=Decimal(str(away_probability))
                 if away_probability
                 else None,
+                spread_updates=spread_updates,
+                total_updates=total_updates,
             )
-            # Update spreads/totals if provided
-            if spread_updates or total_updates:
-                await self._update_probabilities(
-                    event_id=event_id,
-                    spread_updates=spread_updates,
-                    total_updates=total_updates,
-                )
             # Clear pending team info
             del self._pending_team_info[event_id]
         else:
@@ -646,67 +643,40 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         home_team: str,
         away_team: str,
         game_time: datetime,
-        initial_home_probability: Optional[Decimal] = None,
-        initial_away_probability: Optional[Decimal] = None,
     ) -> BettingEvent:
         """Initialize a new betting event.
 
         This is an internal method. Events are initialized via GameInitializeEvent
-        through handle_stream_event.
+        through handle_stream_event. Probabilities are set separately via _update_probabilities.
 
         Args:
             event_id: Unique event identifier
             home_team: Home team name
             away_team: Away team name
             game_time: Scheduled game time
-            initial_home_probability: Optional initial home probability (0-1, can be None if not yet available)
-            initial_away_probability: Optional initial away probability (0-1, can be None if not yet available)
         """
 
         if self._event is not None:
             raise ValueError(f"Event {event_id} already exists")
 
-        # Validate probabilities if provided
-        if initial_home_probability is not None and (
-            initial_home_probability < 0 or initial_home_probability > 1
-        ):
-            raise ValueError("Probability must be between 0 and 1")
-        if initial_away_probability is not None and (
-            initial_away_probability < 0 or initial_away_probability > 1
-        ):
-            raise ValueError("Probability must be between 0 and 1")
-
-        now = datetime.now()
         betting_event = BettingEvent(
             event_id=event_id,
             home_team=home_team,
             away_team=away_team,
             game_time=game_time,
             status=EventStatus.SCHEDULED,
-            home_probability=initial_home_probability,
-            away_probability=initial_away_probability,
-            last_odds_update=now
-            if (initial_home_probability and initial_away_probability)
-            else None,
+            home_probability=None,
+            away_probability=None,
+            last_odds_update=None,
         )
 
         self._event = betting_event
-        if initial_home_probability and initial_away_probability:
-            logger.info(
-                "Created event %s: %s vs %s (Probabilities: %s/%s)",
-                event_id,
-                home_team,
-                away_team,
-                initial_home_probability,
-                initial_away_probability,
-            )
-        else:
-            logger.info(
-                "Created event %s: %s vs %s (Probabilities: pending)",
-                event_id,
-                home_team,
-                away_team,
-            )
+        logger.info(
+            "Created event %s: %s vs %s (Probabilities: pending)",
+            event_id,
+            home_team,
+            away_team,
+        )
         return betting_event
 
     async def _update_probabilities(

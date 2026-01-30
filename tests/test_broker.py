@@ -255,8 +255,6 @@ class TestEventManagement:
             home_team="Lakers",
             away_team="Warriors",
             game_time=datetime.now(),
-            initial_home_probability=Decimal("0.513"),
-            initial_away_probability=Decimal("0.476"),
         )
 
         with pytest.raises(ValueError, match="already exists"):
@@ -265,20 +263,23 @@ class TestEventManagement:
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
-                initial_home_probability=Decimal("0.513"),
-                initial_away_probability=Decimal("0.476"),
             )
 
     async def test_initialize_event_invalid_probability_raises_error(self, broker):
-        """Test that probability outside 0-1 range raises error"""
+        """Test that probability outside 0-1 range raises error when updating probabilities"""
+        # Initialize event first
+        await broker._initialize_event(
+            event_id="game1",
+            home_team="Lakers",
+            away_team="Warriors",
+            game_time=datetime.now(),
+        )
+        # Probability validation happens in _update_probabilities, not _initialize_event
         with pytest.raises(ValueError, match="between 0 and 1"):
-            await broker._initialize_event(
+            await broker._update_probabilities(
                 event_id="game1",
-                home_team="Lakers",
-                away_team="Warriors",
-                game_time=datetime.now(),
-                initial_home_probability=Decimal("1.5"),  # Invalid: > 1
-                initial_away_probability=Decimal("0.476"),
+                home_probability=Decimal("1.5"),  # Invalid: > 1
+                away_probability=Decimal("0.476"),
             )
 
     async def test_get_available_event_with_initialized(self, initialized_event):
