@@ -953,9 +953,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         betting_event.status = status
 
         if status == EventStatus.LIVE:
-            # Game started - reject pre-game bets and cancel unfilled pre-game orders
-            betting_event.betting_closed_at = datetime.now()
-            await self._cancel_pregame_orders(event_id)
+            # Game started - betting continues, pending orders remain active
+            # No action needed - limit orders can still execute during live gameplay
+            pass
 
         elif status == EventStatus.CLOSED:
             # Game ended - reject all bets and cancel all pending orders
@@ -1125,21 +1125,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             # Log state change
             await self._log_accounts_and_bets_status("bet_settled")
-
-    async def _cancel_pregame_orders(self, event_id: str) -> None:
-        """Cancel all unfilled pending orders for an event when it goes live"""
-        pending_bet_ids = list(self._event_pending_orders.get(event_id, set()))
-
-        cancelled_count = 0
-        for bet_id in pending_bet_ids:
-            bet = self._bets[bet_id]
-            await self._cancel_pending_order(bet)
-            cancelled_count += 1
-
-        if cancelled_count > 0:
-            logger.info(
-                "Cancelled %d pending orders for event %s", cancelled_count, event_id
-            )
 
     async def _cancel_all_pending_orders(self, event_id: str) -> None:
         """Cancel all pending orders for an event"""

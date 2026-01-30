@@ -1121,13 +1121,11 @@ class TestBetSettlement:
         balance = await broker.get_balance(agent.actor_id)
         assert balance == Decimal("900.00")
 
-    async def test_cancel_pregame_orders_on_game_start(self, broker_with_agent):
-        """Test that pregame limit orders are cancelled when game starts"""
+    async def test_pending_orders_remain_active_on_game_start(self, broker_with_agent):
+        """Test that pending limit orders remain active when game starts (not cancelled)"""
         broker, agent = broker_with_agent
 
         # Initialize event
-        # Initialize event
-
         game_init_event = StreamEvent(
             stream_id="nba_game_stream",
             payload=GameInitializeEvent(
@@ -1142,7 +1140,6 @@ class TestBetSettlement:
         await broker.handle_stream_event(game_init_event)
 
         # Set odds
-
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
@@ -1161,7 +1158,7 @@ class TestBetSettlement:
 
         await broker.handle_stream_event(odds_event)
 
-        # Place pregame limit order
+        # Place limit order
         await broker.place_bet(
             agent.actor_id,
             BetRequestMoneyline(
@@ -1173,6 +1170,12 @@ class TestBetSettlement:
             ),
         )
 
+        # Verify order is pending before game starts
+        pending = await broker.get_pending_orders(agent.actor_id)
+        assert len(pending) == 1
+        balance_before = await broker.get_balance(agent.actor_id)
+        assert balance_before == Decimal("950.00")  # Funds locked
+
         # Start game
         game_start = StreamEvent(
             stream_id="nba_game_stream",
@@ -1181,12 +1184,32 @@ class TestBetSettlement:
         )
         await broker.handle_stream_event(game_start)
 
-        # Check order was cancelled and funds refunded
+        # Check order is still pending (not cancelled) - betting continues during live gameplay
+        pending = await broker.get_pending_orders(agent.actor_id)
+        assert len(pending) == 1
+
+        balance_after = await broker.get_balance(agent.actor_id)
+        assert balance_after == Decimal("950.00")  # Funds still locked
+
+        # Now close the game - orders should be cancelled
+        game_result = StreamEvent(
+            stream_id="nba_results_stream",
+            payload=GameResultEvent(
+                game_id="test_event",
+                winner="home",
+                home_score=110,
+                away_score=105,
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_result)
+
+        # Check order was cancelled when game closed
         pending = await broker.get_pending_orders(agent.actor_id)
         assert len(pending) == 0
 
-        balance = await broker.get_balance(agent.actor_id)
-        assert balance == Decimal("1000.00")
+        balance_final = await broker.get_balance(agent.actor_id)
+        assert balance_final == Decimal("1000.00")  # Funds refunded
 
 
 # =============================================================================
