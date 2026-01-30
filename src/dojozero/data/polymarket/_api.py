@@ -26,7 +26,7 @@ logger = logging.getLogger("dojozero.data.polymarket._api")
 
 
 class PolymarketAPI(ExternalAPI):
-    """Polymarket API implementation using Gamma API and CLOB API."""
+    """Polymarket API implementation using Gamma API."""
 
     # Complete mappings from ESPN team abbreviations to Polymarket slug abbreviations
     # Source: https://gamma-api.polymarket.com/teams?league=nba and ?league=nfl
@@ -146,22 +146,6 @@ class PolymarketAPI(ExternalAPI):
         """
         self.api_key = api_key
         self._gamma_base_url = "https://gamma-api.polymarket.com"
-        self._clob_base_url = "https://clob.polymarket.com"
-        self._clob_client = None  # Lazy initialization
-
-    def _get_clob_client(self):
-        """Lazy initialization of CLOB client."""
-        if self._clob_client is None:
-            try:
-                from py_clob_client.client import ClobClient
-
-                self._clob_client = ClobClient(self._clob_base_url)
-            except ImportError:
-                raise ImportError(
-                    "py-clob-client is required for Polymarket API. "
-                    "Install it with: pip install py-clob-client"
-                )
-        return self._clob_client
 
     async def get_market_by_slug(self, slug: str) -> dict[str, Any]:
         """Query Gamma API for market data by slug.
@@ -170,7 +154,7 @@ class PolymarketAPI(ExternalAPI):
             slug: Market slug (e.g., "nba-sas-lal-2025-12-10")
 
         Returns:
-            Market data dictionary with 'id' and 'clobTokenIds'
+            Market data dictionary with market information
         """
         url = f"{self._gamma_base_url}/markets/slug/{slug}"
         async with aiohttp.ClientSession() as session:
@@ -266,135 +250,136 @@ class PolymarketAPI(ExternalAPI):
 
         return filtered
 
-    def _parse_tokens(self, tokens: str | list[str] | None) -> list[str]:
-        """Parse tokens from stringified JSON list to Python list if needed.
+    def _parse_outcomes_and_prices(
+        self, outcomes: str | list[str] | None, outcomePrices: str | list[str] | None
+    ) -> tuple[list[str], list[float]] | None:
+        """Parse outcomes and outcomePrices from JSON strings or lists.
+
+        Expected order:
+        - For totals: ["Over", "Under"] with corresponding prices
+        - For moneyline/spreads: [Away, Home] with corresponding prices
 
         Args:
-            tokens: Tokens as string, list, or None
+            outcomes: Outcomes as JSON string or list
+            outcomePrices: Outcome prices as JSON string or list (must match outcomes order)
 
         Returns:
-            List of token IDs
+            Tuple of (outcomes_list, prices_list) or None if parsing fails.
+            The order is preserved from the input.
         """
-        if tokens is None:
-            return []
-        if isinstance(tokens, str):
+        if outcomes is None or outcomePrices is None:
+            return None
+
+        # Parse outcomes
+        if isinstance(outcomes, str):
             try:
-                return json.loads(tokens)
+                outcomes_list = json.loads(outcomes)
             except json.JSONDecodeError:
-                return [tokens] if tokens else []
-        return list(tokens) if tokens else []
+                logger.warning(f"Failed to parse outcomes JSON: {outcomes}")
+                return None
+        else:
+            outcomes_list = list(outcomes)
 
-    def get_orderbook_data(self, token_id: str) -> dict[str, Any] | None:
-        """Get orderbook data for a given token ID using CLOB API.
+        # Parse outcomePrices
+        if isinstance(outcomePrices, str):
+            try:
+                prices_list = json.loads(outcomePrices)
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse outcomePrices JSON: {outcomePrices}")
+                return None
+        else:
+            prices_list = list(outcomePrices)
 
-        Args:
-            token_id: Token ID to query
+        # Validate lengths match
+        if len(outcomes_list) != len(prices_list):
+            logger.warning(
+                f"Mismatched outcomes/prices length: outcomes={len(outcomes_list)}, "
+                f"prices={len(prices_list)}"
+            )
+            return None
 
-        Returns:
-            Dictionary with 'midpoint', 'price', 'order_book', 'order_books', or None if not found
-        """
-        client = self._get_clob_client()
+        if len(outcomes_list) < 2:
+            logger.warning(f"Expected at least 2 outcomes, got {len(outcomes_list)}")
+            return None
+
+        # Convert prices to floats
         try:
-            from py_clob_client.clob_types import BookParams
-            from py_clob_client.exceptions import PolyApiException
-
-            return {
-                "midpoint": client.get_midpoint(token_id),
-                "price": client.get_price(token_id, side="BUY"),
-                "order_book": client.get_order_book(token_id),
-                "order_books": client.get_order_books([BookParams(token_id=token_id)]),
-            }
-        except PolyApiException as e:
-            # Handle 404 or other errors
-            if e.status_code == 404:
-                return None  # No orderbook exists
-            raise
-        except Exception:
-            # Re-raise other exceptions
-            raise
-
-    def find_active_token(
-        self, tokens: list[str]
-    ) -> tuple[str | None, dict[str, Any] | None]:
-        """Try each token until we find one with an active orderbook.
-
-        Args:
-            tokens: List of token IDs to try
-
-        Returns:
-            Tuple of (token_id, orderbook_data) or (None, None) if none found
-        """
-        for token in tokens:
-            try:
-                data = self.get_orderbook_data(token)
-                if data is not None:
-                    return token, data
-            except Exception as e:
-                logger.debug("Token %s has no active orderbook: %s", token, e)
-                continue  # Try next token
-        return None, None
-
-    def find_all_active_tokens(
-        self, tokens: list[str]
-    ) -> list[tuple[str, dict[str, Any]]]:
-        """Find all tokens with active orderbooks.
-
-        Args:
-            tokens: List of token IDs to try
-
-        Returns:
-            List of (token_id, orderbook_data) tuples for all active tokens
-        """
-        active_tokens = []
-        for token in tokens:
-            try:
-                data = self.get_orderbook_data(token)
-                if data is not None:
-                    active_tokens.append((token, data))
-            except Exception as e:
-                logger.debug("Token %s has no active orderbook: %s", token, e)
-                continue  # Try next token
-        return active_tokens
-
-    def _extract_numeric_value(self, value: Any) -> float | None:
-        """Extract numeric value from midpoint/price, handling dict format.
-
-        Args:
-            value: Can be a number, dict with 'mid' key, or string
-
-        Returns:
-            Numeric value or None if not extractable
-        """
-        if value is None:
+            prices_float = [float(p) for p in prices_list]
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"Failed to convert prices to floats: {prices_list}, error: {e}"
+            )
             return None
 
-        # Handle dict format like {'mid': '0.135'}
-        if isinstance(value, dict):
-            mid_value = value.get("mid")
-            if mid_value is not None:
-                try:
-                    return float(mid_value)
-                except (ValueError, TypeError):
-                    return None
+        if len(outcomes_list) != len(prices_float) or len(outcomes_list) < 2:
             return None
 
-        # Handle string format
-        if isinstance(value, str):
-            try:
-                return float(value)
-            except (ValueError, TypeError):
+        # Validate prices are between 0 and 1
+        for i, price in enumerate(prices_float):
+            if price < 0.0 or price > 1.0:
+                logger.warning(
+                    f"Price {i} out of valid range [0, 1]: {price} for outcome {outcomes_list[i]}"
+                )
                 return None
 
-        # Handle numeric format
-        if isinstance(value, (int, float)):
-            return float(value)
+        return outcomes_list, prices_float
 
-        return None
+    def _map_outcomes_to_probabilities(
+        self,
+        outcomes: list[str],
+        prices: list[float],
+        market_type: str | None,
+        slug: str,
+    ) -> tuple[float, float] | None:
+        """Map outcomes to probabilities based on market type.
+
+        Polymarket API returns outcomes in fixed order:
+        - For totals: [Over, Under] -> prices[0] = over_prob, prices[1] = under_prob
+        - For moneyline/spreads: [Away, Home] -> prices[0] = away_prob, prices[1] = home_prob
+
+        Args:
+            outcomes: List of outcome names
+            prices: List of outcome prices (probabilities) in same order as outcomes
+            market_type: Market type ("moneyline", "spreads", "totals")
+            slug: Market slug for logging
+
+        Returns:
+            For totals: (over_probability, under_probability)
+            For moneyline/spreads: (home_probability, away_probability)
+            None if mapping fails
+        """
+        if len(outcomes) != len(prices) or len(outcomes) < 2:
+            return None
+
+        if market_type == "totals":
+            # For totals: outcomes order is [Over, Under]
+            # prices[0] = over_probability, prices[1] = under_probability
+            if len(outcomes) != 2:
+                logger.warning(
+                    f"Expected 2 outcomes for totals market {slug}, got {len(outcomes)}: {outcomes}"
+                )
+                return None
+
+            over_prob = prices[0]
+            under_prob = prices[1]
+            return over_prob, under_prob
+        else:
+            # For moneyline/spreads: outcomes order is [Away, Home]
+            # prices[0] = away_probability, prices[1] = home_probability
+            if len(outcomes) != 2:
+                logger.warning(
+                    f"Expected 2 outcomes for {market_type} market {slug}, got {len(outcomes)}: {outcomes}"
+                )
+                return None
+
+            away_prob = prices[0]
+            home_prob = prices[1]
+            return home_prob, away_prob
 
     async def _fetch_odds_from_slug(
         self, slug: str, market_type: str | None = None
     ) -> MarketOddsData | None:
-        """Fetch odds from a market slug.
+        """Fetch odds from a market slug using Gamma API outcomes and prices.
 
         Args:
             slug: Market slug (e.g., "nba-sas-lal-2025-12-10")
@@ -417,92 +402,73 @@ class PolymarketAPI(ExternalAPI):
             return None
 
         market_id = market.id
-        tokens = self._parse_tokens(market.clobTokenIds)
+        market_type = market_type or market.sportsMarketType
 
-        if not tokens:
-            return None
-
-        # Find all active tokens and get orderbook data
-        active_tokens = self.find_all_active_tokens(tokens)
-
-        if len(active_tokens) < 2:
-            logger.debug(
-                f"Found {len(active_tokens)} active tokens for market {slug} "
-                f"(type: {market_type}). Market may not be fully active yet."
+        # Parse outcomes and prices
+        parsed = self._parse_outcomes_and_prices(market.outcomes, market.outcomePrices)
+        if parsed is None:
+            logger.warning(
+                f"Could not parse outcomes/prices for market {slug}: "
+                f"outcomes={market.outcomes}, outcomePrices={market.outcomePrices}"
             )
-            if not active_tokens:
-                return None  # No active tokens - market not ready
-            # For markets with fewer than 2 tokens, we can't determine both sides
-            # This might happen for spread/total markets with different structures
             return None
 
-        # Extract odds from orderbooks
-        # Each token's midpoint/price represents the probability of that outcome
-        # Convert probability to decimal odds: odds = 1 / probability
-        token1_id, orderbook1 = active_tokens[0]
-        token2_id, orderbook2 = active_tokens[1]
+        outcomes, prices = parsed
 
-        # Get midpoint or price for each token
-        midpoint1 = orderbook1.get("midpoint")
-        midpoint2 = orderbook2.get("midpoint")
+        # Map outcomes to probabilities (Polymarket API order: totals=[Over,Under], others=[Away,Home])
+        probs = self._map_outcomes_to_probabilities(outcomes, prices, market_type, slug)
+        if probs is None:
+            return None
 
-        # Extract numeric values
-        mid1_value = self._extract_numeric_value(midpoint1)
-        mid2_value = self._extract_numeric_value(midpoint2)
+        if market_type == "totals":
+            # For totals: returns (over_probability, under_probability)
+            over_prob, under_prob = probs
 
-        if mid1_value is not None and mid2_value is not None:
-            # Convert probabilities to odds
-            odds1 = 1.0 / mid1_value if mid1_value > 0 else 1.0
-            odds2 = 1.0 / mid2_value if mid2_value > 0 else 1.0
+            # Convert probabilities to decimal odds
+            over_odds = 1.0 / over_prob if over_prob > 0 else 1.0
+            under_odds = 1.0 / under_prob if under_prob > 0 else 1.0
+
+            logger.debug(
+                f"Fetched odds for totals market {slug}: "
+                f"over_prob={over_prob:.4f}, under_prob={under_prob:.4f}, "
+                f"over_odds={over_odds:.4f}, under_odds={under_odds:.4f}"
+            )
+
+            # Map to home/away for MarketOddsData model (home=over, away=under for totals)
+            return MarketOddsData(
+                market_id=market_id,
+                slug=slug,
+                market_type=market_type,
+                line=market.line,
+                home_odds=over_odds,
+                away_odds=under_odds,
+                home_probability=over_prob,
+                away_probability=under_prob,
+            )
         else:
-            # Fallback to price; require valid numeric prices
-            price1 = orderbook1.get("price")
-            price2 = orderbook2.get("price")
+            # For moneyline/spreads: returns (home_probability, away_probability)
+            home_prob, away_prob = probs
 
-            price1_value = self._extract_numeric_value(price1)
-            price2_value = self._extract_numeric_value(price2)
+            # Convert probabilities to decimal odds
+            home_odds = 1.0 / home_prob if home_prob > 0 else 1.0
+            away_odds = 1.0 / away_prob if away_prob > 0 else 1.0
 
-            if price1_value is not None and price2_value is not None:
-                odds1 = 1.0 / price1_value if price1_value > 0 else 1.0
-                odds2 = 1.0 / price2_value if price2_value > 0 else 1.0
-            else:
-                logger.warning(
-                    f"Missing or non-numeric midpoint/price data for tokens "
-                    f"{token1_id} (midpoint={midpoint1!r}, price={price1!r}), "
-                    f"{token2_id} (midpoint={midpoint2!r}, price={price2!r})"
-                )
-                return None
+            logger.debug(
+                f"Fetched odds for {market_type or 'market'} market {slug}: "
+                f"home_prob={home_prob:.4f}, away_prob={away_prob:.4f}, "
+                f"home_odds={home_odds:.4f}, away_odds={away_odds:.4f}"
+            )
 
-        # Token ordering: slug format is "nba-{away_tricode}-{home_tricode}-{date}"
-        # We assume tokens follow slug order: token1 = away, token2 = home
-        # TODO: If market metadata provides outcome information, use it to verify/correct this assumption
-        logger.debug(
-            f"Token ordering for {market_type or 'market'}: token1=away ({token1_id}, prob={mid1_value}, odds={odds1}), "
-            f"token2=home ({token2_id}, prob={mid2_value}, odds={odds2})"
-        )
-
-        home_prob = (
-            mid2_value
-            if mid2_value is not None
-            else (price2_value if price2_value is not None else 0.0)
-        )
-        away_prob = (
-            mid1_value
-            if mid1_value is not None
-            else (price1_value if price1_value is not None else 0.0)
-        )
-
-        return MarketOddsData(
-            market_id=market_id,
-            slug=slug,
-            market_type=market_type,
-            line=None,  # Will be set later from market data if available
-            home_odds=odds2,  # token2 = home (computed from probability)
-            away_odds=odds1,  # token1 = away (computed from probability)
-            home_probability=home_prob,
-            away_probability=away_prob,
-            token_ids=[token1_id, token2_id],
-        )
+            return MarketOddsData(
+                market_id=market_id,
+                slug=slug,
+                market_type=market_type,
+                line=market.line,
+                home_odds=home_odds,
+                away_odds=away_odds,
+                home_probability=home_prob,
+                away_probability=away_prob,
+            )
 
     async def fetch_odds_from_market(
         self,
@@ -684,28 +650,6 @@ class PolymarketAPI(ExternalAPI):
                 slug,
             )
         return {}
-
-    async def place_bet(
-        self, market_id: str, outcome: str, amount: float
-    ) -> dict[str, Any]:
-        """Place a bet on Polymarket.
-
-        Args:
-            market_id: Market identifier
-            outcome: Outcome to bet on (e.g., "Yes", "No")
-            amount: Bet amount
-
-        Returns:
-            Bet confirmation
-        """
-        # Simulated bet placement
-        return {
-            "bet_id": f"bet_{market_id}_{outcome}",
-            "market_id": market_id,
-            "outcome": outcome,
-            "amount": amount,
-            "status": "placed",
-        }
 
     async def close(self) -> None:
         """Close the API (no-op for PolymarketAPI as it doesn't maintain persistent connections)."""

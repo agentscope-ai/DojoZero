@@ -96,7 +96,6 @@ def _make_moneyline_odds(
         away_odds=away_odds,
         home_probability=home_probability,
         away_probability=away_probability,
-        token_ids=["token1", "token2"],
     )
 
 
@@ -119,7 +118,6 @@ def _make_spread_odds(
         away_odds=away_odds,
         home_probability=home_probability,
         away_probability=away_probability,
-        token_ids=["token3", "token4"],
     )
 
 
@@ -142,7 +140,6 @@ def _make_total_odds(
         away_odds=away_odds,
         home_probability=home_probability,
         away_probability=away_probability,
-        token_ids=["token5", "token6"],
     )
 
 
