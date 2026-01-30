@@ -1843,19 +1843,19 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 Moneyline betting (may be None if probabilities not set yet):
                 - home_probability: Win probability for home team (0-1) as string (e.g., "0.54") or null
                 - away_probability: Win probability for away team (0-1) as string (e.g., "0.46") or null
-                Use with place_bet_moneyline(selection="home" or "away")
+                Use with place_market_bet_moneyline() or place_limit_bet_moneyline()
 
                 Spread betting (empty dict {} if not available):
                 - spread_lines: Dict mapping spread values to probabilities
                   Format: {"-3.5": {"home_probability": "0.526", "away_probability": "0.474"}, "+3.5": {...}, ...}
                   Keys are spread values as strings (e.g., "-3.5", "+3.5")
-                  Use with place_bet_spread(spread_value must match a key from spread_lines)
+                  Use with place_market_bet_spread() or place_limit_bet_spread()
 
                 Total betting (empty dict {} if not available):
                 - total_lines: Dict mapping total values to probabilities
                   Format: {"220.5": {"over_probability": "0.532", "under_probability": "0.468"}, "225.5": {...}, ...}
                   Keys are total point values as strings (e.g., "220.5")
-                  Use with place_bet_total(total_value must match a key from total_lines, selection="over" or "under")
+                  Use with place_market_bet_total() or place_limit_bet_total()
 
                 Metadata:
                 - last_odds_update: Last probability update time (ISO format string) or null
@@ -1872,21 +1872,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             return event.model_dump_json()
 
         @tool
-        async def place_bet_moneyline(
+        async def place_market_bet_moneyline(
             amount: str,
             selection: Literal["home", "away"],
-            order_type: Literal["MARKET", "LIMIT"] = "MARKET",
-            limit_probability: str | None = None,
         ) -> str:
-            """Bet on which team will win (moneyline).
+            """Place a market order to bet on which team will win (moneyline). Executes immediately at current probability.
 
-            You can bet at any time while the event is SCHEDULED or LIVE (no phase distinction).
+            You can bet at any time while the event is SCHEDULED or LIVE.
 
             Args:
                 amount: Bet amount as string (e.g., "100.00")
                 selection: "home" or "away"
-                order_type: "MARKET" (execute immediately at current probability) or "LIMIT" (wait for probability to reach your minimum)
-                limit_probability: For LIMIT only - minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
 
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
@@ -1901,10 +1897,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     amount=Decimal(amount),
                     selection=selection,
                     event_id=event.event_id,
-                    order_type=OrderType[order_type],
-                    limit_probability=Decimal(limit_probability)
-                    if limit_probability
-                    else None,
+                    order_type=OrderType.MARKET,
+                    limit_probability=None,
                 )
                 result = await target.place_bet(agent_id, bet_request)
                 return result
@@ -1912,28 +1906,69 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 return f"bet_invalid: {str(e)}"
             except Exception as e:
                 logger.error(
-                    "Unexpected error in place_bet_moneyline: %s", e, exc_info=True
+                    "Unexpected error in place_market_bet_moneyline: %s",
+                    e,
+                    exc_info=True,
                 )
                 return f"bet_invalid: Unexpected error - {str(e)}"
 
         @tool
-        async def place_bet_spread(
+        async def place_limit_bet_moneyline(
+            amount: str,
+            selection: Literal["home", "away"],
+            limit_probability: str,
+        ) -> str:
+            """Place a limit order to bet on which team will win (moneyline). Executes when probability reaches your minimum.
+
+            You can bet at any time while the event is SCHEDULED or LIVE.
+
+            Args:
+                amount: Bet amount as string (e.g., "100.00")
+                selection: "home" or "away"
+                limit_probability: Minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
+
+            Returns:
+                "bet_placed" or "bet_invalid: <reason>"
+            """
+            try:
+                # Get the current event
+                event = await target.get_available_event()
+                if not event:
+                    return "bet_invalid: No event available"
+
+                bet_request = BetRequestMoneyline(
+                    amount=Decimal(amount),
+                    selection=selection,
+                    event_id=event.event_id,
+                    order_type=OrderType.LIMIT,
+                    limit_probability=Decimal(limit_probability),
+                )
+                result = await target.place_bet(agent_id, bet_request)
+                return result
+            except (ValueError, KeyError, TypeError) as e:
+                return f"bet_invalid: {str(e)}"
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in place_limit_bet_moneyline: %s",
+                    e,
+                    exc_info=True,
+                )
+                return f"bet_invalid: Unexpected error - {str(e)}"
+
+        @tool
+        async def place_market_bet_spread(
             amount: str,
             selection: Literal["home", "away"],
             spread_value: str,
-            order_type: Literal["MARKET", "LIMIT"] = "MARKET",
-            limit_probability: str | None = None,
         ) -> str:
-            """Bet on point spread (team must win by more than spread or lose by less).
+            """Place a market order to bet on point spread. Executes immediately at current probability.
 
-            You can bet at any time while the event is SCHEDULED or LIVE (no phase distinction).
+            You can bet at any time while the event is SCHEDULED or LIVE.
 
             Args:
                 amount: Bet amount as string (e.g., "100.00")
                 selection: "home" or "away"
                 spread_value: Must match a key from spread_lines in get_event(). Negative values (e.g., "-3.5") mean home team is favored; positive values (e.g., "+3.5") mean away team is favored.
-                order_type: "MARKET" (execute immediately) or "LIMIT" (wait for probability to reach your minimum)
-                limit_probability: For LIMIT only - minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
 
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
@@ -1949,10 +1984,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     selection=selection,
                     event_id=event.event_id,
                     spread_value=Decimal(spread_value),
-                    order_type=OrderType[order_type],
-                    limit_probability=Decimal(limit_probability)
-                    if limit_probability
-                    else None,
+                    order_type=OrderType.MARKET,
+                    limit_probability=None,
                 )
                 result = await target.place_bet(agent_id, bet_request)
                 return result
@@ -1960,28 +1993,68 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 return f"bet_invalid: {str(e)}"
             except Exception as e:
                 logger.error(
-                    "Unexpected error in place_bet_spread: %s", e, exc_info=True
+                    "Unexpected error in place_market_bet_spread: %s", e, exc_info=True
                 )
                 return f"bet_invalid: Unexpected error - {str(e)}"
 
         @tool
-        async def place_bet_total(
+        async def place_limit_bet_spread(
+            amount: str,
+            selection: Literal["home", "away"],
+            spread_value: str,
+            limit_probability: str,
+        ) -> str:
+            """Place a limit order to bet on point spread. Executes when probability reaches your minimum.
+
+            You can bet at any time while the event is SCHEDULED or LIVE.
+
+            Args:
+                amount: Bet amount as string (e.g., "100.00")
+                selection: "home" or "away"
+                spread_value: Must match a key from spread_lines in get_event(). Negative values (e.g., "-3.5") mean home team is favored; positive values (e.g., "+3.5") mean away team is favored.
+                limit_probability: Minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
+
+            Returns:
+                "bet_placed" or "bet_invalid: <reason>"
+            """
+            try:
+                # Get the current event
+                event = await target.get_available_event()
+                if not event:
+                    return "bet_invalid: No event available"
+
+                bet_request = BetRequestSpread(
+                    amount=Decimal(amount),
+                    selection=selection,
+                    event_id=event.event_id,
+                    spread_value=Decimal(spread_value),
+                    order_type=OrderType.LIMIT,
+                    limit_probability=Decimal(limit_probability),
+                )
+                result = await target.place_bet(agent_id, bet_request)
+                return result
+            except (ValueError, KeyError, TypeError) as e:
+                return f"bet_invalid: {str(e)}"
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in place_limit_bet_spread: %s", e, exc_info=True
+                )
+                return f"bet_invalid: Unexpected error - {str(e)}"
+
+        @tool
+        async def place_market_bet_total(
             amount: str,
             selection: Literal["over", "under"],
             total_value: str,
-            order_type: Literal["MARKET", "LIMIT"] = "MARKET",
-            limit_probability: str | None = None,
         ) -> str:
-            """Bet on total points scored (over/under).
+            """Place a market order to bet on total points scored (over/under). Executes immediately at current probability.
 
-            You can bet at any time while the event is SCHEDULED or LIVE (no phase distinction).
+            You can bet at any time while the event is SCHEDULED or LIVE.
 
             Args:
                 amount: Bet amount as string (e.g., "100.00")
                 selection: "over" or "under"
                 total_value: Must match a key from total_lines in get_event(). This is the combined points both teams will score; bet "over" if you think total will exceed this, "under" if it will be less.
-                order_type: "MARKET" or "LIMIT"
-                limit_probability: For LIMIT only - minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
 
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
@@ -1997,10 +2070,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     selection=selection,
                     event_id=event.event_id,
                     total_value=Decimal(total_value),
-                    order_type=OrderType[order_type],
-                    limit_probability=Decimal(limit_probability)
-                    if limit_probability
-                    else None,
+                    order_type=OrderType.MARKET,
+                    limit_probability=None,
                 )
                 result = await target.place_bet(agent_id, bet_request)
                 return result
@@ -2008,7 +2079,51 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 return f"bet_invalid: {str(e)}"
             except Exception as e:
                 logger.error(
-                    "Unexpected error in place_bet_total: %s", e, exc_info=True
+                    "Unexpected error in place_market_bet_total: %s", e, exc_info=True
+                )
+                return f"bet_invalid: Unexpected error - {str(e)}"
+
+        @tool
+        async def place_limit_bet_total(
+            amount: str,
+            selection: Literal["over", "under"],
+            total_value: str,
+            limit_probability: str,
+        ) -> str:
+            """Place a limit order to bet on total points scored (over/under). Executes when probability reaches your minimum.
+
+            You can bet at any time while the event is SCHEDULED or LIVE.
+
+            Args:
+                amount: Bet amount as string (e.g., "100.00")
+                selection: "over" or "under"
+                total_value: Must match a key from total_lines in get_event(). This is the combined points both teams will score; bet "over" if you think total will exceed this, "under" if it will be less.
+                limit_probability: Minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
+
+            Returns:
+                "bet_placed" or "bet_invalid: <reason>"
+            """
+            try:
+                # Get the current event
+                event = await target.get_available_event()
+                if not event:
+                    return "bet_invalid: No event available"
+
+                bet_request = BetRequestTotal(
+                    amount=Decimal(amount),
+                    selection=selection,
+                    event_id=event.event_id,
+                    total_value=Decimal(total_value),
+                    order_type=OrderType.LIMIT,
+                    limit_probability=Decimal(limit_probability),
+                )
+                result = await target.place_bet(agent_id, bet_request)
+                return result
+            except (ValueError, KeyError, TypeError) as e:
+                return f"bet_invalid: {str(e)}"
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in place_limit_bet_total: %s", e, exc_info=True
                 )
                 return f"bet_invalid: Unexpected error - {str(e)}"
 
@@ -2071,9 +2186,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             "get_balance": get_balance,
             "get_holdings": get_holdings,
             "get_event": get_event,
-            "place_bet_moneyline": place_bet_moneyline,
-            "place_bet_spread": place_bet_spread,
-            "place_bet_total": place_bet_total,
+            "place_market_bet_moneyline": place_market_bet_moneyline,
+            "place_limit_bet_moneyline": place_limit_bet_moneyline,
+            "place_market_bet_spread": place_market_bet_spread,
+            "place_limit_bet_spread": place_limit_bet_spread,
+            "place_market_bet_total": place_market_bet_total,
+            "place_limit_bet_total": place_limit_bet_total,
             "cancel_bet": cancel_bet,
             "get_pending_orders": get_pending_orders,
             "get_bet_history": get_bet_history,

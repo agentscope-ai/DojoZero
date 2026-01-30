@@ -61,12 +61,10 @@ config:
       class: BrokerOperator
       initial_balance: "1000.00"
       allowed_tools:
+      - get_event
       - get_balance
       - get_holdings
-      - get_event
-      - place_bet_moneyline
-      - cancel_bet
-      - get_pending_orders
+      - place_market_bet_moneyline
       - get_bet_history
       - get_statistics
       data_streams:

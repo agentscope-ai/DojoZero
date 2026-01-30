@@ -2393,7 +2393,7 @@ class TestAllowedTools:
         config: BrokerOperatorConfig = {
             "actor_id": "test_broker",
             "initial_balance": "1000.00",
-            "allowed_tools": ["get_balance", "get_event", "place_bet_moneyline"],
+            "allowed_tools": ["get_balance", "get_event", "place_market_bet_moneyline"],
         }
         broker = BrokerOperator(config, trial_id="test-trial")
         await broker.start()
@@ -2411,13 +2411,17 @@ class TestAllowedTools:
 
         # Should only have the allowed tools
         assert "get_balance" in tool_names
-        # assert "get_event" in tool_names
-        assert "place_bet_moneyline" in tool_names
+        assert "get_event" in tool_names
+        assert "place_market_bet_moneyline" in tool_names
 
         # Should NOT have the restricted tools
-        assert "place_bet_spread" not in tool_names
-        assert "place_bet_total" not in tool_names
+        assert "place_limit_bet_moneyline" not in tool_names
+        assert "place_market_bet_spread" not in tool_names
+        assert "place_limit_bet_spread" not in tool_names
+        assert "place_market_bet_total" not in tool_names
+        assert "place_limit_bet_total" not in tool_names
         assert "cancel_bet" not in tool_names
+        assert "get_pending_orders" not in tool_names
 
     async def test_all_tools_when_none_specified(self, broker, agent):
         """Test that all tools are available when allowed_tools is None"""
@@ -2432,9 +2436,12 @@ class TestAllowedTools:
             "get_balance",
             "get_holdings",
             "get_event",
-            "place_bet_moneyline",
-            "place_bet_spread",
-            "place_bet_total",
+            "place_market_bet_moneyline",
+            "place_limit_bet_moneyline",
+            "place_market_bet_spread",
+            "place_limit_bet_spread",
+            "place_market_bet_total",
+            "place_limit_bet_total",
             "cancel_bet",
             "get_pending_orders",
             "get_bet_history",

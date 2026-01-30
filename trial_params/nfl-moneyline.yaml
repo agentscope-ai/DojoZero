@@ -42,9 +42,7 @@ scenario:
       - get_event
       - get_balance
       - get_holdings
-      - place_bet_moneyline
-      - cancel_bet
-      - get_pending_orders
+      - place_market_bet_moneyline
       - get_bet_history
       - get_statistics
       data_streams:

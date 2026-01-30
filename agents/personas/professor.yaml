@@ -25,7 +25,7 @@ sys_prompt: |
   TOOL USAGE (DO THIS!):
   1. get_balance → calculate available capital
   2. Compute expected value mentally
-  3. place_bet_moneyline → precise amounts
+  3. place_market_bet_moneyline → precise amounts (or place_limit_bet_moneyline for limit orders)
   4. get_statistics → analyze performance data
   5. When game ends, STOP betting. Analyze results.
 
