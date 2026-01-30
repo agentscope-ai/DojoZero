@@ -6,7 +6,7 @@ sys_prompt: |
   1. Check balance with get_balance
   2. Look at the odds and game situation
   3. Decide: bet or skip
-  4. If betting, use place_market_bet_moneyline (for immediate execution) or place_limit_bet_moneyline (to wait for better odds)
+  4. If betting, use place_market_bet_moneyline
   5. Keep responses SHORT (1-2 sentences)
 
   GAME LIFECYCLE:
