@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # ESPN API base URLs
 SITE_API_BASE = "https://site.api.espn.com/apis/site/v2/sports"
+SITE_V2_API_BASE = "https://site.api.espn.com/apis/v2/sports"
 CORE_API_BASE = "https://sports.core.api.espn.com/v2/sports"
 
 
@@ -91,6 +92,15 @@ class ESPNExternalAPI(ExternalAPI):
     def core_api_url(self) -> str:
         """Get the core API base URL for this sport/league."""
         return f"{CORE_API_BASE}/{self.sport}/leagues/{self.league}"
+
+    @property
+    def site_v2_api_url(self) -> str:
+        """Get the site v2 API base URL for this sport/league.
+
+        Used by endpoints like standings that live under ``/apis/v2/``
+        rather than ``/apis/site/v2/``.
+        """
+        return f"{SITE_V2_API_BASE}/{self.sport}/{self.league}"
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
@@ -410,7 +420,7 @@ class ESPNExternalAPI(ExternalAPI):
         Returns:
             {"standings": {...}} with children array of conference/division standings
         """
-        url = f"https://site.api.espn.com/apis/v2/sports/{self.sport}/{self.league}/standings"
+        url = f"{self.site_v2_api_url}/standings"
         query_params: dict[str, str] = {}
         if "season" in params:
             query_params["season"] = str(params["season"])
