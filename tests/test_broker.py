@@ -15,7 +15,6 @@ from dojozero.betting import (
     BetRequestSpread,
     BetRequestTotal,
     OrderType,
-    BettingPhase,
     BetStatus,
     BetOutcome,
     BetExecutedPayload,
@@ -531,7 +530,6 @@ class TestBetPlacement:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
 
@@ -594,7 +592,6 @@ class TestBetPlacement:
                 selection="away",
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
-                betting_phase=BettingPhase.PRE_GAME,
                 limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
@@ -659,7 +656,6 @@ class TestBetPlacement:
                 selection="away",
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
-                betting_phase=BettingPhase.PRE_GAME,
                 limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
@@ -740,7 +736,6 @@ class TestBetPlacement:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
 
@@ -817,7 +812,6 @@ class TestBetPlacement:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
 
@@ -871,7 +865,6 @@ class TestBetPlacement:
                 selection="away",
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
-                betting_phase=BettingPhase.PRE_GAME,
                 limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
@@ -940,7 +933,6 @@ class TestBetPlacement:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
 
@@ -1009,7 +1001,6 @@ class TestBetSettlement:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
 
@@ -1096,7 +1087,6 @@ class TestBetSettlement:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
 
@@ -1179,7 +1169,6 @@ class TestBetSettlement:
                 selection="away",
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
-                betting_phase=BettingPhase.PRE_GAME,
                 limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
@@ -1256,7 +1245,6 @@ class TestStatistics:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
 
@@ -1267,7 +1255,6 @@ class TestStatistics:
                 selection="away",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
 
@@ -1379,7 +1366,6 @@ class TestStateManagement:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
 
@@ -1454,7 +1440,6 @@ class TestIntegration:
                 selection="home",
                 event_id="game1",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
             ),
         )
         assert result == "bet_placed"
@@ -1467,7 +1452,6 @@ class TestIntegration:
                 selection="away",
                 event_id="game1",
                 order_type=OrderType.LIMIT,
-                betting_phase=BettingPhase.PRE_GAME,
                 limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
@@ -1648,7 +1632,6 @@ class TestSpreadBetting:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
                 spread_value=Decimal("-3.5"),
             ),
         )
@@ -1706,7 +1689,6 @@ class TestSpreadBetting:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
                 spread_value=Decimal("-3.5"),
             ),
         )
@@ -1772,7 +1754,6 @@ class TestSpreadBetting:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
                 spread_value=Decimal("-3.5"),
             ),
         )
@@ -1900,7 +1881,6 @@ class TestSpreadBetting:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
-                betting_phase=BettingPhase.PRE_GAME,
                 spread_value=Decimal("-3.5"),
                 limit_probability=Decimal("0.513"),  # 1/1.95 - Want better probability
             ),
@@ -1981,7 +1961,6 @@ class TestTotalBetting:
                 selection="over",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
                 total_value=Decimal("220.5"),
             ),
         )
@@ -2035,7 +2014,6 @@ class TestTotalBetting:
                 selection="over",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
                 total_value=Decimal("220.5"),
             ),
         )
@@ -2101,7 +2079,6 @@ class TestTotalBetting:
                 selection="under",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
                 total_value=Decimal("220.5"),
             ),
         )
@@ -2229,7 +2206,6 @@ class TestTotalBetting:
                 selection="over",
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
-                betting_phase=BettingPhase.PRE_GAME,
                 total_value=Decimal("220.5"),
                 limit_probability=Decimal("0.526"),  # 1/1.90 - Want better probability
             ),
@@ -2312,7 +2288,6 @@ class TestMultipleSpreadsTotals:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
                 spread_value=Decimal("-3.5"),
             ),
         )
@@ -2324,7 +2299,6 @@ class TestMultipleSpreadsTotals:
                 selection="away",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
                 spread_value=Decimal("-4.5"),  # Away gets +4.5
             ),
         )
@@ -2387,7 +2361,6 @@ class TestMultipleSpreadsTotals:
                 selection="home",
                 event_id="test_event",
                 order_type=OrderType.MARKET,
-                betting_phase=BettingPhase.PRE_GAME,
                 # bet_type not specified - should default to MONEYLINE
             ),
         )

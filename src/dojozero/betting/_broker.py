@@ -32,7 +32,6 @@ from dojozero.betting._models import (
     BetStatus,
     BetType,
     BettingEvent,
-    BettingPhase,
     EventStatus,
     Holding,
     OrderType,
@@ -1128,19 +1127,18 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             await self._log_accounts_and_bets_status("bet_settled")
 
     async def _cancel_pregame_orders(self, event_id: str) -> None:
-        """Cancel all unfilled pre-game orders for an event"""
+        """Cancel all unfilled pending orders for an event when it goes live"""
         pending_bet_ids = list(self._event_pending_orders.get(event_id, set()))
 
         cancelled_count = 0
         for bet_id in pending_bet_ids:
             bet = self._bets[bet_id]
-            if bet.betting_phase == BettingPhase.PRE_GAME:
-                await self._cancel_pending_order(bet)
-                cancelled_count += 1
+            await self._cancel_pending_order(bet)
+            cancelled_count += 1
 
         if cancelled_count > 0:
             logger.info(
-                "Cancelled %d pre-game orders for event %s", cancelled_count, event_id
+                "Cancelled %d pending orders for event %s", cancelled_count, event_id
             )
 
     async def _cancel_all_pending_orders(self, event_id: str) -> None:
@@ -1326,15 +1324,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 if betting_event.status == EventStatus.SETTLED:
                     raise ValueError("Event has been settled")
 
-                # Validate betting phase matches event status
-                if bet_request.betting_phase == BettingPhase.PRE_GAME:
-                    if betting_event.status != EventStatus.SCHEDULED:
-                        raise ValueError(
-                            "Pre-game betting only allowed for scheduled events"
-                        )
-                elif bet_request.betting_phase == BettingPhase.IN_GAME:
-                    if betting_event.status != EventStatus.LIVE:
-                        raise ValueError("In-game betting only allowed for live events")
+                # Betting is allowed for SCHEDULED or LIVE events (no phase distinction)
 
                 # Check account exists and has sufficient balance
                 if agent_id not in self._accounts:
@@ -1451,7 +1441,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     shares=shares,  # Will be updated for limit orders
                     order_type=bet_request.order_type,
                     limit_probability=bet_request.limit_probability,
-                    betting_phase=bet_request.betting_phase,
                     bet_type=bet_type,
                     spread_value=spread_value,
                     total_value=total_value,
@@ -1869,19 +1858,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         async def place_bet_moneyline(
             amount: str,
             selection: Literal["home", "away"],
-            betting_phase: Literal["PRE_GAME", "IN_GAME"],
             order_type: Literal["MARKET", "LIMIT"] = "MARKET",
             limit_probability: str | None = None,
         ) -> str:
             """Bet on which team will win (moneyline).
 
-            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
-            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+            You can bet at any time while the event is SCHEDULED or LIVE (no phase distinction).
 
             Args:
                 amount: Bet amount as string (e.g., "100.00")
                 selection: "home" or "away"
-                betting_phase: "PRE_GAME" or "IN_GAME" (depends on the current event status, if the event status is SCHEDULED, you can only place a PRE_GAME bet, if the event status is LIVE, you can only place a IN_GAME bet)
                 order_type: "MARKET" (execute immediately at current probability) or "LIMIT" (wait for probability to reach your minimum)
                 limit_probability: For LIMIT only - minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
 
@@ -1899,7 +1885,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     selection=selection,
                     event_id=event.event_id,
                     order_type=OrderType[order_type],
-                    betting_phase=BettingPhase[betting_phase],
                     limit_probability=Decimal(limit_probability)
                     if limit_probability
                     else None,
@@ -1919,20 +1904,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             amount: str,
             selection: Literal["home", "away"],
             spread_value: str,
-            betting_phase: Literal["PRE_GAME", "IN_GAME"],
             order_type: Literal["MARKET", "LIMIT"] = "MARKET",
             limit_probability: str | None = None,
         ) -> str:
             """Bet on point spread (team must win by more than spread or lose by less).
 
-            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
-            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+            You can bet at any time while the event is SCHEDULED or LIVE (no phase distinction).
 
             Args:
                 amount: Bet amount as string (e.g., "100.00")
                 selection: "home" or "away"
                 spread_value: Must match a key from spread_lines in get_event(). Negative values (e.g., "-3.5") mean home team is favored; positive values (e.g., "+3.5") mean away team is favored.
-                betting_phase: "PRE_GAME" or "IN_GAME" (depends on the current event status, if the event status is SCHEDULED, you can only place a PRE_GAME bet, if the event status is LIVE, you can only place a IN_GAME bet)
                 order_type: "MARKET" (execute immediately) or "LIMIT" (wait for probability to reach your minimum)
                 limit_probability: For LIMIT only - minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
 
@@ -1951,7 +1933,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     event_id=event.event_id,
                     spread_value=Decimal(spread_value),
                     order_type=OrderType[order_type],
-                    betting_phase=BettingPhase[betting_phase],
                     limit_probability=Decimal(limit_probability)
                     if limit_probability
                     else None,
@@ -1971,20 +1952,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             amount: str,
             selection: Literal["over", "under"],
             total_value: str,
-            betting_phase: Literal["PRE_GAME", "IN_GAME"],
             order_type: Literal["MARKET", "LIMIT"] = "MARKET",
             limit_probability: str | None = None,
         ) -> str:
             """Bet on total points scored (over/under).
 
-            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
-            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+            You can bet at any time while the event is SCHEDULED or LIVE (no phase distinction).
 
             Args:
                 amount: Bet amount as string (e.g., "100.00")
                 selection: "over" or "under"
                 total_value: Must match a key from total_lines in get_event(). This is the combined points both teams will score; bet "over" if you think total will exceed this, "under" if it will be less.
-                betting_phase: "PRE_GAME" or "IN_GAME" (depends on the current event status, if the event status is SCHEDULED, you can only place a PRE_GAME bet, if the event status is LIVE, you can only place a IN_GAME bet)
                 order_type: "MARKET" or "LIMIT"
                 limit_probability: For LIMIT only - minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
 
@@ -2003,7 +1981,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     event_id=event.event_id,
                     total_value=Decimal(total_value),
                     order_type=OrderType[order_type],
-                    betting_phase=BettingPhase[betting_phase],
                     limit_probability=Decimal(limit_probability)
                     if limit_probability
                     else None,

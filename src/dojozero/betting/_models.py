@@ -43,13 +43,6 @@ class OrderType(Enum):
     LIMIT = "LIMIT"  # Execute only when odds reach limit_odds
 
 
-class BettingPhase(Enum):
-    """Phase when bet is placed"""
-
-    PRE_GAME = "PRE_GAME"  # Before game starts
-    IN_GAME = "IN_GAME"  # During game (live betting)
-
-
 class BetStatus(Enum):
     """Status of a bet"""
 
@@ -147,14 +140,9 @@ class BettingEvent(BaseModel):
     betting_closed_at: Optional[datetime] = None
 
     @computed_field
-    def can_bet_pregame(self) -> bool:
-        """True if PRE_GAME betting is allowed (status=SCHEDULED)."""
-        return self.status == EventStatus.SCHEDULED
-
-    @computed_field
-    def can_bet_ingame(self) -> bool:
-        """True if IN_GAME betting is allowed (status=LIVE)."""
-        return self.status == EventStatus.LIVE
+    def can_bet(self) -> bool:
+        """True if betting is allowed (status is SCHEDULED or LIVE)."""
+        return self.status in {EventStatus.SCHEDULED, EventStatus.LIVE}
 
 
 # =============================================================================
@@ -170,7 +158,6 @@ class BetRequestMoneyline:
     selection: Literal["home", "away"]
     event_id: str
     order_type: OrderType
-    betting_phase: BettingPhase
     limit_probability: Optional[Decimal] = (
         None  # Required if order_type == LIMIT (0-1 range)
     )
@@ -197,7 +184,6 @@ class BetRequestSpread:
     selection: Literal["home", "away"]
     event_id: str
     order_type: OrderType
-    betting_phase: BettingPhase
     spread_value: Decimal  # Required for SPREAD bets
     limit_probability: Optional[Decimal] = (
         None  # Required if order_type == LIMIT (0-1 range)
@@ -225,7 +211,6 @@ class BetRequestTotal:
     selection: Literal["over", "under"]
     event_id: str
     order_type: OrderType
-    betting_phase: BettingPhase
     total_value: Decimal  # Required for TOTAL bets
     limit_probability: Optional[Decimal] = (
         None  # Required if order_type == LIMIT (0-1 range)
@@ -277,7 +262,6 @@ class Bet(BaseModel):
         le=1,
         description="Limit probability threshold (0-1). None for market orders.",
     )
-    betting_phase: BettingPhase
     create_time: datetime
     execution_time: Optional[datetime] = None  # None until executed
     status: BetStatus
@@ -336,7 +320,6 @@ __all__ = [
     "BetOutcome",
     "BetStatus",
     "BetType",
-    "BettingPhase",
     "EventStatus",
     "OrderType",
     "VALID_STATUS_TRANSITIONS",
