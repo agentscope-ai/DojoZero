@@ -67,12 +67,6 @@ class BettingTrialMetadata(BaseTrialMetadata):
     away_team_name: str
     game_date: str
 
-    # ESPN team IDs and season context (populated from GameInfo)
-    home_team_id: str = ""
-    away_team_id: str = ""
-    season_year: int = 0
-    season_type: str = ""  # "regular", "postseason", "preseason"
-
     # Polymarket (optional)
     market_url: str | None = None
 
