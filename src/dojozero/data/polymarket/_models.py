@@ -67,20 +67,6 @@ class MarketOddsData:
         ),
     )
 
-    @property
-    def over_probability(self) -> float | None:
-        """Get over probability for totals markets, None for other market types."""
-        if self.market_type == "totals":
-            return self.home_probability
-        return None
-
-    @property
-    def under_probability(self) -> float | None:
-        """Get under probability for totals markets, None for other market types."""
-        if self.market_type == "totals":
-            return self.away_probability
-        return None
-
 
 class MarketData(BaseModel):
     """Market data from Polymarket API.
