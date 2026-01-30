@@ -23,6 +23,7 @@ from dojozero.data._models import (
 )
 from dojozero.data.espn._api import ESPNExternalAPI
 from dojozero.data.espn._stats_events import PreGameStatsEvent
+from dojozero.data.espn._utils import safe_score
 
 logger = logging.getLogger(__name__)
 
@@ -265,23 +266,6 @@ def _get_competitor_info(
     return team_comp, opp_comp
 
 
-def _safe_score(comp: dict[str, Any] | None) -> int:
-    """Extract an integer score from a competitor dict.
-
-    ESPN may return ``"score"`` as a plain string/int **or** as a nested dict
-    like ``{"value": "110", "displayValue": "110"}``.  Handle both.
-    """
-    if comp is None:
-        return 0
-    raw = comp.get("score", 0)
-    if isinstance(raw, dict):
-        raw = raw.get("value", raw.get("displayValue", 0))
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return 0
-
-
 # ---------------------------------------------------------------------------
 # Section parsers
 # ---------------------------------------------------------------------------
@@ -319,8 +303,8 @@ def _parse_season_series(
             if not status.get("type", {}).get("completed", False):
                 continue
 
-            team_score = _safe_score(team_comp)
-            opp_score = _safe_score(opp_comp)
+            team_score = safe_score(team_comp)
+            opp_score = safe_score(opp_comp)
             winner = "home" if team_comp and team_comp.get("winner", False) else "away"
 
             if winner == "home":
@@ -389,8 +373,8 @@ def _parse_recent_form(
             if not team_comp:
                 continue
 
-            team_score = _safe_score(team_comp)
-            opp_score = _safe_score(opp_comp)
+            team_score = safe_score(team_comp)
+            opp_score = safe_score(opp_comp)
             won = team_comp.get("winner", False)
 
             if won:
@@ -577,8 +561,8 @@ def _parse_home_away_splits(
             if not team_comp:
                 continue
 
-            team_score = _safe_score(team_comp)
-            opp_score = _safe_score(opp_comp)
+            team_score = safe_score(team_comp)
+            opp_score = safe_score(opp_comp)
             won = team_comp.get("winner", False)
             is_home = team_comp.get("homeAway") == "home"
 
