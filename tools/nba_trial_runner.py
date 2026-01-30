@@ -110,7 +110,7 @@ class GameTrialManager:
             None  # Track game status at monitoring start
         )
         self._grace_period_seconds: float = (
-            300.0  # 5 min grace period for already-finished games
+            60.0  # Safety net grace period (self-stop is primary at 10s)
         )
 
     async def check_server_trial_status(self) -> str | None:

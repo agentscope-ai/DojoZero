@@ -295,8 +295,7 @@ class PolymarketStore(DataStore):
                 """Callback to adjust polling interval based on game status."""
                 event_type = event.event_type
 
-                # Handle both NBA and NFL game start events
-                if event_type in ("game_start", "nfl_game_start"):
+                if event_type == "event.game_start":
                     # Game started: switch to in-game polling (5 seconds)
                     if not self._game_started:
                         logger.info(
@@ -304,22 +303,18 @@ class PolymarketStore(DataStore):
                         )
                         self.update_poll_interval("odds", 5.0)
                         self._game_started = True
-                # Handle both NBA and NFL game result events
-                elif event_type in ("game_result", "nfl_game_result"):
+                elif event_type == "event.game_result":
                     # Game ended: stop odds polling (no more updates needed)
                     logger.info("Game ended, stopping odds polling")
                     # Stop polling by setting _running to False
                     # This will cause the _poll_loop to exit on next iteration
                     self._running = False
 
-            # Subscribe to game_start and game_result events (both NBA and NFL)
             self._data_hub.subscribe_agent(
                 agent_id=f"{self.store_id}_game_status_monitor",
                 event_types=[
-                    "game_start",
-                    "game_result",
-                    "nfl_game_start",
-                    "nfl_game_result",
+                    "event.game_start",
+                    "event.game_result",
                 ],
                 callback=game_status_callback,
             )
@@ -330,7 +325,7 @@ class PolymarketStore(DataStore):
             # Check if game has already started by looking at hub's recent events
             # This handles the case where game_start was emitted before we subscribed
             recent_events = self._data_hub.get_recent_events(
-                event_types=["game_start", "nfl_game_start"], limit=10
+                event_types=["event.game_start"], limit=10
             )
             if recent_events:
                 logger.info(

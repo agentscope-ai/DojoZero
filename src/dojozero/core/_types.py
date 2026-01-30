@@ -49,6 +49,14 @@ class RuntimeContext:
     cleanup: StartupCallback | None = None
     """Optional async callback to stop data stores during shutdown."""
 
+    request_stop: Callable[[], None] | None = None
+    """Optional callback to request graceful trial stop.
+
+    Called by DataHub subscription when a terminal event (e.g., GameResultEvent)
+    is received. The orchestrator wires this to schedule stop_trial() with a
+    grace period for broker settlement.
+    """
+
 
 def _utcnow() -> datetime:
     """Return a timezone-aware UTC timestamp for event defaults."""

@@ -171,6 +171,24 @@ def build_runtime_context(
             logger.error("Failed to create store '%s': %s", store_type, e)
             raise
 
+    # Self-stop mechanism: request trial stop when game ends
+    _stop_requested = False
+
+    def _request_stop() -> None:
+        nonlocal _stop_requested
+        if _stop_requested:
+            return
+        _stop_requested = True
+        logger.info(
+            "Trial '%s' self-stop requested (GameResultEvent received)", trial_id
+        )
+
+    hub.subscribe_agent(
+        agent_id=f"_trial_self_stop_{trial_id}",
+        event_types=["event.game_result"],
+        callback=lambda _event: _request_stop(),
+    )
+
     # Create startup callback
     async def start_data_stores() -> None:
         """Start all DataHub stores (begin polling)."""
@@ -188,6 +206,7 @@ def build_runtime_context(
         stores=stores,
         startup=start_data_stores,
         cleanup=stop_data_stores,
+        request_stop=_request_stop,
     )
 
 
