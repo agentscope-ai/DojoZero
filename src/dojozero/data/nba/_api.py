@@ -123,9 +123,11 @@ class NBAExternalAPI(ExternalAPI):
         espn_boxscore = summary.get("boxscore", {}) or {}
         teams = espn_boxscore.get("teams", []) or []
 
-        # Find home and away teams
+        # Find home and away teams from boxscore.teams[]
         home_team_data: dict[str, Any] = {}
         away_team_data: dict[str, Any] = {}
+        home_team_id: str = ""
+        away_team_id: str = ""
 
         for team in teams:
             if not team or not isinstance(team, dict):
@@ -134,8 +136,38 @@ class NBAExternalAPI(ExternalAPI):
             # ESPN uses homeAway field to identify home/away
             if team.get("homeAway") == "home":
                 home_team_data = self._extract_team_data(team, team_info)
+                home_team_id = str(team_info.get("id", ""))
             elif team.get("homeAway") == "away":
                 away_team_data = self._extract_team_data(team, team_info)
+                away_team_id = str(team_info.get("id", ""))
+
+        # Extract player stats from boxscore.players[] (separate from teams[])
+        # ESPN site API puts player data here, not under teams[].players[]
+        boxscore_players = espn_boxscore.get("players", []) or []
+        home_players: list[dict[str, Any]] = []
+        away_players: list[dict[str, Any]] = []
+        for player_group in boxscore_players:
+            if not player_group or not isinstance(player_group, dict):
+                continue
+            group_team_id = str((player_group.get("team", {}) or {}).get("id", ""))
+            extracted = self._extract_players_from_group(player_group)
+            if group_team_id and group_team_id == home_team_id:
+                home_players = extracted
+            elif group_team_id and group_team_id == away_team_id:
+                away_players = extracted
+            else:
+                # Fallback: first group = away (displayOrder 1), second = home
+                order = player_group.get("displayOrder", 0)
+                if order == 1 and not away_players:
+                    away_players = extracted
+                elif order == 2 and not home_players:
+                    home_players = extracted
+
+        # Merge players into team data
+        if home_team_data:
+            home_team_data["players"] = home_players
+        if away_team_data:
+            away_team_data["players"] = away_players
 
         # Also check header for additional info
         header = summary.get("header", {}) or {}
@@ -158,18 +190,29 @@ class NBAExternalAPI(ExternalAPI):
                     away_team_data["statistics"] = away_team_data.get("statistics", {})
                     away_team_data["statistics"]["points"] = int(score) if score else 0
 
+        # Extract game date/time from header competition
+        status_data: dict[str, Any] = {}
+        if competitions and competitions[0] and isinstance(competitions[0], dict):
+            comp = competitions[0]
+            status_data["date"] = comp.get("date", "")
+
         return {
             "boxscore": {
                 "gameId": event_id,
                 "homeTeam": home_team_data,
                 "awayTeam": away_team_data,
+                "status": status_data,
             }
         }
 
     def _extract_team_data(
         self, team: dict[str, Any], team_info: dict[str, Any]
     ) -> dict[str, Any]:
-        """Extract team data from ESPN boxscore team entry."""
+        """Extract team data from ESPN boxscore team entry.
+
+        Note: players are extracted separately from ``boxscore.players[]``
+        and merged in by ``_convert_summary_to_boxscore``.
+        """
         # Extract statistics
         stats_list = team.get("statistics", []) or []
         statistics: dict[str, Any] = {}
@@ -187,29 +230,35 @@ class NBAExternalAPI(ExternalAPI):
             except (ValueError, TypeError):
                 statistics[stat_name] = stat_value
 
-        # Extract players
-        players = []
-        for player_entry in team.get("players", []) or []:
-            if not player_entry or not isinstance(player_entry, dict):
-                continue
-            for stat_entry in player_entry.get("statistics", []) or []:
-                if not stat_entry or not isinstance(stat_entry, dict):
-                    continue
-                for athlete in stat_entry.get("athletes", []) or []:
-                    if not athlete or not isinstance(athlete, dict):
-                        continue
-                    player_data = self._extract_player_data(athlete, stat_entry)
-                    if player_data:
-                        players.append(player_data)
-
         return {
             "teamId": team_info.get("id", ""),
             "teamName": team_info.get("name", ""),
             "teamCity": team_info.get("location", ""),
             "teamTricode": team_info.get("abbreviation", ""),
             "statistics": statistics,
-            "players": players,
+            "players": [],  # Populated by _convert_summary_to_boxscore
         }
+
+    def _extract_players_from_group(
+        self, player_group: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Extract player data from a ``boxscore.players[]`` entry.
+
+        ESPN site API nests players under
+        ``boxscore.players[].statistics[].athletes[]``, each entry containing
+        stat keys shared across all athletes in that section.
+        """
+        players: list[dict[str, Any]] = []
+        for stat_entry in player_group.get("statistics", []) or []:
+            if not stat_entry or not isinstance(stat_entry, dict):
+                continue
+            for athlete in stat_entry.get("athletes", []) or []:
+                if not athlete or not isinstance(athlete, dict):
+                    continue
+                player_data = self._extract_player_data(athlete, stat_entry)
+                if player_data:
+                    players.append(player_data)
+        return players
 
     def _extract_competitor_data(self, competitor: dict[str, Any]) -> dict[str, Any]:
         """Extract team data from ESPN header competitor."""
@@ -308,6 +357,7 @@ class NBAExternalAPI(ExternalAPI):
         # Extract team info
         team = play.get("team", {})
         team_tricode = team.get("abbreviation", "") if team else ""
+        team_id = team.get("id", "") if team else ""
 
         # Extract period and clock
         period = play.get("period", {})
@@ -336,6 +386,13 @@ class NBAExternalAPI(ExternalAPI):
             action_type = "game"
             description = "Game End"
 
+        # Extract scoring info
+        scoring_play = play.get("scoringPlay", False)
+        score_value = play.get("scoreValue", 0) or 0
+
+        # Play ID from ESPN (sequenceNumber or id)
+        play_id = str(play.get("sequenceNumber", "")) or str(play.get("id", ""))
+
         return {
             "actionNumber": index,
             "actionType": action_type.lower() if action_type else "",
@@ -343,11 +400,15 @@ class NBAExternalAPI(ExternalAPI):
             "clock": clock_str,
             "personId": person_id,
             "playerName": player_name,
+            "teamId": str(team_id),
             "teamTricode": team_tricode,
             "scoreHome": home_score,
             "scoreAway": away_score,
             "description": description,
             "timeActual": play.get("wallclock", ""),
+            "scoringPlay": scoring_play,
+            "scoreValue": int(score_value) if score_value else 0,
+            "playId": play_id,
         }
 
     async def close(self) -> None:

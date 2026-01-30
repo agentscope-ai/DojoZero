@@ -723,7 +723,8 @@ def _extract_game_info_from_summary(
     """Extract game info from ESPN summary response.
 
     Returns:
-        GameInfo with team info and game date, or None if extraction fails.
+        GameInfo with team info, venue, broadcast, season, and game date,
+        or None if extraction fails.
     """
     header = summary.get("header", {})
     competitions = header.get("competitions", [])
@@ -739,6 +740,35 @@ def _extract_game_info_from_summary(
 
     for competitor in competitors:
         team = competitor.get("team", {})
+        # Extract record from competitor data
+        records = competitor.get("record", [])
+        if not records:
+            records = competitor.get("records", [])
+        record_summary = ""
+        if records and isinstance(records, list) and records:
+            first_record = records[0]
+            if isinstance(first_record, dict):
+                record_summary = first_record.get("summary", "") or first_record.get(
+                    "displayValue", ""
+                )
+            elif isinstance(first_record, str):
+                record_summary = first_record
+
+        # Extract logo URL: summary uses "logos" array, scoreboard uses "logo" string
+        logo_url = team.get("logo", "")
+        if not logo_url:
+            logos = team.get("logos", [])
+            if logos and isinstance(logos, list):
+                # Pick first logo with 'default' rel, or just the first one
+                for logo_entry in logos:
+                    if isinstance(logo_entry, dict):
+                        rels = logo_entry.get("rel", [])
+                        if "default" in rels:
+                            logo_url = logo_entry.get("href", "")
+                            break
+                if not logo_url and isinstance(logos[0], dict):
+                    logo_url = logos[0].get("href", "")
+
         # Build team data dict with aliases that TeamInfo expects
         team_data = {
             "teamId": str(team.get("id", "")),
@@ -748,7 +778,8 @@ def _extract_game_info_from_summary(
             "shortDisplayName": team.get("name", ""),
             "color": team.get("color", ""),
             "alternateColor": team.get("alternateColor", ""),
-            "logo": team.get("logo", ""),
+            "logo": logo_url,
+            "record": record_summary,
         }
 
         if competitor.get("homeAway") == "home":
@@ -762,33 +793,193 @@ def _extract_game_info_from_summary(
     # Get game date/time
     game_time_utc_str = comp.get("date", "")
 
+    # Extract venue info
+    venue_data = comp.get("venue", {})
+    venue_address = venue_data.get("address", {})
+    venue = {
+        "venueId": str(venue_data.get("id", "")),
+        "name": venue_data.get("fullName", "") or venue_data.get("name", ""),
+        "city": venue_address.get("city", ""),
+        "state": venue_address.get("state", ""),
+        "indoor": venue_data.get("indoor", True),
+    }
+
+    # Extract broadcast info
+    broadcasts_raw = comp.get("broadcasts", [])
+    broadcasts: list[dict[str, Any]] = []
+    broadcast_names: list[str] = []
+    for b in broadcasts_raw:
+        market = b.get("market", "")
+        names = b.get("names", [])
+        broadcasts.append({"market": market, "names": names})
+        if names:
+            broadcast_names.extend(names)
+    broadcast = ", ".join(broadcast_names) if broadcast_names else ""
+
+    # Extract season info from header
+    season = header.get("season", {})
+    season_year = season.get("year", 0)
+    season_type_id = season.get("type", 0)
+    season_type_map = {1: "preseason", 2: "regular", 3: "postseason", 4: "offseason"}
+    season_type = season_type_map.get(season_type_id, "")
+
     # Build GameInfo using dict with aliases for Pydantic validation
-    game_data = {
+    game_data: dict[str, Any] = {
         "gameId": game_id,
         "sport_type": "nba",
         "homeTeam": home_team_data,
         "awayTeam": away_team_data,
         "gameTimeUTC": game_time_utc_str,
+        "venue": venue,
+        "broadcasts": broadcasts,
+        "broadcast": broadcast,
+        "seasonYear": season_year,
+        "seasonType": season_type,
     }
 
     return GameInfo.model_validate(game_data)
 
 
-def get_game_info_by_id(game_id: str, proxy: str | None = None) -> GameInfo | None:
+def _enrich_from_scoreboard(
+    game_info: GameInfo,
+    game_date: date,
+    proxy: str | None = None,
+) -> GameInfo:
+    """Enrich GameInfo with venue/broadcast data from scoreboard endpoint.
+
+    The ESPN summary endpoint doesn't include venue or broadcast data.
+    The scoreboard endpoint does. This function fetches scoreboard for the
+    game date and merges venue/broadcast into the existing GameInfo.
+
+    Args:
+        game_info: GameInfo from summary endpoint (may be missing venue/broadcast)
+        game_date: Game date for scoreboard lookup
+        proxy: Optional proxy URL
+
+    Returns:
+        Enriched GameInfo with venue and broadcast data if available.
+    """
+    try:
+        scoreboard_data = _run_async(_fetch_espn_scoreboard(game_date, proxy=proxy))
+        return _merge_scoreboard_into_game_info(game_info, scoreboard_data)
+    except Exception as e:
+        logger.debug(
+            "Scoreboard enrichment failed for game_id=%s: %s",
+            game_info.game_id,
+            e,
+        )
+        return game_info
+
+
+async def _enrich_from_scoreboard_async(
+    game_info: GameInfo,
+    game_date: date,
+    proxy: str | None = None,
+) -> GameInfo:
+    """Async version of _enrich_from_scoreboard."""
+    try:
+        scoreboard_data = await _fetch_espn_scoreboard(game_date, proxy=proxy)
+        return _merge_scoreboard_into_game_info(game_info, scoreboard_data)
+    except Exception as e:
+        logger.debug(
+            "Scoreboard enrichment failed for game_id=%s: %s",
+            game_info.game_id,
+            e,
+        )
+        return game_info
+
+
+def _merge_scoreboard_into_game_info(
+    game_info: GameInfo,
+    scoreboard_data: dict[str, Any],
+) -> GameInfo:
+    """Merge scoreboard data into GameInfo for venue/broadcast fields."""
+    events = scoreboard_data.get("events", [])
+    for event in events:
+        if str(event.get("id", "")) != game_info.game_id:
+            continue
+
+        competitions = event.get("competitions", [])
+        if not competitions:
+            break
+        comp = competitions[0]
+
+        # Extract venue
+        venue_data = comp.get("venue", {})
+        venue_address = venue_data.get("address", {})
+        venue = {
+            "venueId": str(venue_data.get("id", "")),
+            "name": venue_data.get("fullName", "") or venue_data.get("name", ""),
+            "city": venue_address.get("city", ""),
+            "state": venue_address.get("state", ""),
+            "indoor": venue_data.get("indoor", True),
+        }
+
+        # Extract broadcast
+        broadcasts_raw = comp.get("broadcasts", [])
+        broadcasts: list[dict[str, Any]] = []
+        broadcast_names: list[str] = []
+        for b in broadcasts_raw:
+            market = b.get("market", "")
+            names = b.get("names", [])
+            broadcasts.append({"market": market, "names": names})
+            if names:
+                broadcast_names.extend(names)
+        broadcast = ", ".join(broadcast_names) if broadcast_names else ""
+
+        # Build updated dict from existing game_info + scoreboard enrichments
+        updated = game_info.model_dump(by_alias=False)
+        # Only overwrite venue if scoreboard has real data
+        if venue_data.get("id"):
+            updated["venue"] = venue
+        # Only overwrite broadcast if scoreboard has data
+        if broadcast:
+            updated["broadcast"] = broadcast
+            updated["broadcasts"] = broadcasts
+
+        return GameInfo.model_validate(updated)
+
+    return game_info
+
+
+def _parse_game_date(game_date: str | date | None) -> date | None:
+    """Parse game_date to a date object."""
+    if game_date is None:
+        return None
+    if isinstance(game_date, date):
+        return game_date
+    try:
+        from dateutil import parser
+
+        return parser.parse(game_date).date()
+    except Exception:
+        return None
+
+
+def get_game_info_by_id(
+    game_id: str,
+    proxy: str | None = None,
+    game_date: str | date | None = None,
+) -> GameInfo | None:
     """Get team names and game date for a given game/event ID using ESPN API.
 
     Supports both ESPN event IDs (e.g., '401584701') and legacy NBA.com game IDs
     (e.g., '0022500640'). For NBA.com IDs, this function will log a warning
     as ESPN uses different event IDs.
 
+    When game_date is provided, also fetches scoreboard data to enrich the
+    result with venue and broadcast information (not available from summary).
+
     Args:
         game_id: ESPN event ID or NBA.com game ID
         proxy: Optional proxy URL
+        game_date: Optional game date (str or date) for scoreboard enrichment
 
     Returns:
         GameInfo with game information, or None if not found.
     """
     logger.debug(f"Looking up game_id={game_id}")
+    parsed_date = _parse_game_date(game_date)
 
     # First, try direct ESPN lookup (works for ESPN event IDs)
     try:
@@ -800,6 +991,9 @@ def get_game_info_by_id(game_id: str, proxy: str | None = None) -> GameInfo | No
                 logger.debug(
                     f"Found game via ESPN: {result.away_team.tricode} @ {result.home_team.tricode}"
                 )
+                # Enrich with scoreboard data (venue, broadcast) if date provided
+                if parsed_date is not None:
+                    result = _enrich_from_scoreboard(result, parsed_date, proxy=proxy)
                 return result
     except Exception as e:
         logger.debug(f"ESPN direct lookup failed for game_id={game_id}: {e}")
@@ -819,7 +1013,9 @@ def get_game_info_by_id(game_id: str, proxy: str | None = None) -> GameInfo | No
 
 
 async def get_game_info_by_id_async(
-    game_id: str, proxy: str | None = None
+    game_id: str,
+    proxy: str | None = None,
+    game_date: str | date | None = None,
 ) -> GameInfo | None:
     """Async version of get_game_info_by_id using ESPN API.
 
@@ -827,14 +1023,19 @@ async def get_game_info_by_id_async(
     (e.g., '0022500640'). For NBA.com IDs, this function will log a warning
     as ESPN uses different event IDs.
 
+    When game_date is provided, also fetches scoreboard data to enrich the
+    result with venue and broadcast information (not available from summary).
+
     Args:
         game_id: ESPN event ID or NBA.com game ID
         proxy: Optional proxy URL
+        game_date: Optional game date (str or date) for scoreboard enrichment
 
     Returns:
         GameInfo with game information, or None if not found.
     """
     logger.debug(f"Looking up game_id={game_id}")
+    parsed_date = _parse_game_date(game_date)
 
     # First, try direct ESPN lookup
     try:
@@ -846,6 +1047,11 @@ async def get_game_info_by_id_async(
                 logger.debug(
                     f"Found game via ESPN: {result.away_team.tricode} @ {result.home_team.tricode}"
                 )
+                # Enrich with scoreboard data (venue, broadcast) if date provided
+                if parsed_date is not None:
+                    result = await _enrich_from_scoreboard_async(
+                        result, parsed_date, proxy=proxy
+                    )
                 return result
     except Exception as e:
         logger.debug(f"ESPN direct lookup failed for game_id={game_id}: {e}")

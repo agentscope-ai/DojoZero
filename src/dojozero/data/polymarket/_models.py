@@ -1,13 +1,17 @@
-"""Pydantic models for Polymarket API data structures.
+"""Models for Polymarket API data structures.
 
-These models provide type-safe representations of Polymarket API responses
-and internal data structures used throughout the Polymarket integration.
+MarketOddsData is a frozen dataclass used as an internal DTO between the
+Polymarket API client and store.  MarketData / EventData remain Pydantic
+BaseModels because they rely on ``extra="allow"`` for flexible API parsing.
 """
+
+from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class MarketOddsData(BaseModel):
+@dataclass(slots=True, frozen=True)
+class MarketOddsData:
     """Odds data for a single market.
 
     Represents the odds information fetched from a Polymarket market.
@@ -84,6 +88,8 @@ class MarketData(BaseModel):
     Represents a market returned by the Polymarket Gamma API.
     """
 
+    model_config = ConfigDict(extra="allow")
+
     id: str = Field(..., description="Market ID")
     slug: str | None = Field(None, description="Market slug")
     question: str | None = Field(None, description="Market question")
@@ -101,8 +107,6 @@ class MarketData(BaseModel):
         description="Outcome prices as JSON string or list (e.g., ['0.495', '0.505'])",
     )
 
-    model_config = ConfigDict(extra="allow")  # Allow extra fields from API response
-
 
 class EventData(BaseModel):
     """Event data from Polymarket API.
@@ -110,11 +114,11 @@ class EventData(BaseModel):
     Represents an event returned by the Polymarket Gamma API.
     """
 
+    model_config = ConfigDict(extra="allow")
+
     id: str = Field(..., description="Event ID")
     slug: str = Field(..., description="Event slug")
     title: str | None = Field(None, description="Event title")
     markets: list[MarketData] = Field(
         default_factory=list, description="Markets for this event"
     )
-
-    model_config = ConfigDict(extra="allow")  # Allow extra fields from API response

@@ -24,12 +24,13 @@ from dojozero.betting import (
 )
 
 from dojozero.core import StreamEvent
-from dojozero.data.nba._events import (
+from dojozero.data._models import (
     GameInitializeEvent,
     GameStartEvent,
     GameResultEvent,
+    OddsUpdateEvent,
 )
-from dojozero.data.polymarket._events import OddsUpdateEvent
+from dojozero.data._models import MoneylineOdds, SpreadOdds, TotalOdds, OddsInfo
 
 pytestmark = pytest.mark.asyncio
 
@@ -109,8 +110,7 @@ async def initialized_event(broker):
         stream_id="nba_odds_stream",
         payload=OddsUpdateEvent(
             game_id="lakers_vs_warriors",
-            home_odds=1.95,
-            away_odds=2.10,
+            odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
         ),
         emitted_at=datetime.now(),
     )
@@ -219,8 +219,7 @@ class TestEventManagement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game1",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -298,8 +297,7 @@ class TestEventManagement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id=event_id,
-                home_odds=2.00,
-                away_odds=2.20,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=2.00, away_odds=2.20)),
             ),
             emitted_at=datetime.now(),
         )
@@ -356,7 +354,8 @@ class TestEventManagement:
             payload=GameResultEvent(
                 game_id=event_id,
                 winner="home",
-                final_score={"home": 110, "away": 105},
+                home_score=110,
+                away_score=105,
             ),
             emitted_at=datetime.now(),
         )
@@ -385,8 +384,7 @@ class TestEventManagement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game1",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -409,8 +407,7 @@ class TestEventManagement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game2",
-                home_odds=1.85,
-                away_odds=2.00,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.85, away_odds=2.00)),
             ),
             emitted_at=datetime.now(),
         )
@@ -429,7 +426,8 @@ class TestEventManagement:
             payload=GameResultEvent(
                 game_id="game2",
                 winner="home",
-                final_score={"home": 100, "away": 95},
+                home_score=100,
+                away_score=95,
             ),
             emitted_at=datetime.now(),
         )
@@ -475,8 +473,7 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -532,8 +529,7 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -590,8 +586,7 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -616,8 +611,9 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.90,
-                away_odds=2.25,  # Now >= 2.20, should trigger
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(home_odds=1.90, away_odds=2.25)
+                ),  # Now >= 2.20, should trigger
             ),
             emitted_at=datetime.now(),
         )
@@ -658,8 +654,7 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -709,8 +704,7 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -730,7 +724,8 @@ class TestBetPlacement:
             payload=GameResultEvent(
                 game_id="test_event",
                 winner="home",
-                final_score={"home": 110, "away": 105},
+                home_score=110,
+                away_score=105,
             ),
             emitted_at=datetime.now(),
         )
@@ -775,8 +770,7 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -838,8 +832,7 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -901,8 +894,7 @@ class TestBetSettlement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -935,7 +927,8 @@ class TestBetSettlement:
             payload=GameResultEvent(
                 game_id="test_event",
                 winner="home",
-                final_score={"home": 110, "away": 105},
+                home_score=110,
+                away_score=105,
             ),
             emitted_at=datetime.now(),
         )
@@ -978,8 +971,7 @@ class TestBetSettlement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -1012,7 +1004,8 @@ class TestBetSettlement:
             payload=GameResultEvent(
                 game_id="test_event",
                 winner="away",
-                final_score={"home": 105, "away": 110},
+                home_score=105,
+                away_score=110,
             ),
             emitted_at=datetime.now(),
         )
@@ -1054,8 +1047,7 @@ class TestBetSettlement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -1125,8 +1117,7 @@ class TestStatistics:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -1169,7 +1160,8 @@ class TestStatistics:
             payload=GameResultEvent(
                 game_id="test_event",
                 winner="home",
-                final_score={"home": 110, "away": 105},
+                home_score=110,
+                away_score=105,
             ),
             emitted_at=datetime.now(),
         )
@@ -1237,8 +1229,7 @@ class TestStateManagement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -1307,8 +1298,7 @@ class TestIntegration:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game1",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -1346,8 +1336,7 @@ class TestIntegration:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game1",
-                home_odds=1.90,
-                away_odds=2.25,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.90, away_odds=2.25)),
             ),
             emitted_at=datetime.now(),
         )
@@ -1371,7 +1360,8 @@ class TestIntegration:
             payload=GameResultEvent(
                 game_id="game1",
                 winner="home",
-                final_score={"home": 110, "away": 105},
+                home_score=110,
+                away_score=105,
             ),
             emitted_at=datetime.now(),
         )
@@ -1412,18 +1402,53 @@ def create_odds_event_with_spreads_totals(
     spread_updates: list | None = None,
     total_updates: list | None = None,
 ):
-    """Helper to create an OddsUpdateEvent with spread/total updates for testing"""
+    """Helper to create an OddsUpdateEvent with spread/total updates for testing."""
+    moneyline = MoneylineOdds(
+        home_odds=home_odds,
+        away_odds=away_odds,
+        home_probability=1.0 / home_odds if home_odds > 0 else 0.0,
+        away_probability=1.0 / away_odds if away_odds > 0 else 0.0,
+    )
 
-    class OddsEvent:
-        def __init__(self):
-            self.game_id = game_id  # Changed from event_id to game_id
-            self.home_odds = home_odds
-            self.away_odds = away_odds
-            self.spread_updates = spread_updates or []
-            self.total_updates = total_updates or []
-            self.event_type = "odds_update"
+    spreads: list[SpreadOdds] = []
+    if spread_updates:
+        for su in spread_updates:
+            h_odds = su.get("home_odds", 1.0)
+            a_odds = su.get("away_odds", 1.0)
+            spreads.append(
+                SpreadOdds(
+                    spread=su["spread"],
+                    home_probability=1.0 / h_odds if h_odds > 0 else 0.0,
+                    away_probability=1.0 / a_odds if a_odds > 0 else 0.0,
+                    home_odds=h_odds,
+                    away_odds=a_odds,
+                )
+            )
 
-    return OddsEvent()
+    totals: list[TotalOdds] = []
+    if total_updates:
+        for tu in total_updates:
+            over_odds = tu.get("over_odds", 1.0)
+            under_odds = tu.get("under_odds", 1.0)
+            totals.append(
+                TotalOdds(
+                    total=tu["total"],
+                    over_probability=1.0 / over_odds if over_odds > 0 else 0.0,
+                    under_probability=1.0 / under_odds if under_odds > 0 else 0.0,
+                    over_odds=over_odds,
+                    under_odds=under_odds,
+                )
+            )
+
+    return OddsUpdateEvent(
+        game_id=game_id,
+        odds=OddsInfo(
+            provider="test",
+            moneyline=moneyline,
+            spreads=spreads,
+            totals=totals,
+        ),
+    )
 
 
 class TestSpreadBetting:
@@ -1536,7 +1561,8 @@ class TestSpreadBetting:
             payload=GameResultEvent(
                 game_id="test_event",
                 winner="home",
-                final_score={"home": 110, "away": 105},
+                home_score=110,
+                away_score=105,
             ),
             emitted_at=datetime.now(),
         )
@@ -1596,7 +1622,8 @@ class TestSpreadBetting:
             payload=GameResultEvent(
                 game_id="test_event",
                 winner="home",
-                final_score={"home": 105, "away": 103},
+                home_score=105,
+                away_score=103,
             ),
             emitted_at=datetime.now(),
         )
@@ -1848,7 +1875,8 @@ class TestTotalBetting:
             payload=GameResultEvent(
                 game_id="test_event",
                 winner="home",
-                final_score={"home": 115, "away": 110},  # Total = 225
+                home_score=115,
+                away_score=110,  # Total = 225
             ),
             emitted_at=datetime.now(),
         )
@@ -1908,7 +1936,8 @@ class TestTotalBetting:
             payload=GameResultEvent(
                 game_id="test_event",
                 winner="home",
-                final_score={"home": 115, "away": 110},  # Total = 225
+                home_score=115,
+                away_score=110,  # Total = 225
             ),
             emitted_at=datetime.now(),
         )
@@ -2149,8 +2178,7 @@ class TestMultipleSpreadsTotals:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                home_odds=1.95,
-                away_odds=2.10,
+                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
             ),
             emitted_at=datetime.now(),
         )
@@ -2315,7 +2343,8 @@ class TestEventOrdering:
             payload=GameResultEvent(
                 game_id=event_id,
                 winner="home",
-                final_score={"home": 110, "away": 105},
+                home_score=110,
+                away_score=105,
             ),
             emitted_at=datetime.now(),
         )
@@ -2384,7 +2413,8 @@ class TestEventOrdering:
             payload=GameResultEvent(
                 game_id=event_id,
                 winner="home",
-                final_score={"home": 110, "away": 105},
+                home_score=110,
+                away_score=105,
             ),
             emitted_at=datetime.now(),
         )

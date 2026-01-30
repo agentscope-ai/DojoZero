@@ -136,9 +136,12 @@ export default function EventReplay({
     const config = eventTypes[type] || { label: type, color: "#64748B" };
 
     switch (type) {
+      case "nba_game_update":
+      case "nfl_game_update":
+      case "espn_game_update":
       case "game_update": {
-        const home = event.home_team || {};
-        const away = event.away_team || {};
+        const home = event.home_team || event.home_team_stats || {};
+        const away = event.away_team || event.away_team_stats || {};
         return {
           title: "Score Update",
           subtitle: `${home.teamTricode || "HOME"} ${home.score || 0} - ${
@@ -170,6 +173,7 @@ export default function EventReplay({
           color: config.color,
           visual: "brain",
         };
+      case "injury_report":
       case "injury_summary":
         return {
           title: "Injury Report",
@@ -210,6 +214,9 @@ export default function EventReplay({
           color: config.color,
           visual: "trophy",
         };
+      case "nba_play":
+      case "nfl_play":
+      case "espn_play":
       case "play_by_play": {
         const actionType = event.action_type || "";
         const player = event.player_name || "";

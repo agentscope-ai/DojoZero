@@ -2,15 +2,22 @@
 
 from typing import Any, Sequence
 
-from dojozero.data._models import DataEvent
-from dojozero.data._stores import DataStore, ExternalAPI
-from dojozero.data.nba._api import NBAExternalAPI
-from dojozero.data.nba._events import (
+from dojozero.data._models import (
+    DataEvent,
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
-    GameUpdateEvent,
-    PlayByPlayEvent,
+    TeamIdentity,
+    VenueInfo,
+)
+from dojozero.data._stores import DataStore, ExternalAPI
+from dojozero.data.nba._api import NBAExternalAPI
+from dojozero.data.nba._events import (
+    NBAGamePlayerStats,
+    NBAGameUpdateEvent,
+    NBAPlayEvent,
+    NBAPlayerStats,
+    NBATeamGameStats,
 )
 from dojozero.data.nba._state_tracker import GameStateTracker
 
@@ -104,25 +111,53 @@ class NBAStore(DataStore):
 
             # Emit GameInitializeEvent on first call when team data is not yet available
             if not self._state.is_game_initialized(game_id) and not has_team_data:
-                # Try to get game info from scoreboard API
+                # Try to get game info from ESPN summary API
                 try:
                     from dojozero.data.nba._utils import get_game_info_by_id
 
-                    game_info = get_game_info_by_id(game_id)
+                    game_date = self._poll_identifier.get("game_date")
+                    game_info = get_game_info_by_id(game_id, game_date=game_date)
                     if game_info:
-                        home_team_str = game_info.home_team.name
-                        away_team_str = game_info.away_team.name
-                        # GameInfo.game_time_utc is already a datetime or None
-                        game_time_dt = game_info.game_time_utc or timestamp
+                        home = game_info.home_team
+                        away = game_info.away_team
 
-                        if home_team_str and away_team_str:
+                        if home.name and away.name:
                             events.append(
                                 GameInitializeEvent(
                                     timestamp=timestamp,
                                     game_id=game_id,
-                                    home_team=home_team_str,
-                                    away_team=away_team_str,
-                                    game_time=game_time_dt,
+                                    sport="nba",
+                                    home_team=TeamIdentity(
+                                        team_id=home.team_id,
+                                        name=home.name,
+                                        tricode=home.tricode,
+                                        location=home.location,
+                                        color=home.color,
+                                        alternate_color=home.alternate_color,
+                                        logo_url=home.logo,
+                                        record=home.record,
+                                    ),
+                                    away_team=TeamIdentity(
+                                        team_id=away.team_id,
+                                        name=away.name,
+                                        tricode=away.tricode,
+                                        location=away.location,
+                                        color=away.color,
+                                        alternate_color=away.alternate_color,
+                                        logo_url=away.logo,
+                                        record=away.record,
+                                    ),
+                                    venue=VenueInfo(
+                                        venue_id=game_info.venue.venue_id,
+                                        name=game_info.venue.name,
+                                        city=game_info.venue.city,
+                                        state=game_info.venue.state,
+                                        indoor=game_info.venue.indoor,
+                                    ),
+                                    game_time=game_info.game_time_utc or timestamp,
+                                    broadcast=game_info.broadcast,
+                                    season_year=game_info.season_year,
+                                    season_type=game_info.season_type,
                                 )
                             )
                             self._state.mark_game_initialized(game_id)
@@ -138,8 +173,13 @@ class NBAStore(DataStore):
                         e,
                     )
 
-            # Only emit GameUpdateEvent if we have team data
-            if has_team_data:
+            # Skip emitting game updates if game is concluded and we've already emitted the final update
+            game_concluded = self._state.is_game_concluded(game_id)
+            final_update_emitted = self._state.has_final_update_emitted(game_id)
+            should_emit_update = not (game_concluded and final_update_emitted)
+
+            # Only emit GameUpdateEvent if we have team data and game hasn't already concluded
+            if has_team_data and should_emit_update:
                 # Get team statistics
                 home_stats = home_team_data.get("statistics", {})
                 away_stats = away_team_data.get("statistics", {})
@@ -151,44 +191,65 @@ class NBAStore(DataStore):
                 # Extract all player stats from BoxScore (pass through raw data)
                 player_stats = self._extract_player_stats_from_boxscore(boxscore_data)
 
+                # Get latest period/clock from play-by-play state tracker
+                # (boxscore endpoint doesn't carry period/clock reliably)
+                period = self._state.get_current_period(game_id)
+                game_clock = self._state.get_current_clock(game_id)
+                # Game time from header status (if available)
+                status_data = boxscore_data.get("status", {})
+                game_time_utc = status_data.get("date", "") or ""
+
                 # Emit GameUpdateEvent with complete BoxScore data
                 # Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay
                 events.append(
-                    GameUpdateEvent(
+                    NBAGameUpdateEvent(
                         timestamp=timestamp,
                         game_id=game_id,
-                        period=0,  # BoxScore doesn't provide period info
-                        game_clock="",  # BoxScore doesn't provide clock info
-                        game_time_utc="",  # BoxScore doesn't provide game time
-                        home_team={
-                            "teamId": home_team_data.get("teamId", 0),
-                            "teamName": home_team_data.get("teamName", ""),
-                            "teamCity": home_team_data.get("teamCity", ""),
-                            "teamTricode": home_team_data.get("teamTricode", ""),
-                            "score": home_score,
-                            "wins": 0,  # Not available in BoxScore
-                            "losses": 0,  # Not available in BoxScore
-                            "seed": 0,  # Not available in BoxScore
-                            "timeoutsRemaining": 0,  # Not available in BoxScore
-                            "inBonus": None,  # Not available in BoxScore
-                            "periods": [],  # Not available in BoxScore
-                        },
-                        away_team={
-                            "teamId": away_team_data.get("teamId", 0),
-                            "teamName": away_team_data.get("teamName", ""),
-                            "teamCity": away_team_data.get("teamCity", ""),
-                            "teamTricode": away_team_data.get("teamTricode", ""),
-                            "score": away_score,
-                            "wins": 0,  # Not available in BoxScore
-                            "losses": 0,  # Not available in BoxScore
-                            "seed": 0,  # Not available in BoxScore
-                            "timeoutsRemaining": 0,  # Not available in BoxScore
-                            "inBonus": None,  # Not available in BoxScore
-                            "periods": [],  # Not available in BoxScore
-                        },
-                        player_stats=player_stats,
+                        sport="nba",
+                        period=period,
+                        game_clock=game_clock,
+                        game_time_utc=game_time_utc,
+                        home_score=home_score,
+                        away_score=away_score,
+                        home_team_stats=NBATeamGameStats(
+                            team_id=home_team_data.get("teamId", 0),
+                            team_name=home_team_data.get("teamName", ""),
+                            team_city=home_team_data.get("teamCity", ""),
+                            team_tricode=home_team_data.get("teamTricode", ""),
+                            score=home_score,
+                        ),
+                        away_team_stats=NBATeamGameStats(
+                            team_id=away_team_data.get("teamId", 0),
+                            team_name=away_team_data.get("teamName", ""),
+                            team_city=away_team_data.get("teamCity", ""),
+                            team_tricode=away_team_data.get("teamTricode", ""),
+                            score=away_score,
+                        ),
+                        player_stats=NBAGamePlayerStats(
+                            home=[
+                                NBAPlayerStats(
+                                    player_id=p.get("personId", 0),
+                                    name=p.get("name", ""),
+                                    position=p.get("position", ""),
+                                    statistics=p.get("statistics", {}),
+                                )
+                                for p in player_stats.get("home", [])
+                            ],
+                            away=[
+                                NBAPlayerStats(
+                                    player_id=p.get("personId", 0),
+                                    name=p.get("name", ""),
+                                    position=p.get("position", ""),
+                                    statistics=p.get("statistics", {}),
+                                )
+                                for p in player_stats.get("away", [])
+                            ],
+                        ),
                     )
                 )
+                # Mark final update as emitted if game is concluded
+                if game_concluded:
+                    self._state.mark_final_update_emitted(game_id)
 
                 # Also emit GameInitializeEvent if not already emitted (when data becomes available)
                 if not self._state.is_game_initialized(game_id):
@@ -209,24 +270,82 @@ class NBAStore(DataStore):
                     )
 
                     if home_team_str and away_team_str:
-                        # Try to get game time from game info
-                        game_time_dt = timestamp  # Default to current time
+                        # Get enriched game info (venue, broadcast, season, record)
+                        game_time_dt = timestamp
+                        venue = VenueInfo()
+                        broadcast = ""
+                        season_year = 0
+                        season_type = ""
+                        home_record = ""
+                        away_record = ""
+                        home_color = ""
+                        home_alt_color = ""
+                        home_logo = ""
+                        away_color = ""
+                        away_alt_color = ""
+                        away_logo = ""
+
                         try:
                             from dojozero.data.nba._utils import get_game_info_by_id
 
-                            game_info = get_game_info_by_id(game_id)
-                            if game_info and game_info.game_time_utc:
-                                game_time_dt = game_info.game_time_utc
+                            game_date = self._poll_identifier.get("game_date")
+                            game_info = get_game_info_by_id(
+                                game_id, game_date=game_date
+                            )
+                            if game_info:
+                                if game_info.game_time_utc:
+                                    game_time_dt = game_info.game_time_utc
+                                venue = VenueInfo(
+                                    venue_id=game_info.venue.venue_id,
+                                    name=game_info.venue.name,
+                                    city=game_info.venue.city,
+                                    state=game_info.venue.state,
+                                    indoor=game_info.venue.indoor,
+                                )
+                                broadcast = game_info.broadcast
+                                season_year = game_info.season_year
+                                season_type = game_info.season_type
+                                home_record = game_info.home_team.record
+                                away_record = game_info.away_team.record
+                                home_color = game_info.home_team.color
+                                home_alt_color = game_info.home_team.alternate_color
+                                home_logo = game_info.home_team.logo
+                                away_color = game_info.away_team.color
+                                away_alt_color = game_info.away_team.alternate_color
+                                away_logo = game_info.away_team.logo
                         except (KeyError, TypeError, ValueError, AttributeError):
-                            pass  # Use timestamp as fallback
+                            pass  # Use defaults
 
                         events.append(
                             GameInitializeEvent(
                                 timestamp=timestamp,
                                 game_id=game_id,
-                                home_team=home_team_str,
-                                away_team=away_team_str,
+                                sport="nba",
+                                home_team=TeamIdentity(
+                                    team_id=str(home_team_data.get("teamId", "")),
+                                    name=home_team_str,
+                                    tricode=home_team_data.get("teamTricode", ""),
+                                    location=home_city,
+                                    color=home_color,
+                                    alternate_color=home_alt_color,
+                                    logo_url=home_logo,
+                                    record=home_record,
+                                ),
+                                away_team=TeamIdentity(
+                                    team_id=str(away_team_data.get("teamId", "")),
+                                    name=away_team_str,
+                                    tricode=away_team_data.get("teamTricode", ""),
+                                    location=away_city,
+                                    color=away_color,
+                                    alternate_color=away_alt_color,
+                                    logo_url=away_logo,
+                                    record=away_record,
+                                ),
+                                venue=venue,
                                 game_time=game_time_dt,
+                                broadcast=broadcast,
+                                season_year=season_year,
+                                season_type=season_type,
                             )
                         )
                         self._state.mark_game_initialized(game_id)
@@ -255,6 +374,7 @@ class NBAStore(DataStore):
                         GameStartEvent(
                             timestamp=datetime.now(timezone.utc),
                             game_id=game_id,
+                            sport="nba",
                         )
                     )
                     self._state.set_previous_status(game_id, 2)  # In Progress
@@ -287,8 +407,10 @@ class NBAStore(DataStore):
                             GameResultEvent(
                                 timestamp=datetime.now(timezone.utc),
                                 game_id=game_id,
+                                sport="nba",
                                 winner=winner,
-                                final_score={"home": home_score, "away": away_score},
+                                home_score=home_score,
+                                away_score=away_score,
                             )
                         )
                         self._state.set_previous_status(game_id, 3)  # Finished
@@ -314,32 +436,44 @@ class NBAStore(DataStore):
                 action_number = action.get("actionNumber", 0)
                 period = action.get("period", 0)
                 clock = action.get("clock", "")
+                # Track latest period/clock for boxscore updates
+                if period:
+                    self._state.update_game_clock(game_id, period, clock)
                 person_id = action.get("personId", 0)
                 player_name = action.get("playerName", "") or action.get("name", "")
+                team_id = str(action.get("teamId", ""))
                 team_tricode = action.get("teamTricode", "")
                 home_score = int(action.get("scoreHome", 0) or 0)
                 away_score = int(action.get("scoreAway", 0) or 0)
                 description = action.get("description", "")
+                is_scoring_play = bool(action.get("scoringPlay", False))
+                score_value = int(action.get("scoreValue", 0) or 0)
+                play_id = action.get("playId", "")
 
                 # Generate unique event_id for deduplication
                 pbp_event_id = f"{game_id}_pbp_{action_number}"
 
                 # Emit ALL play-by-play events
                 events.append(
-                    PlayByPlayEvent(
+                    NBAPlayEvent(
                         timestamp=timestamp,
-                        event_id=pbp_event_id,
                         game_id=game_id,
+                        sport="nba",
+                        event_id=pbp_event_id,
                         action_type=action_type,
                         action_number=action_number,
                         period=period,
                         clock=clock,
-                        person_id=person_id,
+                        player_id=person_id,
                         player_name=player_name,
+                        team_id=team_id,
                         team_tricode=team_tricode,
                         home_score=home_score,
                         away_score=away_score,
                         description=description,
+                        play_id=play_id,
+                        is_scoring_play=is_scoring_play,
+                        score_value=score_value,
                     )
                 )
 

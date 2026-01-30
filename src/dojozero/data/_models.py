@@ -1,16 +1,245 @@
-"""Core data models: DataEvent and DataFact."""
+"""Core data models: DataEvent hierarchy and shared value objects.
+
+Event Hierarchy:
+    DataEvent (base)
+    ├── SportEvent (adds game_id, sport)
+    │   ├── GameEvent — game state changes
+    │   │   ├── [Lifecycle] GameInitializeEvent, GameStartEvent, GameResultEvent
+    │   │   ├── [Atomic]   BasePlayEvent → NBAPlayEvent, NFLPlayEvent
+    │   │   ├── [Segment]  BaseSegmentEvent → NFLDriveEvent
+    │   │   ├── [Snapshot] BaseGameUpdateEvent → NBAGameUpdateEvent, NFLGameUpdateEvent
+    │   │   └── OddsUpdateEvent
+    │   └── PreGameInsightEvent — supplementary pre-game intelligence
+    │       ├── WebSearchInsightEvent — insights derived from web search
+    │       │   ├── InjuryReportEvent
+    │       │   ├── PowerRankingEvent
+    │       │   └── ExpertPredictionEvent
+    │       └── StatsInsightEvent — insights derived from stats APIs
+    │           └── PreGameStatsEvent (unified pregame stats)
+    └── (future non-sport events)
+
+Value Objects:
+    TeamIdentity - Team identification (name, tricode, colors, logo)
+    VenueInfo - Venue/stadium information
+    MoneylineOdds - Moneyline market odds
+    SpreadOdds - Point spread market odds
+    OddsInfo - Container for all odds markets from a provider
+"""
 
 from abc import ABC
-from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, TypeVar, get_origin, get_args, overload
+from typing import Any, Literal, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+# =============================================================================
+# Value Objects (shared across events, metadata, stores, API responses)
+# =============================================================================
+
+
+class TeamIdentity(BaseModel):
+    """Single representation for a team across the entire system.
+
+    Used in events, trial metadata, arena server responses, and frontend data.
+    Captures all team data from ESPN API at discovery time so downstream
+    components never need to re-fetch or hardcode team info.
+
+    Serialization aliases produce camelCase keys matching the frontend contract
+    when serialized with ``model_dump(by_alias=True)``.
+    """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    team_id: str = Field(default="", serialization_alias="teamId")
+    name: str = ""  # Full display name, e.g., "Boston Celtics"
+    tricode: str = Field(default="", serialization_alias="abbrev")  # e.g., "BOS"
+    location: str = Field(default="", serialization_alias="city")  # e.g., "Boston"
+    color: str = ""  # Primary hex color
+    alternate_color: str = Field(default="", serialization_alias="alternateColor")
+    logo_url: str = Field(default="", serialization_alias="logoUrl")
+    record: str = ""  # Win-loss record, e.g., "42-18"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def __bool__(self) -> bool:
+        return bool(self.name)
+
+
+class VenueInfo(BaseModel):
+    """Venue/stadium information."""
+
+    model_config = ConfigDict(frozen=True)
+
+    venue_id: str = ""
+    name: str = ""
+    city: str = ""
+    state: str = ""
+    indoor: bool = True
+
+
+class MoneylineOdds(BaseModel):
+    """Moneyline (match winner) market odds.
+
+    Probabilities come directly from Polymarket (0-1 range).
+    Decimal odds are computed as 1/probability.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    home_probability: float = 0.0
+    away_probability: float = 0.0
+    home_odds: float = 1.0  # Decimal odds (1 / home_probability)
+    away_odds: float = 1.0  # Decimal odds (1 / away_probability)
+
+
+class SpreadOdds(BaseModel):
+    """Point spread market odds.
+
+    Spread is from the home team's perspective.
+    Negative spread means home team is favored (e.g., -6.5).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    spread: float = 0.0  # e.g., -6.5 means home favored by 6.5
+    home_probability: float = 0.0  # Probability of home covering
+    away_probability: float = 0.0
+    home_odds: float = 1.0  # Decimal odds (1 / home_probability)
+    away_odds: float = 1.0  # Decimal odds (1 / away_probability)
+
+
+class TotalOdds(BaseModel):
+    """Over/under (totals) market odds.
+
+    The total line is the combined score threshold.
+    Probabilities and odds describe the over/under outcomes.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    total: float = 0.0  # e.g., 220.5
+    over_probability: float = 0.0
+    under_probability: float = 0.0
+    over_odds: float = 1.0  # Decimal odds (1 / over_probability)
+    under_odds: float = 1.0  # Decimal odds (1 / under_probability)
+
+
+class OddsInfo(BaseModel):
+    """All odds markets for a game from a single provider.
+
+    Each market is optional since providers may not offer all market types,
+    and updates may arrive for individual markets independently.
+    Spreads and totals are lists since providers may offer multiple lines.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str = ""  # e.g., "polymarket"
+    moneyline: MoneylineOdds | None = None
+    spreads: list[SpreadOdds] = Field(default_factory=list)
+    totals: list[TotalOdds] = Field(default_factory=list)
+
+
+# =============================================================================
+# Pre-Game Stats Value Objects
+# =============================================================================
+
+
+class SeasonSeries(BaseModel):
+    """Head-to-head record between two teams this season."""
+
+    model_config = ConfigDict(frozen=True)
+
+    total_games: int = 0
+    home_wins: int = 0
+    away_wins: int = 0
+    games: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TeamRecentForm(BaseModel):
+    """Recent form (last N games) for a team."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    last_n: int = 10
+    wins: int = 0
+    losses: int = 0
+    streak: str = ""  # e.g., "W3", "L2"
+    games: list[dict[str, Any]] = Field(default_factory=list)
+    avg_points_scored: float = 0.0
+    avg_points_allowed: float = 0.0
+
+
+class ScheduleDensity(BaseModel):
+    """Schedule density / rest info for a team."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    days_rest: int = 0
+    is_back_to_back: bool = False
+    games_last_7_days: int = 0
+    games_last_14_days: int = 0
+
+
+class TeamSeasonStats(BaseModel):
+    """Team season statistical averages."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    stats: dict[str, float] = Field(default_factory=dict)
+    rank: dict[str, int] = Field(default_factory=dict)
+
+
+class HomeAwaySplits(BaseModel):
+    """Home vs away performance splits."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    home_record: str = ""
+    away_record: str = ""
+    home_stats: dict[str, float] = Field(default_factory=dict)
+    away_stats: dict[str, float] = Field(default_factory=dict)
+
+
+class TeamPlayerStats(BaseModel):
+    """Key player stats for a team."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    players: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TeamStandings(BaseModel):
+    """Conference and division standings for a team."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    conference: str = ""
+    conference_rank: int = 0
+    division: str = ""
+    division_rank: int = 0
+    overall_record: str = ""
+    conference_record: str = ""
+    games_back: float = 0.0
+
 
 # Type variable for event classes
 EventT = TypeVar("EventT", bound="DataEvent")
-
-# Event registry for reconstruction during replay
-_EVENT_REGISTRY: dict[str, type["DataEvent"]] = {}
 
 
 class EventTypes(str, Enum):
@@ -18,117 +247,53 @@ class EventTypes(str, Enum):
 
     These constants should be used wherever event_type strings are compared
     (e.g., in operators, processors, or stores) to avoid magic strings.
-
-    Organized by domain for maintainability:
-    - Polymarket/betting: odds updates
-    - NBA: game lifecycle events
-    - Web search: raw search results and processed summaries
     """
 
     # =========================================================================
-    # Polymarket / Betting
+    # Polymarket / Betting (unified)
     # =========================================================================
     ODDS_UPDATE = "event.odds_update"
 
     # =========================================================================
-    # NBA Game Lifecycle
+    # Game Lifecycle (unified across sports)
     # =========================================================================
     GAME_INITIALIZE = "event.game_initialize"
     GAME_START = "event.game_start"
     GAME_RESULT = "event.game_result"
-    GAME_UPDATE = "event.game_update"
-    PLAY_BY_PLAY = "event.play_by_play"
 
     # =========================================================================
-    # Web Search
+    # NBA Game Events
     # =========================================================================
-    # Raw search results from API
-    RAW_WEB_SEARCH = "event.raw_web_search"
+    NBA_PLAY = "event.nba_play"
+    NBA_GAME_UPDATE = "event.nba_game_update"
 
-    # Processed summaries (generated from raw_web_search)
-    INJURY_SUMMARY = "event.injury_summary"
+    # =========================================================================
+    # NFL Game Events
+    # =========================================================================
+    NFL_PLAY = "event.nfl_play"
+    NFL_DRIVE = "event.nfl_drive"
+    NFL_GAME_UPDATE = "event.nfl_game_update"
+
+    # =========================================================================
+    # Game Insights (web search, sentiment, etc.)
+    # =========================================================================
+    INJURY_REPORT = "event.injury_report"
     POWER_RANKING = "event.power_ranking"
     EXPERT_PREDICTION = "event.expert_prediction"
 
     # =========================================================================
-    # NFL Game Lifecycle
+    # Stats Insights (ESPN API-derived)
     # =========================================================================
-    NFL_GAME_INITIALIZE = "event.nfl_game_initialize"
-    NFL_GAME_START = "event.nfl_game_start"
-    NFL_GAME_RESULT = "event.nfl_game_result"
-    NFL_GAME_UPDATE = "event.nfl_game_update"
-    NFL_PLAY = "event.nfl_play"
-    NFL_DRIVE = "event.nfl_drive"
-    NFL_ODDS_UPDATE = "event.nfl_odds_update"
+    PREGAME_STATS = "event.pregame_stats"
 
 
-@overload
-def register_event(event_class: type[EventT]) -> type[EventT]: ...
+def register_event(event_class: type[EventT]) -> type[EventT]:
+    """No-op decorator, retained for source compatibility.
 
-
-@overload
-def register_event(
-    event_class: None = None,
-) -> Callable[[type[EventT]], type[EventT]]: ...
-
-
-def register_event(
-    event_class: type[EventT] | None = None,
-) -> type[EventT] | Callable[[type[EventT]], type[EventT]]:
-    """Decorator to register an event class in the registry.
-
-    Usage:
-        @register_event
-        @dataclass(slots=True, frozen=True)
-        class MyEvent(DataEvent):
-            ...
-
-    Or with explicit event_type:
-        @register_event
-        @dataclass(slots=True, frozen=True)
-        class MyEvent(DataEvent):
-            @property
-            def event_type(self) -> str:
-                return "custom_type"
-
-    Args:
-        event_class: Event class to register (when used as decorator)
-
-    Returns:
-        The decorated class
+    Event dispatch now uses Pydantic discriminated unions via
+    ``deserialize_data_event()`` in ``dojozero.data``.
     """
-
-    def decorator(cls: type[EventT]) -> type[EventT]:
-        # Create a minimal instance to get the actual event_type
-        # All event classes have default values for their fields
-        try:
-            instance = cls()
-            event_type = instance.event_type
-            _EVENT_REGISTRY[event_type] = cls
-        except Exception:
-            # Fallback: use class name if instantiation fails
-            class_name = cls.__name__
-            event_type = class_name.lower().replace("event", "")
-            _EVENT_REGISTRY[event_type] = cls
-        return cls
-
-    # Support both @register_event and @register_event()
-    if event_class is None:
-        return decorator
-    else:
-        return decorator(event_class)
-
-
-def get_event_class(event_type: str) -> type["DataEvent"] | None:
-    """Get event class by event type.
-
-    Args:
-        event_type: Event type string
-
-    Returns:
-        Event class or None if not found
-    """
-    return _EVENT_REGISTRY.get(event_type)
+    return event_class
 
 
 def convert_datetime_to_iso(obj: Any) -> Any:
@@ -174,180 +339,324 @@ def extract_game_id(event_dict: dict[str, Any]) -> str:
     return raw_id_str
 
 
-class DataEventFactory:
-    """Factory for creating DataEvent instances from dictionaries.
-
-    Handles automatic dispatch to the correct event subclass based on event_type.
-    """
-
-    @staticmethod
-    def from_dict(data: dict[str, Any]) -> "DataEvent | None":
-        """Create event from dictionary by automatically dispatching to the correct subclass.
-
-        Uses the event registry to look up the correct event class based on 'event_type'.
-        This is useful when you don't know the specific event class ahead of time.
-
-        Args:
-            data: Dictionary containing event data (must include 'event_type')
-
-        Returns:
-            Instance of the correct event subclass, or None if event_type not found
-
-        Example:
-            >>> data = {"event_type": "raw_web_search", "query": "test", ...}
-            >>> event = DataEventFactory.from_dict(data)
-            >>> assert isinstance(event, RawWebSearchEvent)
-        """
-        event_type = data.get("event_type")
-        if not event_type:
-            return None
-
-        event_class = get_event_class(event_type)
-        if not event_class:
-            return None
-
-        # Use the class's from_dict method
-        return event_class.from_dict(data)
+# =============================================================================
+# Base Event
+# =============================================================================
 
 
-@dataclass(slots=True, frozen=True, kw_only=True)
-class DataEvent(ABC):
+class DataEvent(BaseModel, ABC):
     """Base class for push-based incremental updates (events).
 
     Events represent raw or processed data updates that flow through the system.
     They are timestamped and typed for proper routing and processing.
+
+    Concrete subclasses narrow ``event_type`` to a ``Literal`` for Pydantic
+    discriminated-union dispatch::
+
+        class MyEvent(DataEvent):
+            event_type: Literal["event.my_event"] = "event.my_event"
     """
 
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    @property
-    def event_type(self) -> str:
-        """Return the event type identifier."""
-        return self.__class__.__name__.lower().replace("event", "")
+    event_type: str = ""  # Narrowed to Literal on concrete subclasses
+
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""
-        # Use dataclasses.asdict() to handle slots=True dataclasses
-        event_dict = asdict(self)
-
-        # Convert all datetime fields to ISO format strings
-        converted_dict = convert_datetime_to_iso(event_dict)
-        return {
-            "event_type": self.event_type,
-            **converted_dict,
-        }
+        event_dict = self.model_dump(mode="python")
+        return convert_datetime_to_iso(event_dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DataEvent":
         """Create event from dictionary.
 
-        When called on a specific subclass (e.g., RawWebSearchEvent.from_dict(data)),
-        creates an instance of that subclass.
+        Only fields defined on the model are used. Extra fields in the dictionary
+        are ignored to support forward compatibility.
 
         Args:
-            data: Dictionary containing event data (may include 'event_type' and extra fields)
+            data: Dictionary containing event data
 
         Returns:
             Instance of the class this method is called on
-
-        Note:
-            Only fields defined on the dataclass are used. Extra fields in the dictionary
-            are ignored to support forward compatibility (e.g., events from newer versions).
         """
-        # Get field names and types defined on this dataclass
-        field_info = {f.name: f.type for f in fields(cls)}
-        field_names = set(field_info.keys())
-
-        # Filter data to only include fields defined on the dataclass
-        # This prevents TypeError when dictionary contains extra fields
+        field_names = set(cls.model_fields.keys())
         event_data = {k: v for k, v in data.items() if k in field_names}
-
-        # Parse datetime fields if they are strings
-        for field_name, field_type in field_info.items():
-            if field_name in event_data and isinstance(event_data[field_name], str):
-                # Check if the field type is datetime (handle both datetime and Optional[datetime])
-                origin = get_origin(field_type)
-                args = get_args(field_type) if origin else ()
-                is_datetime_field = field_type == datetime or (
-                    origin is not None and datetime in args
-                )
-                if is_datetime_field:
-                    try:
-                        event_data[field_name] = datetime.fromisoformat(
-                            event_data[field_name]
-                        )
-                    except (ValueError, AttributeError):
-                        pass  # If parsing fails, keep the original value
-
-        return cls(**event_data)
+        return cls.model_validate(event_data)
 
 
-@dataclass(slots=True, frozen=True, kw_only=True)
-class DataFact(ABC):
-    """Base class for pull-based state snapshots (facts).
+# =============================================================================
+# Sport Event (common base for game + intel events)
+# =============================================================================
 
-    Facts represent processed/aggregated data that agents can query.
-    They are computed from events by processors.
+
+class SportEvent(DataEvent):
+    """Base for all events related to a specific sport and game."""
+
+    game_id: str = ""  # ESPN event ID for the game
+    sport: str = ""  # "nba", "nfl"
+
+
+# =============================================================================
+# Game Events
+# =============================================================================
+
+
+class GameEvent(SportEvent):
+    """Base for game state change events (lifecycle, plays, updates, odds)."""
+
+    pass
+
+
+@register_event
+class GameInitializeEvent(GameEvent):
+    """Game initialization event with rich team and venue data.
+
+    Emitted when a game is first detected. Carries full team identity
+    so downstream components never need to re-fetch team info.
+    Replaces the old NBA GameInitializeEvent, NFL NFLGameInitializeEvent,
+    and ESPN ESPNGameInitializeEvent.
     """
 
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    home_team: TeamIdentity | str = Field(default_factory=lambda: TeamIdentity())
+    away_team: TeamIdentity | str = Field(default_factory=lambda: TeamIdentity())
+    venue: VenueInfo = Field(default_factory=VenueInfo)
+    game_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    broadcast: str = ""
+    season_year: int = 0
+    season_type: str = ""  # "regular", "postseason", "preseason"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_teams(cls, values: Any) -> Any:
+        """Accept plain strings for home_team/away_team, coercing to TeamIdentity."""
+        if isinstance(values, dict):
+            for field in ("home_team", "away_team"):
+                v = values.get(field)
+                if isinstance(v, str):
+                    values[field] = TeamIdentity(name=v)
+        return values
+
+    event_type: Literal["event.game_initialize"] = "event.game_initialize"
+
+
+@register_event
+class GameStartEvent(GameEvent):
+    """Game start event signaling transition from scheduled to in-progress."""
+
+    event_type: Literal["event.game_start"] = "event.game_start"
+
+
+@register_event
+class GameResultEvent(GameEvent):
+    """Game result event with winner and final scores."""
+
+    winner: str = ""  # "home", "away", or "" for tie
+    home_score: int = 0
+    away_score: int = 0
+    home_team_name: str = ""
+    away_team_name: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_final_score(cls, values: Any) -> Any:
+        """Accept final_score dict for backward compatibility with broker."""
+        if isinstance(values, dict):
+            final_score = values.pop("final_score", None)
+            if isinstance(final_score, dict):
+                if "home_score" not in values and "home" in final_score:
+                    values["home_score"] = final_score["home"]
+                if "away_score" not in values and "away" in final_score:
+                    values["away_score"] = final_score["away"]
+        return values
 
     @property
-    def fact_type(self) -> str:
-        """Return the fact type identifier."""
-        return self.__class__.__name__.lower().replace("fact", "")
+    def final_score(self) -> dict[str, int]:
+        """Backward-compatible property for broker settlement."""
+        return {"home": self.home_score, "away": self.away_score}
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert fact to dictionary for serialization."""
-        # Use dataclasses.asdict() to handle slots=True dataclasses
-        fact_dict = asdict(self)
+    event_type: Literal["event.game_result"] = "event.game_result"
 
-        # Convert all datetime fields to ISO format strings
-        converted_dict = convert_datetime_to_iso(fact_dict)
-        return {
-            "fact_type": self.fact_type,
-            **converted_dict,
-        }
 
+# =============================================================================
+# Tier 1: Atomic (single action as it happens)
+# =============================================================================
+
+
+class BasePlayEvent(GameEvent):
+    """Base for atomic play-by-play events.
+
+    Captures a single action in a game (e.g., a shot, pass, foul).
+    Sport-specific subclasses add their own fields.
+    """
+
+    play_id: str = ""
+    sequence_number: int = 0
+    period: int = 0
+    clock: str = ""
+    description: str = ""
+    home_score: int = 0
+    away_score: int = 0
+    team_id: str = ""
+    team_tricode: str = ""
+    is_scoring_play: bool = False
+    score_value: int = 0
+
+
+# =============================================================================
+# Tier 2: Segment (completed unit of play)
+# =============================================================================
+
+
+class BaseSegmentEvent(GameEvent):
+    """Base for segment events (completed unit of play).
+
+    Captures a completed sequence of plays (e.g., an NFL drive).
+    Not all sports need this tier.
+    """
+
+    segment_id: str = ""
+    segment_number: int = 0
+    team_id: str = ""
+    team_tricode: str = ""
+    start_period: int = 0
+    start_clock: str = ""
+    end_period: int = 0
+    end_clock: str = ""
+    plays_count: int = 0
+    result: str = ""  # e.g., "Touchdown", "Field Goal", "Punt"
+    is_score: bool = False
+    points_scored: int = 0
+
+
+# =============================================================================
+# Tier 3: Snapshot (current game state)
+# =============================================================================
+
+
+class BaseGameUpdateEvent(GameEvent):
+    """Base for game state snapshot events.
+
+    Captures the full game state at a point in time (scores, stats, clock).
+    Sport-specific subclasses add team stats and other details.
+    """
+
+    period: int = 0
+    game_clock: str = ""
+    home_score: int = 0
+    away_score: int = 0
+    game_time_utc: str = ""  # ISO format datetime string
+
+
+# =============================================================================
+# Odds
+# =============================================================================
+
+
+@register_event
+class OddsUpdateEvent(GameEvent):
+    """Odds update event from prediction market.
+
+    Unified event for all odds sources (Polymarket, sportsbooks).
+    Carries structured OddsInfo with optional market types.
+
+    Supports two construction styles:
+    - New style: OddsUpdateEvent(odds=OddsInfo(moneyline=MoneylineOdds(...)))
+    - Legacy:   OddsUpdateEvent(home_odds=1.95, away_odds=2.10)
+    """
+
+    odds: OddsInfo = Field(default_factory=OddsInfo)
+
+    # Convenience fields for backward compatibility and easy access
+    home_tricode: str = ""
+    away_tricode: str = ""
+
+    @model_validator(mode="before")
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "DataFact":
-        """Create fact from dictionary.
+    def _coerce_odds(cls, values: Any) -> Any:
+        """Accept home_odds/away_odds kwargs for backward compatibility."""
+        if isinstance(values, dict):
+            home_odds = values.pop("home_odds", None)
+            away_odds = values.pop("away_odds", None)
+            if (
+                home_odds is not None or away_odds is not None
+            ) and "odds" not in values:
+                values["odds"] = {
+                    "moneyline": {
+                        "home_odds": float(home_odds) if home_odds is not None else 1.0,
+                        "away_odds": float(away_odds) if away_odds is not None else 1.0,
+                    }
+                }
+        return values
 
-        When called on a specific subclass, creates an instance of that subclass.
+    @property
+    def home_odds(self) -> float | None:
+        """Backward-compatible accessor for home decimal odds."""
+        if self.odds and self.odds.moneyline:
+            return self.odds.moneyline.home_odds
+        return None
 
-        Args:
-            data: Dictionary containing fact data (may include 'fact_type' and extra fields)
+    @property
+    def away_odds(self) -> float | None:
+        """Backward-compatible accessor for away decimal odds."""
+        if self.odds and self.odds.moneyline:
+            return self.odds.moneyline.away_odds
+        return None
 
-        Returns:
-            Instance of the class this method is called on
+    event_type: Literal["event.odds_update"] = "event.odds_update"
 
-        Note:
-            Only fields defined on the dataclass are used. Extra fields in the dictionary
-            are ignored to support forward compatibility (e.g., facts from newer versions).
-        """
-        # Get field names and types defined on this dataclass
-        field_info = {f.name: f.type for f in fields(cls)}
-        field_names = set(field_info.keys())
 
-        # Filter data to only include fields defined on the dataclass
-        # This prevents TypeError when dictionary contains extra fields
-        fact_data = {k: v for k, v in data.items() if k in field_names}
+# =============================================================================
+# Pre-Game Insight Events (supplementary intelligence)
+# =============================================================================
 
-        # Parse datetime fields if they are strings
-        for field_name, field_type in field_info.items():
-            if field_name in fact_data and isinstance(fact_data[field_name], str):
-                # Check if the field type is datetime (handle both datetime and Optional[datetime])
-                origin = get_origin(field_type)
-                args = get_args(field_type) if origin else ()
-                is_datetime_field = field_type == datetime or (
-                    origin is not None and datetime in args
-                )
-                if is_datetime_field:
-                    try:
-                        fact_data[field_name] = datetime.fromisoformat(
-                            fact_data[field_name]
-                        )
-                    except (ValueError, AttributeError):
-                        pass  # If parsing fails, keep the original value
 
-        return cls(**fact_data)
+class PreGameInsightEvent(SportEvent):
+    """Base for supplementary pre-game intelligence events.
+
+    These events provide context that enriches agent decisions but are not
+    game state events. Subcategories include web search insights, stats-based
+    insights, sentiment analysis, news aggregation, etc.
+
+    Concrete (non-abstract) so it can be used as a generic insight event.
+    Subclasses override event_type for specific event identification.
+    """
+
+    source: str = ""  # e.g., "websearch", "espn_stats", "twitter", "news"
+
+    event_type: Literal["event.pre_game_insight"] = "event.pre_game_insight"
+
+
+class WebSearchInsightEvent(PreGameInsightEvent):
+    """Base for insights derived from web search + LLM processing.
+
+    Subclasses represent specific types of processed web search results
+    (injury reports, power rankings, expert predictions). Each subclass
+    handles its own search query construction and result processing.
+
+    The raw_results field carries raw API response data through the
+    processor pipeline. It defaults to empty and is typically not
+    populated on the final processed events emitted to consumers.
+    """
+
+    query: str = ""
+    summary: str = ""  # Human-readable summary of processed results
+    raw_results: list[dict[str, Any]] = Field(default_factory=list)
+
+    event_type: Literal["event.web_search"] = "event.web_search"
+
+
+class StatsInsightEvent(PreGameInsightEvent):
+    """Base for insights derived from stats APIs (e.g., ESPN).
+
+    Carries team identification and season context so concrete subclasses
+    can focus on their specific stats payload.
+    """
+
+    home_team_id: str = ""
+    away_team_id: str = ""
+    season_year: int = 0
+    season_type: str = ""  # "regular", "postseason", "preseason"
+
+    event_type: Literal["event.stats_insight"] = "event.stats_insight"

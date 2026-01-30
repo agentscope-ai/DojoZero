@@ -10,8 +10,7 @@ from py_clob_client.exceptions import PolyApiException
 
 from dojozero.data.polymarket._store import PolymarketStore
 from dojozero.data.polymarket._api import PolymarketAPI
-from dojozero.data.polymarket._events import OddsUpdateEvent
-from dojozero.data.nba._events import GameInitializeEvent
+from dojozero.data._models import GameInitializeEvent, OddsUpdateEvent
 
 
 market_url = "https://polymarket.com/event/nba-lac-okc-2025-12-17"
@@ -153,11 +152,14 @@ async def test_polymarket_store_logic(market_url: str):
             if isinstance(event, OddsUpdateEvent):
                 print("  - OddsUpdateEvent:")
                 print(f"    Game ID: {event.game_id}")
+                ml = event.odds.moneyline
+                home_prob = ml.home_probability if ml else 0.0
+                away_prob = ml.away_probability if ml else 0.0
                 print(
-                    f"    Home Odds: {event.home_odds:.4f} (from prob: {event.home_probability:.4f})"
+                    f"    Home Odds: {event.home_odds:.4f} (from prob: {home_prob:.4f})"
                 )
                 print(
-                    f"    Away Odds: {event.away_odds:.4f} (from prob: {event.away_probability:.4f})"
+                    f"    Away Odds: {event.away_odds:.4f} (from prob: {away_prob:.4f})"
                 )
                 print(f"    Event Type: {event.event_type}")
                 print()
@@ -197,12 +199,11 @@ async def test_polymarket_store_logic(market_url: str):
         if isinstance(event, OddsUpdateEvent):
             print("  - OddsUpdateEvent:")
             print(f"    Game ID: {event.game_id}")
-            print(
-                f"    Home Odds: {event.home_odds:.4f} (from prob: {event.home_probability:.4f})"
-            )
-            print(
-                f"    Away Odds: {event.away_odds:.4f} (from prob: {event.away_probability:.4f})"
-            )
+            ml = event.odds.moneyline
+            home_prob = ml.home_probability if ml else 0.0
+            away_prob = ml.away_probability if ml else 0.0
+            print(f"    Home Odds: {event.home_odds:.4f} (from prob: {home_prob:.4f})")
+            print(f"    Away Odds: {event.away_odds:.4f} (from prob: {away_prob:.4f})")
             print(f"    Event Type: {event.event_type}")
     print()
 

@@ -9,20 +9,35 @@ This module implements a generic betting broker operator that manages:
 This broker is sport-agnostic and can be used for NBA, NFL, or any other sports betting.
 """
 
-from dataclasses import dataclass
-from datetime import datetime
-from decimal import Decimal
-from enum import Enum
-from typing import Any, Dict, Literal, Optional, Union
-
 import asyncio
 import logging
 import uuid
 from collections import defaultdict
-from typing import List, Sequence, Set, TypedDict
+from datetime import datetime
+from decimal import Decimal
+from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict
 
-from pydantic import BaseModel, Field, TypeAdapter, computed_field
+from pydantic import TypeAdapter
 
+from dojozero.betting._models import (
+    Account,
+    Bet,
+    BetExecutedPayload,
+    BetOutcome,
+    BetRequest,
+    BetRequestMoneyline,
+    BetRequestSpread,
+    BetRequestTotal,
+    BetSettledPayload,
+    BetStatus,
+    BetType,
+    BettingEvent,
+    BettingPhase,
+    EventStatus,
+    OrderType,
+    Statistics,
+    VALID_STATUS_TRANSITIONS,
+)
 from dojozero.core import (
     Agent,
     Operator,
@@ -31,280 +46,17 @@ from dojozero.core import (
     StreamEvent,
 )
 from dojozero.core._tracing import create_span_from_event, emit_span
+from dojozero.data._models import (
+    BaseGameUpdateEvent,
+    GameInitializeEvent,
+    GameResultEvent,
+    GameStartEvent,
+    OddsInfo,
+    OddsUpdateEvent,
+)
 
 # Logger for broker operations
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# Enums
-# =============================================================================
-
-
-class EventStatus(Enum):
-    """Status of a betting event"""
-
-    SCHEDULED = "SCHEDULED"  # Pre-game, accepting bets
-    LIVE = "LIVE"  # In-game, accepting live bets only
-    CLOSED = "CLOSED"  # Game ended, no more bets
-    SETTLED = "SETTLED"  # All bets settled
-
-
-# Valid status transitions for betting events
-VALID_STATUS_TRANSITIONS = {
-    EventStatus.SCHEDULED: {EventStatus.LIVE, EventStatus.CLOSED},
-    EventStatus.LIVE: {EventStatus.CLOSED},
-    EventStatus.CLOSED: {EventStatus.SETTLED},
-    EventStatus.SETTLED: set(),
-}
-
-
-class OrderType(Enum):
-    """Type of bet order"""
-
-    MARKET = "MARKET"  # Execute immediately at current odds
-    LIMIT = "LIMIT"  # Execute only when odds reach limit_odds
-
-
-class BettingPhase(Enum):
-    """Phase when bet is placed"""
-
-    PRE_GAME = "PRE_GAME"  # Before game starts
-    IN_GAME = "IN_GAME"  # During game (live betting)
-
-
-class BetStatus(Enum):
-    """Status of a bet"""
-
-    PENDING = "PENDING"  # Limit order waiting for execution
-    ACTIVE = "ACTIVE"  # Executed, waiting for settlement
-    SETTLED = "SETTLED"  # Completed with outcome
-    CANCELLED = "CANCELLED"  # Cancelled before execution
-
-
-class BetOutcome(Enum):
-    """Outcome of a settled bet"""
-
-    WIN = "WIN"
-    LOSS = "LOSS"
-
-
-class BetType(Enum):
-    """Type of bet"""
-
-    MONEYLINE = "MONEYLINE"  # Default: win/lose
-    SPREAD = "SPREAD"  # Point spread
-    TOTAL = "TOTAL"  # Over/under total points
-
-
-# =============================================================================
-# Account
-# =============================================================================
-
-
-class Account(BaseModel):
-    """Agent account information"""
-
-    agent_id: str
-    balance: Decimal
-    created_at: datetime
-    last_updated: datetime
-
-
-# =============================================================================
-# Event
-# =============================================================================
-
-
-class BettingEvent(BaseModel):
-    """Betting event (e.g., a sports game)"""
-
-    event_id: str
-    home_team: str
-    away_team: str
-    game_time: datetime
-    status: EventStatus
-    home_odds: Optional[Decimal] = Field(
-        default=None, description="Can be None initially, filled in when odds arrive"
-    )
-    away_odds: Optional[Decimal] = Field(
-        default=None, description="Can be None initially, filled in when odds arrive"
-    )
-    # Multiple spreads: spread_value -> {home_odds, away_odds}
-    spread_lines: Dict[Decimal, Dict[str, Decimal]] = Field(
-        default_factory=dict, description="Spread betting lines"
-    )
-    # Multiple totals: total_value -> {over_odds, under_odds}
-    total_lines: Dict[Decimal, Dict[str, Decimal]] = Field(
-        default_factory=dict, description="Total (over/under) betting lines"
-    )
-    last_odds_update: Optional[datetime] = None
-    betting_closed_at: Optional[datetime] = None
-
-    @computed_field
-    def can_bet_pregame(self) -> bool:
-        """True if PRE_GAME betting is allowed (status=SCHEDULED)."""
-        return self.status == EventStatus.SCHEDULED
-
-    @computed_field
-    def can_bet_ingame(self) -> bool:
-        """True if IN_GAME betting is allowed (status=LIVE)."""
-        return self.status == EventStatus.LIVE
-
-
-# =============================================================================
-# Bet Request
-# =============================================================================
-
-
-@dataclass
-class BetRequestMoneyline:
-    """Moneyline bet request from agent to broker"""
-
-    amount: Decimal
-    selection: Literal["home", "away"]
-    event_id: str
-    order_type: OrderType
-    betting_phase: BettingPhase
-    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
-
-    def validate(self) -> None:
-        """Validate bet request parameters"""
-        if self.amount <= 0:
-            raise ValueError(f"Bet amount must be positive, got {self.amount}")
-
-        if self.order_type == OrderType.LIMIT:
-            if self.limit_odds is None:
-                raise ValueError("limit_odds required for LIMIT orders")
-            if self.limit_odds <= 1.0:
-                raise ValueError(
-                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
-                )
-
-
-@dataclass
-class BetRequestSpread:
-    """Spread bet request from agent to broker"""
-
-    amount: Decimal
-    selection: Literal["home", "away"]
-    event_id: str
-    order_type: OrderType
-    betting_phase: BettingPhase
-    spread_value: Decimal  # Required for SPREAD bets
-    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
-
-    def validate(self) -> None:
-        """Validate bet request parameters"""
-        if self.amount <= 0:
-            raise ValueError(f"Bet amount must be positive, got {self.amount}")
-
-        if self.order_type == OrderType.LIMIT:
-            if self.limit_odds is None:
-                raise ValueError("limit_odds required for LIMIT orders")
-            if self.limit_odds <= 1.0:
-                raise ValueError(
-                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
-                )
-
-
-@dataclass
-class BetRequestTotal:
-    """Total (over/under) bet request from agent to broker"""
-
-    amount: Decimal
-    selection: Literal["over", "under"]
-    event_id: str
-    order_type: OrderType
-    betting_phase: BettingPhase
-    total_value: Decimal  # Required for TOTAL bets
-    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
-
-    def validate(self) -> None:
-        """Validate bet request parameters"""
-        if self.amount <= 0:
-            raise ValueError(f"Bet amount must be positive, got {self.amount}")
-
-        if self.order_type == OrderType.LIMIT:
-            if self.limit_odds is None:
-                raise ValueError("limit_odds required for LIMIT orders")
-            if self.limit_odds <= 1.0:
-                raise ValueError(
-                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
-                )
-
-
-# Union type for all bet request types
-BetRequest = Union[BetRequestMoneyline, BetRequestSpread, BetRequestTotal]
-
-
-# =============================================================================
-# Bet
-# =============================================================================
-
-
-class Bet(BaseModel):
-    """Bet record"""
-
-    bet_id: str
-    agent_id: str
-    event_id: str
-    amount: Decimal
-    selection: str
-    odds: Decimal  # Actual execution odds
-    order_type: OrderType
-    limit_odds: Optional[Decimal] = None  # None for market orders
-    betting_phase: BettingPhase
-    create_time: datetime
-    execution_time: Optional[datetime] = None  # None until executed
-    status: BetStatus
-    bet_type: BetType = Field(
-        default=BetType.MONEYLINE,
-        description="Type of bet (default: MONEYLINE for backward compatibility)",
-    )
-    spread_value: Optional[Decimal] = None  # For SPREAD bets
-    total_value: Optional[Decimal] = None  # For TOTAL bets
-    actual_payout: Optional[Decimal] = None
-    outcome: Optional[BetOutcome] = None
-    settlement_time: Optional[datetime] = None
-
-
-@dataclass
-class BetExecutedPayload:
-    bet_id: str
-    agent_id: str
-    event_id: str
-    selection: str
-    amount: str
-    execution_odds: str
-    execution_time: str
-
-
-@dataclass
-class BetSettledPayload:
-    bet_id: str
-    agent_id: str
-    event_id: str
-    outcome: BetOutcome  # Store the enum directly
-    payout: str
-    winner: str
-
-
-# =============================================================================
-# Statistics
-# =============================================================================
-
-
-class Statistics(BaseModel):
-    """Agent performance statistics"""
-
-    total_bets: int
-    total_wagered: Decimal
-    wins: int
-    losses: int
-    win_rate: float
-    net_profit: Decimal
-    roi: float
-
 
 # =============================================================================
 # Configuration
@@ -342,13 +94,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     generic game lifecycle events (initialize, start, result) and odds updates.
     """
 
-    # Event types that the broker listens to (can be overridden by subclasses)
-    EVENT_TYPE_GAME_INITIALIZE = "game_initialize"
-    EVENT_TYPE_GAME_UPDATE = "game_update"
-    EVENT_TYPE_ODDS_UPDATE = "odds_update"
-    EVENT_TYPE_GAME_START = "game_start"
-    EVENT_TYPE_GAME_RESULT = "game_result"
-
     def __init__(self, config: BrokerOperatorConfig, trial_id: str):
         super().__init__(config["actor_id"], trial_id)
 
@@ -365,14 +110,14 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._pending_team_info: Dict[str, Dict[str, Any]] = {}
 
         # Pending status events that arrived before GameInitializeEvent
-        # Maps event_id -> list of (status, data_event) tuples to apply when event is registered
-        self._pending_status_events: Dict[str, List[tuple[str, Any]]] = defaultdict(
-            list
-        )
+        # Maps event_id -> list of (status, typed event) tuples to apply when event is registered
+        self._pending_status_events: Dict[
+            str, List[tuple[str, GameStartEvent | GameResultEvent]]
+        ] = defaultdict(list)
 
         # Pending odds that arrived before GameInitializeEvent
-        # Maps event_id -> {"home_odds": Decimal, "away_odds": Decimal, ...}
-        self._pending_odds: Dict[str, Dict[str, Any]] = {}
+        # Maps event_id -> OddsInfo (structured odds from OddsUpdateEvent)
+        self._pending_odds: Dict[str, OddsInfo] = {}
 
         # Bet management
         self._bets: Dict[str, Bet] = {}
@@ -432,32 +177,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # Event Stream Processing
     # =========================================================================
 
-    def _get_event_type(self, data_event: Any) -> str | None:
-        """Get event type from data event, handling sport-specific prefixes.
-
-        Override this method in subclasses to handle sport-specific event types.
-        """
-        event_type = getattr(data_event, "event_type", None)
-        if not event_type:
-            return None
-
-        # Handle event.* prefix (new format)
-        # e.g., "event.nfl_game_initialize" -> "nfl_game_initialize"
-        if event_type.startswith("event."):
-            event_type = event_type[6:]  # Strip "event." prefix
-
-        # Handle sport-specific prefixes (e.g., "nfl_game_initialize" -> "game_initialize")
-        # This allows the broker to work with any sport's events
-        for prefix in ["nba_", "nfl_", "mlb_", "nhl_"]:
-            if event_type.startswith(prefix):
-                return event_type[len(prefix) :]
-
-        return event_type
-
     async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
         """Process incoming stream events and delegate to appropriate handlers.
 
-        Expects StreamEvent.payload to be a DataEvent (OddsUpdateEvent, GameStartEvent, GameResultEvent, etc.)
+        Expects StreamEvent.payload to be a typed DataEvent (GameInitializeEvent,
+        OddsUpdateEvent, GameStartEvent, GameResultEvent, or BaseGameUpdateEvent).
+        Uses isinstance dispatch for type-safe handling.
         """
         try:
             data_event = event.payload
@@ -480,50 +205,47 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             async with self._event_locks[
                 event_id
             ]:  # avoid multiple streamEvent change the same event
-                # Get event type (handles sport-specific prefixes)
-                event_type = self._get_event_type(data_event)
-                if not event_type:
-                    logger.warning(
-                        "Event missing event_type property: type=%s, event_id=%s",
-                        type(data_event),
-                        event_id,
-                    )
-                    return
-
                 # Log every incoming event
+                event_type_str = getattr(data_event, "event_type", "unknown")
                 logger.info(
                     "Received event: type=%s, event_id=%s, stream_id=%s, timestamp=%s",
-                    event_type,
+                    event_type_str,
                     event_id,
                     event.stream_id,
                     getattr(data_event, "timestamp", None),
                 )
 
-                if event_type == self.EVENT_TYPE_GAME_INITIALIZE:
+                # Dispatch using isinstance for type-safe handling
+                # Order matters: check specific types before base types
+                if isinstance(data_event, GameInitializeEvent):
                     await self._handle_game_initialize(data_event, event_id)
 
-                elif event_type == self.EVENT_TYPE_ODDS_UPDATE:
+                elif isinstance(data_event, OddsUpdateEvent):
                     await self._handle_odds_update(data_event, event_id)
 
-                elif event_type == self.EVENT_TYPE_GAME_UPDATE:
-                    await self._handle_game_update(data_event, event_id)
+                elif isinstance(data_event, GameResultEvent):
+                    await self._handle_game_result(data_event, event_id)
 
-                elif event_type == self.EVENT_TYPE_GAME_START:
+                elif isinstance(data_event, GameStartEvent):
                     await self._handle_game_start(data_event, event_id)
 
-                elif event_type == self.EVENT_TYPE_GAME_RESULT:
-                    await self._handle_game_result(data_event, event_id)
+                elif isinstance(data_event, BaseGameUpdateEvent):
+                    await self._handle_game_update(data_event, event_id)
+
                 else:
-                    logger.debug("Unhandled event type: %s", event_type)
+                    logger.debug("Unhandled event type: %s", event_type_str)
 
         except Exception as e:
             logger.error("Failed to handle stream event: %s", e, exc_info=True)
 
-    async def _handle_game_initialize(self, data_event: Any, event_id: str) -> None:
+    async def _handle_game_initialize(
+        self, data_event: GameInitializeEvent, event_id: str
+    ) -> None:
         """Handle game initialization event."""
-        home_team_str = getattr(data_event, "home_team", "")
-        away_team_str = getattr(data_event, "away_team", "")
-        game_time_dt = getattr(data_event, "game_time", None)
+        # TeamIdentity.__str__() returns .name; plain str passes through
+        home_team_str = str(data_event.home_team)
+        away_team_str = str(data_event.away_team)
+        game_time_dt = data_event.game_time
 
         if not home_team_str or not away_team_str:
             logger.warning(
@@ -531,9 +253,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 event_id,
             )
             return
-
-        if not isinstance(game_time_dt, datetime):
-            game_time_dt = datetime.now()
 
         if event_id in self._events:
             # Event already exists - update team info if needed
@@ -581,21 +300,51 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         if event_id not in self._pending_odds:
             return
 
-        pending = self._pending_odds.pop(event_id)
+        pending_odds = self._pending_odds.pop(event_id)
+
+        # Extract moneyline from the stored OddsInfo
+        home_odds: Decimal | None = None
+        away_odds: Decimal | None = None
+        if pending_odds.moneyline:
+            home_odds = Decimal(str(pending_odds.moneyline.home_odds))
+            away_odds = Decimal(str(pending_odds.moneyline.away_odds))
+
+        # Extract spreads
+        spread_updates: list[dict[str, Any]] = []
+        for sp in pending_odds.spreads:
+            spread_updates.append(
+                {
+                    "spread": sp.spread,
+                    "home_odds": sp.home_odds,
+                    "away_odds": sp.away_odds,
+                }
+            )
+
+        # Extract totals
+        total_updates: list[dict[str, Any]] = []
+        for t in pending_odds.totals:
+            total_updates.append(
+                {
+                    "total": t.total,
+                    "over_odds": t.over_odds,
+                    "under_odds": t.under_odds,
+                }
+            )
+
         logger.info(
             "Applying pending odds for event %s: home_odds=%s, away_odds=%s",
             event_id,
-            pending.get("home_odds"),
-            pending.get("away_odds"),
+            home_odds,
+            away_odds,
         )
 
         try:
             await self._update_odds(
                 event_id=event_id,
-                home_odds=pending.get("home_odds"),
-                away_odds=pending.get("away_odds"),
-                spread_updates=pending.get("spread_updates", []),
-                total_updates=pending.get("total_updates", []),
+                home_odds=home_odds,
+                away_odds=away_odds,
+                spread_updates=spread_updates,
+                total_updates=total_updates,
             )
         except Exception as e:
             logger.error(
@@ -633,7 +382,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     await self._update_event_status(
                         event_id=event_id, status=EventStatus.LIVE
                     )
-                elif event_type == "game_result":
+                elif event_type == "game_result" and isinstance(
+                    data_event, GameResultEvent
+                ):
                     logger.info(
                         "Applying buffered game_result for event %s",
                         event_id,
@@ -654,30 +405,42 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     e,
                 )
 
-    async def _handle_odds_update(self, data_event: Any, event_id: str) -> None:
+    async def _handle_odds_update(
+        self, data_event: OddsUpdateEvent, event_id: str
+    ) -> None:
         """Handle odds update event. Supports moneyline, spreads, and totals."""
-        # Get moneyline odds from event - handle both NBA and NFL odds formats
-        home_odds = getattr(data_event, "home_odds", None)
-        away_odds = getattr(data_event, "away_odds", None)
+        odds_info = data_event.odds
 
-        # NFL uses moneyline format, convert to decimal odds if needed
-        if home_odds is None:
-            moneyline_home = getattr(data_event, "moneyline_home", None)
-            if moneyline_home is not None and moneyline_home != 0:
-                home_odds = self._moneyline_to_decimal(moneyline_home)
+        # Extract moneyline decimal odds from structured OddsInfo
+        home_odds: float | None = None
+        away_odds: float | None = None
+        if odds_info.moneyline:
+            home_odds = odds_info.moneyline.home_odds
+            away_odds = odds_info.moneyline.away_odds
 
-        if away_odds is None:
-            moneyline_away = getattr(data_event, "moneyline_away", None)
-            if moneyline_away is not None and moneyline_away != 0:
-                away_odds = self._moneyline_to_decimal(moneyline_away)
+        # Extract all spread lines from OddsInfo
+        spread_updates: list[dict[str, Any]] = []
+        for sp in odds_info.spreads:
+            spread_updates.append(
+                {
+                    "spread": sp.spread,
+                    "home_odds": sp.home_odds,
+                    "away_odds": sp.away_odds,
+                }
+            )
 
-        # Extract spread updates (optional - for backward compatibility)
-        spread_updates = getattr(data_event, "spread_updates", None) or []
+        # Extract all total lines from OddsInfo
+        total_updates: list[dict[str, Any]] = []
+        for t in odds_info.totals:
+            total_updates.append(
+                {
+                    "total": t.total,
+                    "over_odds": t.over_odds,
+                    "under_odds": t.under_odds,
+                }
+            )
 
-        # Extract total updates (optional - for backward compatibility)
-        total_updates = getattr(data_event, "total_updates", None) or []
-
-        # Check if we have any odds to update (moneyline OR spreads OR totals)
+        # Check if we have any odds to update
         has_moneyline = home_odds is not None and away_odds is not None
         has_spreads = len(spread_updates) > 0
         has_totals = len(total_updates) > 0
@@ -711,14 +474,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             # We have team info from GameUpdateEvent - initialize event with odds
             team_info = self._pending_team_info[event_id]
             logger.info(
-                "Initializing event from OddsUpdateEvent (team info already available): event_id=%s, home_team=%s, away_team=%s, home_odds=%s, away_odds=%s, spreads=%d, totals=%d",
+                "Initializing event from OddsUpdateEvent (team info already available): event_id=%s, home_team=%s, away_team=%s, home_odds=%s, away_odds=%s, spreads=%d",
                 event_id,
                 team_info.get("home_team"),
                 team_info.get("away_team"),
                 home_odds,
                 away_odds,
                 len(spread_updates),
-                len(total_updates),
             )
             # Initialize with moneyline odds (if available)
             await self._initialize_event(
@@ -739,41 +501,47 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             # Clear pending team info
             del self._pending_team_info[event_id]
         else:
-            # No team info yet - store odds for later when event is initialized
+            # No team info yet - store OddsInfo for later when event is initialized
             logger.info(
                 "Storing pending odds (waiting for event initialization): event_id=%s, home_odds=%s, away_odds=%s",
                 event_id,
                 home_odds,
                 away_odds,
             )
-            self._pending_odds[event_id] = {
-                "home_odds": Decimal(str(home_odds)) if home_odds else None,
-                "away_odds": Decimal(str(away_odds)) if away_odds else None,
-                "spread_updates": spread_updates,
-                "total_updates": total_updates,
-            }
+            self._pending_odds[event_id] = odds_info
 
-    async def _handle_game_update(self, data_event: Any, event_id: str) -> None:
-        """Handle game update event."""
-        # Extract team names and game time from GameUpdateEvent
-        home_team_str = None
-        away_team_str = None
-        game_time_dt = None
+    async def _handle_game_update(
+        self, data_event: BaseGameUpdateEvent, event_id: str
+    ) -> None:
+        """Handle game update event (NBAGameUpdateEvent, NFLGameUpdateEvent, etc.)."""
+        # Extract team names from sport-specific typed stats models
+        home_team_str: str | None = None
+        away_team_str: str | None = None
+        game_time_dt: datetime | None = None
 
-        if hasattr(data_event, "home_team") and isinstance(data_event.home_team, dict):
-            home_city = data_event.home_team.get("teamCity", "")
-            home_name = data_event.home_team.get("teamName", "")
-            if home_city or home_name:
-                home_team_str = f"{home_city} {home_name}".strip()
+        # NBAGameUpdateEvent has home_team_stats: NBATeamGameStats
+        # NFLGameUpdateEvent has home_team_stats: NFLTeamGameStats
+        # Both have .team_city/.team_name (NBA) or .team_name/.team_abbreviation (NFL)
+        if hasattr(data_event, "home_team_stats"):
+            stats = data_event.home_team_stats  # type: ignore[attr-defined]
+            name = getattr(stats, "team_name", "")
+            city = getattr(stats, "team_city", "")
+            if city and name:
+                home_team_str = f"{city} {name}".strip()
+            elif name:
+                home_team_str = name
 
-        if hasattr(data_event, "away_team") and isinstance(data_event.away_team, dict):
-            away_city = data_event.away_team.get("teamCity", "")
-            away_name = data_event.away_team.get("teamName", "")
-            if away_city or away_name:
-                away_team_str = f"{away_city} {away_name}".strip()
+        if hasattr(data_event, "away_team_stats"):
+            stats = data_event.away_team_stats  # type: ignore[attr-defined]
+            name = getattr(stats, "team_name", "")
+            city = getattr(stats, "team_city", "")
+            if city and name:
+                away_team_str = f"{city} {name}".strip()
+            elif name:
+                away_team_str = name
 
-        # Extract game_time_utc if available
-        if hasattr(data_event, "game_time_utc") and data_event.game_time_utc:
+        # Extract game_time_utc if available (on BaseGameUpdateEvent)
+        if data_event.game_time_utc:
             try:
                 game_time_dt = datetime.fromisoformat(
                     data_event.game_time_utc.replace("Z", "+00:00")
@@ -823,7 +591,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 game_time_dt,
             )
 
-    async def _handle_game_start(self, data_event: Any, event_id: str) -> None:
+    async def _handle_game_start(
+        self, data_event: GameStartEvent, event_id: str
+    ) -> None:
         """Handle game start event.
 
         If the event is registered, update its status to LIVE.
@@ -839,7 +609,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         await self._update_event_status(event_id=event_id, status=EventStatus.LIVE)
 
-    async def _handle_game_result(self, data_event: Any, event_id: str) -> None:
+    async def _handle_game_result(
+        self, data_event: GameResultEvent, event_id: str
+    ) -> None:
         """Handle game result event.
 
         If the event is registered, close it and settle bets.
@@ -859,20 +631,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             winner=data_event.winner,
             final_score=data_event.final_score,
         )
-
-    def _moneyline_to_decimal(self, moneyline: int) -> float:
-        """Convert American moneyline odds to decimal odds.
-
-        Args:
-            moneyline: American odds (e.g., -150, +200)
-
-        Returns:
-            Decimal odds (e.g., 1.67, 3.00)
-        """
-        if moneyline > 0:
-            return (moneyline / 100) + 1
-        else:
-            return (100 / abs(moneyline)) + 1
 
     async def _initialize_event(
         self,
@@ -1409,7 +1167,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             # Create span with all the data
             tags = {
-                "dojozero.event.type": "broker.state_update",
                 "broker.change_type": change_type,
                 "broker.accounts_count": len(self._accounts),
                 "broker.bets_count": len(self._bets),

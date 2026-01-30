@@ -3,17 +3,27 @@
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
-from dojozero.data._models import DataEvent
+from dojozero.data._models import (
+    DataEvent,
+    GameInitializeEvent,
+    GameResultEvent,
+    GameStartEvent,
+    OddsUpdateEvent,
+)
+from dojozero.data._models import (
+    MoneylineOdds,
+    OddsInfo,
+    SpreadOdds,
+    TeamIdentity,
+    VenueInfo,
+)
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.nfl._api import NFLExternalAPI
 from dojozero.data.nfl._events import (
     NFLDriveEvent,
-    NFLGameInitializeEvent,
-    NFLGameResultEvent,
-    NFLGameStartEvent,
     NFLGameUpdateEvent,
-    NFLOddsUpdateEvent,
     NFLPlayEvent,
+    NFLTeamGameStats,
 )
 from dojozero.data.nfl._state_tracker import NFLGameStateTracker
 
@@ -99,10 +109,10 @@ class NFLStore(DataStore):
                            If None, emit events for all games.
 
         Emits:
-        - NFLGameInitializeEvent for new games
-        - NFLOddsUpdateEvent when odds change
-        - NFLGameStartEvent when game status changes to in_progress
-        - NFLGameResultEvent when game status changes to final
+        - GameInitializeEvent for new games
+        - OddsUpdateEvent when odds change
+        - GameStartEvent when game status changes to in_progress
+        - GameResultEvent when game status changes to final
         """
         events: list[DataEvent] = []
 
@@ -160,31 +170,69 @@ class NFLStore(DataStore):
                     except ValueError:
                         pass
 
-                # Get venue
-                venue = competition.get("venue", {}).get("fullName", "")
+                # Get venue details
+                venue_data = competition.get("venue", {})
+                venue_address = venue_data.get("address", {})
 
-                # Get week and season type
-                week = (
-                    game.get("week", {}).get("number", 0)
-                    if isinstance(game.get("week"), dict)
-                    else 0
-                )
+                # Extract team records
+                home_records = home_team_data.get("records", [])
+                home_record = home_records[0].get("summary", "") if home_records else ""
+                away_records = away_team_data.get("records", [])
+                away_record = away_records[0].get("summary", "") if away_records else ""
+
+                # Extract broadcast info
+                broadcasts_raw = competition.get("broadcasts", [])
+                broadcast_names: list[str] = []
+                for b in broadcasts_raw:
+                    names = b.get("names", [])
+                    if names:
+                        broadcast_names.extend(names)
+                broadcast = ", ".join(broadcast_names)
+
+                # Get season info
                 season = game.get("season", {})
-                season_type = season.get("type", 2) if isinstance(season, dict) else 2
+                season_type_code = (
+                    season.get("type", 2) if isinstance(season, dict) else 2
+                )
+                season_type_map = {1: "preseason", 2: "regular", 3: "postseason"}
+                season_type = season_type_map.get(season_type_code, "regular")
+                season_year = season.get("year", 0) if isinstance(season, dict) else 0
 
                 events.append(
-                    NFLGameInitializeEvent(
+                    GameInitializeEvent(
                         timestamp=timestamp,
                         game_id=event_id,
-                        home_team=home_team_info.get("displayName", ""),
-                        away_team=away_team_info.get("displayName", ""),
-                        home_team_id=str(home_team_info.get("id", "")),
-                        away_team_id=str(away_team_info.get("id", "")),
-                        home_team_abbreviation=home_team_info.get("abbreviation", ""),
-                        away_team_abbreviation=away_team_info.get("abbreviation", ""),
-                        venue=venue,
+                        sport="nfl",
+                        home_team=TeamIdentity(
+                            team_id=str(home_team_info.get("id", "")),
+                            name=home_team_info.get("displayName", ""),
+                            tricode=home_team_info.get("abbreviation", ""),
+                            location=home_team_info.get("location", ""),
+                            color=home_team_info.get("color", ""),
+                            alternate_color=home_team_info.get("alternateColor", ""),
+                            logo_url=home_team_info.get("logo", ""),
+                            record=home_record,
+                        ),
+                        away_team=TeamIdentity(
+                            team_id=str(away_team_info.get("id", "")),
+                            name=away_team_info.get("displayName", ""),
+                            tricode=away_team_info.get("abbreviation", ""),
+                            location=away_team_info.get("location", ""),
+                            color=away_team_info.get("color", ""),
+                            alternate_color=away_team_info.get("alternateColor", ""),
+                            logo_url=away_team_info.get("logo", ""),
+                            record=away_record,
+                        ),
+                        venue=VenueInfo(
+                            venue_id=str(venue_data.get("id", "")),
+                            name=venue_data.get("fullName", ""),
+                            city=venue_address.get("city", ""),
+                            state=venue_address.get("state", ""),
+                            indoor=venue_data.get("indoor", True),
+                        ),
                         game_time=game_time,
-                        week=week,
+                        broadcast=broadcast,
+                        season_year=season_year,
                         season_type=season_type,
                     )
                 )
@@ -205,25 +253,23 @@ class NFLStore(DataStore):
                     home_odds = odds.get("homeTeamOdds", {}) or {}
                     away_odds = odds.get("awayTeamOdds", {}) or {}
 
+                    moneyline_home = int(home_odds.get("moneyLine", 0) or 0)
+                    moneyline_away = int(away_odds.get("moneyLine", 0) or 0)
+
                     events.append(
-                        NFLOddsUpdateEvent(
+                        OddsUpdateEvent(
                             timestamp=timestamp,
                             game_id=event_id,
-                            provider=provider,
-                            spread=spread,
-                            spread_odds_home=int(
-                                home_odds.get("spreadOdds", -110) or -110
+                            odds=OddsInfo(
+                                provider=provider,
+                                spreads=[SpreadOdds(spread=spread)],
+                                moneyline=MoneylineOdds(
+                                    home_odds=float(moneyline_home),
+                                    away_odds=float(moneyline_away),
+                                ),
                             ),
-                            spread_odds_away=int(
-                                away_odds.get("spreadOdds", -110) or -110
-                            ),
-                            over_under=float(odds.get("overUnder", 0) or 0),
-                            over_odds=int(odds.get("overOdds", -110) or -110),
-                            under_odds=int(odds.get("underOdds", -110) or -110),
-                            moneyline_home=int(home_odds.get("moneyLine", 0) or 0),
-                            moneyline_away=int(away_odds.get("moneyLine", 0) or 0),
-                            home_team=home_team_info.get("displayName", ""),
-                            away_team=away_team_info.get("displayName", ""),
+                            home_tricode=home_team_info.get("abbreviation", ""),
+                            away_tricode=away_team_info.get("abbreviation", ""),
                         )
                     )
                     self._state.set_last_odds(event_id, odds)
@@ -242,7 +288,7 @@ class NFLStore(DataStore):
                     and previous_status != NFLGameStateTracker.STATUS_IN_PROGRESS
                 ):
                     events.append(
-                        NFLGameStartEvent(
+                        GameStartEvent(
                             timestamp=timestamp,
                             game_id=event_id,
                         )
@@ -261,13 +307,14 @@ class NFLStore(DataStore):
                     )
 
                     events.append(
-                        NFLGameResultEvent(
+                        GameResultEvent(
                             timestamp=timestamp,
                             game_id=event_id,
                             winner=winner,
-                            final_score={"home": home_score, "away": away_score},
-                            home_team=home_team_info.get("displayName", ""),
-                            away_team=away_team_info.get("displayName", ""),
+                            home_score=home_score,
+                            away_score=away_score,
+                            home_team_name=home_team_info.get("displayName", ""),
+                            away_team_name=away_team_info.get("displayName", ""),
                         )
                     )
 
@@ -369,18 +416,35 @@ class NFLStore(DataStore):
 
                 # Only emit update if we should (skip duplicates for concluded games)
                 if should_emit_update:
+                    # Build structured team stats from raw dicts
+                    home_stats = (
+                        NFLTeamGameStats.from_espn_api(home_team_dict)
+                        if home_team_dict
+                        else NFLTeamGameStats()
+                    )
+                    away_stats = (
+                        NFLTeamGameStats.from_espn_api(away_team_dict)
+                        if away_team_dict
+                        else NFLTeamGameStats()
+                    )
                     events.append(
                         NFLGameUpdateEvent(
                             timestamp=timestamp,
                             game_id=event_id,
-                            quarter=quarter,
+                            period=quarter,
                             game_clock=game_clock,
+                            home_score=home_team_dict.get("score", 0)
+                            if home_team_dict
+                            else 0,
+                            away_score=away_team_dict.get("score", 0)
+                            if away_team_dict
+                            else 0,
                             possession=possession_team,
                             down=down,
                             distance=distance,
                             yard_line=yard_line,
-                            home_team=home_team_dict,
-                            away_team=away_team_dict,
+                            home_team_stats=home_stats,
+                            away_team_stats=away_stats,
                             home_line_scores=home_line_scores,
                             away_line_scores=away_line_scores,
                         )
@@ -434,16 +498,14 @@ class NFLStore(DataStore):
                     ]
                 ),
                 team_id=team_id,
-                team_abbreviation=team_abbreviation,
-                start_quarter=int(
-                    (start.get("period", {}) or {}).get("number", 0) or 0
-                ),
+                team_tricode=team_abbreviation,
+                start_period=int((start.get("period", {}) or {}).get("number", 0) or 0),
                 start_clock=(start.get("clock", {}) or {}).get("displayValue", ""),
                 start_yard_line=int(start.get("yardLine", 0) or 0),
-                end_quarter=int((end.get("period", {}) or {}).get("number", 0) or 0),
+                end_period=int((end.get("period", {}) or {}).get("number", 0) or 0),
                 end_clock=(end.get("clock", {}) or {}).get("displayValue", ""),
                 end_yard_line=int(end.get("yardLine", 0) or 0),
-                plays=int(drive.get("offensivePlays", 0) or 0),
+                plays_count=int(drive.get("offensivePlays", 0) or 0),
                 yards=int(drive.get("yards", 0) or 0),
                 time_elapsed=(drive.get("timeElapsed", {}) or {}).get(
                     "displayValue", ""
@@ -463,7 +525,7 @@ class NFLStore(DataStore):
 
         Emits:
         - NFLPlayEvent for each new play
-        - NFLGameStartEvent when first play is detected
+        - GameStartEvent when first play is detected
         """
         events: list[DataEvent] = []
 
@@ -482,7 +544,7 @@ class NFLStore(DataStore):
         # Detect game start
         if new_plays and not self._state.has_game_started(event_id):
             events.append(
-                NFLGameStartEvent(
+                GameStartEvent(
                     timestamp=timestamp,
                     game_id=event_id,
                 )
@@ -537,8 +599,8 @@ class NFLStore(DataStore):
                     game_id=event_id,
                     play_id=play_id,
                     sequence_number=int(play.get("sequenceNumber", 0) or 0),
-                    quarter=quarter,
-                    game_clock=game_clock,
+                    period=quarter,
+                    clock=game_clock,
                     down=down,
                     distance=distance,
                     yard_line=yard_line,

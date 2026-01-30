@@ -13,8 +13,8 @@ import ray
 from dojozero.agents import load_agent_config
 from dojozero.betting import BrokerOperator
 from dojozero.core import RuntimeContext, AgentSpec, OperatorSpec, StreamEvent
-from dojozero.data.nba._events import GameInitializeEvent, GameResultEvent
-from dojozero.data.polymarket._events import OddsUpdateEvent
+from dojozero.data._models import GameInitializeEvent, GameResultEvent
+from dojozero.data._models import OddsUpdateEvent
 from dojozero.nba._agent import BettingAgent, BettingAgentConfig
 from dojozero.ray_runtime import RayActorRuntimeProvider
 
@@ -106,7 +106,8 @@ async def test_agent_receives_event_and_places_bet(
     game_result_event = GameResultEvent(
         game_id=game_id,
         winner="home",
-        final_score={"home": 110, "away": 105},
+        home_score=110,
+        away_score=105,
     )
     final_event = StreamEvent(
         stream_id="nba-stream",
@@ -273,7 +274,8 @@ async def test_agent_with_ray_runtime(
     game_result_event = GameResultEvent(
         game_id=game_id,
         winner="home",
-        final_score={"home": 110, "away": 105},
+        home_score=110,
+        away_score=105,
     )
     final_event = StreamEvent(
         stream_id="nba-stream",

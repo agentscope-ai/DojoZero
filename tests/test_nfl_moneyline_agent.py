@@ -8,10 +8,10 @@ import os
 import pytest
 
 from dojozero.core import StreamEvent
-from dojozero.data.nfl._events import (
-    NFLGameInitializeEvent,
-    NFLGameResultEvent,
-    NFLOddsUpdateEvent,
+from dojozero.data._models import (
+    GameInitializeEvent,
+    GameResultEvent,
+    OddsUpdateEvent,
 )
 
 # Import shared fixtures - conftest.py is auto-loaded by pytest
@@ -63,13 +63,13 @@ async def test_nfl_agent_receives_event_and_places_bet(
     print(f"\nInitial balance: ${initial_balance}")
 
     # Initialize NFL game event in broker first
-    game_init_event = NFLGameInitializeEvent(**nfl_game_init_data)
+    game_init_event = GameInitializeEvent(**nfl_game_init_data)
     await broker.handle_stream_event(
         StreamEvent(stream_id="nfl-stream", payload=game_init_event, sequence=-2)
     )
 
     # NFL uses American moneyline odds (e.g., -150, +130)
-    odds_update_event = NFLOddsUpdateEvent(**nfl_odds_data)
+    odds_update_event = OddsUpdateEvent(**nfl_odds_data)
     await broker.handle_stream_event(
         StreamEvent(stream_id="nfl-stream", payload=odds_update_event, sequence=-1)
     )
@@ -103,12 +103,13 @@ async def test_nfl_agent_receives_event_and_places_bet(
         await agent.handle_stream_event(event)
 
     # Simulate game result - Ravens win
-    game_result_event = NFLGameResultEvent(
+    game_result_event = GameResultEvent(
         game_id=game_id,
         winner="home",
-        final_score={"home": 28, "away": 24},
-        home_team="Baltimore Ravens",
-        away_team="Kansas City Chiefs",
+        home_score=28,
+        away_score=24,
+        home_team_name="Baltimore Ravens",
+        away_team_name="Kansas City Chiefs",
     )
     final_event = StreamEvent(
         stream_id="nfl-stream",

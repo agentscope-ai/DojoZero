@@ -12,338 +12,175 @@ const WSMessageType = {
 };
 
 /**
- * Try to parse a JSON string, return original value if parsing fails.
+ * Process a list of typed items (from snapshot or accumulated spans) to
+ * extract all derived state.
+ *
+ * Each item has the shape: { category: string, data: {...} }
+ *
+ * Categories:
+ *   - "actor_registration": actor metadata (agents, datastreams)
+ *   - "agent_message": agent messages grouped into conversations
+ *   - "trial_lifecycle": trial phase (started/stopped/terminated)
+ *   - "event": DataStream events for EventTicker / EventReplay
+ *   - "broker_state": broker state updates
+ *   - "betting_result": betting result spans
  */
-function tryParseJSON(value) {
-  if (typeof value !== "string") return value;
-  if (!value.startsWith("{") && !value.startsWith("[")) return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
-/**
- * Convert span tags array to a map for easy access.
- * Handles both array format [{key, value}] and object format {key: value}.
- */
-function spanTagsToMap(tags) {
-  const tagsMap = {};
-  if (Array.isArray(tags)) {
-    for (const tag of tags) {
-      if (tag.key && tag.value !== undefined) {
-        tagsMap[tag.key] = tag.value;
-      }
-    }
-  } else if (typeof tags === "object" && tags !== null) {
-    Object.assign(tagsMap, tags);
-  }
-  return tagsMap;
-}
-
-/**
- * Check if a span is a registration span (actor metadata).
- */
-function isRegistrationSpan(span) {
-  return span.operationName && span.operationName.endsWith(".registered");
-}
-
-/**
- * Check if a span is an agent message span.
- * Agent spans have operationName starting with "agent." (e.g., agent.response, agent.input)
- */
-function isAgentSpan(span) {
-  return span.operationName && span.operationName.startsWith("agent.");
-}
-
-/**
- * Check if a span is a trial lifecycle span (trial.started, trial.stopped, or trial.terminated).
- */
-function isTrialLifecycleSpan(span) {
-  return span.operationName && (
-    span.operationName === "trial.started" ||
-    span.operationName === "trial.stopped" ||
-    span.operationName === "trial.terminated"
-  );
-}
-
-/**
- * Check if a span is a DataStream event (for EventTicker).
- * DataStream events are NOT registration spans, NOT agent spans, and NOT trial lifecycle spans.
- */
-function isDataStreamEvent(span) {
-  return !isRegistrationSpan(span) && !isAgentSpan(span) && !isTrialLifecycleSpan(span);
-}
-
-/**
- * Determine trial phase from spans.
- * Returns "running" if trial.started exists but no trial.stopped/terminated.
- * Returns "stopped" if trial.stopped or trial.terminated exists.
- * Returns "unknown" if no lifecycle spans found.
- */
-function determineTrialPhase(spans) {
-  let hasStarted = false;
-  let hasStopped = false;
+function processTypedItems(items) {
+  const actors = {};
+  const conversations = {};
+  const events = [];
+  let phase = "unknown";
   let latestStartTime = 0;
   let latestStopTime = 0;
+  let hasStarted = false;
+  let hasStopped = false;
+  const trialMetadata = {};
 
-  for (const span of spans) {
-    if (span.operationName === "trial.started") {
-      hasStarted = true;
-      if (span.startTime > latestStartTime) {
-        latestStartTime = span.startTime;
-      }
-    } else if (span.operationName === "trial.stopped" || span.operationName === "trial.terminated") {
-      hasStopped = true;
-      if (span.startTime > latestStopTime) {
-        latestStopTime = span.startTime;
-      }
-    }
-  }
+  for (const item of items) {
+    const { category, data } = item;
 
-  // If stopped/terminated after started, trial is stopped
-  if (hasStopped && latestStopTime >= latestStartTime) {
-    return "stopped";
-  }
-  // If started but not stopped, trial is running
-  if (hasStarted && !hasStopped) {
-    return "running";
-  }
-  // If stopped but no start (shouldn't happen normally)
-  if (hasStopped) {
-    return "stopped";
-  }
-  // No lifecycle spans found - assume running if there are any spans
-  return spans.length > 0 ? "running" : "unknown";
-}
-
-/**
- * Extract actors (agents/datastreams) from registration spans.
- * Registration spans have operationName like "agent.registered" or "datastream.registered"
- * and contain resource.* tags with actor metadata.
- */
-function extractActors(spans) {
-  const actors = {};
-
-  for (const span of spans) {
-    if (!isRegistrationSpan(span)) continue;
-
-    const tagsMap = spanTagsToMap(span.tags);
-    const actorId = tagsMap["dojozero.actor.id"];
-    const actorType = tagsMap["dojozero.actor.type"];
-
-    if (!actorId) continue;
-
-    actors[actorId] = {
-      id: actorId,
-      type: actorType,
-      name: tagsMap["resource.name"] || actorId,
-      model: tagsMap["resource.model"],
-      modelProvider: tagsMap["resource.model_provider"],
-      systemPrompt: tagsMap["resource.system_prompt"],
-      tools: tryParseJSON(tagsMap["resource.tools"]) || [],
-      sourceType: tagsMap["resource.source_type"],
-    };
-  }
-
-  return actors;
-}
-
-/**
- * Group agent message spans by actor and stream for conversation view.
- * Returns: { actorId: { streamId: [messages] } }
- */
-function groupConversations(spans) {
-  const conversations = {};
-
-  for (const span of spans) {
-    // Skip registration spans and non-agent spans
-    if (isRegistrationSpan(span)) continue;
-    if (!span.operationName || !span.operationName.startsWith("agent.")) continue;
-
-    const tagsMap = spanTagsToMap(span.tags);
-    const actorId = tagsMap["dojozero.actor.id"];
-    const streamId = tagsMap["event.stream_id"] || "default";
-
-    if (!actorId) continue;
-
-    if (!conversations[actorId]) {
-      conversations[actorId] = {};
-    }
-    if (!conversations[actorId][streamId]) {
-      conversations[actorId][streamId] = [];
-    }
-
-    conversations[actorId][streamId].push({
-      spanId: span.spanID,
-      role: tagsMap["event.role"],
-      content: tagsMap["event.content"],
-      name: tagsMap["event.name"],
-      toolCalls: tryParseJSON(tagsMap["event.tool_calls"]),
-      toolCallId: tagsMap["event.tool_call_id"],
-      messageId: tagsMap["event.message_id"],
-      timestamp: span.startTime ? new Date(span.startTime / 1000).toISOString() : null,
-      sequence: tagsMap["dojozero.event.sequence"],
-    });
-  }
-
-  return conversations;
-}
-
-/**
- * Convert a span to event format for UI compatibility.
- * Spans have format: { operationName, startTime, tags: [{key, value}], ... }
- * We convert to flat event format: { event_type, timestamp, ... }
- */
-function spanToEvent(span) {
-  const tagsMap = spanTagsToMap(span.tags);
-
-  // Convert microsecond timestamp to ISO string
-  const timestamp = span.startTime
-    ? new Date(span.startTime / 1000).toISOString()
-    : null;
-
-  // Build event object
-  const event = {
-    event_type: (span.operationName || "unknown").replace(/^event\./, ""),
-    timestamp,
-    span_id: span.spanID,
-    trace_id: span.traceID,
-    actor_id: tagsMap["dojozero.actor.id"],
-    actor_type: tagsMap["dojozero.actor.type"],
-    sequence: tagsMap["dojozero.event.sequence"],
-  };
-
-  // Extract resource.* tags (for registration spans)
-  for (const [key, value] of Object.entries(tagsMap)) {
-    if (key.startsWith("resource.")) {
-      const fieldName = key.slice(9); // Remove "resource." prefix
-      event[fieldName] = tryParseJSON(value);
-    }
-  }
-
-  // Extract business data from tags (event.* prefix)
-  for (const [key, value] of Object.entries(tagsMap)) {
-    if (key.startsWith("event.")) {
-      const fieldName = key.slice(6); // Remove "event." prefix
-      event[fieldName] = tryParseJSON(value);
-    }
-  }
-
-  return event;
-}
-
-/**
- * Extract trial metadata from trial.started span.
- * Metadata is stored in tags with "trial." prefix (e.g., trial.home_team_tricode).
- */
-function extractTrialMetadata(spans) {
-  const metadata = {};
-
-  for (const span of spans) {
-    if (span.operationName === "trial.started") {
-      const tags = span.tags || [];
-      const tagsMap = Array.isArray(tags)
-        ? Object.fromEntries(tags.map((t) => [t.key, t.value]))
-        : tags;
-
-      // Extract trial.* tags (excluding system tags like trial.phase)
-      for (const [key, value] of Object.entries(tagsMap)) {
-        if (key.startsWith("trial.") && key !== "trial.phase") {
-          const metadataKey = key.slice(6); // Remove "trial." prefix
-          metadata[metadataKey] = value;
+    switch (category) {
+      case "actor_registration": {
+        const actorId = data.actor_id;
+        if (actorId) {
+          actors[actorId] = {
+            id: actorId,
+            type: data.actor_type || "",
+            name: data.name || actorId,
+            model: data.model || "",
+            modelProvider: data.model_provider || "",
+            systemPrompt: data.system_prompt || "",
+            tools: data.tools || [],
+            sourceType: data.source_type || "",
+          };
         }
+        break;
       }
-      break; // Only need the first trial.started span
+
+      case "agent_message": {
+        const actorId = data.actor_id;
+        const streamId = data.stream_id || "default";
+        if (actorId) {
+          if (!conversations[actorId]) conversations[actorId] = {};
+          if (!conversations[actorId][streamId])
+            conversations[actorId][streamId] = [];
+          conversations[actorId][streamId].push({
+            role: data.role || "",
+            content: data.content || "",
+            name: data.name || "",
+            toolCalls: data.tool_calls || [],
+            toolCallId: data.tool_call_id || "",
+            messageId: data.message_id || "",
+            timestamp: data.start_time
+              ? new Date(data.start_time / 1000).toISOString()
+              : null,
+            sequence: data.sequence || 0,
+          });
+        }
+        break;
+      }
+
+      case "trial_lifecycle": {
+        const trialPhase = data.phase || "";
+        const startTime = data.start_time || 0;
+
+        if (trialPhase === "started") {
+          hasStarted = true;
+          if (startTime > latestStartTime) latestStartTime = startTime;
+          // Extract metadata fields
+          for (const key of [
+            "home_team_tricode",
+            "away_team_tricode",
+            "home_team_name",
+            "away_team_name",
+            "league",
+            "game_date",
+            "sport_type",
+            "espn_game_id",
+          ]) {
+            if (data[key]) trialMetadata[key] = data[key];
+          }
+          // Include extra_metadata
+          if (data.extra_metadata) {
+            Object.assign(trialMetadata, data.extra_metadata);
+          }
+        } else if (
+          trialPhase === "stopped" ||
+          trialPhase === "terminated"
+        ) {
+          hasStopped = true;
+          if (startTime > latestStopTime) latestStopTime = startTime;
+        }
+        break;
+      }
+
+      case "event": {
+        // Data events come pre-parsed from the backend.
+        // Strip "event." prefix from event_type for UI compatibility.
+        const rawType = data.event_type || "";
+        const event = {
+          ...data,
+          event_type: rawType.replace(/^event\./, ""),
+        };
+        events.push(event);
+        break;
+      }
+
+      // broker_state and betting_result are available but not currently
+      // consumed by UI components — just skip them.
+      default:
+        break;
     }
   }
 
-  return metadata;
-}
+  // Determine phase
+  if (hasStopped && latestStopTime >= latestStartTime) {
+    phase = "stopped";
+  } else if (hasStarted && !hasStopped) {
+    phase = "running";
+  } else if (hasStopped) {
+    phase = "stopped";
+  } else if (items.length > 0) {
+    phase = "running";
+  }
 
-/**
- * Extract game metadata from events.
- * Looks for game_initialize and game_update events to extract team info.
- */
-function extractGameMetadata(events) {
-  const metadata = {};
-
+  // Extract game metadata from events (e.g. game_initialize, game_update)
+  const gameMetadata = {};
   for (const event of events) {
     if (event.event_type === "game_initialize") {
-      metadata.home_team = event.home_team || "";
-      metadata.away_team = event.away_team || "";
-      metadata.game_id = event.game_id || "";
+      gameMetadata.home_team = event.home_team || "";
+      gameMetadata.away_team = event.away_team || "";
+      gameMetadata.game_id = event.game_id || "";
     }
-    if (event.event_type === "game_update") {
+    if (
+      event.event_type === "game_update" ||
+      event.event_type === "nba_game_update"
+    ) {
       const home = event.home_team;
       const away = event.away_team;
       if (home && typeof home === "object") {
-        metadata.home_team_tricode = home.teamTricode || "";
-        metadata.home_team_name = home.teamName || "";
+        gameMetadata.home_team_tricode = home.teamTricode || home.team_tricode || "";
+        gameMetadata.home_team_name = home.teamName || home.team_name || "";
       }
       if (away && typeof away === "object") {
-        metadata.away_team_tricode = away.teamTricode || "";
-        metadata.away_team_name = away.teamName || "";
+        gameMetadata.away_team_tricode = away.teamTricode || away.team_tricode || "";
+        gameMetadata.away_team_name = away.teamName || away.team_name || "";
       }
     }
   }
 
-  return metadata;
-}
-
-/**
- * Process spans to extract all derived state.
- * This is the central function that processes the unified span protocol.
- *
- * Separation of concerns:
- * - events: Only DataStream events (game_update, odds_update, etc.) for EventTicker
- * - conversations: Agent messages grouped by actor/stream for AgentPanel
- * - agents: Agent metadata from registration spans
- * - phase: Trial lifecycle phase (running/stopped) from lifecycle spans
- */
-function processSpans(rawSpans) {
-  // Extract actors from registration spans
-  const actors = extractActors(rawSpans);
+  const metadata = { ...trialMetadata, ...gameMetadata };
   const agentsList = Object.values(actors).filter((a) => a.type === "agent");
 
-  // Group conversations for agent panel (agent messages only)
-  const conversations = groupConversations(rawSpans);
-
-  // Convert ONLY DataStream events for EventTicker timeline
-  // Filter out: registration spans, agent spans, lifecycle spans
-  const dataStreamSpans = rawSpans.filter(isDataStreamEvent);
-  const events = dataStreamSpans.map(spanToEvent);
-
-  // Extract trial metadata from trial.started span (base info like team tricodes)
-  const trialMetadata = extractTrialMetadata(rawSpans);
-
-  // Extract game metadata from DataStream events (runtime info like scores)
-  const gameMetadata = extractGameMetadata(events);
-
-  // Merge metadata: trial metadata as base, game metadata can override
-  const metadata = { ...trialMetadata, ...gameMetadata };
-
-  // Determine trial phase from lifecycle spans
-  const phase = determineTrialPhase(rawSpans);
-
-  return {
-    actors,
-    agents: agentsList,
-    conversations,
-    events,
-    metadata,
-    phase,
-  };
+  return { actors, agents: agentsList, conversations, events, metadata, phase };
 }
 
 /**
  * Hook for managing WebSocket connection to trial stream.
  * Handles live streaming for active trials and falls back to REST for completed trials.
  *
- * Uses the unified span protocol where ALL data flows through spans:
- * - Resource Spans (*.registered): Actor metadata
- * - Event Spans: Runtime events with business data
+ * Uses the typed item protocol where ALL data flows as typed items:
+ *   { category: "<category>", data: {...typed fields...} }
  *
  * @param {string} trialId - The trial ID to connect to
  * @param {boolean} isLive - Whether the trial is live (uses WebSocket) or completed (uses REST)
@@ -361,7 +198,7 @@ export function useTrialStream(trialId, isLive = true) {
   const [phase, setPhase] = useState("");
   const [agents, setAgents] = useState([]);
   const [events, setEvents] = useState([]);
-  const [spans, setSpans] = useState([]);
+  const [spans, setSpans] = useState([]); // Now stores typed items
   const [agentStates, setAgentStates] = useState({});
   const [actors, setActors] = useState({});
 
@@ -370,23 +207,20 @@ export function useTrialStream(trialId, isLive = true) {
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 5;
-  const isMountedRef = useRef(true);  // Track if component is mounted
-  const isCleaningUpRef = useRef(false);  // Track if we're in cleanup phase
+  const isMountedRef = useRef(true);
+  const isCleaningUpRef = useRef(false);
 
-  // Process snapshot message (contains all spans)
+  // Process snapshot message (contains all typed items)
   const handleSnapshot = useCallback((data) => {
-    const rawSpans = data.spans || [];
-    setSpans(rawSpans);
+    const items = data.items || [];
+    setSpans(items);
 
-    // Process spans using unified protocol
-    const processed = processSpans(rawSpans);
+    const processed = processTypedItems(items);
     setActors(processed.actors);
     setAgents(processed.agents);
     setAgentStates(processed.conversations);
     setEvents(processed.events);
     setMetadata(processed.metadata);
-
-    // Set phase from lifecycle spans
     setPhase(processed.phase);
     if (processed.phase === "stopped") {
       setTrialEnded(true);
@@ -397,33 +231,27 @@ export function useTrialStream(trialId, isLive = true) {
     reconnectAttempts.current = 0;
   }, []);
 
-  // Process span message - convert and append new span to list
-  const handleSpan = useCallback((spanData) => {
+  // Process span message — a single typed item {category, data}
+  const handleSpan = useCallback((message) => {
+    // The message itself contains {type, trial_id, timestamp, category, data}
+    const item = { category: message.category, data: message.data };
+
     setSpans((prev) => {
-      // Check for duplicate span (by spanID)
-      const spanId = spanData.spanID || spanData.span_id;
-      if (spanId && prev.some(s => (s.spanID || s.span_id) === spanId)) {
-        // Span already exists, skip
-        return prev;
-      }
+      const newItems = [...prev, item];
 
-      const newSpans = [...prev, spanData];
-
-      // Re-process all spans to update derived state
-      const processed = processSpans(newSpans);
+      // Re-process all items to update derived state
+      const processed = processTypedItems(newItems);
       setActors(processed.actors);
       setAgents(processed.agents);
       setAgentStates(processed.conversations);
       setEvents(processed.events);
       setMetadata((currentMeta) => ({ ...currentMeta, ...processed.metadata }));
-
-      // Update phase from lifecycle spans
       setPhase(processed.phase);
       if (processed.phase === "stopped") {
         setTrialEnded(true);
       }
 
-      return newSpans;
+      return newItems;
     });
   }, []);
 
@@ -435,16 +263,14 @@ export function useTrialStream(trialId, isLive = true) {
 
   // Connect to WebSocket for live trials
   const connectWebSocket = useCallback(() => {
-    // Don't connect if unmounting or cleaning up
-    if (!trialId || !isLive || !isMountedRef.current || isCleaningUpRef.current) return;
+    if (!trialId || !isLive || !isMountedRef.current || isCleaningUpRef.current)
+      return;
 
     const wsUrl = `${WS_BASE_URL}/ws/trials/${trialId}/stream`;
-
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      // Only log if still mounted
       if (isMountedRef.current) {
         console.log(`WebSocket connected to trial: ${trialId}`);
         setError(null);
@@ -452,9 +278,8 @@ export function useTrialStream(trialId, isLive = true) {
     };
 
     ws.onmessage = (event) => {
-      // Ignore messages if unmounted
       if (!isMountedRef.current) return;
-      
+
       const message = JSON.parse(event.data);
 
       switch (message.type) {
@@ -462,13 +287,13 @@ export function useTrialStream(trialId, isLive = true) {
           handleSnapshot(message.data);
           break;
         case WSMessageType.SPAN:
-          handleSpan(message.data);
+          // Span messages now have {type, trial_id, timestamp, category, data}
+          handleSpan(message);
           break;
         case WSMessageType.TRIAL_ENDED:
           handleTrialEnded();
           break;
         case WSMessageType.HEARTBEAT:
-          // Heartbeat received, connection is alive
           break;
         default:
           console.warn("Unknown message type:", message.type);
@@ -476,7 +301,6 @@ export function useTrialStream(trialId, isLive = true) {
     };
 
     ws.onerror = (err) => {
-      // Only log error if not cleaning up (expected during unmount)
       if (!isCleaningUpRef.current && isMountedRef.current) {
         console.error("WebSocket error:", err);
         setError("Connection error");
@@ -484,24 +308,34 @@ export function useTrialStream(trialId, isLive = true) {
     };
 
     ws.onclose = (event) => {
-      // Don't log or reconnect if cleaning up
       if (isCleaningUpRef.current || !isMountedRef.current) return;
-      
+
       console.log("WebSocket closed:", event.code, event.reason);
       setConnected(false);
 
-      // Attempt reconnection if not intentionally closed and trial not ended
       if (!trialEnded && reconnectAttempts.current < maxReconnectAttempts) {
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
+        const delay = Math.min(
+          1000 * Math.pow(2, reconnectAttempts.current),
+          30000
+        );
         reconnectAttempts.current += 1;
-        console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current})`);
+        console.log(
+          `Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current})`
+        );
 
         reconnectTimeoutRef.current = setTimeout(() => {
           connectWebSocket();
         }, delay);
       }
     };
-  }, [trialId, isLive, handleSnapshot, handleSpan, handleTrialEnded, trialEnded]);
+  }, [
+    trialId,
+    isLive,
+    handleSnapshot,
+    handleSpan,
+    handleTrialEnded,
+    trialEnded,
+  ]);
 
   // Fetch trace data for completed trials (or any trial via REST)
   const fetchTraceData = useCallback(async () => {
@@ -515,18 +349,15 @@ export function useTrialStream(trialId, isLive = true) {
       }
       const data = await response.json();
 
-      const rawSpans = data.spans || [];
-      setSpans(rawSpans);
+      const items = data.items || [];
+      setSpans(items);
 
-      // Process spans using unified protocol
-      const processed = processSpans(rawSpans);
+      const processed = processTypedItems(items);
       setActors(processed.actors);
       setAgents(processed.agents);
       setAgentStates(processed.conversations);
       setEvents(processed.events);
       setMetadata(processed.metadata);
-
-      // Set phase from lifecycle spans
       setPhase(processed.phase);
       if (processed.phase === "stopped") {
         setTrialEnded(true);
@@ -542,10 +373,9 @@ export function useTrialStream(trialId, isLive = true) {
 
   // Connect/fetch based on trial mode
   useEffect(() => {
-    // Mark as mounted
     isMountedRef.current = true;
     isCleaningUpRef.current = false;
-    
+
     if (!trialId) return;
 
     if (isLive) {
@@ -555,21 +385,19 @@ export function useTrialStream(trialId, isLive = true) {
     }
 
     return () => {
-      // Mark as cleaning up to suppress errors and reconnection attempts
       isCleaningUpRef.current = true;
       isMountedRef.current = false;
-      
-      // Clear any pending reconnection
+
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
-      
-      // Close WebSocket if open
+
       if (wsRef.current) {
-        // Only close if not already closed/closing
-        if (wsRef.current.readyState === WebSocket.OPEN || 
-            wsRef.current.readyState === WebSocket.CONNECTING) {
+        if (
+          wsRef.current.readyState === WebSocket.OPEN ||
+          wsRef.current.readyState === WebSocket.CONNECTING
+        ) {
           wsRef.current.close();
         }
         wsRef.current = null;
@@ -580,15 +408,17 @@ export function useTrialStream(trialId, isLive = true) {
   // Disconnect handler
   const disconnect = useCallback(() => {
     isCleaningUpRef.current = true;
-    
+
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
-    
+
     if (wsRef.current) {
-      if (wsRef.current.readyState === WebSocket.OPEN || 
-          wsRef.current.readyState === WebSocket.CONNECTING) {
+      if (
+        wsRef.current.readyState === WebSocket.OPEN ||
+        wsRef.current.readyState === WebSocket.CONNECTING
+      ) {
         wsRef.current.close();
       }
       wsRef.current = null;
@@ -608,9 +438,9 @@ export function useTrialStream(trialId, isLive = true) {
     phase,
     agents,
     events,
-    spans,
-    agentStates,  // Now contains grouped conversations: { actorId: { streamId: [messages] } }
-    actors,       // New: all actors with metadata: { actorId: { id, type, name, model, ... } }
+    spans, // Now typed items, not raw SpanData
+    agentStates,
+    actors,
 
     // Controls
     disconnect,

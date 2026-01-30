@@ -78,10 +78,9 @@ class QueryResult(Generic[ResultT]):
     Provides metadata about the query (source, timing, etc.) along with the result.
 
     Example:
-        # Query returns QueryResult[DataFact]
-        result = await store.query_fact("game_score", game_id="game_123")
+        result = await store.query("game_score", game_id="game_123")
         # result.query_id - unique query identifier
-        # result.result - the DataFact (or None if not found)
+        # result.result - the query result (or None if not found)
         # result.queried_at - when query was executed
     """
 

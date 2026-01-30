@@ -47,6 +47,9 @@ class ESPNStateTracker:
         self._game_started: set[str] = set()  # event_ids where first play was seen
         self._initialized_games: set[str] = set()  # event_ids with init event emitted
         self._last_odds: dict[str, dict[str, Any]] = {}  # event_id -> last odds
+        self._final_update_emitted: set[str] = (
+            set()
+        )  # event_ids where final game update was emitted
 
     def get_previous_status(self, event_id: str) -> int | None:
         """Get previous game status for transition detection.
@@ -67,6 +70,36 @@ class ESPNStateTracker:
             status: Game status code
         """
         self._previous_game_status[event_id] = status
+
+    def is_game_concluded(self, event_id: str) -> bool:
+        """Check if game has concluded (status = FINAL).
+
+        Args:
+            event_id: ESPN event ID
+
+        Returns:
+            True if game status is FINAL
+        """
+        return self._previous_game_status.get(event_id) == self.STATUS_FINAL
+
+    def has_final_update_emitted(self, event_id: str) -> bool:
+        """Check if final game update has been emitted.
+
+        Args:
+            event_id: ESPN event ID
+
+        Returns:
+            True if final ESPNGameUpdateEvent has been emitted
+        """
+        return event_id in self._final_update_emitted
+
+    def mark_final_update_emitted(self, event_id: str) -> None:
+        """Mark that final game update has been emitted.
+
+        Args:
+            event_id: ESPN event ID
+        """
+        self._final_update_emitted.add(event_id)
 
     def status_name_to_code(self, status_name: str) -> int:
         """Convert ESPN status name to status code.

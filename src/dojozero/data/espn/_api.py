@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # ESPN API base URLs
 SITE_API_BASE = "https://site.api.espn.com/apis/site/v2/sports"
+SITE_V2_API_BASE = "https://site.api.espn.com/apis/v2/sports"
 CORE_API_BASE = "https://sports.core.api.espn.com/v2/sports"
 
 
@@ -92,6 +93,15 @@ class ESPNExternalAPI(ExternalAPI):
         """Get the core API base URL for this sport/league."""
         return f"{CORE_API_BASE}/{self.sport}/leagues/{self.league}"
 
+    @property
+    def site_v2_api_url(self) -> str:
+        """Get the site v2 API base URL for this sport/league.
+
+        Used by endpoints like standings that live under ``/apis/v2/``
+        rather than ``/apis/site/v2/``.
+        """
+        return f"{SITE_V2_API_BASE}/{self.sport}/{self.league}"
+
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
@@ -127,6 +137,16 @@ class ESPNExternalAPI(ExternalAPI):
             return await self._fetch_plays(params)
         elif endpoint == "teams":
             return await self._fetch_teams()
+        elif endpoint == "team_schedule":
+            return await self._fetch_team_schedule(params)
+        elif endpoint == "team_statistics":
+            return await self._fetch_team_statistics(params)
+        elif endpoint == "standings":
+            return await self._fetch_standings(params)
+        elif endpoint == "team_roster":
+            return await self._fetch_team_roster(params)
+        elif endpoint == "team_leaders":
+            return await self._fetch_team_leaders(params)
         else:
             logger.warning("Unknown endpoint: %s", endpoint)
             return {}
@@ -212,14 +232,18 @@ class ESPNExternalAPI(ExternalAPI):
             return {"summary": {"eventId": event_id}}
 
     async def _fetch_plays(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Fetch play-by-play data.
+        """Fetch play-by-play data with automatic pagination.
+
+        The ESPN core API returns at most ``limit`` plays per page.  This
+        method fetches all pages so that a full game (~500+ plays) is
+        returned in a single call.
 
         Params:
             event_id: ESPN event ID (required)
-            limit: Max number of plays (default 300)
+            limit: Per-page limit (default 300)
 
         Returns:
-            {"plays": {...}} with items array of plays
+            {"plays": {...}} with items array of **all** plays
         """
         event_id = params.get("event_id")
         if not event_id:
@@ -228,27 +252,47 @@ class ESPNExternalAPI(ExternalAPI):
 
         limit = params.get("limit", 300)
         url = f"{self.core_api_url}/events/{event_id}/competitions/{event_id}/plays"
-        query_params = {"limit": str(limit)}
+
+        all_items: list[dict[str, Any]] = []
+        page = 1
+        total_count = 0
 
         session = await self._get_session()
         try:
-            async with session.get(
-                url, params=query_params, proxy=self._proxy
-            ) as response:
-                if response.status != 200:
-                    logger.warning(
-                        "Plays request failed: status=%d, event_id=%s",
-                        response.status,
-                        event_id,
-                    )
-                    return {"plays": {"items": [], "eventId": event_id}}
+            while True:
+                query_params = {"limit": str(limit), "page": str(page)}
+                async with session.get(
+                    url, params=query_params, proxy=self._proxy
+                ) as response:
+                    if response.status != 200:
+                        logger.warning(
+                            "Plays request failed: status=%d, event_id=%s, page=%d",
+                            response.status,
+                            event_id,
+                            page,
+                        )
+                        break
 
-                data = await response.json()
-                data["eventId"] = event_id
-                return {"plays": data}
+                    data = await response.json()
+                    items = data.get("items", [])
+                    all_items.extend(items)
+                    total_count = data.get("count", len(all_items))
+                    page_count = data.get("pageCount", 1)
+
+                    if page >= page_count:
+                        break
+                    page += 1
+
         except Exception as e:
             logger.error("Error fetching plays for event %s: %s", event_id, e)
-            return {"plays": {"items": [], "eventId": event_id}}
+
+        return {
+            "plays": {
+                "items": all_items,
+                "count": total_count,
+                "eventId": event_id,
+            }
+        }
 
     async def _fetch_teams(self) -> dict[str, Any]:
         """Fetch all teams for the league.
@@ -278,6 +322,207 @@ class ESPNExternalAPI(ExternalAPI):
         except Exception as e:
             logger.error("Error fetching teams: %s", e)
             return {"teams": []}
+
+    async def _fetch_team_schedule(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Fetch team schedule data.
+
+        Params:
+            team_id: ESPN team ID (required)
+            season: Season year (optional, e.g., 2025)
+
+        Returns:
+            {"team_schedule": {...}} with events array
+        """
+        team_id = params.get("team_id")
+        if not team_id:
+            logger.warning("team_schedule endpoint requires team_id param")
+            return {"team_schedule": {"events": []}}
+
+        url = f"{self.site_api_url}/teams/{team_id}/schedule"
+        query_params: dict[str, str] = {}
+        if "season" in params:
+            query_params["season"] = str(params["season"])
+
+        session = await self._get_session()
+        try:
+            async with session.get(
+                url, params=query_params, proxy=self._proxy
+            ) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "Team schedule request failed: status=%d, team_id=%s",
+                        response.status,
+                        team_id,
+                    )
+                    return {"team_schedule": {"events": []}}
+
+                data = await response.json()
+                return {"team_schedule": data}
+        except Exception as e:
+            logger.error("Error fetching team schedule for %s: %s", team_id, e)
+            return {"team_schedule": {"events": []}}
+
+    async def _fetch_team_statistics(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Fetch team season statistics.
+
+        Params:
+            team_id: ESPN team ID (required)
+            season_year: Season year (required, e.g., 2025)
+            season_type: Season type string (optional, default "regular")
+                         Maps: "preseason"->1, "regular"->2, "postseason"->3
+
+        Returns:
+            {"team_statistics": {...}} with splits/categories
+        """
+        team_id = params.get("team_id")
+        if not team_id:
+            logger.warning("team_statistics endpoint requires team_id param")
+            return {"team_statistics": {}}
+
+        season_year = params.get("season_year")
+        if not season_year:
+            logger.warning("team_statistics endpoint requires season_year param")
+            return {"team_statistics": {}}
+
+        season_type_str = params.get("season_type", "regular")
+        season_type_map = {"preseason": 1, "regular": 2, "postseason": 3}
+        season_type_id = season_type_map.get(season_type_str, 2)
+
+        url = (
+            f"{self.core_api_url}/seasons/{season_year}"
+            f"/types/{season_type_id}/teams/{team_id}/statistics"
+        )
+
+        session = await self._get_session()
+        try:
+            async with session.get(url, proxy=self._proxy) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "Team statistics request failed: status=%d, team_id=%s",
+                        response.status,
+                        team_id,
+                    )
+                    return {"team_statistics": {}}
+
+                data = await response.json()
+                return {"team_statistics": data}
+        except Exception as e:
+            logger.error("Error fetching team statistics for %s: %s", team_id, e)
+            return {"team_statistics": {}}
+
+    async def _fetch_standings(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Fetch league standings.
+
+        Params:
+            season: Season year (optional)
+            group: Group filter (optional, e.g., conference)
+
+        Returns:
+            {"standings": {...}} with children array of conference/division standings
+        """
+        url = f"{self.site_v2_api_url}/standings"
+        query_params: dict[str, str] = {}
+        if "season" in params:
+            query_params["season"] = str(params["season"])
+        if "group" in params:
+            query_params["group"] = str(params["group"])
+
+        session = await self._get_session()
+        try:
+            async with session.get(
+                url, params=query_params, proxy=self._proxy
+            ) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "Standings request failed: status=%d", response.status
+                    )
+                    return {"standings": {"children": []}}
+
+                data = await response.json()
+                return {"standings": data}
+        except Exception as e:
+            logger.error("Error fetching standings: %s", e)
+            return {"standings": {"children": []}}
+
+    async def _fetch_team_roster(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Fetch team roster with player info.
+
+        Params:
+            team_id: ESPN team ID (required)
+
+        Returns:
+            {"team_roster": {...}} with athletes array
+        """
+        team_id = params.get("team_id")
+        if not team_id:
+            logger.warning("team_roster endpoint requires team_id param")
+            return {"team_roster": {"athletes": []}}
+
+        url = f"{self.site_api_url}/teams/{team_id}/roster"
+
+        session = await self._get_session()
+        try:
+            async with session.get(url, proxy=self._proxy) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "Team roster request failed: status=%d, team_id=%s",
+                        response.status,
+                        team_id,
+                    )
+                    return {"team_roster": {"athletes": []}}
+
+                data = await response.json()
+                return {"team_roster": data}
+        except Exception as e:
+            logger.error("Error fetching team roster for %s: %s", team_id, e)
+            return {"team_roster": {"athletes": []}}
+
+    async def _fetch_team_leaders(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Fetch team statistical leaders (per-game stats by player).
+
+        Params:
+            team_id: ESPN team ID (required)
+            season_year: Season year (required, e.g., 2026)
+            season_type: Season type string (optional, default "regular")
+
+        Returns:
+            {"team_leaders": {...}} with categories array containing leader stats
+        """
+        team_id = params.get("team_id")
+        if not team_id:
+            logger.warning("team_leaders endpoint requires team_id param")
+            return {"team_leaders": {"categories": []}}
+
+        season_year = params.get("season_year")
+        if not season_year:
+            logger.warning("team_leaders endpoint requires season_year param")
+            return {"team_leaders": {"categories": []}}
+
+        season_type_str = params.get("season_type", "regular")
+        season_type_map = {"preseason": 1, "regular": 2, "postseason": 3}
+        season_type_id = season_type_map.get(season_type_str, 2)
+
+        url = (
+            f"{self.core_api_url}/seasons/{season_year}"
+            f"/types/{season_type_id}/teams/{team_id}/leaders"
+        )
+
+        session = await self._get_session()
+        try:
+            async with session.get(url, proxy=self._proxy) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "Team leaders request failed: status=%d, team_id=%s",
+                        response.status,
+                        team_id,
+                    )
+                    return {"team_leaders": {"categories": []}}
+
+                data = await response.json()
+                return {"team_leaders": data}
+        except Exception as e:
+            logger.error("Error fetching team leaders for %s: %s", team_id, e)
+            return {"team_leaders": {"categories": []}}
 
 
 def get_espn_game_url(event_id: str, sport: str = "nba") -> str:

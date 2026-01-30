@@ -3,13 +3,19 @@
 import logging
 from typing import Any, Sequence
 
-from dojozero.data._models import DataEvent
+from dojozero.data._models import (
+    DataEvent,
+    MoneylineOdds,
+    OddsInfo,
+    OddsUpdateEvent,
+    SpreadOdds,
+    TotalOdds,
+)
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.polymarket._api import PolymarketAPI
-from dojozero.data.polymarket._events import OddsUpdateEvent
 from dojozero.data.polymarket._models import MarketOddsData
 
-logger = logging.getLogger("dojozero.data.polymarket._store")
+logger = logging.getLogger(__name__)
 
 
 class PolymarketStore(DataStore):
@@ -153,27 +159,41 @@ class PolymarketStore(DataStore):
             home_tricode = (identifier or {}).get("home_tricode", "")
             away_tricode = (identifier or {}).get("away_tricode", "")
 
-            # Use moneyline data for home_odds/away_odds if available
-            home_odds = 1.0
-            away_odds = 1.0
-            home_probability = 0.0
-            away_probability = 0.0
-
+            # Build MoneylineOdds from moneyline data
+            moneyline: MoneylineOdds | None = None
             if moneyline_data:
-                # moneyline_data is now a MarketOddsData model
-                home_odds = moneyline_data.home_odds
-                away_odds = moneyline_data.away_odds
-                home_probability = moneyline_data.home_probability
-                away_probability = moneyline_data.away_probability
-                # game_id is already set from identifier (ESPN game ID) above
+                moneyline = MoneylineOdds(
+                    home_probability=moneyline_data.home_probability,
+                    away_probability=moneyline_data.away_probability,
+                    home_odds=moneyline_data.home_odds,
+                    away_odds=moneyline_data.away_odds,
+                )
 
-            # Pass MarketOddsData models directly (type validation happens in MarketOddsData)
-            spread_updates_list: list[MarketOddsData] = [
-                s for s in spread_odds_list if s.line is not None
-            ]
-            total_updates_list: list[MarketOddsData] = [
-                t for t in total_odds_list if t.line is not None
-            ]
+            # Build SpreadOdds list from all deduplicated spreads
+            spreads: list[SpreadOdds] = []
+            for spread_data in spread_odds_list:
+                spreads.append(
+                    SpreadOdds(
+                        spread=spread_data.line or 0.0,
+                        home_probability=spread_data.home_probability,
+                        away_probability=spread_data.away_probability,
+                        home_odds=spread_data.home_odds,
+                        away_odds=spread_data.away_odds,
+                    )
+                )
+
+            # Build TotalOdds list from all deduplicated totals
+            totals: list[TotalOdds] = []
+            for total_data in total_odds_list:
+                totals.append(
+                    TotalOdds(
+                        total=total_data.line or 0.0,
+                        over_probability=total_data.home_probability,
+                        under_probability=total_data.away_probability,
+                        over_odds=total_data.home_odds,
+                        under_odds=total_data.away_odds,
+                    )
+                )
 
             events.append(
                 OddsUpdateEvent(
@@ -181,12 +201,12 @@ class PolymarketStore(DataStore):
                     game_id=game_id,
                     home_tricode=home_tricode,
                     away_tricode=away_tricode,
-                    home_odds=home_odds,
-                    away_odds=away_odds,
-                    home_probability=home_probability,
-                    away_probability=away_probability,
-                    spread_updates=spread_updates_list,
-                    total_updates=total_updates_list,
+                    odds=OddsInfo(
+                        provider="polymarket",
+                        moneyline=moneyline,
+                        spreads=spreads,
+                        totals=totals,
+                    ),
                 )
             )
 
@@ -270,9 +290,6 @@ class PolymarketStore(DataStore):
         """Start polling and subscribe to game status events for dynamic interval adjustment."""
         # Subscribe to game status events to adjust polling interval
         if self._data_hub:
-            import logging
-
-            logger = logging.getLogger(__name__)
 
             def game_status_callback(event: DataEvent) -> None:
                 """Callback to adjust polling interval based on game status."""

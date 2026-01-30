@@ -8,6 +8,7 @@ Team abbreviation mappings are sourced from Polymarket's Teams API:
 - NFL teams: https://gamma-api.polymarket.com/teams?league=nfl
 """
 
+import dataclasses
 import json
 import logging
 from typing import Any
@@ -594,7 +595,7 @@ class PolymarketAPI(ExternalAPI):
                     if odds_data:
                         # Extract line information from the market (for spreads and totals)
                         # and assign it to the odds data. `market.line` is already `float | None`.
-                        odds_data.line = market.line
+                        odds_data = dataclasses.replace(odds_data, line=market.line)
                         odds_list.append(odds_data)
                     else:
                         logger.debug(

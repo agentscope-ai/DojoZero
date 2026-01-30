@@ -1,159 +1,105 @@
 """Event formatters for NBA moneyline betting agent."""
 
 import json
-from datetime import datetime
 from typing import Any
 
-from dojozero.data._models import DataEvent
+from dojozero.data._models import (
+    DataEvent,
+    GameInitializeEvent,
+    GameResultEvent,
+    GameStartEvent,
+    OddsUpdateEvent,
+)
+from dojozero.data.nba._events import NBAGameUpdateEvent, NBAPlayEvent
+from dojozero.data.websearch._formatters import WEBSEARCH_EVENT_FORMATTERS
 
 
-def _format_injury_summary(event: DataEvent) -> str:
-    """Format InjurySummaryEvent to readable text."""
-    summary = getattr(event, "summary", "")
-    injured_players = getattr(event, "injured_players", {})
-
-    lines = ["[Injury Report Update]"]
-    if summary:
-        lines.append(f"\n{summary}")
-
-    if injured_players:
-        lines.append("\n**Injured Players by Team:**")
-        for team, players in injured_players.items():
-            if players:
-                players_str = ", ".join(players)
-                lines.append(f"- {team}: {players_str}")
-
-    return "\n".join(lines)
-
-
-def _format_power_ranking(event: DataEvent) -> str:
-    """Format PowerRankingEvent to readable text."""
-    rankings = getattr(event, "rankings", {})
-
-    lines = ["[Power Rankings Update]"]
-
-    for source, team_rankings in rankings.items():
-        lines.append(f"\n**Source: {source}**")
-        for rank_info in team_rankings[:10]:
-            rank = rank_info.get("rank", "?")
-            team = rank_info.get("team", "Unknown")
-            record = rank_info.get("record", "")
-            record_str = f" ({record})" if record else ""
-            lines.append(f"{rank}. {team}{record_str}")
-
-    return "\n".join(lines)
-
-
-def _format_expert_prediction(event: DataEvent) -> str:
-    """Format ExpertPredictionEvent to readable text."""
-    predictions = getattr(event, "predictions", [])
-
-    lines = ["[Expert Predictions]"]
-
-    for pred in predictions:
-        source = pred.get("source", "Unknown")
-        expert = pred.get("expert", "")
-        prediction = pred.get("prediction", "")
-        confidence = pred.get("confidence", "")
-
-        expert_str = f" ({expert})" if expert else ""
-        conf_str = f" [Confidence: {confidence}]" if confidence else ""
-        lines.append(f"\n**{source}{expert_str}**{conf_str}")
-        if prediction:
-            lines.append(f"{prediction}")
-
-    return "\n".join(lines)
-
-
-def _format_game_initialize(event: DataEvent) -> str:
+def _format_game_initialize(event: GameInitializeEvent) -> str:
     """Format GameInitializeEvent to readable text."""
-    home_team = getattr(event, "home_team", "Unknown")
-    away_team = getattr(event, "away_team", "Unknown")
-    game_time = getattr(event, "game_time", None)
+    home_team = str(event.home_team)
+    away_team = str(event.away_team)
+    game_time = event.game_time
 
-    time_str = ""
-    if game_time:
-        if isinstance(game_time, datetime):
-            time_str = f" at {game_time.strftime('%Y-%m-%d %H:%M UTC')}"
-        else:
-            time_str = f" at {game_time}"
+    time_str = f" at {game_time.strftime('%Y-%m-%d %H:%M UTC')}"
 
     return f"[Game Initialized] {away_team} @ {home_team}{time_str}"
 
 
-def _format_game_start(event: DataEvent) -> str:
+def _format_game_start(event: GameStartEvent) -> str:
     """Format GameStartEvent to readable text."""
-    event_id = getattr(event, "event_id", "")
-    return f"[Game Started] Event ID: {event_id}"
+    return f"[Game Started] Game ID: {event.game_id}"
 
 
-def _format_game_result(event: DataEvent) -> str:
+def _format_game_result(event: GameResultEvent) -> str:
     """Format GameResultEvent to readable text."""
-    winner = getattr(event, "winner", "")
-    final_score = getattr(event, "final_score", {})
-
-    home_score = final_score.get("home", "?")
-    away_score = final_score.get("away", "?")
+    home_score = event.home_score
+    away_score = event.away_score
     winner_str = (
-        "Home Team" if winner == "home" else "Away Team" if winner == "away" else winner
+        "Home Team"
+        if event.winner == "home"
+        else "Away Team"
+        if event.winner == "away"
+        else event.winner
     )
 
     return f"[Game Finished] {winner_str} wins! Final Score: Home {home_score} - Away {away_score}"
 
 
-def _format_game_update(event: DataEvent) -> str:
-    """Format GameUpdateEvent to readable text."""
-    period = getattr(event, "period", 0)
-    game_clock = getattr(event, "game_clock", "")
-    home_team = getattr(event, "home_team", {})
-    away_team = getattr(event, "away_team", {})
-
-    home_name = home_team.get("teamName", "Home")
-    home_tricode = home_team.get("teamTricode", "")
-    home_score = home_team.get("score", 0)
-
-    away_name = away_team.get("teamName", "Away")
-    away_tricode = away_team.get("teamTricode", "")
-    away_score = away_team.get("score", 0)
+def _format_game_update(event: NBAGameUpdateEvent) -> str:
+    """Format NBAGameUpdateEvent to readable text."""
+    period = event.period
+    game_clock = event.game_clock
+    home = event.home_team_stats
+    away = event.away_team_stats
 
     period_name = f"Q{period}" if period <= 4 else f"OT{period - 4}"
     clock_str = f" | {game_clock}" if game_clock else ""
 
     lines = [
         f"[Game Update] {period_name}{clock_str}",
-        f"{away_name} ({away_tricode}): {away_score}",
-        f"{home_name} ({home_tricode}): {home_score}",
+        f"{away.team_name} ({away.team_tricode}): {away.score}",
+        f"{home.team_name} ({home.team_tricode}): {home.score}",
     ]
 
     return "\n".join(lines)
 
 
-def _format_odds_update(event: DataEvent) -> str:
+def _format_odds_update(event: OddsUpdateEvent) -> str:
     """Format OddsUpdateEvent to readable text."""
-    home_odds = getattr(event, "home_odds", 1.0)
-    away_odds = getattr(event, "away_odds", 1.0)
-    home_prob = getattr(event, "home_probability", 0.0)
-    away_prob = getattr(event, "away_probability", 0.0)
+    lines = ["[Odds Update]"]
 
-    lines = [
-        "[Odds Update]",
-        f"- Home: {home_odds:.2f} ({home_prob * 100:.1f}% implied probability)",
-        f"- Away: {away_odds:.2f} ({away_prob * 100:.1f}% implied probability)",
-    ]
+    ml = event.odds.moneyline
+    if ml:
+        lines.append(
+            f"- Home: {ml.home_odds:.2f} ({ml.home_probability * 100:.1f}% implied probability)"
+        )
+        lines.append(
+            f"- Away: {ml.away_odds:.2f} ({ml.away_probability * 100:.1f}% implied probability)"
+        )
+
+    for sp in event.odds.spreads:
+        lines.append(
+            f"- Spread: {sp.spread:+.1f} (Home: {sp.home_odds:.2f}, Away: {sp.away_odds:.2f})"
+        )
+
+    for tot in event.odds.totals:
+        lines.append(
+            f"- Total: O/U {tot.total:.1f} (Over: {tot.over_odds:.2f}, Under: {tot.under_odds:.2f})"
+        )
 
     return "\n".join(lines)
 
 
-def _format_play_by_play(event: DataEvent) -> str:
-    """Format PlayByPlayEvent to readable text."""
-    period = getattr(event, "period", 0)
-    clock = getattr(event, "clock", "")
-    action_type = getattr(event, "action_type", "")
-    player_name = getattr(event, "player_name", "")
-    team_tricode = getattr(event, "team_tricode", "")
-    description = getattr(event, "description", "")
-    home_score = getattr(event, "home_score", 0)
-    away_score = getattr(event, "away_score", 0)
+def _format_play_by_play(event: NBAPlayEvent) -> str:
+    """Format NBAPlayEvent to readable text."""
+    period = event.period
+    clock = event.clock
+    action_type = event.action_type
+    player_name = event.player_name
+    team_tricode = event.team_tricode
+    description = event.description
+    home_score = event.home_score
+    away_score = event.away_score
 
     period_name = f"Q{period}" if period <= 4 else f"OT{period - 4}"
     player_str = f" [{player_name}]" if player_name else ""
@@ -164,27 +110,26 @@ def _format_play_by_play(event: DataEvent) -> str:
 
 def _format_default(event: DataEvent) -> str:
     """Default formatter for unknown event types."""
-    event_type = getattr(event, "event_type", "unknown")
-    event_dict = event.to_dict() if hasattr(event, "to_dict") else str(event)
+    event_type = event.event_type
+    event_dict = event.to_dict()
     return f"[{event_type}]: {json.dumps(event_dict, default=str, ensure_ascii=False)}"
 
 
 _EVENT_FORMATTERS: dict[str, Any] = {
-    "injury_summary": _format_injury_summary,
-    "power_ranking": _format_power_ranking,
-    "expert_prediction": _format_expert_prediction,
+    # Shared web search event formatters
+    **WEBSEARCH_EVENT_FORMATTERS,
     "game_initialize": _format_game_initialize,
     "game_start": _format_game_start,
     "game_result": _format_game_result,
-    "game_update": _format_game_update,
+    "nba_game_update": _format_game_update,
     "odds_update": _format_odds_update,
-    "play_by_play": _format_play_by_play,
+    "nba_play": _format_play_by_play,
 }
 
 
 def format_event(event: DataEvent) -> str:
     """Format a DataEvent into LLM-friendly text."""
-    event_type = getattr(event, "event_type", "unknown")
+    event_type = event.event_type
     # Strip "event." prefix if present (new format: event.game_update -> game_update)
     if event_type.startswith("event."):
         event_type = event_type[6:]

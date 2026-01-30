@@ -7,30 +7,37 @@ scenario:
       persistence_file: outputs/nba_betting_events.jsonl
 
     data_streams:
-    - id: raw_web_search_stream
-      event_type: raw_web_search
-      initializer:
-        search_queries:
-        - template: NBA injury updates for {teams} on {date}
-          intent: injury_summary
-        - template: NBA power rankings
-          intent: power_ranking
-        - template: NBA expert predictions for {teams}
-          intent: expert_prediction
-    - id: injury_summary_stream
-      event_type: injury_summary
-    - id: power_ranking_stream
-      event_type: power_ranking
-    - id: expert_prediction_stream
-      event_type: expert_prediction
-    - id: game_status_change_stream
-      event_type: game_status_change
+    # Pre-game insights: each event class owns search → LLM → typed event lifecycle
+    - id: pre_game_insights_stream
+      event_types:
+      - injury_report
+      - power_ranking
+      - expert_prediction
+
+    # ESPN pregame stats (fetched from ESPN API during pregame phase)
+    - id: stats_stream
+      event_types:
+      - pregame_stats
+
+    # Game lifecycle
+    - id: game_lifecycle_stream
+      event_types:
+      - game_initialize
+      - game_start
+      - game_result
+
+    # Live game data
     - id: game_update_stream
-      event_type: game_update
+      event_types:
+      - espn_game_update
+
     - id: odds_update_stream
-      event_type: odds_update
+      event_types:
+      - odds_update
+
     - id: play_by_play_stream
-      event_type: play_by_play
+      event_types:
+      - espn_play
 
     operators:
     - id: betting_broker
@@ -45,7 +52,7 @@ scenario:
       - get_bet_history
       - get_statistics
       data_streams:
-      - game_status_change_stream
+      - game_lifecycle_stream
       - odds_update_stream
       - game_update_stream
 
@@ -58,12 +65,11 @@ scenario:
       operators:
       - betting_broker
       data_streams:
-      - injury_summary_stream
-      - power_ranking_stream
-      - expert_prediction_stream
+      - pre_game_insights_stream
+      - stats_stream
       - game_update_stream
       - odds_update_stream
-      - game_status_change_stream
+      - game_lifecycle_stream
       - play_by_play_stream
     - id: oracle_agent
       name: oracle
@@ -73,12 +79,11 @@ scenario:
       operators:
         - betting_broker
       data_streams:
-        - injury_summary_stream
-        - power_ranking_stream
-        - expert_prediction_stream
+        - pre_game_insights_stream
+        - stats_stream
         - game_update_stream
         - odds_update_stream
-        - game_status_change_stream
+        - game_lifecycle_stream
         - play_by_play_stream
     - id: professor_agent
       name: professor
@@ -88,12 +93,11 @@ scenario:
       operators:
         - betting_broker
       data_streams:
-        - injury_summary_stream
-        - power_ranking_stream
-        - expert_prediction_stream
+        - pre_game_insights_stream
+        - stats_stream
         - game_update_stream
         - odds_update_stream
-        - game_status_change_stream
+        - game_lifecycle_stream
         - play_by_play_stream
     - id: shark_agent
       name: shark
@@ -103,12 +107,11 @@ scenario:
       operators:
       - betting_broker
       data_streams:
-      - injury_summary_stream
-      - power_ranking_stream
-      - expert_prediction_stream
+      - pre_game_insights_stream
+      - stats_stream
       - game_update_stream
       - odds_update_stream
-      - game_status_change_stream
+      - game_lifecycle_stream
       - play_by_play_stream
     - id: sheep_agent
       name: sheep
@@ -118,12 +121,11 @@ scenario:
       operators:
       - betting_broker
       data_streams:
-      - injury_summary_stream
-      - power_ranking_stream
-      - expert_prediction_stream
+      - pre_game_insights_stream
+      - stats_stream
       - game_update_stream
       - odds_update_stream
-      - game_status_change_stream
+      - game_lifecycle_stream
       - play_by_play_stream
     - id: whale_agent
       name: whale
@@ -133,10 +135,9 @@ scenario:
       operators:
       - betting_broker
       data_streams:
-      - injury_summary_stream
-      - power_ranking_stream
-      - expert_prediction_stream
+      - pre_game_insights_stream
+      - stats_stream
       - game_update_stream
       - odds_update_stream
-      - game_status_change_stream
+      - game_lifecycle_stream
       - play_by_play_stream

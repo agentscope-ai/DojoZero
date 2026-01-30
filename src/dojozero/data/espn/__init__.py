@@ -28,16 +28,12 @@ Example:
 
 from dojozero.data.espn._api import ESPNExternalAPI, get_espn_game_url, get_proxy
 from dojozero.data.espn._events import (
-    ESPNCompetitor,
-    ESPNGameEndEvent,
-    ESPNGameInitializeEvent,
-    ESPNGameStartEvent,
     ESPNGameUpdateEvent,
-    ESPNOddsUpdateEvent,
     ESPNPlayEvent,
-    ESPNTeamInfo,
 )
 from dojozero.data.espn._state_tracker import ESPNStateTracker
+from dojozero.data.espn._stats_events import PreGameStatsEvent
+from dojozero.data.espn._stats_fetcher import fetch_pregame_stats
 from dojozero.data.espn._store import ESPNStore
 
 # Game status constants (re-exported from ESPNStateTracker for convenience)
@@ -62,14 +58,10 @@ __all__ = [
     "STATUS_FINAL",
     "STATUS_POSTPONED",
     "STATUS_CANCELLED",
-    # Events
-    "ESPNGameInitializeEvent",
-    "ESPNGameStartEvent",
-    "ESPNGameEndEvent",
+    # Events (generic ESPN, lifecycle events are now unified in _models)
     "ESPNGameUpdateEvent",
     "ESPNPlayEvent",
-    "ESPNOddsUpdateEvent",
-    # Utility Types
-    "ESPNTeamInfo",
-    "ESPNCompetitor",
+    # Stats Insight Events
+    "PreGameStatsEvent",
+    "fetch_pregame_stats",
 ]

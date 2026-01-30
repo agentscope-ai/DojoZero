@@ -4,13 +4,13 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Sequence
 
-from dojozero.data._models import DataEvent, DataFact
+from dojozero.data._models import DataEvent
 
 
 class DataProcessor(ABC):
     """Base class for processors that transform events.
 
-    Processors can transform raw events into cooked events or facts.
+    Processors transform raw events into processed events.
     They are registered in DataStores for stream processing.
     """
 
@@ -55,20 +55,18 @@ class DataProcessor(ABC):
         return True  # Default: process all events
 
     @abstractmethod
-    async def process(self, event: DataEvent) -> DataEvent | DataFact | None:
-        """Process a single event and return transformed event or fact.
+    async def process(self, event: DataEvent) -> DataEvent | None:
+        """Process a single event and return transformed event.
 
         Args:
             event: Input event to process
 
         Returns:
-            Transformed event, fact, or None
+            Transformed event or None
         """
         ...
 
-    async def process_batched(
-        self, events: Sequence[DataEvent]
-    ) -> Sequence[DataEvent | DataFact]:
+    async def process_batched(self, events: Sequence[DataEvent]) -> Sequence[DataEvent]:
         """Process multiple events in batch (optional override).
 
         Default implementation processes all events in parallel and returns
@@ -79,7 +77,7 @@ class DataProcessor(ABC):
             events: Sequence of input events
 
         Returns:
-            Sequence of successfully transformed events/facts (may be empty)
+            Sequence of successfully transformed events (may be empty)
         """
         if not events:
             return []
@@ -90,11 +88,10 @@ class DataProcessor(ABC):
         )
 
         # Filter out None and exceptions, return all successful results
-        processed: list[DataEvent | DataFact] = []
+        processed: list[DataEvent] = []
         for result in results:
             if result is not None and not isinstance(result, BaseException):
-                # After filtering out None and BaseException, result must be DataEvent | DataFact
-                assert isinstance(result, (DataEvent, DataFact))
+                assert isinstance(result, DataEvent)
                 processed.append(result)
 
         return processed
@@ -115,7 +112,7 @@ class CompositeProcessor(DataProcessor):
         """Check if any processor in the chain should process this event."""
         return any(processor.should_process(event) for processor in self.processors)
 
-    async def process(self, event: DataEvent) -> DataEvent | DataFact | None:
+    async def process(self, event: DataEvent) -> DataEvent | None:
         """Process event through all processors in sequence."""
         result = event
         for processor in self.processors:
@@ -125,8 +122,6 @@ class CompositeProcessor(DataProcessor):
                     return None
                 if isinstance(processed, DataEvent):
                     result = processed
-                elif isinstance(processed, DataFact):
-                    return processed
             else:
                 # Processor doesn't handle this event type, skip
                 continue

@@ -115,9 +115,12 @@ function EventMessage({ event, homeTeam, awayTeam }) {
   let content = null;
 
   switch (eventType) {
+    case "nba_game_update":
+    case "nfl_game_update":
+    case "espn_game_update":
     case "game_update": {
-      const home = event.home_team || {};
-      const away = event.away_team || {};
+      const home = event.home_team || event.home_team_stats || {};
+      const away = event.away_team || event.away_team_stats || {};
       const leaders = event.game_leaders || { home: {}, away: {} };
       
       content = (
@@ -225,6 +228,7 @@ function EventMessage({ event, homeTeam, awayTeam }) {
       break;
     }
 
+    case "injury_report":
     case "injury_summary": {
       const injured = event.injured_players || [];
       const summary = event.summary || '';
@@ -330,6 +334,9 @@ function EventMessage({ event, homeTeam, awayTeam }) {
       break;
     }
 
+    case "nba_play":
+    case "nfl_play":
+    case "espn_play":
     case "play_by_play": {
       const player = event.player_name || '';
       const team = event.team_tricode || '';

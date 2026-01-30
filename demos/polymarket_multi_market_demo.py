@@ -116,46 +116,45 @@ async def main():
                 print(f"  Timestamp: {event.timestamp}")
                 print(f"  Home Tricode: {event.home_tricode}")
                 print(f"  Away Tricode: {event.away_tricode}")
-                print(f"  Home Odds (Moneyline): {event.home_odds:.4f}")
-                print(f"  Away Odds (Moneyline): {event.away_odds:.4f}")
-                print(f"  Home Probability: {event.home_probability:.4f}")
-                print(f"  Away Probability: {event.away_probability:.4f}")
+                print(f"  Provider: {event.odds.provider}")
 
-                print(f"\n  Spread Updates: {len(event.spread_updates)}")
-                if event.spread_updates:
-                    for spread in event.spread_updates:
-                        print(f"    - Spread: {spread.line}")
-                        print(f"      Home Odds: {spread.home_odds:.4f}")
-                        print(f"      Away Odds: {spread.away_odds:.4f}")
+                # Moneyline odds
+                ml = event.odds.moneyline
+                if ml:
+                    print("\n  Moneyline:")
+                    print(f"    Home Odds: {ml.home_odds:.4f}")
+                    print(f"    Away Odds: {ml.away_odds:.4f}")
+                    print(f"    Home Probability: {ml.home_probability:.4f}")
+                    print(f"    Away Probability: {ml.away_probability:.4f}")
                 else:
-                    print("    (none)")
+                    print("\n  Moneyline: (none)")
 
-                print(f"\n  Total Updates: {len(event.total_updates)}")
-                if event.total_updates:
-                    for total in event.total_updates:
-                        print(f"    - Total: {total.line}")
-                        print(f"      Over Odds: {total.home_odds:.4f}")
-                        print(f"      Under Odds: {total.away_odds:.4f}")
+                # Spread odds
+                if event.odds.spreads:
+                    for sp in event.odds.spreads:
+                        print(f"\n  Spread (line {sp.spread}):")
+                        print(f"    Home Odds: {sp.home_odds:.4f}")
+                        print(f"    Away Odds: {sp.away_odds:.4f}")
+                        print(f"    Home Probability: {sp.home_probability:.4f}")
+                        print(f"    Away Probability: {sp.away_probability:.4f}")
                 else:
-                    print("    (none)")
+                    print("\n  Spread: (none)")
+
+                # Total odds
+                if event.odds.totals:
+                    for tot in event.odds.totals:
+                        print(f"\n  Total (line {tot.total}):")
+                        print(f"    Over Odds: {tot.over_odds:.4f}")
+                        print(f"    Under Odds: {tot.under_odds:.4f}")
+                        print(f"    Over Probability: {tot.over_probability:.4f}")
+                        print(f"    Under Probability: {tot.under_probability:.4f}")
+                else:
+                    print("\n  Total: (none)")
 
                 # Show the event as it would appear in the stream
                 print("\n  Event Stream Representation:")
                 print("-" * 80)
-                event_dict = {
-                    "event_type": event.event_type,
-                    "timestamp": event.timestamp.isoformat(),
-                    "game_id": event.game_id,
-                    "home_tricode": event.home_tricode,
-                    "away_tricode": event.away_tricode,
-                    "home_odds": event.home_odds,
-                    "away_odds": event.away_odds,
-                    "home_probability": event.home_probability,
-                    "away_probability": event.away_probability,
-                    "spread_updates": [s.model_dump() for s in event.spread_updates],
-                    "total_updates": [t.model_dump() for t in event.total_updates],
-                }
-                print(json.dumps(event_dict, indent=2, default=str))
+                print(json.dumps(event.to_dict(), indent=2, default=str))
 
     except Exception as e:
         print(f"✗ Error parsing API response: {e}")
