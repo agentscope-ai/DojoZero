@@ -1288,12 +1288,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 betting_event = self._event
 
                 # Check event is accepting bets
-                if betting_event.status == EventStatus.CLOSED:
-                    raise ValueError("Event is closed for betting")
-                if betting_event.status == EventStatus.SETTLED:
-                    raise ValueError("Event has been settled")
-
-                # Betting is allowed for SCHEDULED or LIVE events (no phase distinction)
+                if not betting_event.can_bet:
+                    raise ValueError(
+                        f"Event is not accepting bets (status: {betting_event.status.value})"
+                    )
 
                 # Check account exists and has sufficient balance
                 if agent_id not in self._accounts:
@@ -1636,10 +1634,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         The broker handles one event at a time. Returns the event if it's SCHEDULED or LIVE,
         otherwise returns None.
         """
-        if self._event is not None and self._event.status in [
-            EventStatus.SCHEDULED,
-            EventStatus.LIVE,
-        ]:
+        if self._event is not None and self._event.can_bet:
             return self._event
         return None
 
@@ -1777,8 +1772,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             """Get your current holdings (aggregated positions from all active bets).
 
             Holdings aggregate all bets for the same position (event_id + selection + bet_type + spread_value/total_value).
-            For example, if you have two bets on "home" moneyline, they appear as a single holding with total shares aggregated.
-            For pending orders that haven't executed yet, use get_pending_orders().
 
             Returns:
                 JSON array of holding objects. Each holding represents an aggregated position and includes:
@@ -1833,7 +1826,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             Note: Probabilities represent the price per share. If you bet $100 at probability 0.56, you get 100/0.56 ≈ 178.57 shares.
             If your bet wins, each share pays $1.00. If it loses, you get $0.00.
-
 
             """
             event = await target.get_available_event()
