@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -79,6 +79,21 @@ class BetType(Enum):
 # =============================================================================
 
 
+class Holding(BaseModel):
+    """Information about a holding (shares in an active bet)"""
+
+    bet_id: str
+    shares: Decimal
+    selection: Literal["home", "away", "over", "under"]
+    event_id: str
+    bet_type: BetType
+    spread_value: Optional[Decimal] = None  # For SPREAD bets
+    total_value: Optional[Decimal] = None  # For TOTAL bets
+    probability: Decimal = Field(
+        ge=0, le=1, description="Probability at which shares were purchased"
+    )
+
+
 class Account(BaseModel):
     """Agent account information"""
 
@@ -86,6 +101,11 @@ class Account(BaseModel):
     balance: Decimal
     created_at: datetime
     last_updated: datetime
+    # Holdings: list of active bet holdings (includes shares, selection, event info)
+    holdings: List[Holding] = Field(
+        default_factory=list,
+        description="Current holdings: list of Holding objects with shares and bet details",
+    )
 
 
 # =============================================================================
@@ -101,19 +121,27 @@ class BettingEvent(BaseModel):
     away_team: str
     game_time: datetime
     status: EventStatus
-    home_odds: Optional[Decimal] = Field(
-        default=None, description="Can be None initially, filled in when odds arrive"
+    home_probability: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="Home team win probability (0-1). Can be None initially, filled in when odds arrive",
     )
-    away_odds: Optional[Decimal] = Field(
-        default=None, description="Can be None initially, filled in when odds arrive"
+    away_probability: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="Away team win probability (0-1). Can be None initially, filled in when odds arrive",
     )
-    # Multiple spreads: spread_value -> {home_odds, away_odds}
+    # Multiple spreads: spread_value -> {home_probability, away_probability}
     spread_lines: Dict[Decimal, Dict[str, Decimal]] = Field(
-        default_factory=dict, description="Spread betting lines"
+        default_factory=dict,
+        description="Spread betting lines: {spread_value: {'home_probability': Decimal, 'away_probability': Decimal}}",
     )
-    # Multiple totals: total_value -> {over_odds, under_odds}
+    # Multiple totals: total_value -> {over_probability, under_probability}
     total_lines: Dict[Decimal, Dict[str, Decimal]] = Field(
-        default_factory=dict, description="Total (over/under) betting lines"
+        default_factory=dict,
+        description="Total (over/under) betting lines: {total_value: {'over_probability': Decimal, 'under_probability': Decimal}}",
     )
     last_odds_update: Optional[datetime] = None
     betting_closed_at: Optional[datetime] = None
@@ -143,7 +171,9 @@ class BetRequestMoneyline:
     event_id: str
     order_type: OrderType
     betting_phase: BettingPhase
-    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
+    limit_probability: Optional[Decimal] = (
+        None  # Required if order_type == LIMIT (0-1 range)
+    )
 
     def validate(self) -> None:
         """Validate bet request parameters"""
@@ -151,11 +181,11 @@ class BetRequestMoneyline:
             raise ValueError(f"Bet amount must be positive, got {self.amount}")
 
         if self.order_type == OrderType.LIMIT:
-            if self.limit_odds is None:
-                raise ValueError("limit_odds required for LIMIT orders")
-            if self.limit_odds <= 1.0:
+            if self.limit_probability is None:
+                raise ValueError("limit_probability required for LIMIT orders")
+            if self.limit_probability < 0 or self.limit_probability > 1:
                 raise ValueError(
-                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
+                    f"limit_probability must be between 0 and 1, got {self.limit_probability}"
                 )
 
 
@@ -169,7 +199,9 @@ class BetRequestSpread:
     order_type: OrderType
     betting_phase: BettingPhase
     spread_value: Decimal  # Required for SPREAD bets
-    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
+    limit_probability: Optional[Decimal] = (
+        None  # Required if order_type == LIMIT (0-1 range)
+    )
 
     def validate(self) -> None:
         """Validate bet request parameters"""
@@ -177,11 +209,11 @@ class BetRequestSpread:
             raise ValueError(f"Bet amount must be positive, got {self.amount}")
 
         if self.order_type == OrderType.LIMIT:
-            if self.limit_odds is None:
-                raise ValueError("limit_odds required for LIMIT orders")
-            if self.limit_odds <= 1.0:
+            if self.limit_probability is None:
+                raise ValueError("limit_probability required for LIMIT orders")
+            if self.limit_probability < 0 or self.limit_probability > 1:
                 raise ValueError(
-                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
+                    f"limit_probability must be between 0 and 1, got {self.limit_probability}"
                 )
 
 
@@ -195,7 +227,9 @@ class BetRequestTotal:
     order_type: OrderType
     betting_phase: BettingPhase
     total_value: Decimal  # Required for TOTAL bets
-    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
+    limit_probability: Optional[Decimal] = (
+        None  # Required if order_type == LIMIT (0-1 range)
+    )
 
     def validate(self) -> None:
         """Validate bet request parameters"""
@@ -203,11 +237,11 @@ class BetRequestTotal:
             raise ValueError(f"Bet amount must be positive, got {self.amount}")
 
         if self.order_type == OrderType.LIMIT:
-            if self.limit_odds is None:
-                raise ValueError("limit_odds required for LIMIT orders")
-            if self.limit_odds <= 1.0:
+            if self.limit_probability is None:
+                raise ValueError("limit_probability required for LIMIT orders")
+            if self.limit_probability < 0 or self.limit_probability > 1:
                 raise ValueError(
-                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
+                    f"limit_probability must be between 0 and 1, got {self.limit_probability}"
                 )
 
 
@@ -226,11 +260,23 @@ class Bet(BaseModel):
     bet_id: str
     agent_id: str
     event_id: str
-    amount: Decimal
-    selection: str
-    odds: Decimal  # Actual execution odds
+    amount: Decimal  # Amount wagered (cost to buy shares)
+    selection: Literal["home", "away", "over", "under"]
+    probability: Decimal = Field(
+        ge=0,
+        le=1,
+        description="Actual execution probability (0-1). Price per share when bet was placed.",
+    )
+    shares: Decimal = Field(
+        description="Number of shares purchased. Shares = amount / probability"
+    )
     order_type: OrderType
-    limit_odds: Optional[Decimal] = None  # None for market orders
+    limit_probability: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="Limit probability threshold (0-1). None for market orders.",
+    )
     betting_phase: BettingPhase
     create_time: datetime
     execution_time: Optional[datetime] = None  # None until executed
@@ -253,7 +299,8 @@ class BetExecutedPayload:
     event_id: str
     selection: str
     amount: str
-    execution_odds: str
+    execution_probability: str  # Probability (0-1) at which bet was executed
+    shares: str  # Number of shares purchased
     execution_time: str
 
 
@@ -303,5 +350,6 @@ __all__ = [
     "BetRequestTotal",
     "BetSettledPayload",
     "BettingEvent",
+    "Holding",
     "Statistics",
 ]

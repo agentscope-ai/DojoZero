@@ -55,7 +55,7 @@ class MockAgent:
         if isinstance(payload, BetExecutedPayload):
             print(
                 f"[AGENT {self.actor_id}] Bet {payload.bet_id} executed "
-                f"at odds {payload.execution_odds}"
+                f"at probability {payload.execution_probability} (shares: {payload.shares})"
             )
         elif isinstance(payload, BetSettledPayload):
             print(
@@ -105,12 +105,19 @@ async def initialized_event(broker):
     )
     await broker.handle_stream_event(game_init_event)
 
-    # Add odds update to set initial odds
+    # Add odds update to set initial probabilities
     odds_event = StreamEvent(
         stream_id="nba_odds_stream",
         payload=OddsUpdateEvent(
             game_id="lakers_vs_warriors",
-            odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+            odds=OddsInfo(
+                moneyline=MoneylineOdds(
+                    home_probability=0.513,  # 1/1.95
+                    away_probability=0.476,  # 1/2.10
+                    home_odds=1.95,
+                    away_odds=2.10,
+                )
+            ),
         ),
         emitted_at=datetime.now(),
     )
@@ -219,7 +226,14 @@ class TestEventManagement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game1",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -232,8 +246,8 @@ class TestEventManagement:
         assert quote["home_team"] == "Lakers"
         assert quote["away_team"] == "Warriors"
         assert quote["status"] == "SCHEDULED"
-        assert Decimal(quote["home_odds"]) == Decimal("1.95")
-        assert Decimal(quote["away_odds"]) == Decimal("2.10")
+        assert Decimal(quote["home_probability"]) == Decimal("0.513")
+        assert Decimal(quote["away_probability"]) == Decimal("0.476")
 
     async def test_initialize_duplicate_event_raises_error(self, broker):
         """Test that creating duplicate event raises error"""
@@ -242,8 +256,8 @@ class TestEventManagement:
             home_team="Lakers",
             away_team="Warriors",
             game_time=datetime.now(),
-            initial_home_odds=Decimal("1.95"),
-            initial_away_odds=Decimal("2.10"),
+            initial_home_probability=Decimal("0.513"),
+            initial_away_probability=Decimal("0.476"),
         )
 
         with pytest.raises(ValueError, match="already exists"):
@@ -252,20 +266,20 @@ class TestEventManagement:
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
-                initial_home_odds=Decimal("1.95"),
-                initial_away_odds=Decimal("2.10"),
+                initial_home_probability=Decimal("0.513"),
+                initial_away_probability=Decimal("0.476"),
             )
 
-    async def test_initialize_event_invalid_odds_raises_error(self, broker):
-        """Test that odds <= 1.0 raises error"""
-        with pytest.raises(ValueError, match="greater than 1.0"):
+    async def test_initialize_event_invalid_probability_raises_error(self, broker):
+        """Test that probability outside 0-1 range raises error"""
+        with pytest.raises(ValueError, match="between 0 and 1"):
             await broker._initialize_event(
                 event_id="game1",
                 home_team="Lakers",
                 away_team="Warriors",
                 game_time=datetime.now(),
-                initial_home_odds=Decimal("0.95"),
-                initial_away_odds=Decimal("2.10"),
+                initial_home_probability=Decimal("1.5"),  # Invalid: > 1
+                initial_away_probability=Decimal("0.476"),
             )
 
     async def test_get_available_event_with_initialized(self, initialized_event):
@@ -280,8 +294,8 @@ class TestEventManagement:
         assert quote["home_team"] == "Lakers"
         assert quote["away_team"] == "Warriors"
         assert quote["status"] == "SCHEDULED"
-        assert Decimal(quote["home_odds"]) == Decimal("1.95")
-        assert Decimal(quote["away_odds"]) == Decimal("2.10")
+        assert Decimal(quote["home_probability"]) == Decimal("0.513")
+        assert Decimal(quote["away_probability"]) == Decimal("0.476")
 
     async def test_get_available_event_nonexistent_returns_none(self, broker):
         """Test that getting event when none exists returns None"""
@@ -292,12 +306,19 @@ class TestEventManagement:
         """Test updating event odds via OddsUpdateEvent"""
         broker, event_id = initialized_event
 
-        # Update odds via event
+        # Update probabilities via event
         odds_event = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id=event_id,
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=2.00, away_odds=2.20)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.50,  # 1/2.00
+                        away_probability=0.455,  # 1/2.20
+                        home_odds=2.00,
+                        away_odds=2.20,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -306,18 +327,20 @@ class TestEventManagement:
         event = await broker.get_available_event()
         assert event is not None
         quote = event.model_dump(mode="json")
-        assert Decimal(quote["home_odds"]) == Decimal("2.00")
-        assert Decimal(quote["away_odds"]) == Decimal("2.20")
+        assert Decimal(quote["home_probability"]) == Decimal("0.50")
+        assert Decimal(quote["away_probability"]) == Decimal("0.455")
 
-    async def test_update_odds_invalid_values_raises_error(self, initialized_event):
-        """Test that invalid odds update raises error"""
+    async def test_update_odds_invalid_probability_raises_error(
+        self, initialized_event
+    ):
+        """Test that invalid probability update raises error"""
         broker, event_id = initialized_event
 
-        with pytest.raises(ValueError, match="greater than 1.0"):
+        with pytest.raises(ValueError, match="between 0 and 1"):
             await broker._update_odds(
                 event_id=event_id,
-                home_odds=Decimal("0.50"),
-                away_odds=Decimal("2.20"),
+                home_probability=Decimal("1.5"),  # Invalid: > 1
+                away_probability=Decimal("0.455"),
             )
 
     async def test_update_event_status_to_live(self, initialized_event):
@@ -384,7 +407,14 @@ class TestEventManagement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game1",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -407,7 +437,14 @@ class TestEventManagement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game2",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.85, away_odds=2.00)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.541,
+                        away_probability=0.50,
+                        home_odds=1.85,
+                        away_odds=2.00,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -473,7 +510,14 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -529,7 +573,14 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -544,7 +595,7 @@ class TestBetPlacement:
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
                 betting_phase=BettingPhase.PRE_GAME,
-                limit_odds=Decimal("2.20"),
+                limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
 
@@ -586,7 +637,14 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -602,18 +660,23 @@ class TestBetPlacement:
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
                 betting_phase=BettingPhase.PRE_GAME,
-                limit_odds=Decimal("2.20"),
+                limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
 
-        # Update odds to trigger execution
+        # Update probabilities to trigger execution
         odds_update = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
                 odds=OddsInfo(
-                    moneyline=MoneylineOdds(home_odds=1.90, away_odds=2.25)
-                ),  # Now >= 2.20, should trigger
+                    moneyline=MoneylineOdds(
+                        home_probability=0.526,  # 1/1.90
+                        away_probability=0.455,  # 1/2.20 (>= 0.455 limit, should execute)
+                        home_odds=1.90,
+                        away_odds=2.20,  # 1/2.20 = 0.455
+                    )
+                ),  # away_probability >= limit_probability, should trigger
             ),
             emitted_at=datetime.now(),
         )
@@ -626,7 +689,9 @@ class TestBetPlacement:
         active = await broker.get_active_bets(agent.actor_id)
         assert len(active) == 1
         assert active[0].status == BetStatus.ACTIVE
-        assert active[0].odds == Decimal("2.25")
+        assert abs(active[0].probability - Decimal("0.455")) < Decimal(
+            "0.001"
+        )  # 1/2.20
 
     async def test_place_bet_insufficient_balance(self, broker_with_agent):
         """Test that bet is rejected with insufficient balance"""
@@ -654,7 +719,14 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -704,7 +776,14 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -770,7 +849,14 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -786,7 +872,7 @@ class TestBetPlacement:
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
                 betting_phase=BettingPhase.PRE_GAME,
-                limit_odds=Decimal("2.20"),
+                limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
 
@@ -832,7 +918,14 @@ class TestBetPlacement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -894,7 +987,14 @@ class TestBetSettlement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -934,15 +1034,18 @@ class TestBetSettlement:
         )
         await broker.handle_stream_event(game_result)
 
-        # Check bet settled with payout
+        # Check bet settled with payout (Polymarket model: shares * $1.00)
         history = await broker.get_bet_history(agent.actor_id)
         assert len(history) == 1
         assert history[0].outcome == BetOutcome.WIN
-        assert history[0].actual_payout == Decimal("100.00") * Decimal("1.95")
+        # Shares = amount / probability = 100 / 0.513 ≈ 194.93
+        # Payout = shares * 1.00 = 194.93
+        expected_shares = Decimal("100.00") / Decimal("0.513")
+        assert history[0].actual_payout == expected_shares * Decimal("1.00")
 
         # Check balance updated
         balance = await broker.get_balance(agent.actor_id)
-        expected_balance = Decimal("900.00") + (Decimal("100.00") * Decimal("1.95"))
+        expected_balance = Decimal("900.00") + (expected_shares * Decimal("1.00"))
         assert balance == expected_balance
 
     async def test_settle_losing_bet(self, broker_with_agent):
@@ -971,7 +1074,14 @@ class TestBetSettlement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -1047,7 +1157,14 @@ class TestBetSettlement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -1063,7 +1180,7 @@ class TestBetSettlement:
                 event_id="test_event",
                 order_type=OrderType.LIMIT,
                 betting_phase=BettingPhase.PRE_GAME,
-                limit_odds=Decimal("2.20"),
+                limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
 
@@ -1117,7 +1234,14 @@ class TestStatistics:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -1176,9 +1300,13 @@ class TestStatistics:
         assert stats.losses == 1
         assert stats.win_rate == 0.5
 
-        # Net profit = win_payout - total_wagered
-        expected_profit = (Decimal("100.00") * Decimal("1.95")) - Decimal("150.00")
-        assert stats.net_profit == expected_profit
+        # Net profit = win_payout - total_wagered (Polymarket model)
+        # Home bet: shares = 100 / 0.513 ≈ 194.93, payout = 194.93
+        home_shares = Decimal("100.00") / Decimal("0.513")
+        expected_profit = (home_shares * Decimal("1.00")) - Decimal("150.00")
+        assert abs(stats.net_profit - expected_profit) < Decimal(
+            "0.01"
+        )  # Allow small rounding
 
     async def test_statistics_no_bets(self, broker_with_agent):
         """Test statistics for agent with no bets"""
@@ -1229,7 +1357,14 @@ class TestStateManagement:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -1298,7 +1433,14 @@ class TestIntegration:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game1",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -1326,17 +1468,24 @@ class TestIntegration:
                 event_id="game1",
                 order_type=OrderType.LIMIT,
                 betting_phase=BettingPhase.PRE_GAME,
-                limit_odds=Decimal("2.20"),
+                limit_probability=Decimal("0.455"),  # 1/2.20
             ),
         )
         assert result == "bet_placed"
 
-        # 4. Update odds (trigger limit order)
+        # 4. Update probabilities (trigger limit order)
         odds_update = StreamEvent(
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="game1",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.90, away_odds=2.25)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.526,
+                        away_probability=0.455,  # 1/2.20 >= 0.455 limit (should execute)
+                        home_odds=1.90,
+                        away_odds=2.20,  # 1/2.20 = 0.455
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -1379,10 +1528,11 @@ class TestIntegration:
         away_bet = [b for b in history if b.selection == "away"][0]
         assert away_bet.outcome == BetOutcome.LOSS
 
-        # 9. Check final balance
+        # 9. Check final balance (Polymarket model: shares * $1.00 for win)
         balance = await broker.get_balance(agent.actor_id)
-        expected = Decimal("850.00") + (Decimal("100.00") * Decimal("1.95"))
-        assert balance == expected
+        home_shares = Decimal("100.00") / Decimal("0.513")
+        expected = Decimal("850.00") + (home_shares * Decimal("1.00"))
+        assert abs(balance - expected) < Decimal("0.01")  # Allow small rounding
 
         # 10. Check statistics
         stats = await broker.get_statistics(agent.actor_id)
@@ -1415,11 +1565,13 @@ def create_odds_event_with_spreads_totals(
         for su in spread_updates:
             h_odds = su.get("home_odds", 1.0)
             a_odds = su.get("away_odds", 1.0)
+            h_prob = 1.0 / h_odds if h_odds > 0 else 0.0
+            a_prob = 1.0 / a_odds if a_odds > 0 else 0.0
             spreads.append(
                 SpreadOdds(
                     spread=su["spread"],
-                    home_probability=1.0 / h_odds if h_odds > 0 else 0.0,
-                    away_probability=1.0 / a_odds if a_odds > 0 else 0.0,
+                    home_probability=h_prob,
+                    away_probability=a_prob,
                     home_odds=h_odds,
                     away_odds=a_odds,
                 )
@@ -1430,11 +1582,13 @@ def create_odds_event_with_spreads_totals(
         for tu in total_updates:
             over_odds = tu.get("over_odds", 1.0)
             under_odds = tu.get("under_odds", 1.0)
+            over_prob = 1.0 / over_odds if over_odds > 0 else 0.0
+            under_prob = 1.0 / under_odds if under_odds > 0 else 0.0
             totals.append(
                 TotalOdds(
                     total=tu["total"],
-                    over_probability=1.0 / over_odds if over_odds > 0 else 0.0,
-                    under_probability=1.0 / under_odds if under_odds > 0 else 0.0,
+                    over_probability=over_prob,
+                    under_probability=under_prob,
                     over_odds=over_odds,
                     under_odds=under_odds,
                 )
@@ -1510,7 +1664,9 @@ class TestSpreadBetting:
         assert len(active_bets) == 1
         assert active_bets[0].bet_type == BetType.SPREAD
         assert active_bets[0].spread_value == Decimal("-3.5")
-        assert active_bets[0].odds == Decimal("1.90")
+        assert abs(active_bets[0].probability - Decimal("0.526")) < Decimal(
+            "0.001"
+        )  # 1/1.90
         assert active_bets[0].status == BetStatus.ACTIVE
 
     async def test_settle_winning_spread_bet(self, broker_with_agent):
@@ -1572,7 +1728,12 @@ class TestSpreadBetting:
         history = await broker.get_bet_history(agent.actor_id)
         assert len(history) == 1
         assert history[0].outcome == BetOutcome.WIN
-        assert history[0].actual_payout == Decimal("100.00") * Decimal("1.90")
+        # Polymarket model: shares * $1.00
+        # Use the actual probability from the bet (1/1.90 = 0.5263157894736842)
+        bet_probability = history[0].probability
+        expected_shares = Decimal("100.00") / bet_probability
+        expected_payout = expected_shares * Decimal("1.00")
+        assert abs(history[0].actual_payout - expected_payout) < Decimal("0.01")
 
     async def test_settle_losing_spread_bet(self, broker_with_agent):
         """Test settling a losing spread bet"""
@@ -1670,7 +1831,11 @@ class TestSpreadBetting:
         quote = event.model_dump(mode="json")
         assert "spread_lines" in quote
         assert "-3.5" in quote["spread_lines"]
-        assert Decimal(quote["spread_lines"]["-3.5"]["home_odds"]) == Decimal("1.90")
+        # 1/1.90 = 0.5263157894736842
+        assert abs(
+            Decimal(quote["spread_lines"]["-3.5"]["home_probability"])
+            - Decimal("0.526")
+        ) < Decimal("0.001")
 
         # Update spread odds
         updated_odds_payload = create_odds_event_with_spreads_totals(
@@ -1688,12 +1853,15 @@ class TestSpreadBetting:
         updated_event = await broker.get_available_event()
         assert updated_event is not None
         updated_quote = updated_event.model_dump(mode="json")
-        assert Decimal(updated_quote["spread_lines"]["-3.5"]["home_odds"]) == Decimal(
-            "1.95"
-        )
-        assert Decimal(updated_quote["spread_lines"]["-3.5"]["away_odds"]) == Decimal(
-            "1.85"
-        )
+        # 1/1.95 = 0.5128205128205128, 1/1.85 = 0.5405405405405406
+        assert abs(
+            Decimal(updated_quote["spread_lines"]["-3.5"]["home_probability"])
+            - Decimal("0.513")
+        ) < Decimal("0.001")
+        assert abs(
+            Decimal(updated_quote["spread_lines"]["-3.5"]["away_probability"])
+            - Decimal("0.541")
+        ) < Decimal("0.001")
 
     async def test_limit_order_spread_bet(self, broker_with_agent):
         """Test that limit order executes when spread odds reach threshold"""
@@ -1734,7 +1902,7 @@ class TestSpreadBetting:
                 order_type=OrderType.LIMIT,
                 betting_phase=BettingPhase.PRE_GAME,
                 spread_value=Decimal("-3.5"),
-                limit_odds=Decimal("1.95"),  # Want better odds
+                limit_probability=Decimal("0.513"),  # 1/1.95 - Want better probability
             ),
         )
 
@@ -1743,12 +1911,12 @@ class TestSpreadBetting:
         assert len(pending) == 1
         assert pending[0].status == BetStatus.PENDING
 
-        # Update spread odds to trigger execution
+        # Update spread probabilities to trigger execution
         updated_odds_payload = create_odds_event_with_spreads_totals(
             game_id="test_event",
             spread_updates=[
-                {"spread": -3.5, "home_odds": 1.96, "away_odds": 1.84}
-            ],  # 1.96 >= 1.95
+                {"spread": -3.5, "home_odds": 1.94, "away_odds": 1.86}
+            ],  # home_probability = 1/1.94 = 0.515 >= 0.513 limit (should execute)
         )
         updated_odds_event = StreamEvent(
             stream_id="nba_odds_stream",
@@ -1764,7 +1932,8 @@ class TestSpreadBetting:
         active = await broker.get_active_bets(agent.actor_id)
         assert len(active) == 1
         assert active[0].status == BetStatus.ACTIVE
-        assert active[0].odds == Decimal("1.96")
+        # 1/1.94 = 0.515464... ≈ 0.515
+        assert abs(active[0].probability - Decimal("0.515")) < Decimal("0.001")
         assert active[0].bet_type == BetType.SPREAD
         assert active[0].spread_value == Decimal("-3.5")
 
@@ -1825,7 +1994,9 @@ class TestTotalBetting:
         assert active_bets[0].bet_type == BetType.TOTAL
         assert active_bets[0].total_value == Decimal("220.5")
         assert active_bets[0].selection == "over"
-        assert active_bets[0].odds == Decimal("1.88")
+        assert abs(active_bets[0].probability - Decimal("0.532")) < Decimal(
+            "0.001"
+        )  # 1/1.88
 
     async def test_settle_winning_over_bet(self, broker_with_agent):
         """Test settling a winning over bet"""
@@ -1886,7 +2057,12 @@ class TestTotalBetting:
         history = await broker.get_bet_history(agent.actor_id)
         assert len(history) == 1
         assert history[0].outcome == BetOutcome.WIN
-        assert history[0].actual_payout == Decimal("100.00") * Decimal("1.88")
+        # Polymarket model: shares * $1.00
+        # Use the actual probability from the bet (1/1.88 = 0.5319148936170213)
+        bet_probability = history[0].probability
+        expected_shares = Decimal("100.00") / bet_probability
+        expected_payout = expected_shares * Decimal("1.00")
+        assert abs(history[0].actual_payout - expected_payout) < Decimal("0.01")
 
     async def test_settle_losing_under_bet(self, broker_with_agent):
         """Test settling a losing under bet"""
@@ -1984,9 +2160,13 @@ class TestTotalBetting:
         quote = event.model_dump(mode="json")
         assert "total_lines" in quote
         assert "220.5" in quote["total_lines"]
-        assert Decimal(quote["total_lines"]["220.5"]["over_odds"]) == Decimal("1.88")
+        # 1/1.88 = 0.5319148936170213
+        assert abs(
+            Decimal(quote["total_lines"]["220.5"]["over_probability"])
+            - Decimal("0.532")
+        ) < Decimal("0.001")
 
-        # Update total odds
+        # Update total probabilities
         updated_odds_payload = create_odds_event_with_spreads_totals(
             game_id="test_event",
             total_updates=[{"total": 220.5, "over_odds": 1.92, "under_odds": 1.84}],
@@ -2002,12 +2182,15 @@ class TestTotalBetting:
         updated_event = await broker.get_available_event()
         assert updated_event is not None
         updated_quote = updated_event.model_dump(mode="json")
-        assert Decimal(updated_quote["total_lines"]["220.5"]["over_odds"]) == Decimal(
-            "1.92"
-        )
-        assert Decimal(updated_quote["total_lines"]["220.5"]["under_odds"]) == Decimal(
-            "1.84"
-        )
+        # 1/1.92 = 0.5208333333333334, 1/1.84 = 0.5434782608695652
+        assert abs(
+            Decimal(updated_quote["total_lines"]["220.5"]["over_probability"])
+            - Decimal("0.521")
+        ) < Decimal("0.001")
+        assert abs(
+            Decimal(updated_quote["total_lines"]["220.5"]["under_probability"])
+            - Decimal("0.543")
+        ) < Decimal("0.001")
 
     async def test_limit_order_total_bet(self, broker_with_agent):
         """Test that limit order executes when total odds reach threshold"""
@@ -2048,7 +2231,7 @@ class TestTotalBetting:
                 order_type=OrderType.LIMIT,
                 betting_phase=BettingPhase.PRE_GAME,
                 total_value=Decimal("220.5"),
-                limit_odds=Decimal("1.90"),  # Want better odds
+                limit_probability=Decimal("0.526"),  # 1/1.90 - Want better probability
             ),
         )
 
@@ -2061,8 +2244,8 @@ class TestTotalBetting:
         updated_odds_payload = create_odds_event_with_spreads_totals(
             game_id="test_event",
             total_updates=[
-                {"total": 220.5, "over_odds": 1.92, "under_odds": 1.84}
-            ],  # 1.92 >= 1.90
+                {"total": 220.5, "over_odds": 1.88, "under_odds": 1.84}
+            ],  # over_probability = 1/1.88 = 0.532 >= 0.526 limit (should execute)
         )
         updated_odds_event = StreamEvent(
             stream_id="nba_odds_stream",
@@ -2078,7 +2261,8 @@ class TestTotalBetting:
         active = await broker.get_active_bets(agent.actor_id)
         assert len(active) == 1
         assert active[0].status == BetStatus.ACTIVE
-        assert active[0].odds == Decimal("1.92")
+        # 1/1.88 = 0.531915... ≈ 0.532
+        assert abs(active[0].probability - Decimal("0.532")) < Decimal("0.001")
         assert active[0].bet_type == BetType.TOTAL
         assert active[0].total_value == Decimal("220.5")
         assert active[0].selection == "over"
@@ -2153,8 +2337,12 @@ class TestMultipleSpreadsTotals:
         spread_35_bet = [b for b in active_bets if b.spread_value == Decimal("-3.5")][0]
         spread_45_bet = [b for b in active_bets if b.spread_value == Decimal("-4.5")][0]
 
-        assert spread_35_bet.odds == Decimal("1.90")
-        assert spread_45_bet.odds == Decimal("1.95")  # Away spread odds
+        assert abs(spread_35_bet.probability - Decimal("0.526")) < Decimal(
+            "0.001"
+        )  # 1/1.90
+        assert abs(spread_45_bet.probability - Decimal("0.513")) < Decimal(
+            "0.001"
+        )  # 1/1.95 (away spread probability)
 
     async def test_backward_compatibility_moneyline_default(self, broker_with_agent):
         """Test that moneyline betting still works without specifying bet_type"""
@@ -2178,7 +2366,14 @@ class TestMultipleSpreadsTotals:
             stream_id="nba_odds_stream",
             payload=OddsUpdateEvent(
                 game_id="test_event",
-                odds=OddsInfo(moneyline=MoneylineOdds(home_odds=1.95, away_odds=2.10)),
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
             ),
             emitted_at=datetime.now(),
         )
@@ -2203,7 +2398,9 @@ class TestMultipleSpreadsTotals:
         active_bets = await broker.get_active_bets(agent.actor_id)
         assert len(active_bets) == 1
         assert active_bets[0].bet_type == BetType.MONEYLINE
-        assert active_bets[0].odds == Decimal("1.95")
+        assert abs(active_bets[0].probability - Decimal("0.513")) < Decimal(
+            "0.001"
+        )  # 1/1.95
 
 
 # =============================================================================
@@ -2257,12 +2454,12 @@ class TestAllowedTools:
         # Should have all tools
         expected_tools = [
             "get_balance",
+            "get_holdings",
             "get_event",
             "place_bet_moneyline",
             "place_bet_spread",
             "place_bet_total",
             "cancel_bet",
-            "get_active_bets",
             "get_pending_orders",
             "get_bet_history",
             "get_statistics",
