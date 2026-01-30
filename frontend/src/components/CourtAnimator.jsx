@@ -106,9 +106,12 @@ export default function CourtAnimator({
     const eventType = currentEvent.event_type;
 
     switch (eventType) {
+      case "nba_game_update":
+      case "nfl_game_update":
+      case "espn_game_update":
       case "game_update": {
-        const homeScore = currentEvent.home_team?.score || 0;
-        const awayScore = currentEvent.away_team?.score || 0;
+        const homeScore = (currentEvent.home_team || currentEvent.home_team_stats)?.score || 0;
+        const awayScore = (currentEvent.away_team || currentEvent.away_team_stats)?.score || 0;
         
         if (homeScore > lastScoreRef.current.home) {
           setScoringTeam("home");
@@ -135,6 +138,9 @@ export default function CourtAnimator({
         break;
       }
       
+      case "nba_play":
+      case "nfl_play":
+      case "espn_play":
       case "play_by_play": {
         // Handle play-by-play events for real-time animation
         const actionType = currentEvent.action_type || "";

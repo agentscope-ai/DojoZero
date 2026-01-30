@@ -495,6 +495,82 @@ export const eventTypes = {
     label: "Web Search",
     color: "#6366F1",
   },
+  // New canonical event type names (after event. prefix stripping)
+  nba_game_update: {
+    icon: "activity",
+    label: "Game Update",
+    color: "#3B82F6",
+  },
+  nba_play: {
+    icon: "basketball",
+    label: "Play",
+    color: "#10B981",
+  },
+  nfl_game_update: {
+    icon: "activity",
+    label: "Game Update",
+    color: "#3B82F6",
+  },
+  nfl_play: {
+    icon: "basketball",
+    label: "Play",
+    color: "#10B981",
+  },
+  nfl_drive: {
+    icon: "activity",
+    label: "Drive",
+    color: "#3B82F6",
+  },
+  injury_report: {
+    icon: "alert-triangle",
+    label: "Injury Report",
+    color: "#EF4444",
+  },
+  espn_game_update: {
+    icon: "activity",
+    label: "Game Update",
+    color: "#3B82F6",
+  },
+  espn_play: {
+    icon: "basketball",
+    label: "Play",
+    color: "#10B981",
+  },
+  web_search: {
+    icon: "search",
+    label: "Web Search",
+    color: "#6366F1",
+  },
+  pre_game_insight: {
+    icon: "brain",
+    label: "Pre-Game Insight",
+    color: "#EC4899",
+  },
+  stats_insight: {
+    icon: "bar-chart-2",
+    label: "Stats Insight",
+    color: "#6366F1",
+  },
+  head_to_head: {
+    icon: "bar-chart-2",
+    label: "Head to Head",
+    color: "#6366F1",
+  },
+  team_stats: {
+    icon: "bar-chart-2",
+    label: "Team Stats",
+    color: "#6366F1",
+  },
+  player_stats: {
+    icon: "bar-chart-2",
+    label: "Player Stats",
+    color: "#6366F1",
+  },
+  recent_form: {
+    icon: "bar-chart-2",
+    label: "Recent Form",
+    color: "#6366F1",
+  },
 };
 
 // Theme colors

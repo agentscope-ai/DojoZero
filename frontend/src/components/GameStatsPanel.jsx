@@ -108,13 +108,18 @@ export default function GameStatsPanel({ events, homeTeam, awayTeam }) {
 
   // Extract latest game_update data
   const gameData = useMemo(() => {
-    const gameUpdates = events.filter((e) => e.event_type === "game_update");
+    const gameUpdates = events.filter((e) =>
+      e.event_type === "game_update" ||
+      e.event_type === "nba_game_update" ||
+      e.event_type === "nfl_game_update" ||
+      e.event_type === "espn_game_update"
+    );
     const latest = gameUpdates[gameUpdates.length - 1];
     if (!latest) return null;
     
     return {
-      homeTeam: latest.home_team,
-      awayTeam: latest.away_team,
+      homeTeam: latest.home_team || latest.home_team_stats,
+      awayTeam: latest.away_team || latest.away_team_stats,
       playerStats: latest.player_stats,
       period: latest.period,
       gameClock: latest.game_clock,

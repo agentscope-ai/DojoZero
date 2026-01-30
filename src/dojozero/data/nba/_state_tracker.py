@@ -16,6 +16,11 @@ class GameStateTracker:
     This separation of concerns improves testability and makes state management explicit.
     """
 
+    # Game status codes
+    STATUS_SCHEDULED = 1
+    STATUS_IN_PROGRESS = 2
+    STATUS_FINAL = 3
+
     def __init__(self):
         """Initialize all state tracking variables."""
         self._previous_game_status: dict[str, int] = {}  # game_id -> gameStatus
@@ -29,6 +34,12 @@ class GameStateTracker:
         self._initialized_games: set[str] = (
             set()
         )  # game_id -> True when GameInitializeEvent emitted
+        self._final_update_emitted: set[str] = (
+            set()
+        )  # game_id -> True when final NBAGameUpdateEvent emitted
+        # Latest period/clock from play-by-play (used by boxscore updates)
+        self._current_period: dict[str, int] = {}
+        self._current_clock: dict[str, str] = {}
 
     def get_previous_status(self, game_id: str) -> int | None:
         """Get previous game status for transition detection.
@@ -49,6 +60,36 @@ class GameStateTracker:
             status: Game status code (1=pre-game, 2=live, 3=finished)
         """
         self._previous_game_status[game_id] = status
+
+    def is_game_concluded(self, game_id: str) -> bool:
+        """Check if game has concluded (status = FINAL).
+
+        Args:
+            game_id: NBA game ID
+
+        Returns:
+            True if game status is FINAL
+        """
+        return self._previous_game_status.get(game_id) == self.STATUS_FINAL
+
+    def has_final_update_emitted(self, game_id: str) -> bool:
+        """Check if final game update has been emitted.
+
+        Args:
+            game_id: NBA game ID
+
+        Returns:
+            True if final NBAGameUpdateEvent has been emitted
+        """
+        return game_id in self._final_update_emitted
+
+    def mark_final_update_emitted(self, game_id: str) -> None:
+        """Mark that final game update has been emitted.
+
+        Args:
+            game_id: NBA game ID
+        """
+        self._final_update_emitted.add(game_id)
 
     def has_seen_event(self, event_id: str) -> bool:
         """Check if event has been processed (deduplication).
@@ -126,6 +167,25 @@ class GameStateTracker:
             game_id: NBA game ID
         """
         self._initialized_games.add(game_id)
+
+    def update_game_clock(self, game_id: str, period: int, clock: str) -> None:
+        """Update the latest period and clock from play-by-play.
+
+        Args:
+            game_id: NBA game ID
+            period: Current period number (1-4, 5+ for OT)
+            clock: Display clock string (e.g., "5:42")
+        """
+        self._current_period[game_id] = period
+        self._current_clock[game_id] = clock
+
+    def get_current_period(self, game_id: str) -> int:
+        """Get latest period from play-by-play."""
+        return self._current_period.get(game_id, 0)
+
+    def get_current_clock(self, game_id: str) -> str:
+        """Get latest game clock from play-by-play."""
+        return self._current_clock.get(game_id, "")
 
     def filter_new_actions(
         self, game_id: str, actions: list[dict[str, Any]]
