@@ -150,6 +150,19 @@ class OddsInfo(BaseModel):
 EventT = TypeVar("EventT", bound="DataEvent")
 
 
+class PollProfile(str, Enum):
+    """Polling interval profile based on game phase.
+
+    Used by stores to dynamically adjust polling frequency
+    as the game progresses through different phases.
+    """
+
+    PRE_GAME = "pre_game"
+    IN_GAME = "in_game"
+    LATE_GAME = "late_game"
+    POST_GAME = "post_game"
+
+
 class EventTypes(str, Enum):
     """Centralized event type identifiers.
 

@@ -67,8 +67,6 @@ from dojozero.data.polymarket import (
     PolymarketStore,
 )
 from dojozero.data.espn import (
-    ESPNGameUpdateEvent,
-    ESPNPlayEvent,
     HeadToHeadEvent,
     PlayerStatsEvent,
     RecentFormEvent,
@@ -102,8 +100,6 @@ AnyDataEvent = Annotated[
         NFLPlayEvent,
         NFLDriveEvent,
         NFLGameUpdateEvent,
-        ESPNGameUpdateEvent,
-        ESPNPlayEvent,
         HeadToHeadEvent,
         TeamStatsEvent,
         PlayerStatsEvent,
@@ -195,9 +191,6 @@ __all__ = [
     "NFLPlayEvent",
     "NFLDriveEvent",
     "NFLGameUpdateEvent",
-    # ESPN
-    "ESPNGameUpdateEvent",
-    "ESPNPlayEvent",
     # Polymarket
     "PolymarketAPI",
     "PolymarketStore",

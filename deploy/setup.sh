@@ -54,9 +54,9 @@ cd "$PROJECT_ROOT"
 echo "Installing DojoZero package and dependencies..."
 uv pip install .
 
-# Install dev dependencies (includes nba_api, tavily-python, etc.)
-echo "Installing additional dependencies for NBA trial runner..."
-uv pip install "nba_api" "python-dotenv" "tavily-python" "dashscope" "py-clob-client"
+# Install additional dependencies for trial runner
+echo "Installing additional dependencies for trial runner..."
+uv pip install "python-dotenv" "tavily-python" "dashscope" "py-clob-client"
 
 echo "✓ Dependencies installed"
 

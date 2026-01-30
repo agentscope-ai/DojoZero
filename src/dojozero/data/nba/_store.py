@@ -2,11 +2,14 @@
 
 from typing import Any, Sequence
 
+import logging
+
 from dojozero.data._models import (
     DataEvent,
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
+    PollProfile,
     TeamIdentity,
     VenueInfo,
 )
@@ -22,10 +25,19 @@ from dojozero.data.nba._events import (
 from dojozero.data.nba._state_tracker import GameStateTracker
 
 
+logger = logging.getLogger(__name__)
+
+
 class NBAStore(DataStore):
     """NBA data store for polling NBA API and emitting events."""
 
     sport_type: str = "nba"
+
+    _POLL_PROFILES: dict[PollProfile, dict[str, float]] = {
+        PollProfile.PRE_GAME: {"boxscore": 120.0, "play_by_play": 60.0},
+        PollProfile.IN_GAME: {"boxscore": 30.0, "play_by_play": 10.0},
+        PollProfile.LATE_GAME: {"boxscore": 15.0, "play_by_play": 5.0},
+    }
 
     def __init__(
         self,
@@ -36,16 +48,17 @@ class NBAStore(DataStore):
     ):
         """Initialize NBA store.
 
-        Default polling intervals:
-        - boxscore: 60.0 seconds (for complete game updates with all leaders)
-        - play_by_play: 20.0 seconds (for all play-by-play events and game status)
+        Default polling intervals (PRE_GAME profile):
+        - boxscore: 120.0 seconds
+        - play_by_play: 60.0 seconds
+
+        Intervals adjust automatically based on game phase:
+        - IN_GAME: boxscore=30s, play_by_play=10s
+        - LATE_GAME (4Q+ and close score): boxscore=15s, play_by_play=5s
         """
-        # Set default poll_intervals if not provided
+        # Set default poll_intervals if not provided (PRE_GAME profile)
         if poll_intervals is None:
-            poll_intervals = {
-                "boxscore": 60.0,  # Complete game updates with all leaders
-                "play_by_play": 20.0,  # All play-by-play events and game status detection
-            }
+            poll_intervals = dict(self._POLL_PROFILES[PollProfile.PRE_GAME])
 
         super().__init__(
             store_id,
@@ -55,6 +68,7 @@ class NBAStore(DataStore):
         )
         # Game state tracker manages all state variables in one place
         self._state = GameStateTracker()
+        self._current_poll_profile: PollProfile = PollProfile.PRE_GAME
 
     def _extract_player_stats_from_boxscore(
         self, boxscore_data: dict[str, Any]
@@ -164,9 +178,6 @@ class NBAStore(DataStore):
                 except (KeyError, TypeError, ValueError, AttributeError) as e:
                     # If we can't get game info, skip GameInitializeEvent
                     # It will be emitted when boxscore data becomes available
-                    import logging
-
-                    logger = logging.getLogger(__name__)
                     logger.debug(
                         "Could not get game info for GameInitializeEvent: game_id=%s, error=%s",
                         game_id,
@@ -187,6 +198,9 @@ class NBAStore(DataStore):
                 # Extract scores from statistics
                 home_score = home_stats.get("points", 0) or 0
                 away_score = away_stats.get("points", 0) or 0
+
+                # Track scores for poll profile calculation
+                self._state.update_scores(game_id, home_score, away_score)
 
                 # Extract all player stats from BoxScore (pass through raw data)
                 player_stats = self._extract_player_stats_from_boxscore(boxscore_data)
@@ -476,6 +490,21 @@ class NBAStore(DataStore):
                         score_value=score_value,
                     )
                 )
+
+        # Check if poll profile needs to change
+        new_profile = self._state.get_poll_profile(game_id)
+        if new_profile != self._current_poll_profile:
+            intervals = self._POLL_PROFILES.get(new_profile)
+            if intervals:
+                for endpoint, interval in intervals.items():
+                    self.update_poll_interval(endpoint, interval)
+            logger.info(
+                "Poll profile changed: %s -> %s for game %s",
+                self._current_poll_profile.value,
+                new_profile.value,
+                game_id,
+            )
+            self._current_poll_profile = new_profile
 
         return events
 

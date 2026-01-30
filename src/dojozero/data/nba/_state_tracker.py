@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from dojozero.data._models import PollProfile
+
 
 class GameStateTracker:
     """Manages game state variables for NBAStore.
@@ -40,6 +42,9 @@ class GameStateTracker:
         # Latest period/clock from play-by-play (used by boxscore updates)
         self._current_period: dict[str, int] = {}
         self._current_clock: dict[str, str] = {}
+        # Latest scores (used for poll profile calculation)
+        self._current_home_score: dict[str, int] = {}
+        self._current_away_score: dict[str, int] = {}
 
     def get_previous_status(self, game_id: str) -> int | None:
         """Get previous game status for transition detection.
@@ -186,6 +191,35 @@ class GameStateTracker:
     def get_current_clock(self, game_id: str) -> str:
         """Get latest game clock from play-by-play."""
         return self._current_clock.get(game_id, "")
+
+    def update_scores(self, game_id: str, home_score: int, away_score: int) -> None:
+        """Update latest scores for poll profile calculation."""
+        self._current_home_score[game_id] = home_score
+        self._current_away_score[game_id] = away_score
+
+    # Close game threshold for LATE_GAME poll profile
+    CLOSE_GAME_MARGIN = 10
+    # Period threshold for late game (4Q and OT)
+    LATE_GAME_PERIOD = 4
+
+    def get_poll_profile(self, game_id: str) -> PollProfile:
+        """Determine polling profile based on game state.
+
+        Returns:
+            PollProfile based on game status, period, and score margin.
+        """
+        status = self._previous_game_status.get(game_id)
+        if status == self.STATUS_FINAL:
+            return PollProfile.POST_GAME
+        if status == self.STATUS_IN_PROGRESS:
+            period = self._current_period.get(game_id, 0)
+            if period >= self.LATE_GAME_PERIOD:
+                home = self._current_home_score.get(game_id, 0)
+                away = self._current_away_score.get(game_id, 0)
+                if abs(home - away) <= self.CLOSE_GAME_MARGIN:
+                    return PollProfile.LATE_GAME
+            return PollProfile.IN_GAME
+        return PollProfile.PRE_GAME
 
     def filter_new_actions(
         self, game_id: str, actions: list[dict[str, Any]]

@@ -46,7 +46,7 @@ class NBAStoreFactory(StoreFactory):
                 poll_intervals=poll_intervals,
             )
         else:
-            # Use default intervals: {"boxscore": 60.0, "play_by_play": 20.0}
+            # Use default intervals (PRE_GAME profile)
             store = NBAStore(
                 store_id=store_id,
                 api=api,
