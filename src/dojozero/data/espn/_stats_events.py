@@ -1,101 +1,73 @@
-"""ESPN stats-based insight event types.
+"""ESPN stats-based pre-game insight event.
 
-These are StatsInsightEvent subclasses that provide pre-game intelligence
-derived from ESPN stats API endpoints.
+A single PreGameStatsEvent bundles all pre-game statistical intelligence
+derived from ESPN API endpoints into one event with embedded value objects.
 
 Hierarchy:
     PreGameInsightEvent
     └── StatsInsightEvent (home_team_id, away_team_id, season)
-        ├── HeadToHeadEvent (historical matchup record)
-        ├── TeamStatsEvent (team season stats)
-        ├── PlayerStatsEvent (key player stats)
-        └── RecentFormEvent (last N game results)
+        └── PreGameStatsEvent (all stats sections)
 """
 
-from typing import Any, Literal
-
-from pydantic import Field
+from typing import Literal
 
 from dojozero.data._models import (
+    HomeAwaySplits,
+    ScheduleDensity,
+    SeasonSeries,
     StatsInsightEvent,
+    TeamPlayerStats,
+    TeamRecentForm,
+    TeamSeasonStats,
+    TeamStandings,
     register_event,
 )
 
 
 @register_event
-class HeadToHeadEvent(StatsInsightEvent):
-    """Historical head-to-head matchup record between two teams.
+class PreGameStatsEvent(StatsInsightEvent):
+    """Unified pre-game statistics event.
 
-    Derived from team schedule data by filtering past matchups.
-    No dedicated ESPN H2H endpoint exists, so this is computed
-    from ``site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{id}/schedule``.
+    All sections are optional so that partial data (e.g., standings fetch
+    failed but schedule succeeded) can still be delivered to agents.
+
+    Data sourced from ESPN API endpoints:
+    - Team schedule: season series, recent form, schedule density, home/away splits
+    - Team statistics: season averages and league ranks
+    - Standings: conference and division rankings
+    - Team roster: key player stats
     """
 
-    event_type: Literal["event.head_to_head"] = "event.head_to_head"
+    event_type: Literal["event.pregame_stats"] = "event.pregame_stats"
 
-    total_games: int = 0
-    home_wins: int = 0
-    away_wins: int = 0
-    last_n_games: int = 0  # how many recent games are included
-    games: list[dict[str, Any]] = Field(default_factory=list)
+    # Season series (H2H this season)
+    season_series: SeasonSeries | None = None
 
+    # Recent form per team
+    home_recent_form: TeamRecentForm | None = None
+    away_recent_form: TeamRecentForm | None = None
 
-@register_event
-class TeamStatsEvent(StatsInsightEvent):
-    """Team season statistics snapshot.
+    # Schedule density per team
+    home_schedule: ScheduleDensity | None = None
+    away_schedule: ScheduleDensity | None = None
 
-    Stats sourced from:
-    ``sports.core.api.espn.com/v2/sports/{sport}/leagues/{league}/seasons/{year}/types/{type}/teams/{id}/statistics``
-    """
+    # Team season stats
+    home_team_stats: TeamSeasonStats | None = None
+    away_team_stats: TeamSeasonStats | None = None
 
-    event_type: Literal["event.team_stats"] = "event.team_stats"
+    # Home/away splits
+    home_splits: HomeAwaySplits | None = None
+    away_splits: HomeAwaySplits | None = None
 
-    team_id: str = ""
-    team_name: str = ""
-    stats: dict[str, Any] = Field(default_factory=dict)
-    rank: dict[str, int] = Field(default_factory=dict)
+    # Key player stats
+    home_players: TeamPlayerStats | None = None
+    away_players: TeamPlayerStats | None = None
 
-
-@register_event
-class PlayerStatsEvent(StatsInsightEvent):
-    """Key player statistics for a team.
-
-    Player data sourced from:
-    - Roster: ``site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{id}/roster``
-    - Stats:  ``site.web.api.espn.com/apis/common/v3/sports/{sport}/{league}/athletes/{id}/overview``
-    """
-
-    event_type: Literal["event.player_stats"] = "event.player_stats"
-
-    team_id: str = ""
-    team_name: str = ""
-    players: list[dict[str, Any]] = Field(default_factory=list)
-
-
-@register_event
-class RecentFormEvent(StatsInsightEvent):
-    """Recent form (last N games) for a team.
-
-    Derived from team schedule data:
-    ``site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{id}/schedule``
-    """
-
-    event_type: Literal["event.recent_form"] = "event.recent_form"
-
-    team_id: str = ""
-    team_name: str = ""
-    last_n: int = 10
-    wins: int = 0
-    losses: int = 0
-    streak: str = ""  # e.g., "W3", "L2"
-    games: list[dict[str, Any]] = Field(default_factory=list)
-    avg_points_scored: float = 0.0
-    avg_points_allowed: float = 0.0
+    # Standings
+    home_standings: TeamStandings | None = None
+    away_standings: TeamStandings | None = None
 
 
 __all__ = [
-    "HeadToHeadEvent",
-    "PlayerStatsEvent",
-    "RecentFormEvent",
-    "TeamStatsEvent",
+    "PreGameStatsEvent",
 ]

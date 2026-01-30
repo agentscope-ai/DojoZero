@@ -69,10 +69,7 @@ from dojozero.data.polymarket import (
 from dojozero.data.espn import (
     ESPNGameUpdateEvent,
     ESPNPlayEvent,
-    HeadToHeadEvent,
-    PlayerStatsEvent,
-    RecentFormEvent,
-    TeamStatsEvent,
+    PreGameStatsEvent,
 )
 from dojozero.data.websearch import (
     ExpertPredictionEvent,
@@ -104,10 +101,7 @@ AnyDataEvent = Annotated[
         NFLGameUpdateEvent,
         ESPNGameUpdateEvent,
         ESPNPlayEvent,
-        HeadToHeadEvent,
-        TeamStatsEvent,
-        PlayerStatsEvent,
-        RecentFormEvent,
+        PreGameStatsEvent,
         InjuryReportEvent,
         PowerRankingEvent,
         ExpertPredictionEvent,
@@ -208,8 +202,5 @@ __all__ = [
     "WebSearchAPI",
     "WebSearchStore",
     # Stats Insights (ESPN)
-    "HeadToHeadEvent",
-    "TeamStatsEvent",
-    "PlayerStatsEvent",
-    "RecentFormEvent",
+    "PreGameStatsEvent",
 ]

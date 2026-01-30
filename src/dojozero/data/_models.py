@@ -15,10 +15,7 @@ Event Hierarchy:
     │       │   ├── PowerRankingEvent
     │       │   └── ExpertPredictionEvent
     │       └── StatsInsightEvent — insights derived from stats APIs
-    │           ├── HeadToHeadEvent
-    │           ├── TeamStatsEvent
-    │           ├── PlayerStatsEvent
-    │           └── RecentFormEvent
+    │           └── PreGameStatsEvent (unified pregame stats)
     └── (future non-sport events)
 
 Value Objects:
@@ -146,6 +143,101 @@ class OddsInfo(BaseModel):
     totals: list[TotalOdds] = Field(default_factory=list)
 
 
+# =============================================================================
+# Pre-Game Stats Value Objects
+# =============================================================================
+
+
+class SeasonSeries(BaseModel):
+    """Head-to-head record between two teams this season."""
+
+    model_config = ConfigDict(frozen=True)
+
+    total_games: int = 0
+    home_wins: int = 0
+    away_wins: int = 0
+    games: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TeamRecentForm(BaseModel):
+    """Recent form (last N games) for a team."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    last_n: int = 10
+    wins: int = 0
+    losses: int = 0
+    streak: str = ""  # e.g., "W3", "L2"
+    games: list[dict[str, Any]] = Field(default_factory=list)
+    avg_points_scored: float = 0.0
+    avg_points_allowed: float = 0.0
+
+
+class ScheduleDensity(BaseModel):
+    """Schedule density / rest info for a team."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    days_rest: int = 0
+    is_back_to_back: bool = False
+    games_last_7_days: int = 0
+    games_last_14_days: int = 0
+
+
+class TeamSeasonStats(BaseModel):
+    """Team season statistical averages."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    stats: dict[str, float] = Field(default_factory=dict)
+    rank: dict[str, int] = Field(default_factory=dict)
+
+
+class HomeAwaySplits(BaseModel):
+    """Home vs away performance splits."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    home_record: str = ""
+    away_record: str = ""
+    home_stats: dict[str, float] = Field(default_factory=dict)
+    away_stats: dict[str, float] = Field(default_factory=dict)
+
+
+class TeamPlayerStats(BaseModel):
+    """Key player stats for a team."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    players: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TeamStandings(BaseModel):
+    """Conference and division standings for a team."""
+
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str = ""
+    team_name: str = ""
+    conference: str = ""
+    conference_rank: int = 0
+    division: str = ""
+    division_rank: int = 0
+    overall_record: str = ""
+    conference_record: str = ""
+    games_back: float = 0.0
+
+
 # Type variable for event classes
 EventT = TypeVar("EventT", bound="DataEvent")
 
@@ -192,10 +284,7 @@ class EventTypes(str, Enum):
     # =========================================================================
     # Stats Insights (ESPN API-derived)
     # =========================================================================
-    HEAD_TO_HEAD = "event.head_to_head"
-    TEAM_STATS = "event.team_stats"
-    PLAYER_STATS = "event.player_stats"
-    RECENT_FORM = "event.recent_form"
+    PREGAME_STATS = "event.pregame_stats"
 
 
 def register_event(event_class: type[EventT]) -> type[EventT]:

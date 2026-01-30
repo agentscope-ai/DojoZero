@@ -14,13 +14,10 @@ scenario:
       - power_ranking
       - expert_prediction
 
-    # ESPN stats (stubs — events defined but not yet emitted by store)
+    # ESPN pregame stats (fetched from ESPN API during pregame phase)
     - id: stats_stream
       event_types:
-      - head_to_head
-      - team_stats
-      - player_stats
-      - recent_form
+      - pregame_stats
 
     # Game lifecycle
     - id: game_lifecycle_stream
@@ -82,12 +79,11 @@ scenario:
       operators:
         - betting_broker
       data_streams:
-        - injury_summary_stream
-        - power_ranking_stream
-        - expert_prediction_stream
+        - pre_game_insights_stream
+        - stats_stream
         - game_update_stream
         - odds_update_stream
-        - game_status_change_stream
+        - game_lifecycle_stream
         - play_by_play_stream
     - id: professor_agent
       name: professor
@@ -97,12 +93,11 @@ scenario:
       operators:
         - betting_broker
       data_streams:
-        - injury_summary_stream
-        - power_ranking_stream
-        - expert_prediction_stream
+        - pre_game_insights_stream
+        - stats_stream
         - game_update_stream
         - odds_update_stream
-        - game_status_change_stream
+        - game_lifecycle_stream
         - play_by_play_stream
     - id: shark_agent
       name: shark

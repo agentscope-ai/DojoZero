@@ -20,6 +20,23 @@ from dojozero.data.espn._events import (
 from dojozero.data.espn._state_tracker import ESPNStateTracker
 
 
+def _safe_score(comp: dict[str, Any] | None) -> int:
+    """Extract an integer score from an ESPN competitor dict.
+
+    ESPN may return ``"score"`` as a plain string/int or as a nested dict
+    like ``{"value": "110", "displayValue": "110"}``.  Handle both.
+    """
+    if comp is None:
+        return 0
+    raw = comp.get("score", 0)
+    if isinstance(raw, dict):
+        raw = raw.get("value", raw.get("displayValue", 0))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
 class ESPNStore(DataStore):
     """Base ESPN data store for polling ESPN API and emitting events.
 
@@ -255,8 +272,8 @@ class ESPNStore(DataStore):
 
                 # Game ended
                 if status_code == ESPNStateTracker.STATUS_FINAL:
-                    home_score = int(home_data.get("score", 0) or 0)
-                    away_score = int(away_data.get("score", 0) or 0)
+                    home_score = _safe_score(home_data)
+                    away_score = _safe_score(away_data)
                     winner = (
                         "home"
                         if home_score > away_score
@@ -314,7 +331,7 @@ class ESPNStore(DataStore):
 
         for comp in competitors:
             team = comp.get("team", {})
-            score = int(comp.get("score", 0) or 0)
+            score = _safe_score(comp)
             line_scores = [
                 int(ls.get("value", 0) or 0)
                 for ls in comp.get("linescores", [])
