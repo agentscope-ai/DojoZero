@@ -73,18 +73,14 @@ class BetType(Enum):
 
 
 class Holding(BaseModel):
-    """Information about a holding (shares in an active bet)"""
+    """Information about an aggregated holding (total shares for a position)."""
 
-    bet_id: str
     shares: Decimal
     selection: Literal["home", "away", "over", "under"]
     event_id: str
     bet_type: BetType
     spread_value: Optional[Decimal] = None  # For SPREAD bets
     total_value: Optional[Decimal] = None  # For TOTAL bets
-    probability: Decimal = Field(
-        ge=0, le=1, description="Probability at which shares were purchased"
-    )
 
 
 class Account(BaseModel):
@@ -94,10 +90,10 @@ class Account(BaseModel):
     balance: Decimal
     created_at: datetime
     last_updated: datetime
-    # Holdings: list of active bet holdings (includes shares, selection, event info)
+    # Holdings: aggregated positions (shares aggregated by event_id + selection + bet_type + spread_value/total_value)
     holdings: List[Holding] = Field(
         default_factory=list,
-        description="Current holdings: list of Holding objects with shares and bet details",
+        description="Current holdings: aggregated positions showing total shares for each unique position (event_id + selection + bet_type + spread_value/total_value). Multiple bets on the same position are combined into a single holding.",
     )
 
 
@@ -279,7 +275,6 @@ class Bet(BaseModel):
 @dataclass
 class BetExecutedPayload:
     bet_id: str
-    agent_id: str
     event_id: str
     selection: str
     amount: str
@@ -291,7 +286,6 @@ class BetExecutedPayload:
 @dataclass
 class BetSettledPayload:
     bet_id: str
-    agent_id: str
     event_id: str
     outcome: BetOutcome  # Store the enum directly
     payout: str
