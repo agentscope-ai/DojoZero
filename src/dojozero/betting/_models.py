@@ -354,15 +354,25 @@ class AgentResponseMessage(BaseModel):
     trigger: str = Field(default="", description="Event that triggered this response")
     game_id: str = Field(default="", description="Game identifier")
     # Optional bet fields - only included in tracing when a bet is placed
-    bet_type: Optional[str] = Field(default=None, description="Type of bet")
-    bet_amount: Optional[str] = Field(default=None, description="Bet amount as string")
-    bet_selection: Optional[str] = Field(
-        default=None, description="Selection: 'home' or 'away'"
+    bet_type: Optional[Literal["MONEYLINE", "SPREAD", "TOTAL"]] = Field(
+        default=None, description="Type of bet"
     )
-    bet_order_type: Optional[str] = Field(
+    bet_amount: Optional[float] = Field(default=None, description="Bet amount")
+    bet_selection: Optional[Literal["home", "away", "over", "under"]] = Field(
+        default=None, description="Selection: 'home', 'away', 'over', or 'under'"
+    )
+    bet_order_type: Optional[Literal["MARKET", "LIMIT"]] = Field(
         default=None, description="Order type: 'MARKET' or 'LIMIT'"
     )
-    bet_phase: Optional[str] = Field(default=None, description="Betting phase")
+    bet_phase: Optional[Literal["PRE_GAME", "IN_GAME"]] = Field(
+        default=None, description="Betting phase"
+    )
+    bet_spread_value: Optional[float] = Field(
+        default=None, description="Spread value for SPREAD bets"
+    )
+    bet_total_value: Optional[float] = Field(
+        default=None, description="Total value for TOTAL (over/under) bets"
+    )
 
 
 class AgentBetMessage(BaseModel):
@@ -372,11 +382,25 @@ class AgentBetMessage(BaseModel):
     stream_id: str = Field(default="", description="Stream identifier")
     name: str = Field(default="", description="Agent name")
     game_id: str = Field(default="", description="Game identifier")
-    bet_type: str = Field(default="MONEYLINE", description="Type of bet")
-    bet_amount: str = Field(default="", description="Bet amount")
-    bet_selection: str = Field(default="", description="Selection")
-    bet_order_type: str = Field(default="MARKET", description="Order type")
-    bet_phase: str = Field(default="PRE_GAME", description="Betting phase")
+    bet_type: Literal["MONEYLINE", "SPREAD", "TOTAL"] = Field(
+        default="MONEYLINE", description="Type of bet"
+    )
+    bet_amount: float = Field(default=0.0, description="Bet amount")
+    bet_selection: Literal["home", "away", "over", "under"] = Field(
+        default="home", description="Selection"
+    )
+    bet_order_type: Literal["MARKET", "LIMIT"] = Field(
+        default="MARKET", description="Order type"
+    )
+    bet_phase: Literal["PRE_GAME", "IN_GAME"] = Field(
+        default="PRE_GAME", description="Betting phase"
+    )
+    bet_spread_value: Optional[float] = Field(
+        default=None, description="Spread value for SPREAD bets"
+    )
+    bet_total_value: Optional[float] = Field(
+        default=None, description="Total value for TOTAL (over/under) bets"
+    )
 
 
 __all__ = [

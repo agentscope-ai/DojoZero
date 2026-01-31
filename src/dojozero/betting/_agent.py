@@ -200,8 +200,13 @@ def _parse_cot_steps(messages: list[dict]) -> list[CoTStep]:
     return steps
 
 
-def _extract_bet_from_tool_calls(messages: list[dict]) -> dict[str, str] | None:
-    """Detect place_bet_moneyline calls and extract bet info.
+def _extract_bet_from_tool_calls(messages: list[dict]) -> dict[str, Any] | None:
+    """Detect place_bet_* calls and extract bet info.
+
+    Supports three bet types:
+    - place_bet_moneyline: MONEYLINE bet (home/away selection)
+    - place_bet_spread: SPREAD bet (home/away selection with spread_value)
+    - place_bet_total: TOTAL bet (over/under selection with total_value)
 
     Args:
         messages: List of new messages from this turn
@@ -209,6 +214,13 @@ def _extract_bet_from_tool_calls(messages: list[dict]) -> dict[str, str] | None:
     Returns:
         Dict with bet fields if bet placed, None otherwise
     """
+    # Mapping of tool names to bet types
+    bet_tool_mapping = {
+        "place_bet_moneyline": "MONEYLINE",
+        "place_bet_spread": "SPREAD",
+        "place_bet_total": "TOTAL",
+    }
+
     for msg in messages:
         content = msg.get("content", [])
         if not isinstance(content, list):
@@ -222,21 +234,39 @@ def _extract_bet_from_tool_calls(messages: list[dict]) -> dict[str, str] | None:
                 continue
 
             tool_name = item.get("name", "")
-            if tool_name != "place_bet_moneyline":
+            if tool_name not in bet_tool_mapping:
                 continue
 
             tool_input = item.get("input", {})
             if not isinstance(tool_input, dict):
                 continue
 
-            # Extract bet details
-            return {
-                "bet_type": "MONEYLINE",
-                "bet_amount": str(tool_input.get("amount", "")),
-                "bet_selection": str(tool_input.get("selection", "")),
-                "bet_order_type": str(tool_input.get("order_type", "MARKET")),
-                "bet_phase": str(tool_input.get("betting_phase", "PRE_GAME")),
+            # Extract common bet details
+            amount = tool_input.get("amount", 0)
+            bet_type = bet_tool_mapping[tool_name]
+
+            result: dict[str, Any] = {
+                "bet_type": bet_type,
+                "bet_amount": float(amount) if amount else 0.0,
+                "bet_selection": tool_input.get("selection", "home"),
+                "bet_order_type": tool_input.get("order_type", "MARKET"),
+                "bet_phase": tool_input.get("betting_phase", "PRE_GAME"),
             }
+
+            # Add type-specific fields
+            if bet_type == "SPREAD":
+                spread_value = tool_input.get("spread_value")
+                if spread_value is not None:
+                    result["bet_spread_value"] = float(spread_value)
+            elif bet_type == "TOTAL":
+                total_value = tool_input.get("total_value")
+                if total_value is not None:
+                    result["bet_total_value"] = float(total_value)
+                # Default selection for total bets
+                if "selection" not in tool_input:
+                    result["bet_selection"] = "over"
+
+            return result
 
     return None
 
@@ -692,11 +722,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 trigger=trigger,
                 game_id=game_id,
                 # Bet fields - None if no bet, otherwise populated from bet dict
-                bet_type=bet["bet_type"] if bet else None,
-                bet_amount=bet["bet_amount"] if bet else None,
-                bet_selection=bet["bet_selection"] if bet else None,
-                bet_order_type=bet["bet_order_type"] if bet else None,
-                bet_phase=bet["bet_phase"] if bet else None,
+                **(bet or {}),
             )
             self._emit_response_span(response_message)
 
@@ -707,11 +733,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                     stream_id=primary_stream_id,
                     name=self.name,
                     game_id=game_id,
-                    bet_type=bet["bet_type"],
-                    bet_amount=bet["bet_amount"],
-                    bet_selection=bet["bet_selection"],
-                    bet_order_type=bet["bet_order_type"],
-                    bet_phase=bet["bet_phase"],
+                    **bet,
                 )
                 self._emit_bet_message(bet_message)
 
