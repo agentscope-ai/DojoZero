@@ -11,7 +11,8 @@ def format_bet_executed(payload: BetExecutedPayload) -> str:
         f"- Event: {payload.event_id}\n"
         f"- Selection: {payload.selection}\n"
         f"- Amount: ${payload.amount}\n"
-        f"- Odds: {payload.execution_odds}\n"
+        f"- Probability: {payload.execution_probability}\n"
+        f"- Shares: {payload.shares}\n"
         f"- Time: {payload.execution_time}"
     )
 

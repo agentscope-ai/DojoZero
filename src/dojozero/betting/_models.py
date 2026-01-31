@@ -364,8 +364,8 @@ class AgentResponseMessage(BaseModel):
     bet_order_type: Optional[Literal["MARKET", "LIMIT"]] = Field(
         default=None, description="Order type: 'MARKET' or 'LIMIT'"
     )
-    bet_phase: Optional[Literal["PRE_GAME", "IN_GAME"]] = Field(
-        default=None, description="Betting phase"
+    bet_limit_probability: Optional[float] = Field(
+        default=None, description="Limit probability for LIMIT orders (0-1)"
     )
     bet_spread_value: Optional[float] = Field(
         default=None, description="Spread value for SPREAD bets"
@@ -392,8 +392,8 @@ class AgentBetMessage(BaseModel):
     bet_order_type: Literal["MARKET", "LIMIT"] = Field(
         default="MARKET", description="Order type"
     )
-    bet_phase: Literal["PRE_GAME", "IN_GAME"] = Field(
-        default="PRE_GAME", description="Betting phase"
+    bet_limit_probability: Optional[float] = Field(
+        default=None, description="Limit probability for LIMIT orders (0-1)"
     )
     bet_spread_value: Optional[float] = Field(
         default=None, description="Spread value for SPREAD bets"

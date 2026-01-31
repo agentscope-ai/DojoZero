@@ -201,12 +201,12 @@ def _parse_cot_steps(messages: list[dict]) -> list[CoTStep]:
 
 
 def _extract_bet_from_tool_calls(messages: list[dict]) -> dict[str, Any] | None:
-    """Detect place_bet_* calls and extract bet info.
+    """Detect place_*_bet_* tool calls and extract bet info.
 
-    Supports three bet types:
-    - place_bet_moneyline: MONEYLINE bet (home/away selection)
-    - place_bet_spread: SPREAD bet (home/away selection with spread_value)
-    - place_bet_total: TOTAL bet (over/under selection with total_value)
+    Supports six tool variants (market and limit for each bet type):
+    - place_market_bet_moneyline / place_limit_bet_moneyline: MONEYLINE bet
+    - place_market_bet_spread / place_limit_bet_spread: SPREAD bet
+    - place_market_bet_total / place_limit_bet_total: TOTAL bet
 
     Args:
         messages: List of new messages from this turn
@@ -214,11 +214,14 @@ def _extract_bet_from_tool_calls(messages: list[dict]) -> dict[str, Any] | None:
     Returns:
         Dict with bet fields if bet placed, None otherwise
     """
-    # Mapping of tool names to bet types
-    bet_tool_mapping = {
-        "place_bet_moneyline": "MONEYLINE",
-        "place_bet_spread": "SPREAD",
-        "place_bet_total": "TOTAL",
+    # Mapping of tool names to (bet_type, order_type)
+    bet_tool_mapping: dict[str, tuple[str, str]] = {
+        "place_market_bet_moneyline": ("MONEYLINE", "MARKET"),
+        "place_limit_bet_moneyline": ("MONEYLINE", "LIMIT"),
+        "place_market_bet_spread": ("SPREAD", "MARKET"),
+        "place_limit_bet_spread": ("SPREAD", "LIMIT"),
+        "place_market_bet_total": ("TOTAL", "MARKET"),
+        "place_limit_bet_total": ("TOTAL", "LIMIT"),
     }
 
     for msg in messages:
@@ -241,17 +244,22 @@ def _extract_bet_from_tool_calls(messages: list[dict]) -> dict[str, Any] | None:
             if not isinstance(tool_input, dict):
                 continue
 
-            # Extract common bet details
+            # Extract bet type and order type from tool name
+            bet_type, order_type = bet_tool_mapping[tool_name]
             amount = tool_input.get("amount", 0)
-            bet_type = bet_tool_mapping[tool_name]
 
             result: dict[str, Any] = {
                 "bet_type": bet_type,
                 "bet_amount": float(amount) if amount else 0.0,
                 "bet_selection": tool_input.get("selection", "home"),
-                "bet_order_type": tool_input.get("order_type", "MARKET"),
-                "bet_phase": tool_input.get("betting_phase", "PRE_GAME"),
+                "bet_order_type": order_type,
             }
+
+            # Add limit_probability for LIMIT orders
+            if order_type == "LIMIT":
+                limit_prob = tool_input.get("limit_probability")
+                if limit_prob is not None:
+                    result["bet_limit_probability"] = float(limit_prob)
 
             # Add type-specific fields
             if bet_type == "SPREAD":
@@ -569,6 +577,10 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         """
         # Build tags from message, excluding None values (e.g., empty bet fields)
         tags = message.model_dump(exclude_none=True)
+
+        # Serialize cot_steps to JSON string for proper display in tracing UI
+        if "cot_steps" in tags:
+            tags["cot_steps"] = json.dumps(tags["cot_steps"])
 
         span = create_span_from_event(
             trial_id=self.trial_id,
