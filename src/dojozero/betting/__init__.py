@@ -50,7 +50,6 @@ from dojozero.betting._models import (
     BetStatus,
     BetType,
     BettingEvent,
-    BettingPhase,
     EventStatus,
     OrderType,
     Statistics,
@@ -86,7 +85,6 @@ __all__ = [
     # Enums
     "EventStatus",
     "OrderType",
-    "BettingPhase",
     "BetStatus",
     "BetOutcome",
     "BetType",

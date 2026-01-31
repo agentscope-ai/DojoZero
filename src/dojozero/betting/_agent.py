@@ -236,7 +236,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                                 f" -> {bet.outcome.value}" if bet.outcome else ""
                             )
                             summaries.append(
-                                f"{bet.selection}: {bet.amount} @ {bet.odds}{outcome_str} [{bet.status.value}]"
+                                f"{bet.selection}: {bet.amount} @ probability {bet.probability} (shares: {bet.shares}){outcome_str} [{bet.status.value}]"
                             )
                         return "\n".join(summaries)
                 except Exception as e:

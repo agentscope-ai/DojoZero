@@ -32,8 +32,8 @@ from dojozero.betting._models import (
     BetStatus,
     BetType,
     BettingEvent,
-    BettingPhase,
     EventStatus,
+    Holding,
     OrderType,
     Statistics,
     VALID_STATUS_TRANSITIONS,
@@ -101,9 +101,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._accounts: Dict[str, Account] = {}
         self._agent_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-        # Event management
-        self._events: Dict[str, BettingEvent] = {}
-        self._event_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # Event management (single event)
+        self._event: Optional[BettingEvent] = None
+        self._event_lock: asyncio.Lock = asyncio.Lock()
 
         # Pending team info from GameUpdateEvent (waiting for OddsUpdateEvent)
         # Maps event_id -> {"home_team": str, "away_team": str, "game_time": datetime}
@@ -149,20 +149,20 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     async def start(self) -> None:
         """Protocol hook: called before traffic is routed"""
         logger.info(
-            "Operator '%s' starting (accounts=%d, events=%d, bets=%d)",
+            "Operator '%s' starting (accounts=%d, event=%s, bets=%d)",
             self.actor_id,
             len(self._accounts),
-            len(self._events),
+            "present" if self._event else "none",
             len(self._bets),
         )
 
     async def stop(self) -> None:
         """Protocol hook: called during shutdown"""
         logger.info(
-            "Operator '%s' stopping - accounts=%d, events=%d, bets=%d",
+            "Operator '%s' stopping - accounts=%d, event=%s, bets=%d",
             self.actor_id,
             len(self._accounts),
-            len(self._events),
+            "present" if self._event else "none",
             len(self._bets),
         )
 
@@ -202,9 +202,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 logger.error("Event missing game_id: %s", data_event)
                 return
 
-            async with self._event_locks[
-                event_id
-            ]:  # avoid multiple streamEvent change the same event
+            async with (
+                self._event_lock
+            ):  # avoid multiple streamEvent change the same event
                 # Log every incoming event
                 event_type_str = getattr(data_event, "event_type", "unknown")
                 logger.info(
@@ -254,9 +254,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             )
             return
 
-        if event_id in self._events:
+        if self._event is not None:
             # Event already exists - update team info if needed
-            broker_event = self._events[event_id]
+            broker_event = self._event
             broker_event.home_team = home_team_str
             broker_event.away_team = away_team_str
             broker_event.game_time = game_time_dt
@@ -268,9 +268,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 game_time_dt,
             )
         else:
-            # Initialize new event without odds (will be filled in when OddsUpdateEvent arrives)
+            # Initialize new event without probabilities (will be filled in when OddsUpdateEvent arrives)
             logger.info(
-                "Initializing event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s (odds pending)",
+                "Initializing event from GameInitializeEvent: event_id=%s, home_team=%s, away_team=%s, game_time=%s (probabilities pending)",
                 event_id,
                 home_team_str,
                 away_team_str,
@@ -281,8 +281,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 home_team=home_team_str,
                 away_team=away_team_str,
                 game_time=game_time_dt,
-                initial_home_odds=None,
-                initial_away_odds=None,
             )
 
             # Apply any pending status events that arrived before this GameInitializeEvent
@@ -302,12 +300,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         pending_odds = self._pending_odds.pop(event_id)
 
-        # Extract moneyline from the stored OddsInfo
-        home_odds: Decimal | None = None
-        away_odds: Decimal | None = None
+        # Extract moneyline probabilities from the stored OddsInfo
+        home_probability: Decimal | None = None
+        away_probability: Decimal | None = None
         if pending_odds.moneyline:
-            home_odds = Decimal(str(pending_odds.moneyline.home_odds))
-            away_odds = Decimal(str(pending_odds.moneyline.away_odds))
+            home_probability = Decimal(str(pending_odds.moneyline.home_probability))
+            away_probability = Decimal(str(pending_odds.moneyline.away_probability))
 
         # Extract spreads
         spread_updates: list[dict[str, Any]] = []
@@ -315,8 +313,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             spread_updates.append(
                 {
                     "spread": sp.spread,
-                    "home_odds": sp.home_odds,
-                    "away_odds": sp.away_odds,
+                    "home_probability": Decimal(str(sp.home_probability)),
+                    "away_probability": Decimal(str(sp.away_probability)),
                 }
             )
 
@@ -326,23 +324,23 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             total_updates.append(
                 {
                     "total": t.total,
-                    "over_odds": t.over_odds,
-                    "under_odds": t.under_odds,
+                    "over_probability": Decimal(str(t.over_probability)),
+                    "under_probability": Decimal(str(t.under_probability)),
                 }
             )
 
         logger.info(
-            "Applying pending odds for event %s: home_odds=%s, away_odds=%s",
+            "Applying pending probabilities for event %s: home_probability=%s, away_probability=%s",
             event_id,
-            home_odds,
-            away_odds,
+            home_probability,
+            away_probability,
         )
 
         try:
-            await self._update_odds(
+            await self._update_probabilities(
                 event_id=event_id,
-                home_odds=home_odds,
-                away_odds=away_odds,
+                home_probability=home_probability,
+                away_probability=away_probability,
                 spread_updates=spread_updates,
                 total_updates=total_updates,
             )
@@ -411,12 +409,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """Handle odds update event. Supports moneyline, spreads, and totals."""
         odds_info = data_event.odds
 
-        # Extract moneyline decimal odds from structured OddsInfo
-        home_odds: float | None = None
-        away_odds: float | None = None
+        # Extract moneyline probabilities from structured OddsInfo
+        home_probability: float | None = None
+        away_probability: float | None = None
         if odds_info.moneyline:
-            home_odds = odds_info.moneyline.home_odds
-            away_odds = odds_info.moneyline.away_odds
+            home_probability = odds_info.moneyline.home_probability
+            away_probability = odds_info.moneyline.away_probability
 
         # Extract all spread lines from OddsInfo
         spread_updates: list[dict[str, Any]] = []
@@ -424,8 +422,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             spread_updates.append(
                 {
                     "spread": sp.spread,
-                    "home_odds": sp.home_odds,
-                    "away_odds": sp.away_odds,
+                    "home_probability": Decimal(str(sp.home_probability)),
+                    "away_probability": Decimal(str(sp.away_probability)),
                 }
             )
 
@@ -435,78 +433,85 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             total_updates.append(
                 {
                     "total": t.total,
-                    "over_odds": t.over_odds,
-                    "under_odds": t.under_odds,
+                    "over_probability": Decimal(str(t.over_probability)),
+                    "under_probability": Decimal(str(t.under_probability)),
                 }
             )
 
-        # Check if we have any odds to update
-        has_moneyline = home_odds is not None and away_odds is not None
+        # Check if we have any probabilities to update
+        has_moneyline = home_probability is not None and away_probability is not None
         has_spreads = len(spread_updates) > 0
         has_totals = len(total_updates) > 0
 
         if not (has_moneyline or has_spreads or has_totals):
             logger.debug(
-                "OddsUpdateEvent missing valid odds: event_id=%s",
+                "OddsUpdateEvent missing valid probabilities: event_id=%s",
                 event_id,
             )
             return
 
-        # Only process odds if we have team info (either from existing event or pending GameUpdateEvent)
-        if event_id in self._events:
-            # Event exists - update odds (supports partial updates)
+        # Only process probabilities if we have team info (either from existing event or pending GameUpdateEvent)
+        if self._event is not None:
+            # Event exists - update probabilities (supports partial updates)
             logger.info(
-                "Updating odds: event_id=%s, home_odds=%s, away_odds=%s, spreads=%d, totals=%d",
+                "Updating probabilities: event_id=%s, home_probability=%s, away_probability=%s, spreads=%d, totals=%d",
                 event_id,
-                home_odds,
-                away_odds,
+                home_probability,
+                away_probability,
                 len(spread_updates),
                 len(total_updates),
             )
-            await self._update_odds(
+            await self._update_probabilities(
                 event_id=event_id,
-                home_odds=Decimal(str(home_odds)) if home_odds else None,
-                away_odds=Decimal(str(away_odds)) if away_odds else None,
+                home_probability=Decimal(str(home_probability))
+                if home_probability
+                else None,
+                away_probability=Decimal(str(away_probability))
+                if away_probability
+                else None,
                 spread_updates=spread_updates,
                 total_updates=total_updates,
             )
         elif event_id in self._pending_team_info:
-            # We have team info from GameUpdateEvent - initialize event with odds
+            # We have team info from GameUpdateEvent - initialize event with probabilities
             team_info = self._pending_team_info[event_id]
             logger.info(
-                "Initializing event from OddsUpdateEvent (team info already available): event_id=%s, home_team=%s, away_team=%s, home_odds=%s, away_odds=%s, spreads=%d",
+                "Initializing event from OddsUpdateEvent (team info already available): event_id=%s, home_team=%s, away_team=%s, home_probability=%s, away_probability=%s, spreads=%d",
                 event_id,
                 team_info.get("home_team"),
                 team_info.get("away_team"),
-                home_odds,
-                away_odds,
+                home_probability,
+                away_probability,
                 len(spread_updates),
             )
-            # Initialize with moneyline odds (if available)
+            # Initialize event
             await self._initialize_event(
                 event_id=event_id,
                 home_team=team_info["home_team"],
                 away_team=team_info["away_team"],
                 game_time=team_info["game_time"],
-                initial_home_odds=Decimal(str(home_odds)) if home_odds else None,
-                initial_away_odds=Decimal(str(away_odds)) if away_odds else None,
             )
-            # Update spreads/totals if provided
-            if spread_updates or total_updates:
-                await self._update_odds(
-                    event_id=event_id,
-                    spread_updates=spread_updates,
-                    total_updates=total_updates,
-                )
+            # Update probabilities (moneyline, spreads, totals) if provided
+            await self._update_probabilities(
+                event_id=event_id,
+                home_probability=Decimal(str(home_probability))
+                if home_probability
+                else None,
+                away_probability=Decimal(str(away_probability))
+                if away_probability
+                else None,
+                spread_updates=spread_updates,
+                total_updates=total_updates,
+            )
             # Clear pending team info
             del self._pending_team_info[event_id]
         else:
             # No team info yet - store OddsInfo for later when event is initialized
             logger.info(
-                "Storing pending odds (waiting for event initialization): event_id=%s, home_odds=%s, away_odds=%s",
+                "Storing pending probabilities (waiting for event initialization): event_id=%s, home_probability=%s, away_probability=%s",
                 event_id,
-                home_odds,
-                away_odds,
+                home_probability,
+                away_probability,
             )
             self._pending_odds[event_id] = odds_info
 
@@ -563,9 +568,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         if not game_time_dt:
             game_time_dt = datetime.now()
 
-        if event_id in self._events:
+        if self._event is not None:
             # Event exists - update team names and game_time
-            broker_event = self._events[event_id]
+            broker_event = self._event
             broker_event.home_team = home_team_str
             broker_event.away_team = away_team_str
             broker_event.game_time = game_time_dt
@@ -599,7 +604,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         If the event is registered, update its status to LIVE.
         If not registered, buffer the event to apply when GameInitializeEvent arrives.
         """
-        if event_id not in self._events:
+        if self._event is None:
             logger.info(
                 "Buffering game_start for event %s (GameInitializeEvent not yet received)",
                 event_id,
@@ -617,7 +622,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         If the event is registered, close it and settle bets.
         If not registered, buffer the event to apply when GameInitializeEvent arrives.
         """
-        if event_id not in self._events:
+        if self._event is None:
             logger.info(
                 "Buffering game_result for event %s (GameInitializeEvent not yet received)",
                 event_id,
@@ -638,105 +643,83 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         home_team: str,
         away_team: str,
         game_time: datetime,
-        initial_home_odds: Optional[Decimal] = None,
-        initial_away_odds: Optional[Decimal] = None,
     ) -> BettingEvent:
         """Initialize a new betting event.
 
         This is an internal method. Events are initialized via GameInitializeEvent
-        through handle_stream_event.
+        through handle_stream_event. Probabilities are set separately via _update_probabilities.
 
         Args:
             event_id: Unique event identifier
             home_team: Home team name
             away_team: Away team name
             game_time: Scheduled game time
-            initial_home_odds: Optional initial home odds (can be None if not yet available)
-            initial_away_odds: Optional initial away odds (can be None if not yet available)
         """
 
-        if event_id in self._events:
+        if self._event is not None:
             raise ValueError(f"Event {event_id} already exists")
 
-        # Validate odds if provided
-        if initial_home_odds is not None and initial_home_odds <= 1.0:
-            raise ValueError("Odds must be greater than 1.0")
-        if initial_away_odds is not None and initial_away_odds <= 1.0:
-            raise ValueError("Odds must be greater than 1.0")
-
-        now = datetime.now()
         betting_event = BettingEvent(
             event_id=event_id,
             home_team=home_team,
             away_team=away_team,
             game_time=game_time,
             status=EventStatus.SCHEDULED,
-            home_odds=initial_home_odds,
-            away_odds=initial_away_odds,
-            last_odds_update=now if (initial_home_odds and initial_away_odds) else None,
+            home_probability=None,
+            away_probability=None,
+            last_odds_update=None,
         )
 
-        self._events[event_id] = betting_event
-        if initial_home_odds and initial_away_odds:
-            logger.info(
-                "Created event %s: %s vs %s (Odds: %s/%s)",
-                event_id,
-                home_team,
-                away_team,
-                initial_home_odds,
-                initial_away_odds,
-            )
-        else:
-            logger.info(
-                "Created event %s: %s vs %s (Odds: pending)",
-                event_id,
-                home_team,
-                away_team,
-            )
+        self._event = betting_event
+        logger.info(
+            "Created event %s: %s vs %s (Probabilities: pending)",
+            event_id,
+            home_team,
+            away_team,
+        )
         return betting_event
 
-    async def _update_odds(
+    async def _update_probabilities(
         self,
         event_id: str,
-        home_odds: Optional[Decimal] = None,
-        away_odds: Optional[Decimal] = None,
+        home_probability: Optional[Decimal] = None,
+        away_probability: Optional[Decimal] = None,
         spread_updates: Optional[List[Dict[str, Any]]] = None,
         total_updates: Optional[List[Dict[str, Any]]] = None,
     ) -> BettingEvent:
-        """Update odds for an event and execute matching limit orders.
+        """Update probabilities for an event and execute matching limit orders.
 
-        This is an internal method. Odds are updated via OddsUpdateEvent
+        This is an internal method. Probabilities are updated via OddsUpdateEvent
         through handle_stream_event.
 
-        Supports partial updates - only provided odds are updated.
-        Backward compatible: existing calls with just home_odds/away_odds still work.
+        Supports partial updates - only provided probabilities are updated.
 
         Args:
             event_id: Event identifier
-            home_odds: Optional moneyline home odds
-            away_odds: Optional moneyline away odds
-            spread_updates: Optional list of spread updates [{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}, ...]
-            total_updates: Optional list of total updates [{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}, ...]
+            home_probability: Optional moneyline home probability (0-1)
+            away_probability: Optional moneyline away probability (0-1)
+            spread_updates: Optional list of spread updates [{"spread": -3.5, "home_probability": 0.526, "away_probability": 0.474}, ...]
+            total_updates: Optional list of total updates [{"total": 220.5, "over_probability": 0.532, "under_probability": 0.468}, ...]
         """
-        if event_id not in self._events:
+        if self._event is None:
             raise ValueError(f"Event {event_id} not found")
 
-        betting_event = self._events[event_id]
+        betting_event = self._event
 
         if betting_event.status not in [EventStatus.SCHEDULED, EventStatus.LIVE]:
             raise ValueError(
-                f"Cannot update odds for {betting_event.status.value} event"
+                f"Cannot update probabilities for {betting_event.status.value} event"
             )
 
-        # Update moneyline odds (if provided)
-        if home_odds is not None:
-            if home_odds <= 1.0:
-                raise ValueError("Odds must be greater than 1.0")
-            betting_event.home_odds = home_odds
-        if away_odds is not None:
-            if away_odds <= 1.0:
-                raise ValueError("Odds must be greater than 1.0")
-            betting_event.away_odds = away_odds
+        # Update moneyline probabilities (if provided)
+        if home_probability is not None:
+            if home_probability < 0 or home_probability > 1:
+                raise ValueError("Probability must be between 0 and 1")
+            betting_event.home_probability = home_probability
+        if away_probability is not None:
+            if away_probability < 0 or away_probability > 1:
+                raise ValueError("Probability must be between 0 and 1")
+            betting_event.away_probability = away_probability
 
         # Update spread lines (if provided)
         if spread_updates:
@@ -746,22 +729,27 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             for update in spread_updates:
                 spread_value = Decimal(str(update["spread"]))
-                home_spread_odds = Decimal(str(update["home_odds"]))
-                away_spread_odds = Decimal(str(update["away_odds"]))
+                home_spread_probability = Decimal(str(update["home_probability"]))
+                away_spread_probability = Decimal(str(update["away_probability"]))
 
-                if home_spread_odds <= 1.0 or away_spread_odds <= 1.0:
-                    raise ValueError("Odds must be greater than 1.0")
+                if (
+                    home_spread_probability < 0
+                    or home_spread_probability > 1
+                    or away_spread_probability < 0
+                    or away_spread_probability > 1
+                ):
+                    raise ValueError("Probability must be between 0 and 1")
 
                 betting_event.spread_lines[spread_value] = {
-                    "home_odds": home_spread_odds,
-                    "away_odds": away_spread_odds,
+                    "home_probability": home_spread_probability,
+                    "away_probability": away_spread_probability,
                 }
                 logger.debug(
-                    "Updated spread line: event_id=%s, spread=%s, home_odds=%s, away_odds=%s",
+                    "Updated spread line: event_id=%s, spread=%s, home_probability=%s, away_probability=%s",
                     event_id,
                     spread_value,
-                    home_spread_odds,
-                    away_spread_odds,
+                    home_spread_probability,
+                    away_spread_probability,
                 )
 
         # Update total lines (if provided)
@@ -772,31 +760,36 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             for update in total_updates:
                 total_value = Decimal(str(update["total"]))
-                over_odds = Decimal(str(update["over_odds"]))
-                under_odds = Decimal(str(update["under_odds"]))
+                over_probability = Decimal(str(update["over_probability"]))
+                under_probability = Decimal(str(update["under_probability"]))
 
-                if over_odds <= 1.0 or under_odds <= 1.0:
-                    raise ValueError("Odds must be greater than 1.0")
+                if (
+                    over_probability < 0
+                    or over_probability > 1
+                    or under_probability < 0
+                    or under_probability > 1
+                ):
+                    raise ValueError("Probability must be between 0 and 1")
 
                 betting_event.total_lines[total_value] = {
-                    "over_odds": over_odds,
-                    "under_odds": under_odds,
+                    "over_probability": over_probability,
+                    "under_probability": under_probability,
                 }
                 logger.debug(
-                    "Updated total line: event_id=%s, total=%s, over_odds=%s, under_odds=%s",
+                    "Updated total line: event_id=%s, total=%s, over_probability=%s, under_probability=%s",
                     event_id,
                     total_value,
-                    over_odds,
-                    under_odds,
+                    over_probability,
+                    under_probability,
                 )
 
         betting_event.last_odds_update = datetime.now()
 
         logger.info(
-            "Updated odds for event %s: home=%s, away=%s, spreads=%d, totals=%d (status=%s)",
+            "Updated probabilities for event %s: home=%s, away=%s, spreads=%d, totals=%d (status=%s)",
             event_id,
-            home_odds,
-            away_odds,
+            home_probability,
+            away_probability,
             len(spread_updates) if spread_updates else 0,
             len(total_updates) if total_updates else 0,
             betting_event.status.value,
@@ -810,10 +803,14 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     async def _check_limit_orders(self, event_id: str) -> None:
         """Check and execute matching limit orders for all bet types.
 
-        Backward compatible: Only checks moneyline if spreads/totals not available.
+        Limit orders execute when current probability >= limit_probability.
+        For probabilities, higher is better (you want to buy at lower probability, sell at higher).
+        But since we're buying shares, we execute when probability >= limit (you're willing to pay up to limit_probability per share).
         """
         pending_bet_ids = list(self._event_pending_orders.get(event_id, set()))
-        betting_event = self._events[event_id]
+        betting_event = self._event
+        if betting_event is None:
+            return
 
         for bet_id in pending_bet_ids:
             bet = self._bets[bet_id]
@@ -821,28 +818,35 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 continue
 
             should_execute = False
-            execution_odds = Decimal(0)
+            execution_probability = Decimal(0)
 
             # Default to moneyline if bet_type not set (backward compatibility)
             bet_type = getattr(bet, "bet_type", BetType.MONEYLINE)
 
             if bet_type == BetType.MONEYLINE:
-                # Moneyline limit orders (existing behavior)
-                if bet.limit_odds is None:
-                    continue  # Skip if no limit odds set
-                if betting_event.home_odds is not None and bet.selection == "home":
-                    if betting_event.home_odds >= bet.limit_odds:
+                # Moneyline limit orders
+                if bet.limit_probability is None:
+                    continue  # Skip if no limit probability set
+                if (
+                    betting_event.home_probability is not None
+                    and bet.selection == "home"
+                ):
+                    # Execute if current probability >= limit (you're willing to pay up to limit_probability)
+                    if betting_event.home_probability >= bet.limit_probability:
                         should_execute = True
-                        execution_odds = betting_event.home_odds
-                elif betting_event.away_odds is not None and bet.selection == "away":
-                    if betting_event.away_odds >= bet.limit_odds:
+                        execution_probability = betting_event.home_probability
+                elif (
+                    betting_event.away_probability is not None
+                    and bet.selection == "away"
+                ):
+                    if betting_event.away_probability >= bet.limit_probability:
                         should_execute = True
-                        execution_odds = betting_event.away_odds
+                        execution_probability = betting_event.away_probability
 
             elif bet_type == BetType.SPREAD:
                 # Spread limit orders
-                if bet.limit_odds is None:
-                    continue  # Skip if no limit odds set
+                if bet.limit_probability is None:
+                    continue  # Skip if no limit probability set
                 spread_value = getattr(bet, "spread_value", None)
                 # Protection: ensure spread_lines is not None
                 if (
@@ -852,18 +856,18 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 ):
                     spread_line = betting_event.spread_lines[spread_value]
                     if bet.selection == "home":
-                        if spread_line["home_odds"] >= bet.limit_odds:
+                        if spread_line["home_probability"] >= bet.limit_probability:
                             should_execute = True
-                            execution_odds = spread_line["home_odds"]
+                            execution_probability = spread_line["home_probability"]
                     elif bet.selection == "away":
-                        if spread_line["away_odds"] >= bet.limit_odds:
+                        if spread_line["away_probability"] >= bet.limit_probability:
                             should_execute = True
-                            execution_odds = spread_line["away_odds"]
+                            execution_probability = spread_line["away_probability"]
 
             elif bet_type == BetType.TOTAL:
                 # Total limit orders
-                if bet.limit_odds is None:
-                    continue  # Skip if no limit odds set
+                if bet.limit_probability is None:
+                    continue  # Skip if no limit probability set
                 total_value = getattr(bet, "total_value", None)
                 # Protection: ensure total_lines is not None
                 if (
@@ -873,16 +877,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 ):
                     total_line = betting_event.total_lines[total_value]
                     if bet.selection == "over":
-                        if total_line["over_odds"] >= bet.limit_odds:
+                        if total_line["over_probability"] >= bet.limit_probability:
                             should_execute = True
-                            execution_odds = total_line["over_odds"]
+                            execution_probability = total_line["over_probability"]
                     elif bet.selection == "under":
-                        if total_line["under_odds"] >= bet.limit_odds:
+                        if total_line["under_probability"] >= bet.limit_probability:
                             should_execute = True
-                            execution_odds = total_line["under_odds"]
+                            execution_probability = total_line["under_probability"]
 
             if should_execute:
-                await self._match_bet(bet, execution_odds)
+                await self._match_bet(bet, execution_probability)
 
     async def _update_event_status(self, event_id: str, status: EventStatus) -> None:
         """Update event status and perform status-specific actions.
@@ -890,10 +894,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         This is an internal method. Use GameStartEvent/GameResultEvent handlers
         for proper event lifecycle management.
         """
-        if event_id not in self._events:
+        if self._event is None:
             raise ValueError(f"Event {event_id} not found")
 
-        betting_event = self._events[event_id]
+        betting_event = self._event
 
         # No-op if already in target status (important for checkpoint resume)
         if betting_event.status == status:
@@ -921,9 +925,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         betting_event.status = status
 
         if status == EventStatus.LIVE:
-            # Game started - reject pre-game bets and cancel unfilled pre-game orders
-            betting_event.betting_closed_at = datetime.now()
-            await self._cancel_pregame_orders(event_id)
+            # Game started - betting continues, pending orders remain active
+            # No action needed - limit orders can still execute during live gameplay
+            pass
 
         elif status == EventStatus.CLOSED:
             # Game ended - reject all bets and cancel all pending orders
@@ -937,10 +941,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         This is an internal method called by _handle_game_result.
         """
-        if event_id not in self._events:
+        if self._event is None:
             raise ValueError(f"Event {event_id} not found")
 
-        betting_event = self._events[event_id]
+        betting_event = self._event
 
         if betting_event.status != EventStatus.CLOSED:
             raise ValueError(
@@ -988,7 +992,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     ) -> None:
         """Settle a single bet. Supports moneyline, spread, and total betting.
 
-        Backward compatible: Defaults to moneyline settlement if bet_type not set.
+        Polymarket settlement model:
+        - If win: payout = shares * 1.0 (each share pays $1)
+        - If lose: payout = 0
+        - Net profit = payout - amount_wagered
         """
         async with self._agent_locks[bet.agent_id]:
             # Determine bet type (default to moneyline for backward compatibility)
@@ -996,7 +1003,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             is_win = False
 
             if bet_type == BetType.MONEYLINE:
-                # Moneyline settlement (existing behavior - backward compatible)
+                # Moneyline settlement
                 is_win = bet.selection == winner
 
             elif bet_type == BetType.SPREAD:
@@ -1038,14 +1045,31 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             outcome = BetOutcome.WIN if is_win else BetOutcome.LOSS
 
-            # Calculate payout
+            # Calculate payout using Polymarket model: $1 per share if win, $0 if lose
             payout = Decimal(0)
             if is_win:
-                payout = bet.amount * bet.odds
+                payout = bet.shares * Decimal("1.0")  # Each share pays $1
                 # Credit account
                 account = self._accounts[bet.agent_id]
                 account.balance += payout
                 account.last_updated = datetime.now()
+
+            # Subtract shares from holdings (shares are settled)
+            account = self._accounts[bet.agent_id]
+            # Find the holding for this position and subtract shares
+            for h in account.holdings:
+                if (
+                    h.event_id == bet.event_id
+                    and h.selection == bet.selection
+                    and h.bet_type == bet.bet_type
+                    and h.spread_value == bet.spread_value
+                    and h.total_value == bet.total_value
+                ):
+                    h.shares -= bet.shares
+                    # Remove holding if shares go to zero or negative
+                    if h.shares <= 0:
+                        account.holdings.remove(h)
+                    break
 
             # Update bet record
             bet.status = BetStatus.SETTLED
@@ -1060,11 +1084,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             # Log settlement
             logger.info(
-                "Bet %s settled - Agent %s: %s (%s), Payout: %s",
+                "Bet %s settled - Agent %s: %s (%s), Shares: %s, Payout: %s",
                 bet.bet_id,
                 bet.agent_id,
                 outcome.value,
                 bet_type.value,
+                bet.shares,
                 payout,
             )
 
@@ -1073,7 +1098,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 stream_id=f"settlement_{bet.bet_id}",
                 payload=BetSettledPayload(
                     bet_id=bet.bet_id,
-                    agent_id=bet.agent_id,
                     event_id=bet.event_id,
                     outcome=outcome,
                     payout=str(payout),
@@ -1085,22 +1109,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             # Log state change
             await self._log_accounts_and_bets_status("bet_settled")
-
-    async def _cancel_pregame_orders(self, event_id: str) -> None:
-        """Cancel all unfilled pre-game orders for an event"""
-        pending_bet_ids = list(self._event_pending_orders.get(event_id, set()))
-
-        cancelled_count = 0
-        for bet_id in pending_bet_ids:
-            bet = self._bets[bet_id]
-            if bet.betting_phase == BettingPhase.PRE_GAME:
-                await self._cancel_pending_order(bet)
-                cancelled_count += 1
-
-        if cancelled_count > 0:
-            logger.info(
-                "Cancelled %d pre-game orders for event %s", cancelled_count, event_id
-            )
 
     async def _cancel_all_pending_orders(self, event_id: str) -> None:
         """Cancel all pending orders for an event"""
@@ -1274,26 +1282,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             async with self._agent_locks[agent_id]:
                 # Check event exists
-                if bet_request.event_id not in self._events:
+                if self._event is None:
                     raise ValueError(f"Event {bet_request.event_id} not found")
 
-                betting_event = self._events[bet_request.event_id]
+                betting_event = self._event
 
                 # Check event is accepting bets
-                if betting_event.status == EventStatus.CLOSED:
-                    raise ValueError("Event is closed for betting")
-                if betting_event.status == EventStatus.SETTLED:
-                    raise ValueError("Event has been settled")
-
-                # Validate betting phase matches event status
-                if bet_request.betting_phase == BettingPhase.PRE_GAME:
-                    if betting_event.status != EventStatus.SCHEDULED:
-                        raise ValueError(
-                            "Pre-game betting only allowed for scheduled events"
-                        )
-                elif bet_request.betting_phase == BettingPhase.IN_GAME:
-                    if betting_event.status != EventStatus.LIVE:
-                        raise ValueError("In-game betting only allowed for live events")
+                if not betting_event.can_bet:
+                    raise ValueError(
+                        f"Event is not accepting bets (status: {betting_event.status.value})"
+                    )
 
                 # Check account exists and has sufficient balance
                 if agent_id not in self._accounts:
@@ -1306,25 +1304,25 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                         f"available {account.balance}"
                     )
 
-                # Determine execution odds based on bet request type
-                execution_odds = None
+                # Determine execution probability based on bet request type
+                execution_probability = None
                 bet_type: BetType
 
                 if isinstance(bet_request, BetRequestMoneyline):
                     # Moneyline betting
                     bet_type = BetType.MONEYLINE
                     if (
-                        betting_event.home_odds is None
-                        or betting_event.away_odds is None
+                        betting_event.home_probability is None
+                        or betting_event.away_probability is None
                     ):
                         raise ValueError(
-                            f"Moneyline odds not yet available for event {bet_request.event_id}. "
-                            "Please wait for odds to be updated."
+                            f"Moneyline probabilities not yet available for event {bet_request.event_id}. "
+                            "Please wait for probabilities to be updated."
                         )
                     if bet_request.selection == "home":
-                        execution_odds = betting_event.home_odds
+                        execution_probability = betting_event.home_probability
                     else:  # away
-                        execution_odds = betting_event.away_odds
+                        execution_probability = betting_event.away_probability
 
                 elif isinstance(bet_request, BetRequestSpread):
                     # Spread betting
@@ -1332,8 +1330,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     # Protection: ensure spread_lines is not None
                     if betting_event.spread_lines is None:
                         raise ValueError(
-                            f"Spread odds not yet available for event {bet_request.event_id}. "
-                            "Please wait for odds to be updated."
+                            f"Spread probabilities not yet available for event {bet_request.event_id}. "
+                            "Please wait for probabilities to be updated."
                         )
                     if bet_request.spread_value not in betting_event.spread_lines:
                         available_spreads = sorted(betting_event.spread_lines.keys())
@@ -1343,9 +1341,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                         )
                     spread_line = betting_event.spread_lines[bet_request.spread_value]
                     if bet_request.selection == "home":
-                        execution_odds = spread_line["home_odds"]
+                        execution_probability = spread_line["home_probability"]
                     else:  # away
-                        execution_odds = spread_line["away_odds"]
+                        execution_probability = spread_line["away_probability"]
 
                 elif isinstance(bet_request, BetRequestTotal):
                     # Total betting
@@ -1353,8 +1351,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     # Protection: ensure total_lines is not None
                     if betting_event.total_lines is None:
                         raise ValueError(
-                            f"Total odds not yet available for event {bet_request.event_id}. "
-                            "Please wait for odds to be updated."
+                            f"Total probabilities not yet available for event {bet_request.event_id}. "
+                            "Please wait for probabilities to be updated."
                         )
                     if bet_request.total_value not in betting_event.total_lines:
                         available_totals = sorted(betting_event.total_lines.keys())
@@ -1364,16 +1362,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                         )
                     total_line = betting_event.total_lines[bet_request.total_value]
                     if bet_request.selection == "over":
-                        execution_odds = total_line["over_odds"]
+                        execution_probability = total_line["over_probability"]
                     else:  # under
-                        execution_odds = total_line["under_odds"]
+                        execution_probability = total_line["under_probability"]
 
                 else:
                     raise ValueError(f"Unknown bet request type: {type(bet_request)}")
 
-                if execution_odds is None:
+                if execution_probability is None:
                     raise ValueError(
-                        f"Odds not available for {bet_type.value} bet on event {bet_request.event_id}"
+                        f"Probability not available for {bet_type.value} bet on event {bet_request.event_id}"
                     )
 
                 # Lock funds
@@ -1391,16 +1389,25 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     if isinstance(bet_request, BetRequestTotal)
                     else None
                 )
+
+                # Calculate shares: amount / probability (price per share)
+                # For market orders, use current probability; for limit orders, will be set on execution
+                shares = (
+                    bet_request.amount / execution_probability
+                    if bet_request.order_type == OrderType.MARKET
+                    else Decimal(0)
+                )
+
                 bet = Bet(
                     bet_id=str(uuid.uuid4()),
                     agent_id=agent_id,
                     event_id=bet_request.event_id,
                     amount=bet_request.amount,
                     selection=bet_request.selection,
-                    odds=execution_odds,  # Will be updated for limit orders
+                    probability=execution_probability,  # Will be updated for limit orders
+                    shares=shares,  # Will be updated for limit orders
                     order_type=bet_request.order_type,
-                    limit_odds=bet_request.limit_odds,
-                    betting_phase=bet_request.betting_phase,
+                    limit_probability=bet_request.limit_probability,
                     bet_type=bet_type,
                     spread_value=spread_value,
                     total_value=total_value,
@@ -1415,18 +1422,18 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 # Process based on order type
                 if bet_request.order_type == OrderType.MARKET:
                     # Execute immediately
-                    await self._match_bet(bet, execution_odds)
+                    await self._match_bet(bet, execution_probability)
                 else:
                     # Add to pending orders (order book)
                     self._pending_orders[agent_id].append(bet.bet_id)
                     self._event_pending_orders[bet_request.event_id].add(bet.bet_id)
                     logger.info(
-                        "Limit order placed - %s: %s $%s on %s @ %s+",
+                        "Limit order placed - %s: %s $%s on %s @ probability >= %s",
                         bet.bet_id,
                         agent_id,
                         bet_request.amount,
                         bet_request.selection,
-                        bet_request.limit_odds,
+                        bet_request.limit_probability,
                     )
 
                 # Log state change
@@ -1437,15 +1444,53 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             logger.error("Bet rejected for %s: %s", agent_id, e, exc_info=True)
             return "bet_invalid"
 
-    async def _match_bet(self, bet: Bet, execution_odds: Decimal) -> None:
-        """Execute a bet at specified odds (asynchronous notification).
+    async def _match_bet(self, bet: Bet, execution_probability: Decimal) -> None:
+        """Execute a bet at specified probability (asynchronous notification).
 
         This is an internal method called by update_odds and place_bet.
+        Calculates shares = amount / probability and updates account holdings.
         """
+        # Calculate shares: amount / probability (price per share)
+        shares = bet.amount / execution_probability
+
         # Update bet record
-        bet.odds = execution_odds
+        bet.probability = execution_probability
+        bet.shares = shares
         bet.execution_time = datetime.now()
         bet.status = BetStatus.ACTIVE
+
+        # Update account holdings - aggregate by position (event_id + selection + bet_type + spread_value/total_value)
+        account = self._accounts[bet.agent_id]
+
+        # Find existing holding for this position
+        existing_holding = None
+        for h in account.holdings:
+            if (
+                h.event_id == bet.event_id
+                and h.selection == bet.selection
+                and h.bet_type == bet.bet_type
+                and h.spread_value == bet.spread_value
+                and h.total_value == bet.total_value
+            ):
+                existing_holding = h
+                break
+
+        if existing_holding:
+            # Aggregate: add shares to existing holding
+            existing_holding.shares += shares
+        else:
+            # Create new holding for this position
+            account.holdings.append(
+                Holding(
+                    shares=shares,
+                    selection=bet.selection,
+                    event_id=bet.event_id,
+                    bet_type=bet.bet_type,
+                    spread_value=bet.spread_value,
+                    total_value=bet.total_value,
+                )
+            )
+        account.last_updated = datetime.now()
 
         # Move from pending to active
         if bet.bet_id in self._pending_orders[bet.agent_id]:
@@ -1457,12 +1502,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._event_active_bets[bet.event_id].add(bet.bet_id)
 
         logger.info(
-            "Bet %s executed - %s $%s on %s @ %s",
+            "Bet %s executed - %s $%s on %s @ probability %s (shares: %s)",
             bet.bet_id,
             bet.agent_id,
             bet.amount,
             bet.selection,
-            execution_odds,
+            execution_probability,
+            shares,
         )
 
         # Log state change
@@ -1473,11 +1519,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             stream_id=f"execution_{bet.bet_id}",
             payload=BetExecutedPayload(
                 bet_id=bet.bet_id,
-                agent_id=bet.agent_id,
                 event_id=bet.event_id,
                 selection=bet.selection,
                 amount=str(bet.amount),
-                execution_odds=str(execution_odds),
+                execution_probability=str(execution_probability),
+                shares=str(shares),
                 execution_time=bet.execution_time.isoformat(),
             ),
             emitted_at=datetime.now(),
@@ -1588,9 +1634,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         The broker handles one event at a time. Returns the event if it's SCHEDULED or LIVE,
         otherwise returns None.
         """
-        for event in self._events.values():
-            if event.status in [EventStatus.SCHEDULED, EventStatus.LIVE]:
-                return event
+        if self._event is not None and self._event.can_bet:
+            return self._event
         return None
 
     async def get_account(self, agent_id: str) -> Account:
@@ -1605,14 +1650,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
     async def save_state(self) -> Dict[str, Any]:
         """Export operator state for persistence"""
-        # Get all event and agent IDs
-        event_ids = list(self._events.keys())
+        # Get all agent IDs
         agent_ids = list(self._accounts.keys())
 
         # Acquire all locks in a consistent order to prevent deadlocks
-        all_locks = [
-            (f"event_{eid}", self._event_locks[eid]) for eid in sorted(event_ids)
-        ]
+        all_locks = []
+        if self._event is not None:
+            all_locks.append(("event", self._event_lock))
         all_locks += [
             (f"agent_{aid}", self._agent_locks[aid]) for aid in sorted(agent_ids)
         ]
@@ -1628,10 +1672,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     agent_id: account.model_dump(mode="json")
                     for agent_id, account in self._accounts.items()
                 },
-                "events": {
-                    event_id: event.model_dump(mode="json")
-                    for event_id, event in self._events.items()
-                },
+                "event": self._event.model_dump(mode="json")
+                if self._event is not None
+                else None,
                 "bets": {
                     bet_id: bet.model_dump(mode="json")
                     for bet_id, bet in self._bets.items()
@@ -1659,11 +1702,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             for agent_id, account_data in state["accounts"].items()
         }
 
-        # Load events
-        self._events = {
-            event_id: BettingEvent.model_validate(event_data)
-            for event_id, event_data in state["events"].items()
-        }
+        # Load event
+        if "event" in state and state["event"] is not None:
+            self._event = BettingEvent.model_validate(state["event"])
+        elif "events" in state and state["events"]:
+            # Backward compatibility: if old format with dict, take first event
+            event_data = next(iter(state["events"].values()))
+            self._event = BettingEvent.model_validate(event_data)
+        else:
+            self._event = None
 
         # Load bets
         self._bets = {
@@ -1721,6 +1768,26 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             return str(balance)
 
         @tool
+        async def get_holdings() -> str:
+            """Get your current holdings (aggregated positions from all active bets).
+
+            Holdings aggregate all bets for the same position (event_id + selection + bet_type + spread_value/total_value).
+
+            Returns:
+                JSON array of holding objects. Each holding represents an aggregated position and includes:
+                - shares: Total number of shares held for this position (aggregated across all bets)
+                - selection: "home", "away", "over", or "under"
+                - event_id: Event identifier
+                - bet_type: "MONEYLINE", "SPREAD", or "TOTAL"
+                - spread_value: Spread value (if SPREAD bet, null otherwise)
+                - total_value: Total value (if TOTAL bet, null otherwise)
+            """
+            account = await target.get_account(agent_id)
+            # Use Pydantic serialization for consistency
+            holdings_adapter = TypeAdapter(List[Holding])
+            return holdings_adapter.dump_json(account.holdings).decode()
+
+        @tool
         async def get_event() -> str:
             """Get current game information and all available betting options.
 
@@ -1736,27 +1803,29 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 - game_time: Scheduled game time (ISO format string)
                 - status: "SCHEDULED" (pre-game, can bet), "LIVE" (in-game, can bet), "CLOSED" (ended, cannot bet), or "SETTLED" (bets settled)
 
-                Moneyline betting (may be None if odds not set yet):
-                - home_odds: Decimal odds for home team as string (e.g., "1.85") or null
-                - away_odds: Decimal odds for away team as string (e.g., "2.10") or null
-                Use with place_bet_moneyline(selection="home" or "away")
+                Moneyline betting (may be None if probabilities not set yet):
+                - home_probability: Win probability for home team (0-1) as string (e.g., "0.54") or null
+                - away_probability: Win probability for away team (0-1) as string (e.g., "0.46") or null
+                Use with place_market_bet_moneyline() or place_limit_bet_moneyline()
 
                 Spread betting (empty dict {} if not available):
-                - spread_lines: Dict mapping spread values to odds
-                  Format: {"-3.5": {"home_odds": "1.90", "away_odds": "1.90"}, "+3.5": {...}, ...}}
+                - spread_lines: Dict mapping spread values to probabilities
+                  Format: {"-3.5": {"home_probability": "0.526", "away_probability": "0.474"}, "+3.5": {...}, ...}
                   Keys are spread values as strings (e.g., "-3.5", "+3.5")
-                  Use with place_bet_spread(spread_value must match a key from spread_lines)
+                  Use with place_market_bet_spread() or place_limit_bet_spread()
 
                 Total betting (empty dict {} if not available):
-                - total_lines: Dict mapping total values to odds
-                  Format: {"220.5": {"over_odds": "1.88", "under_odds": "1.88"}, "225.5": {...}, ...}
+                - total_lines: Dict mapping total values to probabilities
+                  Format: {"220.5": {"over_probability": "0.532", "under_probability": "0.468"}, "225.5": {...}, ...}
                   Keys are total point values as strings (e.g., "220.5")
-                  Use with place_bet_total(total_value must match a key from total_lines, selection="over" or "under")
+                  Use with place_market_bet_total() or place_limit_bet_total()
 
                 Metadata:
-                - last_odds_update: Last odds update time (ISO format string) or null
+                - last_odds_update: Last probability update time (ISO format string) or null
                 - betting_closed_at: When betting closed (ISO format string) or null if still open
 
+            Note: Probabilities represent the price per share. If you bet $100 at probability 0.56, you get 100/0.56 ≈ 178.57 shares.
+            If your bet wins, each share pays $1.00. If it loses, you get $0.00.
 
             """
             event = await target.get_available_event()
@@ -1765,24 +1834,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             return event.model_dump_json()
 
         @tool
-        async def place_bet_moneyline(
+        async def place_market_bet_moneyline(
             amount: str,
             selection: Literal["home", "away"],
-            betting_phase: Literal["PRE_GAME", "IN_GAME"],
-            order_type: Literal["MARKET", "LIMIT"] = "MARKET",
-            limit_odds: str | None = None,
         ) -> str:
-            """Bet on which team will win (moneyline).
+            """Place a market order to bet on which team will win (moneyline). Executes immediately at current probability.
 
-            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
-            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+            You can bet at any time while the event is SCHEDULED or LIVE.
 
             Args:
-                amount: Bet amount as string
+                amount: Bet amount as string (e.g., "100.00")
                 selection: "home" or "away"
-                betting_phase: "PRE_GAME" or "IN_GAME" (depends on the current event status, if the event status is SCHEDULED, you can only place a PRE_GAME bet, if the event status is LIVE, you can only place a IN_GAME bet)
-                order_type: "MARKET" (execute immediately at current odds) or "LIMIT" (wait for odds to reach your minimum)
-                limit_odds: For LIMIT only - minimum odds as string. Order executes when current odds >= this value.
 
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
@@ -1797,9 +1859,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     amount=Decimal(amount),
                     selection=selection,
                     event_id=event.event_id,
-                    order_type=OrderType[order_type],
-                    betting_phase=BettingPhase[betting_phase],
-                    limit_odds=Decimal(limit_odds) if limit_odds else None,
+                    order_type=OrderType.MARKET,
+                    limit_probability=None,
                 )
                 result = await target.place_bet(agent_id, bet_request)
                 return result
@@ -1807,31 +1868,69 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 return f"bet_invalid: {str(e)}"
             except Exception as e:
                 logger.error(
-                    "Unexpected error in place_bet_moneyline: %s", e, exc_info=True
+                    "Unexpected error in place_market_bet_moneyline: %s",
+                    e,
+                    exc_info=True,
                 )
                 return f"bet_invalid: Unexpected error - {str(e)}"
 
         @tool
-        async def place_bet_spread(
+        async def place_limit_bet_moneyline(
+            amount: str,
+            selection: Literal["home", "away"],
+            limit_probability: str,
+        ) -> str:
+            """Place a limit order to bet on which team will win (moneyline). Executes when probability reaches your minimum.
+
+            You can bet at any time while the event is SCHEDULED or LIVE.
+
+            Args:
+                amount: Bet amount as string (e.g., "100.00")
+                selection: "home" or "away"
+                limit_probability: Minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
+
+            Returns:
+                "bet_placed" or "bet_invalid: <reason>"
+            """
+            try:
+                # Get the current event
+                event = await target.get_available_event()
+                if not event:
+                    return "bet_invalid: No event available"
+
+                bet_request = BetRequestMoneyline(
+                    amount=Decimal(amount),
+                    selection=selection,
+                    event_id=event.event_id,
+                    order_type=OrderType.LIMIT,
+                    limit_probability=Decimal(limit_probability),
+                )
+                result = await target.place_bet(agent_id, bet_request)
+                return result
+            except (ValueError, KeyError, TypeError) as e:
+                return f"bet_invalid: {str(e)}"
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in place_limit_bet_moneyline: %s",
+                    e,
+                    exc_info=True,
+                )
+                return f"bet_invalid: Unexpected error - {str(e)}"
+
+        @tool
+        async def place_market_bet_spread(
             amount: str,
             selection: Literal["home", "away"],
             spread_value: str,
-            betting_phase: Literal["PRE_GAME", "IN_GAME"],
-            order_type: Literal["MARKET", "LIMIT"] = "MARKET",
-            limit_odds: str | None = None,
         ) -> str:
-            """Bet on point spread (team must win by more than spread or lose by less).
+            """Place a market order to bet on point spread. Executes immediately at current probability.
 
-            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
-            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+            You can bet at any time while the event is SCHEDULED or LIVE.
 
             Args:
-                amount: Bet amount as string
+                amount: Bet amount as string (e.g., "100.00")
                 selection: "home" or "away"
                 spread_value: Must match a key from spread_lines in get_event(). Negative values (e.g., "-3.5") mean home team is favored; positive values (e.g., "+3.5") mean away team is favored.
-                betting_phase: "PRE_GAME" or "IN_GAME" (depends on the current event status, if the event status is SCHEDULED, you can only place a PRE_GAME bet, if the event status is LIVE, you can only place a IN_GAME bet)
-                order_type: "MARKET" (execute immediately) or "LIMIT" (wait for odds to reach your minimum)
-                limit_odds: For LIMIT only - minimum odds as string. Order executes when current odds >= this value.
 
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
@@ -1847,9 +1946,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     selection=selection,
                     event_id=event.event_id,
                     spread_value=Decimal(spread_value),
-                    order_type=OrderType[order_type],
-                    betting_phase=BettingPhase[betting_phase],
-                    limit_odds=Decimal(limit_odds) if limit_odds else None,
+                    order_type=OrderType.MARKET,
+                    limit_probability=None,
                 )
                 result = await target.place_bet(agent_id, bet_request)
                 return result
@@ -1857,31 +1955,68 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 return f"bet_invalid: {str(e)}"
             except Exception as e:
                 logger.error(
-                    "Unexpected error in place_bet_spread: %s", e, exc_info=True
+                    "Unexpected error in place_market_bet_spread: %s", e, exc_info=True
                 )
                 return f"bet_invalid: Unexpected error - {str(e)}"
 
         @tool
-        async def place_bet_total(
+        async def place_limit_bet_spread(
+            amount: str,
+            selection: Literal["home", "away"],
+            spread_value: str,
+            limit_probability: str,
+        ) -> str:
+            """Place a limit order to bet on point spread. Executes when probability reaches your minimum.
+
+            You can bet at any time while the event is SCHEDULED or LIVE.
+
+            Args:
+                amount: Bet amount as string (e.g., "100.00")
+                selection: "home" or "away"
+                spread_value: Must match a key from spread_lines in get_event(). Negative values (e.g., "-3.5") mean home team is favored; positive values (e.g., "+3.5") mean away team is favored.
+                limit_probability: Minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
+
+            Returns:
+                "bet_placed" or "bet_invalid: <reason>"
+            """
+            try:
+                # Get the current event
+                event = await target.get_available_event()
+                if not event:
+                    return "bet_invalid: No event available"
+
+                bet_request = BetRequestSpread(
+                    amount=Decimal(amount),
+                    selection=selection,
+                    event_id=event.event_id,
+                    spread_value=Decimal(spread_value),
+                    order_type=OrderType.LIMIT,
+                    limit_probability=Decimal(limit_probability),
+                )
+                result = await target.place_bet(agent_id, bet_request)
+                return result
+            except (ValueError, KeyError, TypeError) as e:
+                return f"bet_invalid: {str(e)}"
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in place_limit_bet_spread: %s", e, exc_info=True
+                )
+                return f"bet_invalid: Unexpected error - {str(e)}"
+
+        @tool
+        async def place_market_bet_total(
             amount: str,
             selection: Literal["over", "under"],
             total_value: str,
-            betting_phase: Literal["PRE_GAME", "IN_GAME"],
-            order_type: Literal["MARKET", "LIMIT"] = "MARKET",
-            limit_odds: str | None = None,
         ) -> str:
-            """Bet on total points scored (over/under).
+            """Place a market order to bet on total points scored (over/under). Executes immediately at current probability.
 
-            IMPORTANT: Check the event's can_bet_pregame/can_bet_ingame fields to know
-            which betting_phase to use. For LIVE games, you MUST use betting_phase="IN_GAME".
+            You can bet at any time while the event is SCHEDULED or LIVE.
 
             Args:
-                amount: Bet amount as string
+                amount: Bet amount as string (e.g., "100.00")
                 selection: "over" or "under"
                 total_value: Must match a key from total_lines in get_event(). This is the combined points both teams will score; bet "over" if you think total will exceed this, "under" if it will be less.
-                betting_phase: "PRE_GAME" or "IN_GAME" (depends on the current event status, if the event status is SCHEDULED, you can only place a PRE_GAME bet, if the event status is LIVE, you can only place a IN_GAME bet)
-                order_type: "MARKET" or "LIMIT"
-                limit_odds: For LIMIT only - minimum odds as string
 
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
@@ -1897,9 +2032,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     selection=selection,
                     event_id=event.event_id,
                     total_value=Decimal(total_value),
-                    order_type=OrderType[order_type],
-                    betting_phase=BettingPhase[betting_phase],
-                    limit_odds=Decimal(limit_odds) if limit_odds else None,
+                    order_type=OrderType.MARKET,
+                    limit_probability=None,
                 )
                 result = await target.place_bet(agent_id, bet_request)
                 return result
@@ -1907,7 +2041,51 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 return f"bet_invalid: {str(e)}"
             except Exception as e:
                 logger.error(
-                    "Unexpected error in place_bet_total: %s", e, exc_info=True
+                    "Unexpected error in place_market_bet_total: %s", e, exc_info=True
+                )
+                return f"bet_invalid: Unexpected error - {str(e)}"
+
+        @tool
+        async def place_limit_bet_total(
+            amount: str,
+            selection: Literal["over", "under"],
+            total_value: str,
+            limit_probability: str,
+        ) -> str:
+            """Place a limit order to bet on total points scored (over/under). Executes when probability reaches your minimum.
+
+            You can bet at any time while the event is SCHEDULED or LIVE.
+
+            Args:
+                amount: Bet amount as string (e.g., "100.00")
+                selection: "over" or "under"
+                total_value: Must match a key from total_lines in get_event(). This is the combined points both teams will score; bet "over" if you think total will exceed this, "under" if it will be less.
+                limit_probability: Minimum probability (0-1) as string (e.g., "0.55"). Order executes when current probability >= this value.
+
+            Returns:
+                "bet_placed" or "bet_invalid: <reason>"
+            """
+            try:
+                # Get the current event
+                event = await target.get_available_event()
+                if not event:
+                    return "bet_invalid: No event available"
+
+                bet_request = BetRequestTotal(
+                    amount=Decimal(amount),
+                    selection=selection,
+                    event_id=event.event_id,
+                    total_value=Decimal(total_value),
+                    order_type=OrderType.LIMIT,
+                    limit_probability=Decimal(limit_probability),
+                )
+                result = await target.place_bet(agent_id, bet_request)
+                return result
+            except (ValueError, KeyError, TypeError) as e:
+                return f"bet_invalid: {str(e)}"
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in place_limit_bet_total: %s", e, exc_info=True
                 )
                 return f"bet_invalid: Unexpected error - {str(e)}"
 
@@ -1927,25 +2105,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             return result
 
         @tool
-        async def get_active_bets() -> str:
-            """Get your active bets (executed, waiting for game result).
-
-            Returns:
-                JSON array of bets with: bet_id, amount, selection, odds, bet_type, status="ACTIVE"
-            """
-            bets = await target.get_active_bets(agent_id)
-            # Use Pydantic serialization for consistency
-            bets_adapter = TypeAdapter(List[Bet])
-            return bets_adapter.dump_json(bets).decode()
-
-        @tool
         async def get_pending_orders() -> str:
-            """Get your pending limit orders (waiting for odds to reach your specified minimum).
+            """Get your pending limit orders (waiting for probability to reach your specified minimum).
 
             Use bet_id with cancel_bet() to cancel an order.
 
             Returns:
-                JSON array of orders with: bet_id, amount, selection, limit_odds, bet_type, status="PENDING"
+                JSON array of orders with: bet_id, amount, selection, limit_probability, bet_type, status="PENDING"
             """
             orders = await target.get_pending_orders(agent_id)
             # Use Pydantic serialization for consistency
@@ -1980,12 +2146,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Build mapping of tool names to tool functions
         all_tools_map = {
             "get_balance": get_balance,
+            "get_holdings": get_holdings,
             "get_event": get_event,
-            "place_bet_moneyline": place_bet_moneyline,
-            "place_bet_spread": place_bet_spread,
-            "place_bet_total": place_bet_total,
+            "place_market_bet_moneyline": place_market_bet_moneyline,
+            "place_limit_bet_moneyline": place_limit_bet_moneyline,
+            "place_market_bet_spread": place_market_bet_spread,
+            "place_limit_bet_spread": place_limit_bet_spread,
+            "place_market_bet_total": place_market_bet_total,
+            "place_limit_bet_total": place_limit_bet_total,
             "cancel_bet": cancel_bet,
-            "get_active_bets": get_active_bets,
             "get_pending_orders": get_pending_orders,
             "get_bet_history": get_bet_history,
             "get_statistics": get_statistics,

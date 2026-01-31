@@ -119,13 +119,14 @@ async def test_agent_receives_event_and_places_bet(
 
     # Check results
     final_balance = await broker.get_balance(AGENT_ID)
-    active_bets = await broker.get_active_bets(AGENT_ID)
+    account = await broker.get_account(AGENT_ID)
+    holdings = account.holdings  # List of active holdings
     stats = await broker.get_statistics(AGENT_ID)
 
     print("\nResults:")
     print(f"  Events processed: {agent.event_count}")
     print(f"  Final balance: ${final_balance}")
-    print(f"  Active bets: {len(active_bets)}")
+    print(f"  Active holdings: {len(holdings)}")
     print(f"  Total wagered: {stats}")
 
     await agent.stop()
@@ -287,7 +288,8 @@ async def test_agent_with_ray_runtime(
 
     # Check results (via Ray proxy)
     final_balance = await broker_handler.instance.get_balance(AGENT_ID)  # type: ignore[attr-defined]
-    active_bets = await broker_handler.instance.get_active_bets(AGENT_ID)  # type: ignore[attr-defined]
+    account = await broker_handler.instance.get_account(AGENT_ID)  # type: ignore[attr-defined]
+    holdings = account.holdings  # List of active holdings
     stats = await broker_handler.instance.get_statistics(AGENT_ID)  # type: ignore[attr-defined]
 
     # Get events_processed from Ray agent
@@ -296,7 +298,7 @@ async def test_agent_with_ray_runtime(
     print("\nResults:")
     print(f"  Events processed: {state['events']}")
     print(f"  Final balance: ${final_balance}")
-    print(f"  Active bets: {len(active_bets)}")
+    print(f"  Active holdings: {len(holdings)}")
     print(f"  Stats: {stats}")
 
     await agent_handler.stop()

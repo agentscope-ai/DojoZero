@@ -44,11 +44,10 @@ scenario:
       class: BrokerOperator
       initial_balance: "1000.00"
       allowed_tools:
+      - get_event
       - get_balance
-      - place_bet_moneyline
-      - cancel_bet
-      - get_active_bets
-      - get_pending_orders
+      - get_holdings
+      - place_market_bet_moneyline
       - get_bet_history
       - get_statistics
       data_streams:
