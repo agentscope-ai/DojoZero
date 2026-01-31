@@ -123,6 +123,18 @@ class NBAStore(DataStore):
             # Check if this is the initial call (no team data available yet - pre-game)
             has_team_data = bool(home_team_data and away_team_data)
 
+            # Build team/player lookup maps for PBP enrichment
+            if has_team_data:
+                for team_data in (home_team_data, away_team_data):
+                    tid = str(team_data.get("teamId", ""))
+                    tri = team_data.get("teamTricode", "")
+                    self._state.update_team_lookup(tid, tri)
+                    for player in team_data.get("players", []):
+                        if isinstance(player, dict):
+                            pid = player.get("personId", 0)
+                            pname = player.get("name", "")
+                            self._state.update_player_lookup(int(pid), pname)
+
             # Emit GameInitializeEvent on first call when team data is not yet available
             if not self._state.is_game_initialized(game_id) and not has_team_data:
                 # Try to get game info from ESPN summary API
@@ -457,6 +469,13 @@ class NBAStore(DataStore):
                 player_name = action.get("playerName", "") or action.get("name", "")
                 team_id = str(action.get("teamId", ""))
                 team_tricode = action.get("teamTricode", "")
+
+                # Enrich from boxscore lookup maps when ESPN PBP
+                # only provides numeric IDs without names/tricodes
+                if team_id and not team_tricode:
+                    team_tricode = self._state.get_team_tricode(team_id)
+                if person_id and not player_name:
+                    player_name = self._state.get_player_name(int(person_id))
                 home_score = int(action.get("scoreHome", 0) or 0)
                 away_score = int(action.get("scoreAway", 0) or 0)
                 description = action.get("description", "")

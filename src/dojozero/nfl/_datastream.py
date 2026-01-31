@@ -107,7 +107,7 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             and self._game_context
             and self._hub
         ):
-            self._hub.set_on_game_initialized(self._on_game_initialized)
+            self._hub.add_on_game_initialized(self._on_game_initialized)
 
     async def _on_game_initialized(self, _game_id: str) -> None:
         """Hub callback: run pre-game web searches while stores are paused."""

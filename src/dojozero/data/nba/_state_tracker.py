@@ -24,6 +24,9 @@ class GameStateTracker(BaseGameStateTracker):
         self._pbp_available: set[str] = set()
         self._boxscore_leaders_cache: dict[str, dict[str, Any]] = {}
         self._current_clock: dict[str, str] = {}
+        # Lookup maps populated from boxscore data for PBP enrichment
+        self._team_tricode_lookup: dict[str, str] = {}  # team_id -> tricode
+        self._player_name_lookup: dict[int, str] = {}  # player_id -> name
 
     def has_seen_event(self, event_id: str) -> bool:
         """Check if event has been processed (deduplication)."""
@@ -66,6 +69,24 @@ class GameStateTracker(BaseGameStateTracker):
         """Update latest scores for poll profile calculation."""
         self._current_home_score[game_id] = home_score
         self._current_away_score[game_id] = away_score
+
+    def update_team_lookup(self, team_id: str, tricode: str) -> None:
+        """Register a team_id -> tricode mapping from boxscore data."""
+        if team_id and tricode:
+            self._team_tricode_lookup[team_id] = tricode
+
+    def update_player_lookup(self, player_id: int, name: str) -> None:
+        """Register a player_id -> name mapping from boxscore data."""
+        if player_id and name:
+            self._player_name_lookup[player_id] = name
+
+    def get_team_tricode(self, team_id: str) -> str:
+        """Look up team tricode by team_id."""
+        return self._team_tricode_lookup.get(team_id, "")
+
+    def get_player_name(self, player_id: int) -> str:
+        """Look up player name by player_id."""
+        return self._player_name_lookup.get(player_id, "")
 
     def filter_new_actions(
         self, game_id: str, actions: list[dict[str, Any]]
