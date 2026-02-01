@@ -117,10 +117,55 @@ class NBAStore(DataStore):
                         if pid
                         else ""
                     ),
-                    starter=bool(p.get("starter", False)),
                 )
             )
         return result
+
+    async def _enrich_boxscore_rosters(self, boxscore_data: dict[str, Any]) -> None:
+        """Fetch team rosters and inject into boxscore when players are missing.
+
+        Pre-game boxscores have team info but no player data.  This method
+        fetches rosters from the ESPN team_roster endpoint and merges them
+        into the boxscore dict so that ``_parse_api_response`` can build
+        ``PlayerIdentity`` lists for ``GameInitializeEvent``.
+        """
+        bs = boxscore_data.get("boxscore", {})
+        if not bs:
+            return
+
+        for side in ("homeTeam", "awayTeam"):
+            team_data = bs.get(side, {})
+            if not team_data or team_data.get("players"):
+                continue  # Already has players
+
+            team_id = str(team_data.get("teamId", ""))
+            if not team_id or not isinstance(self._api, NBAExternalAPI):
+                continue
+
+            try:
+                # Access the underlying ESPN API for team_roster
+                result = await self._api._api.fetch("team_roster", {"team_id": team_id})
+                athletes = result.get("team_roster", {}).get("athletes", [])
+                players: list[dict[str, Any]] = []
+                for a in athletes:
+                    if not isinstance(a, dict):
+                        continue
+                    pos = a.get("position", {})
+                    players.append(
+                        {
+                            "personId": a.get("id", 0),
+                            "name": a.get("displayName", ""),
+                            "position": pos.get("abbreviation", "")
+                            if isinstance(pos, dict)
+                            else "",
+                            "jersey": a.get("jersey", ""),
+                        }
+                    )
+                team_data["players"] = players
+            except Exception:
+                logger.debug(
+                    "Failed to fetch roster for team %s", team_id, exc_info=True
+                )
 
     def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
         """Parse NBA API response into DataEvents."""
@@ -159,6 +204,20 @@ class NBAStore(DataStore):
                             pid = player.get("personId", 0)
                             pname = player.get("name", "")
                             self._state.update_player_lookup(int(pid), pname)
+
+                # Extract starters from boxscore (starter=True per player)
+                home_starters = [
+                    p
+                    for p in home_team_data.get("players", [])
+                    if isinstance(p, dict) and p.get("starter")
+                ]
+                away_starters = [
+                    p
+                    for p in away_team_data.get("players", [])
+                    if isinstance(p, dict) and p.get("starter")
+                ]
+                if home_starters or away_starters:
+                    self._state.set_starters(game_id, home_starters, away_starters)
 
             # Emit GameInitializeEvent on first call when team data is not yet available
             if not self._state.is_game_initialized(game_id) and not has_team_data:
@@ -435,6 +494,12 @@ class NBAStore(DataStore):
                             timestamp=datetime.now(timezone.utc),
                             game_id=game_id,
                             sport="nba",
+                            home_starters=self._build_player_identities(
+                                self._state.get_home_starters(game_id), "nba"
+                            ),
+                            away_starters=self._build_player_identities(
+                                self._state.get_away_starters(game_id), "nba"
+                            ),
                         )
                     )
                     self._state.set_previous_status(game_id, 2)  # In Progress
@@ -582,6 +647,12 @@ class NBAStore(DataStore):
                 # Fetch boxscore data
                 boxscore_data = await self._api.fetch("boxscore", boxscore_params)
                 if boxscore_data:
+                    # Pre-game: boxscore has teams but no players.
+                    # Fetch rosters so GameInitializeEvent carries full lineups.
+                    if not self._state.is_game_initialized(
+                        boxscore_data.get("boxscore", {}).get("gameId", "")
+                    ):
+                        await self._enrich_boxscore_rosters(boxscore_data)
                     boxscore_events = self._parse_api_response(boxscore_data)
                     events.extend(boxscore_events)
                     self._record_poll_time("boxscore")

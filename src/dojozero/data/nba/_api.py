@@ -325,7 +325,7 @@ class NBAExternalAPI(ExternalAPI):
             "name": athlete_info.get("displayName", ""),
             "position": athlete_info.get("position", {}).get("abbreviation", ""),
             "jersey": athlete_info.get("jersey", ""),
-            "starter": athlete.get("starter", False),
+            "starter": athlete.get("starter", False),  # Used by GameStartEvent
             "statistics": statistics,
         }
 

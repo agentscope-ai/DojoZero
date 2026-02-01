@@ -27,6 +27,9 @@ class GameStateTracker(BaseGameStateTracker):
         # Lookup maps populated from boxscore data for PBP enrichment
         self._team_tricode_lookup: dict[str, str] = {}  # team_id -> tricode
         self._player_name_lookup: dict[int, str] = {}  # player_id -> name
+        # Starters extracted from boxscore (starter=True) for GameStartEvent
+        self._home_starters: dict[str, list[dict[str, Any]]] = {}  # game_id -> players
+        self._away_starters: dict[str, list[dict[str, Any]]] = {}  # game_id -> players
 
     def has_seen_event(self, event_id: str) -> bool:
         """Check if event has been processed (deduplication)."""
@@ -87,6 +90,24 @@ class GameStateTracker(BaseGameStateTracker):
     def get_player_name(self, player_id: int) -> str:
         """Look up player name by player_id."""
         return self._player_name_lookup.get(player_id, "")
+
+    def set_starters(
+        self,
+        game_id: str,
+        home_starters: list[dict[str, Any]],
+        away_starters: list[dict[str, Any]],
+    ) -> None:
+        """Store starting lineups extracted from boxscore data."""
+        self._home_starters[game_id] = home_starters
+        self._away_starters[game_id] = away_starters
+
+    def get_home_starters(self, game_id: str) -> list[dict[str, Any]]:
+        """Get home team starters for a game."""
+        return self._home_starters.get(game_id, [])
+
+    def get_away_starters(self, game_id: str) -> list[dict[str, Any]]:
+        """Get away team starters for a game."""
+        return self._away_starters.get(game_id, [])
 
     def filter_new_actions(
         self, game_id: str, actions: list[dict[str, Any]]

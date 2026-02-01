@@ -43,7 +43,7 @@ class PlayerIdentity(BaseModel):
     """Player identification for roster/lineup data.
 
     Included in :class:`TeamIdentity` so that ``GameInitializeEvent``
-    carries per-team rosters with starter designations and headshot URLs.
+    carries per-team rosters and headshot URLs.
     """
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
@@ -53,7 +53,6 @@ class PlayerIdentity(BaseModel):
     position: str = ""  # e.g., "G", "F", "C"
     jersey: str = ""
     headshot_url: str = Field(default="", serialization_alias="headshotUrl")
-    starter: bool = False
 
 
 class TeamIdentity(BaseModel):
@@ -475,6 +474,9 @@ class GameInitializeEvent(GameEvent):
 @register_event
 class GameStartEvent(GameEvent):
     """Game start event signaling transition from scheduled to in-progress."""
+
+    home_starters: list[PlayerIdentity] = Field(default_factory=list)
+    away_starters: list[PlayerIdentity] = Field(default_factory=list)
 
     event_type: Literal["event.game_start"] = "event.game_start"
 
