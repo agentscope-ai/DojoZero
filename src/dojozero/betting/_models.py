@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -43,13 +43,6 @@ class OrderType(Enum):
     LIMIT = "LIMIT"  # Execute only when odds reach limit_odds
 
 
-class BettingPhase(Enum):
-    """Phase when bet is placed"""
-
-    PRE_GAME = "PRE_GAME"  # Before game starts
-    IN_GAME = "IN_GAME"  # During game (live betting)
-
-
 class BetStatus(Enum):
     """Status of a bet"""
 
@@ -79,6 +72,17 @@ class BetType(Enum):
 # =============================================================================
 
 
+class Holding(BaseModel):
+    """Information about an aggregated holding (total shares for a position)."""
+
+    shares: Decimal
+    selection: Literal["home", "away", "over", "under"]
+    event_id: str
+    bet_type: BetType
+    spread_value: Optional[Decimal] = None  # For SPREAD bets
+    total_value: Optional[Decimal] = None  # For TOTAL bets
+
+
 class Account(BaseModel):
     """Agent account information"""
 
@@ -86,6 +90,11 @@ class Account(BaseModel):
     balance: Decimal
     created_at: datetime
     last_updated: datetime
+    # Holdings: aggregated positions (shares aggregated by event_id + selection + bet_type + spread_value/total_value)
+    holdings: List[Holding] = Field(
+        default_factory=list,
+        description="Current holdings: aggregated positions showing total shares for each unique position (event_id + selection + bet_type + spread_value/total_value). Multiple bets on the same position are combined into a single holding.",
+    )
 
 
 # =============================================================================
@@ -101,32 +110,35 @@ class BettingEvent(BaseModel):
     away_team: str
     game_time: datetime
     status: EventStatus
-    home_odds: Optional[Decimal] = Field(
-        default=None, description="Can be None initially, filled in when odds arrive"
+    home_probability: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="Home team win probability (0-1). Can be None initially, filled in when odds arrive",
     )
-    away_odds: Optional[Decimal] = Field(
-        default=None, description="Can be None initially, filled in when odds arrive"
+    away_probability: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="Away team win probability (0-1). Can be None initially, filled in when odds arrive",
     )
-    # Multiple spreads: spread_value -> {home_odds, away_odds}
+    # Multiple spreads: spread_value -> {home_probability, away_probability}
     spread_lines: Dict[Decimal, Dict[str, Decimal]] = Field(
-        default_factory=dict, description="Spread betting lines"
+        default_factory=dict,
+        description="Spread betting lines: {spread_value: {'home_probability': Decimal, 'away_probability': Decimal}}",
     )
-    # Multiple totals: total_value -> {over_odds, under_odds}
+    # Multiple totals: total_value -> {over_probability, under_probability}
     total_lines: Dict[Decimal, Dict[str, Decimal]] = Field(
-        default_factory=dict, description="Total (over/under) betting lines"
+        default_factory=dict,
+        description="Total (over/under) betting lines: {total_value: {'over_probability': Decimal, 'under_probability': Decimal}}",
     )
     last_odds_update: Optional[datetime] = None
     betting_closed_at: Optional[datetime] = None
 
     @computed_field
-    def can_bet_pregame(self) -> bool:
-        """True if PRE_GAME betting is allowed (status=SCHEDULED)."""
-        return self.status == EventStatus.SCHEDULED
-
-    @computed_field
-    def can_bet_ingame(self) -> bool:
-        """True if IN_GAME betting is allowed (status=LIVE)."""
-        return self.status == EventStatus.LIVE
+    def can_bet(self) -> bool:
+        """True if betting is allowed (status is SCHEDULED or LIVE)."""
+        return self.status in {EventStatus.SCHEDULED, EventStatus.LIVE}
 
 
 # =============================================================================
@@ -142,8 +154,9 @@ class BetRequestMoneyline:
     selection: Literal["home", "away"]
     event_id: str
     order_type: OrderType
-    betting_phase: BettingPhase
-    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
+    limit_probability: Optional[Decimal] = (
+        None  # Required if order_type == LIMIT (0-1 range)
+    )
 
     def validate(self) -> None:
         """Validate bet request parameters"""
@@ -151,11 +164,11 @@ class BetRequestMoneyline:
             raise ValueError(f"Bet amount must be positive, got {self.amount}")
 
         if self.order_type == OrderType.LIMIT:
-            if self.limit_odds is None:
-                raise ValueError("limit_odds required for LIMIT orders")
-            if self.limit_odds <= 1.0:
+            if self.limit_probability is None:
+                raise ValueError("limit_probability required for LIMIT orders")
+            if self.limit_probability < 0 or self.limit_probability > 1:
                 raise ValueError(
-                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
+                    f"limit_probability must be between 0 and 1, got {self.limit_probability}"
                 )
 
 
@@ -167,9 +180,10 @@ class BetRequestSpread:
     selection: Literal["home", "away"]
     event_id: str
     order_type: OrderType
-    betting_phase: BettingPhase
     spread_value: Decimal  # Required for SPREAD bets
-    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
+    limit_probability: Optional[Decimal] = (
+        None  # Required if order_type == LIMIT (0-1 range)
+    )
 
     def validate(self) -> None:
         """Validate bet request parameters"""
@@ -177,11 +191,11 @@ class BetRequestSpread:
             raise ValueError(f"Bet amount must be positive, got {self.amount}")
 
         if self.order_type == OrderType.LIMIT:
-            if self.limit_odds is None:
-                raise ValueError("limit_odds required for LIMIT orders")
-            if self.limit_odds <= 1.0:
+            if self.limit_probability is None:
+                raise ValueError("limit_probability required for LIMIT orders")
+            if self.limit_probability < 0 or self.limit_probability > 1:
                 raise ValueError(
-                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
+                    f"limit_probability must be between 0 and 1, got {self.limit_probability}"
                 )
 
 
@@ -193,9 +207,10 @@ class BetRequestTotal:
     selection: Literal["over", "under"]
     event_id: str
     order_type: OrderType
-    betting_phase: BettingPhase
     total_value: Decimal  # Required for TOTAL bets
-    limit_odds: Optional[Decimal] = None  # Required if order_type == LIMIT
+    limit_probability: Optional[Decimal] = (
+        None  # Required if order_type == LIMIT (0-1 range)
+    )
 
     def validate(self) -> None:
         """Validate bet request parameters"""
@@ -203,11 +218,11 @@ class BetRequestTotal:
             raise ValueError(f"Bet amount must be positive, got {self.amount}")
 
         if self.order_type == OrderType.LIMIT:
-            if self.limit_odds is None:
-                raise ValueError("limit_odds required for LIMIT orders")
-            if self.limit_odds <= 1.0:
+            if self.limit_probability is None:
+                raise ValueError("limit_probability required for LIMIT orders")
+            if self.limit_probability < 0 or self.limit_probability > 1:
                 raise ValueError(
-                    f"limit_odds must be greater than 1.0, got {self.limit_odds}"
+                    f"limit_probability must be between 0 and 1, got {self.limit_probability}"
                 )
 
 
@@ -226,12 +241,23 @@ class Bet(BaseModel):
     bet_id: str
     agent_id: str
     event_id: str
-    amount: Decimal
-    selection: str
-    odds: Decimal  # Actual execution odds
+    amount: Decimal  # Amount wagered (cost to buy shares)
+    selection: Literal["home", "away", "over", "under"]
+    probability: Decimal = Field(
+        ge=0,
+        le=1,
+        description="Actual execution probability (0-1). Price per share when bet was placed.",
+    )
+    shares: Decimal = Field(
+        description="Number of shares purchased. Shares = amount / probability"
+    )
     order_type: OrderType
-    limit_odds: Optional[Decimal] = None  # None for market orders
-    betting_phase: BettingPhase
+    limit_probability: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="Limit probability threshold (0-1). None for market orders.",
+    )
     create_time: datetime
     execution_time: Optional[datetime] = None  # None until executed
     status: BetStatus
@@ -253,14 +279,14 @@ class BetExecutedPayload:
     event_id: str
     selection: str
     amount: str
-    execution_odds: str
+    execution_probability: str  # Probability (0-1) at which bet was executed
+    shares: str  # Number of shares purchased
     execution_time: str
 
 
 @dataclass
 class BetSettledPayload:
     bet_id: str
-    agent_id: str
     event_id: str
     outcome: BetOutcome  # Store the enum directly
     payout: str
@@ -284,12 +310,77 @@ class Statistics(BaseModel):
     roi: float
 
 
+# =============================================================================
+# Agent Message Models for Tracing
+# =============================================================================
+
+
+class ReasoningStep(BaseModel):
+    """Reasoning step in Chain of Thought"""
+
+    step_type: Literal["reasoning"] = "reasoning"
+    text: str = Field(default="", description="Reasoning text")
+
+
+class ToolCallStep(BaseModel):
+    """Tool call step in Chain of Thought"""
+
+    step_type: Literal["tool_call"] = "tool_call"
+    name: str = Field(default="", description="Tool name")
+    input_display: str = Field(default="", description="Formatted input")
+
+
+class ToolResultStep(BaseModel):
+    """Tool result step in Chain of Thought"""
+
+    step_type: Literal["tool_result"] = "tool_result"
+    name: str = Field(default="", description="Tool name")
+    output_display: str = Field(default="", description="Formatted output")
+
+
+# Discriminated union for CoT steps
+CoTStep = Union[ReasoningStep, ToolCallStep, ToolResultStep]
+
+
+class AgentResponseMessage(BaseModel):
+    """Main agent response with CoT and bet info for OTLP tracing"""
+
+    sequence: int = Field(default=0, description="Event sequence number")
+    stream_id: str = Field(default="", description="Stream identifier")
+    name: str = Field(default="", description="Agent name")
+    content: str = Field(default="", description="Main text response from agent")
+    cot_steps: list[CoTStep] = Field(
+        default_factory=list, description="Chain of thought process steps"
+    )
+    trigger: str = Field(default="", description="Event that triggered this response")
+    game_id: str = Field(default="", description="Game identifier")
+    # Optional bet fields - only included in tracing when a bet is placed
+    bet_type: Optional[Literal["MONEYLINE", "SPREAD", "TOTAL"]] = Field(
+        default=None, description="Type of bet"
+    )
+    bet_amount: Optional[float] = Field(default=None, description="Bet amount")
+    bet_selection: Optional[Literal["home", "away", "over", "under"]] = Field(
+        default=None, description="Selection: 'home', 'away', 'over', or 'under'"
+    )
+    bet_order_type: Optional[Literal["MARKET", "LIMIT"]] = Field(
+        default=None, description="Order type: 'MARKET' or 'LIMIT'"
+    )
+    bet_limit_probability: Optional[float] = Field(
+        default=None, description="Limit probability for LIMIT orders (0-1)"
+    )
+    bet_spread_value: Optional[float] = Field(
+        default=None, description="Spread value for SPREAD bets"
+    )
+    bet_total_value: Optional[float] = Field(
+        default=None, description="Total value for TOTAL (over/under) bets"
+    )
+
+
 __all__ = [
     # Enums
     "BetOutcome",
     "BetStatus",
     "BetType",
-    "BettingPhase",
     "EventStatus",
     "OrderType",
     "VALID_STATUS_TRANSITIONS",
@@ -303,5 +394,12 @@ __all__ = [
     "BetRequestTotal",
     "BetSettledPayload",
     "BettingEvent",
+    "Holding",
     "Statistics",
+    # Agent Message Models
+    "ReasoningStep",
+    "ToolCallStep",
+    "ToolResultStep",
+    "CoTStep",
+    "AgentResponseMessage",
 ]

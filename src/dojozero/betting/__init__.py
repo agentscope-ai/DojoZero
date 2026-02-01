@@ -50,10 +50,15 @@ from dojozero.betting._models import (
     BetStatus,
     BetType,
     BettingEvent,
-    BettingPhase,
     EventStatus,
     OrderType,
     Statistics,
+    # Agent Message Models
+    ReasoningStep,
+    ToolCallStep,
+    ToolResultStep,
+    CoTStep,
+    AgentResponseMessage,
 )
 from dojozero.betting._broker import (
     BrokerOperator,
@@ -86,8 +91,14 @@ __all__ = [
     # Enums
     "EventStatus",
     "OrderType",
-    "BettingPhase",
     "BetStatus",
     "BetOutcome",
     "BetType",
+    # Agent Message Models
+    "ReasoningStep",
+    "ToolCallStep",
+    "ToolResultStep",
+    "CoTStep",
+    "AgentResponseMessage",
+    "AgentBetMessage",
 ]

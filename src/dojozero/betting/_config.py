@@ -37,9 +37,11 @@ class TrialBrokerConfig(BaseModel):
         default=None,
         description=(
             "List of allowed agent tool names (default: all tools). "
-            "Available: get_balance, get_quote, place_bet, place_bet_spread, "
-            "place_bet_total, cancel_bet, get_active_bets, get_pending_orders, "
-            "get_bet_history, get_statistics, get_available_events"
+            "Available: get_balance, get_holdings, get_event, "
+            "place_market_bet_moneyline, place_limit_bet_moneyline, "
+            "place_market_bet_spread, place_limit_bet_spread, "
+            "place_market_bet_total, place_limit_bet_total, "
+            "cancel_bet, get_pending_orders, get_bet_history, get_statistics"
         ),
     )
 

@@ -5,7 +5,7 @@ Polymarket API client and store.  MarketData / EventData remain Pydantic
 BaseModels because they rely on ``extra="allow"`` for flexible API parsing.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,43 +22,50 @@ class MarketOddsData:
     - totals: home_odds = over odds, away_odds = under odds
     """
 
-    market_id: str
-    home_odds: float
-    away_odds: float
-    slug: str | None = None
-    market_type: str | None = None
-    line: float | None = None
-    home_probability: float = 0.0
-    away_probability: float = 0.0
-    token_ids: list[str] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        if self.home_odds <= 0.0:
-            raise ValueError(f"home_odds must be > 0, got {self.home_odds}")
-        if self.away_odds <= 0.0:
-            raise ValueError(f"away_odds must be > 0, got {self.away_odds}")
-        if not 0.0 <= self.home_probability <= 1.0:
-            raise ValueError(
-                f"home_probability must be in [0, 1], got {self.home_probability}"
-            )
-        if not 0.0 <= self.away_probability <= 1.0:
-            raise ValueError(
-                f"away_probability must be in [0, 1], got {self.away_probability}"
-            )
-
-    @property
-    def over_odds(self) -> float | None:
-        """Get over odds for totals markets, None for other market types."""
-        if self.market_type == "totals":
-            return self.home_odds
-        return None
-
-    @property
-    def under_odds(self) -> float | None:
-        """Get under odds for totals markets, None for other market types."""
-        if self.market_type == "totals":
-            return self.away_odds
-        return None
+    market_id: str = Field(..., description="Polymarket market ID")
+    slug: str | None = Field(None, description="Market slug")
+    market_type: str | None = Field(
+        None, description="Market type: moneyline, spreads, or totals"
+    )
+    line: float | None = Field(
+        None, description="Spread or total line value (None for moneyline)"
+    )
+    home_probability: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Home team probability (moneyline/spreads) or over probability (totals). "
+            "For totals: this represents the probability for the over bet. "
+            "The prices probabilities displayed on Polymarket are the midpoint of the bid-ask spread in the orderbook."
+        ),
+    )
+    away_probability: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Away team probability (moneyline/spreads) or under probability (totals). "
+            "For totals: this represents the probability for the under bet. "
+            "The prices probabilities displayed on Polymarket are the midpoint of the bid-ask spread in the orderbook."
+        ),
+    )
+    home_odds: float = Field(
+        1.0,
+        gt=0.0,
+        description=(
+            "Home team odds (decimal format, computed as 1 / home_probability). "
+            "For totals: represents over odds."
+        ),
+    )
+    away_odds: float = Field(
+        1.0,
+        gt=0.0,
+        description=(
+            "Away team odds (decimal format, computed as 1 / away_probability). "
+            "For totals: represents under odds."
+        ),
+    )
 
 
 class MarketData(BaseModel):
@@ -77,8 +84,13 @@ class MarketData(BaseModel):
     )
     line: float | None = Field(None, description="Spread or total line value")
     active: bool = Field(True, description="Whether the market is active")
-    clobTokenIds: str | list[str] | None = Field(
-        None, description="CLOB token IDs (may be JSON string or list)"
+    outcomes: str | list[str] | None = Field(
+        None,
+        description="Market outcomes as JSON string or list (e.g., ['Over', 'Under'] or ['Home', 'Away'])",
+    )
+    outcomePrices: str | list[str] | None = Field(
+        None,
+        description="Outcome prices as JSON string or list (e.g., ['0.495', '0.505'])",
     )
 
 
