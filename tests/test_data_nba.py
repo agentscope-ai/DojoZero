@@ -270,6 +270,36 @@ class TestNBAStoreParsePlayByPlay:
         assert result_events[0].winner == "home"
         assert result_events[0].final_score == {"home": 110, "away": 105}
 
+    def test_parse_pbp_game_end_detection_core_api_format(self, nba_store):
+        """Test game end detection with ESPN Core API format (action_type='end game')."""
+        nba_store._state.set_previous_status("401810001", 2)
+        nba_store._state.mark_pbp_available("401810001")
+
+        pbp_data = {
+            "play_by_play": {
+                "gameId": "401810001",
+                "actions": [
+                    {
+                        "actionNumber": 439,
+                        "actionType": "end game",
+                        "description": "End of Game",
+                        "period": 4,
+                        "clock": "0.0",
+                        "scoreHome": "107",
+                        "scoreAway": "79",
+                    }
+                ],
+            }
+        }
+
+        events = nba_store._parse_api_response(pbp_data)
+
+        result_events = [e for e in events if isinstance(e, GameResultEvent)]
+        assert len(result_events) == 1
+        assert result_events[0].winner == "home"
+        assert result_events[0].home_score == 107
+        assert result_events[0].away_score == 79
+
     def test_parse_pbp_away_team_wins(self, nba_store):
         """Test GameResultEvent with away team winning."""
         nba_store._state.set_previous_status("401810001", 2)
