@@ -504,13 +504,14 @@ class NBAStore(DataStore):
                     )
                     self._state.set_previous_status(game_id, 2)  # In Progress
 
-            # Check for game end (last action is "Game End")
+            # Check for game end (last action is "Game End" or "End of Game")
             if actions:
                 last_action = actions[-1]
                 if (
                     isinstance(last_action, dict)
-                    and last_action.get("actionType") == "game"
-                    and "game end" in last_action.get("description", "").lower()
+                    and last_action.get("actionType") in ("game", "end game")
+                    and "end" in last_action.get("description", "").lower()
+                    and "game" in last_action.get("description", "").lower()
                 ):
                     # Game has ended
                     previous_status = self._state.get_previous_status(game_id)
