@@ -17,6 +17,12 @@ from dojozero.data.nfl._events import (
     NFLPlayEvent,
 )
 from dojozero.data.websearch._formatters import WEBSEARCH_EVENT_FORMATTERS
+from dojozero.betting._models import BetExecutedPayload, BetSettledPayload
+from dojozero.betting._formatters import (
+    format_bet_executed,
+    format_bet_settled,
+    format_pregame_stats,
+)
 
 
 def _format_nfl_game_initialize(event: GameInitializeEvent) -> str:
@@ -181,11 +187,20 @@ _EVENT_FORMATTERS: dict[str, Any] = {
     "nfl_game_update": _format_nfl_game_update,
     "nfl_play": _format_nfl_play,
     "nfl_drive": _format_nfl_drive,
+    # Stats insight events
+    "pregame_stats": format_pregame_stats,
 }
 
 
-def format_event(event: DataEvent) -> str:
-    """Format a DataEvent into LLM-friendly text."""
+def format_event(event: DataEvent | BetExecutedPayload | BetSettledPayload) -> str:
+    """Format a DataEvent or betting payload into LLM-friendly text."""
+    # Handle betting payloads
+    if isinstance(event, BetExecutedPayload):
+        return format_bet_executed(event)
+    if isinstance(event, BetSettledPayload):
+        return format_bet_settled(event)
+
+    # Handle DataEvent
     event_type = event.event_type
     # Strip "event." prefix if present (new format: event.nfl_game_update -> nfl_game_update)
     if event_type.startswith("event."):

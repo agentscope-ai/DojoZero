@@ -275,6 +275,7 @@ class Bet(BaseModel):
 @dataclass
 class BetExecutedPayload:
     bet_id: str
+    agent_id: str
     event_id: str
     selection: str
     amount: str
@@ -309,6 +310,72 @@ class Statistics(BaseModel):
     roi: float
 
 
+# =============================================================================
+# Agent Message Models for Tracing
+# =============================================================================
+
+
+class ReasoningStep(BaseModel):
+    """Reasoning step in Chain of Thought"""
+
+    step_type: Literal["reasoning"] = "reasoning"
+    text: str = Field(default="", description="Reasoning text")
+
+
+class ToolCallStep(BaseModel):
+    """Tool call step in Chain of Thought"""
+
+    step_type: Literal["tool_call"] = "tool_call"
+    name: str = Field(default="", description="Tool name")
+    input_display: str = Field(default="", description="Formatted input")
+
+
+class ToolResultStep(BaseModel):
+    """Tool result step in Chain of Thought"""
+
+    step_type: Literal["tool_result"] = "tool_result"
+    name: str = Field(default="", description="Tool name")
+    output_display: str = Field(default="", description="Formatted output")
+
+
+# Discriminated union for CoT steps
+CoTStep = Union[ReasoningStep, ToolCallStep, ToolResultStep]
+
+
+class AgentResponseMessage(BaseModel):
+    """Main agent response with CoT and bet info for OTLP tracing"""
+
+    sequence: int = Field(default=0, description="Event sequence number")
+    stream_id: str = Field(default="", description="Stream identifier")
+    name: str = Field(default="", description="Agent name")
+    content: str = Field(default="", description="Main text response from agent")
+    cot_steps: list[CoTStep] = Field(
+        default_factory=list, description="Chain of thought process steps"
+    )
+    trigger: str = Field(default="", description="Event that triggered this response")
+    game_id: str = Field(default="", description="Game identifier")
+    # Optional bet fields - only included in tracing when a bet is placed
+    bet_type: Optional[Literal["MONEYLINE", "SPREAD", "TOTAL"]] = Field(
+        default=None, description="Type of bet"
+    )
+    bet_amount: Optional[float] = Field(default=None, description="Bet amount")
+    bet_selection: Optional[Literal["home", "away", "over", "under"]] = Field(
+        default=None, description="Selection: 'home', 'away', 'over', or 'under'"
+    )
+    bet_order_type: Optional[Literal["MARKET", "LIMIT"]] = Field(
+        default=None, description="Order type: 'MARKET' or 'LIMIT'"
+    )
+    bet_limit_probability: Optional[float] = Field(
+        default=None, description="Limit probability for LIMIT orders (0-1)"
+    )
+    bet_spread_value: Optional[float] = Field(
+        default=None, description="Spread value for SPREAD bets"
+    )
+    bet_total_value: Optional[float] = Field(
+        default=None, description="Total value for TOTAL (over/under) bets"
+    )
+
+
 __all__ = [
     # Enums
     "BetOutcome",
@@ -329,4 +396,10 @@ __all__ = [
     "BettingEvent",
     "Holding",
     "Statistics",
+    # Agent Message Models
+    "ReasoningStep",
+    "ToolCallStep",
+    "ToolResultStep",
+    "CoTStep",
+    "AgentResponseMessage",
 ]

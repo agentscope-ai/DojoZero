@@ -27,13 +27,27 @@ from dojozero.agents import (
 )
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
-from dojozero.data._models import DataEvent
+from dojozero.data._models import DataEvent, extract_game_id
+from dojozero.betting._models import (
+    ReasoningStep,
+    ToolCallStep,
+    ToolResultStep,
+    CoTStep,
+    AgentResponseMessage,
+    BetExecutedPayload,
+    BetSettledPayload,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # Type for event formatter function
-EventFormatter = Callable[[DataEvent], str]
+EventFormatter = Callable[[DataEvent | BetExecutedPayload | BetSettledPayload], str]
+
+
+def _is_formattable_payload(payload: Any) -> bool:
+    """Check if payload can be formatted by event formatter."""
+    return isinstance(payload, (DataEvent, BetExecutedPayload, BetSettledPayload))
 
 
 class _ActorIdConfig(TypedDict):
@@ -96,6 +110,172 @@ def _parse_response_content(content: Any) -> tuple[str, list[dict] | None]:
             tool_calls.append(item)
 
     return "".join(text_parts), tool_calls or None
+
+
+def _extract_memory_diff(before: list[dict], after: list[dict]) -> list[dict]:
+    """Get only new messages from this turn by comparing memory before/after.
+
+    Returns:
+        List of new messages added during this turn
+    """
+    before_len = len(before)
+    return after[before_len:]
+
+
+def _parse_cot_steps(messages: list[dict]) -> list[CoTStep]:
+    """Parse message diffs into CoT steps (tool calls, results, reasoning).
+
+    Args:
+        messages: List of new messages from this turn
+
+    Returns:
+        List of CoTStep objects representing the chain of thought
+    """
+    steps: list[CoTStep] = []
+
+    for msg in messages:
+        content = msg.get("content", [])
+        role = msg.get("role", "")
+
+        # Handle string content (reasoning text)
+        if isinstance(content, str) and content.strip():
+            if role == "assistant":
+                steps.append(ReasoningStep(text=content.strip()))
+            continue
+
+        if not isinstance(content, list):
+            continue
+
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+
+            item_type = item.get("type")
+
+            if item_type == "text":
+                # Assistant reasoning text
+                text = item.get("text", "").strip()
+                if text and role == "assistant":
+                    steps.append(ReasoningStep(text=text))
+
+            elif item_type == "tool_use":
+                # Tool call
+                tool_name = item.get("name", "unknown")
+                tool_input = item.get("input", {})
+
+                # Format input as "key=value" pairs for display
+                if isinstance(tool_input, dict):
+                    input_parts = [f"{k}={v}" for k, v in tool_input.items()]
+                    input_display = ", ".join(input_parts)
+                else:
+                    input_display = str(tool_input)
+
+                steps.append(ToolCallStep(name=tool_name, input_display=input_display))
+
+            elif item_type == "tool_result":
+                # Tool result
+                tool_name = item.get("name", "unknown")
+                tool_output = item.get("output", [])
+
+                # Format output for display
+                if isinstance(tool_output, list):
+                    output_texts = []
+                    for out_item in tool_output:
+                        if (
+                            isinstance(out_item, dict)
+                            and out_item.get("type") == "text"
+                        ):
+                            output_texts.append(out_item.get("text", ""))
+                    output_display = (
+                        " ".join(output_texts) if output_texts else str(tool_output)
+                    )
+                else:
+                    output_display = str(tool_output)
+
+                steps.append(
+                    ToolResultStep(name=tool_name, output_display=output_display)
+                )
+
+    return steps
+
+
+def _extract_bet_from_tool_calls(messages: list[dict]) -> dict[str, Any] | None:
+    """Detect place_*_bet_* tool calls and extract bet info.
+
+    Supports six tool variants (market and limit for each bet type):
+    - place_market_bet_moneyline / place_limit_bet_moneyline: MONEYLINE bet
+    - place_market_bet_spread / place_limit_bet_spread: SPREAD bet
+    - place_market_bet_total / place_limit_bet_total: TOTAL bet
+
+    Args:
+        messages: List of new messages from this turn
+
+    Returns:
+        Dict with bet fields if bet placed, None otherwise
+    """
+    # Mapping of tool names to (bet_type, order_type)
+    bet_tool_mapping: dict[str, tuple[str, str]] = {
+        "place_market_bet_moneyline": ("MONEYLINE", "MARKET"),
+        "place_limit_bet_moneyline": ("MONEYLINE", "LIMIT"),
+        "place_market_bet_spread": ("SPREAD", "MARKET"),
+        "place_limit_bet_spread": ("SPREAD", "LIMIT"),
+        "place_market_bet_total": ("TOTAL", "MARKET"),
+        "place_limit_bet_total": ("TOTAL", "LIMIT"),
+    }
+
+    for msg in messages:
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+
+            if item.get("type") != "tool_use":
+                continue
+
+            tool_name = item.get("name", "")
+            if tool_name not in bet_tool_mapping:
+                continue
+
+            tool_input = item.get("input", {})
+            if not isinstance(tool_input, dict):
+                continue
+
+            # Extract bet type and order type from tool name
+            bet_type, order_type = bet_tool_mapping[tool_name]
+            amount = tool_input.get("amount", 0)
+
+            result: dict[str, Any] = {
+                "bet_type": bet_type,
+                "bet_amount": float(amount) if amount else 0.0,
+                "bet_selection": tool_input.get("selection", "home"),
+                "bet_order_type": order_type,
+            }
+
+            # Add limit_probability for LIMIT orders
+            if order_type == "LIMIT":
+                limit_prob = tool_input.get("limit_probability")
+                if limit_prob is not None:
+                    result["bet_limit_probability"] = float(limit_prob)
+
+            # Add type-specific fields
+            if bet_type == "SPREAD":
+                spread_value = tool_input.get("spread_value")
+                if spread_value is not None:
+                    result["bet_spread_value"] = float(spread_value)
+            elif bet_type == "TOTAL":
+                total_value = tool_input.get("total_value")
+                if total_value is not None:
+                    result["bet_total_value"] = float(total_value)
+                # Default selection for total bets
+                if "selection" not in tool_input:
+                    result["bet_selection"] = "over"
+
+            return result
+
+    return None
 
 
 class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
@@ -346,33 +526,65 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             "agent '%s' stopping after %d events", self.actor_id, self._event_count
         )
 
-    def _emit_agent_span(
+    def _extract_game_id_from_events(self, events: list[StreamEvent[Any]]) -> str:
+        """Extract game_id from event payloads.
+
+        Args:
+            events: List of StreamEvent objects
+
+        Returns:
+            game_id string, or empty string if not found
+        """
+        for event in events:
+            payload = event.payload
+            # Only DataEvent contains game_id information
+            if isinstance(payload, DataEvent):
+                game_id = extract_game_id(payload.to_dict())
+                if game_id:
+                    return game_id
+        return ""
+
+    def _emit_input_span(
         self,
         stream_id: str,
-        operation_name: str,
         content: str,
-        session_history: str,
-        latest_event: str,
-        tool_calls: list[dict] | None = None,
+        game_id: str = "",
     ) -> None:
-        """Emit a span for an agent response to the OTel exporter."""
+        """Emit a span for agent input to the OTel exporter."""
         tags: dict[str, Any] = {
-            "dojozero.event.type": operation_name,
-            "dojozero.event.sequence": self._event_count,
+            "sequence": self._event_count,
             "event.stream_id": stream_id,
+            "event.role": "user",
             "event.name": self.name,
             "event.content": content,
-            "event.session_history": session_history,
-            "event.latest_event": latest_event,
+            "game.id": game_id,
         }
-
-        if tool_calls:
-            tags["event.tool_calls"] = json.dumps(tool_calls, default=str)
 
         span = create_span_from_event(
             trial_id=self.trial_id,
             actor_id=self.actor_id,
-            operation_name=operation_name,
+            operation_name="agent.input",
+            extra_tags=tags,
+        )
+        emit_span(span)
+
+    def _emit_response_span(self, message: AgentResponseMessage) -> None:
+        """Emit a span for agent response to the OTel exporter.
+
+        Args:
+            message: Structured agent response message (includes bet fields if present)
+        """
+        # Build tags from message, excluding None values (e.g., empty bet fields)
+        tags = message.model_dump(exclude_none=True)
+
+        # Serialize cot_steps to JSON string for proper display in tracing UI
+        if "cot_steps" in tags:
+            tags["cot_steps"] = json.dumps(tags["cot_steps"])
+
+        span = create_span_from_event(
+            trial_id=self.trial_id,
+            actor_id=self.actor_id,
+            operation_name="agent.response",
             extra_tags=tags,
         )
         emit_span(span)
@@ -390,7 +602,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             # Single event: format directly
             event = events[0]
             payload = event.payload
-            if isinstance(payload, DataEvent):
+            if _is_formattable_payload(payload):
                 return self._event_formatter(payload)
             else:
                 return f"[New data]: {json.dumps(payload, default=str, ensure_ascii=False)}"
@@ -400,7 +612,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         for event in events:
             payload = event.payload
-            if isinstance(payload, DataEvent):
+            if _is_formattable_payload(payload):
                 formatted = self._event_formatter(payload)
             else:
                 formatted = (
@@ -426,7 +638,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # update event history
         for event in events:
             payload = event.payload
-            if isinstance(payload, DataEvent):
+            if _is_formattable_payload(payload):
                 formatted = self._event_formatter(payload)
             else:
                 formatted = (
@@ -459,30 +671,60 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         # Use first event's stream_id for tracing
         primary_stream_id = events[0].stream_id
+        game_id = self._extract_game_id_from_events(events)
+        self._emit_input_span(
+            stream_id=primary_stream_id,
+            content=input_content,
+            game_id=game_id,
+        )
+
+        # Capture memory state BEFORE agent call
+        memory_before = await self.memory.get_memory()
+        memory_before_dicts = [m.to_dict() for m in memory_before]
 
         # Call agent
         response = await self._react_agent(msg)
 
-        # Update state before compaction
-        memory = await self.memory.get_memory()
-        memory_dicts = [m.to_dict() for m in memory]
-        self._state = memory_dicts
+        # Capture memory state AFTER agent call
+        memory_after = await self.memory.get_memory()
+        memory_after_dicts = [m.to_dict() for m in memory_after]
+        self._state = memory_after_dicts
+
+        # Get only this turn's new messages
+        turn_messages = _extract_memory_diff(memory_before_dicts, memory_after_dicts)
 
         # Emit span for agent response
         if response is not None:
-            content = getattr(response, "content", None)
-            text_content, tool_calls = _parse_response_content(content)
-            self._emit_agent_span(
+            response_content = getattr(response, "content", None)
+            text_content, _ = _parse_response_content(response_content)
+
+            # Parse CoT steps and bet info from this turn's messages
+            cot_steps = _parse_cot_steps(turn_messages)
+            bet = _extract_bet_from_tool_calls(turn_messages)
+
+            # Build trigger safely (empty string if no events)
+            trigger = ""
+            if events:
+                last_payload = events[-1].payload
+                if _is_formattable_payload(last_payload):
+                    trigger = self._event_formatter(last_payload)
+
+            # Emit agent response span with structured message (includes bet fields if present)
+            response_message = AgentResponseMessage(
+                sequence=self._event_count,
                 stream_id=primary_stream_id,
-                operation_name="agent.response",
+                name=self.name,
                 content=text_content,
-                session_history=json.dumps(memory_dicts),
-                latest_event=self._event_formatter(events[-1].payload),
-                tool_calls=tool_calls,
+                cot_steps=cot_steps,
+                trigger=trigger,
+                game_id=game_id,
+                # Bet fields - None if no bet, otherwise populated from bet dict
+                **(bet or {}),
             )
+            self._emit_response_span(response_message)
 
         # Compact memory for next iteration
-        if len(memory_dicts) >= self._compression_threshold:
+        if len(memory_after_dicts) >= self._compression_threshold:
             await self._offload()
 
         logger.info(
@@ -567,7 +809,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             # Mark as processing and queue the current event
             self._is_processing = True
 
-            # Skip processing if game is finished
+            # Skip processing if game is finished (only check DataEvent for game state)
             payload = event.payload
             if (
                 isinstance(payload, DataEvent)
@@ -578,7 +820,8 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                     "agent '%s' skipping event processing - game finished",
                     self.actor_id,
                 )
-                self._event_history.append(self._event_formatter(payload))
+                if _is_formattable_payload(payload):
+                    self._event_history.append(self._event_formatter(payload))
                 self._is_processing = False
                 return
 
@@ -622,12 +865,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
     async def save_state(self) -> Mapping[str, Any]:
         """Return serializable state for checkpointing."""
-        return {
-            "events": self._event_count,
-            "state": self._state,
-            "event_history": list(self._event_history),
-            "compressed_context": self._compressed_context,
-        }
+        return {"events": self._event_count, "state": self._state}
 
     async def load_state(self, state: Mapping[str, Any]) -> None:
         """Restore state from checkpoint.
@@ -636,15 +874,10 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         """
         self._event_count = int(state.get("events", 0))
         self._state = state.get("state", [])
-
-        # Restore memory compression state
-        self._event_history = deque(state.get("event_history", []), maxlen=1000)
-        self._compressed_context = state.get("compressed_context")
         logger.info(
-            "agent '%s' restored: events_processed=%d, event_history=%d",
+            "agent '%s' restored: events_processed=%d",
             self.actor_id,
             self._event_count,
-            len(self._event_history),
         )
 
     @property

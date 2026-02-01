@@ -1190,6 +1190,31 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             )
             emit_span(span)
 
+    async def _log_bet_executed(self, payload: BetExecutedPayload) -> None:
+        """Emit a span to trace backend when a bet is executed.
+
+        Args:
+            payload: The BetExecutedPayload containing execution details
+        """
+        tags = {
+            "broker.bet_id": payload.bet_id,
+            "broker.agent_id": payload.agent_id,
+            "broker.event_id": payload.event_id,
+            "broker.selection": payload.selection,
+            "broker.amount": payload.amount,
+            "broker.execution_probability": payload.execution_probability,
+            "broker.shares": payload.shares,
+            "broker.execution_time": payload.execution_time,
+        }
+
+        span = create_span_from_event(
+            trial_id=self.trial_id,
+            actor_id=self.actor_id,
+            operation_name="broker.bet",
+            extra_tags=tags,
+        )
+        emit_span(span)
+
     # =========================================================================
     # Account Management
     # =========================================================================
@@ -1515,19 +1540,25 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         await self._log_accounts_and_bets_status("bet_executed")
 
         # Send execution notification to agent
+        payload = BetExecutedPayload(
+            bet_id=bet.bet_id,
+            agent_id=bet.agent_id,
+            event_id=bet.event_id,
+            selection=bet.selection,
+            amount=str(bet.amount),
+            execution_probability=str(execution_probability),
+            shares=str(shares),
+            execution_time=bet.execution_time.isoformat(),
+        )
         notification = StreamEvent(
             stream_id=f"execution_{bet.bet_id}",
-            payload=BetExecutedPayload(
-                bet_id=bet.bet_id,
-                event_id=bet.event_id,
-                selection=bet.selection,
-                amount=str(bet.amount),
-                execution_probability=str(execution_probability),
-                shares=str(shares),
-                execution_time=bet.execution_time.isoformat(),
-            ),
+            payload=payload,
             emitted_at=datetime.now(),
         )
+
+        # Emit span to trace backend
+        await self._log_bet_executed(payload)
+
         asyncio.create_task(self._notify_agent(bet.agent_id, notification))
 
     async def cancel_bet(self, agent_id: str, bet_id: str) -> str:
