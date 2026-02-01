@@ -12,6 +12,24 @@ logger = logging.getLogger(__name__)
 _ESPN_GAME_END_TYPE_ID = "13"
 
 
+def _id_from_ref(obj: dict[str, Any]) -> str:
+    """Extract the numeric ID from an ESPN ``$ref`` URL.
+
+    The Core API often returns ``{"$ref": ".../teams/24?lang=en&region=us"}``
+    instead of ``{"id": "24"}``.  This helper grabs the last path segment
+    (the ID) so callers don't need to resolve the link.
+
+    Returns an empty string when the ID cannot be determined.
+    """
+    ref = obj.get("$ref", "")
+    if not ref:
+        return ""
+    # Strip query string, then take the last path segment
+    path = ref.split("?", 1)[0]
+    segment = path.rsplit("/", 1)[-1]
+    return segment if segment else ""
+
+
 class NBAExternalAPI(ExternalAPI):
     """ESPN NBA API implementation.
 
@@ -355,9 +373,13 @@ class NBAExternalAPI(ExternalAPI):
         action_type = play_type.get("text", "") if isinstance(play_type, dict) else ""
 
         # Extract team info
+        # The Core API returns $ref links ({"$ref": ".../teams/24?..."})
+        # while the summary API returns inline data ({"id": "24", "abbreviation": "SA"}).
         team = play.get("team", {})
         team_tricode = team.get("abbreviation", "") if team else ""
-        team_id = team.get("id", "") if team else ""
+        team_id = str(team.get("id", "")) if team else ""
+        if not team_id and team:
+            team_id = _id_from_ref(team)
 
         # Extract period and clock
         period = play.get("period", {})
@@ -373,13 +395,21 @@ class NBAExternalAPI(ExternalAPI):
         description = play.get("text", "")
 
         # Extract participant (player)
+        # Same $ref pattern: athlete may be {"$ref": ".../athletes/5104157?..."}
         participants = play.get("participants", []) or []
         person_id = 0
         player_name = ""
         if participants and participants[0] and isinstance(participants[0], dict):
             athlete = participants[0].get("athlete", {}) or {}
-            person_id = athlete.get("id", 0) if athlete else 0
-            player_name = athlete.get("displayName", "") if athlete else ""
+            if athlete:
+                person_id = athlete.get("id", 0)
+                if not person_id:
+                    ref_id = _id_from_ref(athlete)
+                    try:
+                        person_id = int(ref_id) if ref_id else 0
+                    except ValueError:
+                        person_id = 0
+                player_name = athlete.get("displayName", "")
 
         # Check for game end
         if play.get("type", {}).get("id") == _ESPN_GAME_END_TYPE_ID:
