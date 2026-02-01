@@ -1062,6 +1062,46 @@ class TrialOrchestrator:
             raise
         runtime.phase = TrialPhase.RUNNING
 
+        # Wire self-stop: when context.request_stop fires (GameResultEvent),
+        # schedule stop_trial() after a 10s delay for broker settlement
+        context = runtime._context
+        if context is not None and context.request_stop is not None:
+            trial_id = runtime.spec.trial_id
+            original_request_stop = context.request_stop
+
+            def _orchestrator_stop() -> None:
+                # Call original for idempotency flag + logging
+                original_request_stop()
+
+                async def _delayed_stop() -> None:
+                    await asyncio.sleep(10)
+                    if runtime.phase == TrialPhase.RUNNING:
+                        LOGGER.info("Executing self-stop for trial '%s'", trial_id)
+                        try:
+                            await self.stop_trial(trial_id)
+                        except Exception as exc:
+                            LOGGER.error(
+                                "Self-stop failed for trial '%s': %s",
+                                trial_id,
+                                exc,
+                            )
+                    else:
+                        LOGGER.info(
+                            "Self-stop skipped for trial '%s' (phase=%s)",
+                            trial_id,
+                            runtime.phase.value,
+                        )
+
+                try:
+                    asyncio.get_running_loop().create_task(_delayed_stop())
+                except RuntimeError:
+                    LOGGER.warning(
+                        "No running event loop for self-stop of trial '%s'",
+                        trial_id,
+                    )
+
+            context.request_stop = _orchestrator_stop
+
     async def _stop_runtime(self, runtime: TrialRuntime) -> None:
         if runtime.phase in {TrialPhase.STOPPED, TrialPhase.INITIALIZED}:
             return

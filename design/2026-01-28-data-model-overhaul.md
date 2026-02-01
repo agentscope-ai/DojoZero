@@ -20,6 +20,14 @@ The DojoZero data pipeline has grown organically, leading to:
 All shared models live in `src/dojozero/data/_models.py` and are used across events, metadata, stores, and API responses.
 
 ```python
+class PlayerIdentity(BaseModel):
+    """Player identification for roster/lineup data."""
+    player_id: str = ""
+    name: str = ""
+    position: str = ""          # "G", "F", "C"
+    jersey: str = ""
+    headshot_url: str = ""      # ESPN CDN: https://a.espncdn.com/i/headshots/{sport}/players/full/{id}.png
+
 class TeamIdentity(BaseModel):
     """Single source of truth for team identification."""
     team_id: str = ""
@@ -30,6 +38,7 @@ class TeamIdentity(BaseModel):
     alternate_color: str = ""
     logo_url: str = ""
     record: str = ""            # "42-18"
+    players: list[PlayerIdentity] = []  # Full roster with headshots
 
 class VenueInfo(BaseModel):
     """Venue/stadium information."""
@@ -85,7 +94,8 @@ DataEvent
                 season_type: str
 
             GameStartEvent
-                (inherits game_id, sport)
+                home_starters: list[PlayerIdentity]
+                away_starters: list[PlayerIdentity]
 
             GameResultEvent
                 winner: str             # "home", "away", ""
@@ -358,3 +368,15 @@ WebSocket Message Models
 ```
 
 `TeamIdentity` uses `serialization_alias` so `model_dump(by_alias=True)` produces camelCase keys (`teamId`, `abbrev`, `city`, `alternateColor`, `logoUrl`) matching the frontend contract. The arena server's static team lookup tables (`_NBA_TEAMS`, `_NFL_TEAMS`) return `TeamIdentity` directly — no intermediate dict conversion.
+
+### ESPN API Integration Details
+
+**`$ref` URL resolution**: The ESPN Core API (`sports.core.api.espn.com`) returns `$ref` links instead of inline data for team and athlete objects in play-by-play responses: `{"$ref": ".../teams/24?lang=en&region=us"}` rather than `{"id": "24"}`. The `_id_from_ref()` helper in `nba/_api.py` extracts numeric IDs from these URLs so play-by-play events carry correct `team_id` and `player_id` values.
+
+**PBP enrichment from boxscore**: Even after `$ref` resolution, the Core API PBP only provides numeric IDs without team tricodes or player names. The `GameStateTracker` maintains `_team_tricode_lookup` and `_player_name_lookup` maps populated from boxscore data. When PBP actions arrive with only IDs, the store enriches them with tricodes and names from these maps. Boxscore is always polled before PBP to ensure lookups are populated.
+
+**Pre-game roster enrichment**: ESPN summary boxscores include team info (name, tricode, record) but no player data before tip-off. `NBAStore._enrich_boxscore_rosters()` detects missing player lists and fetches from the ESPN `team_roster` endpoint, injecting player dicts into the boxscore so `GameInitializeEvent` carries full rosters with headshot URLs.
+
+**Starter detection**: ESPN boxscore player entries include `starter: true/false` once the game is in progress. Starters are extracted from boxscore data and cached in the `GameStateTracker`. When PBP data first arrives (game start signal), the `GameStartEvent` is emitted with `home_starters` and `away_starters` as `PlayerIdentity` lists. Pre-game, starters are unknown and these lists are empty.
+
+**Headshot URL pattern**: `https://a.espncdn.com/i/headshots/{sport}/players/full/{player_id}.png` -- works for both NBA and NFL. Constructed at `PlayerIdentity` build time from the ESPN player ID.

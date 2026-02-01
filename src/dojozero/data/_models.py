@@ -39,6 +39,22 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # =============================================================================
 
 
+class PlayerIdentity(BaseModel):
+    """Player identification for roster/lineup data.
+
+    Included in :class:`TeamIdentity` so that ``GameInitializeEvent``
+    carries per-team rosters and headshot URLs.
+    """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    player_id: str = Field(default="", serialization_alias="playerId")
+    name: str = ""
+    position: str = ""  # e.g., "G", "F", "C"
+    jersey: str = ""
+    headshot_url: str = Field(default="", serialization_alias="headshotUrl")
+
+
 class TeamIdentity(BaseModel):
     """Single representation for a team across the entire system.
 
@@ -60,6 +76,7 @@ class TeamIdentity(BaseModel):
     alternate_color: str = Field(default="", serialization_alias="alternateColor")
     logo_url: str = Field(default="", serialization_alias="logoUrl")
     record: str = ""  # Win-loss record, e.g., "42-18"
+    players: list[PlayerIdentity] = Field(default_factory=list)
 
     def __str__(self) -> str:
         return self.name
@@ -240,6 +257,19 @@ class TeamStandings(BaseModel):
 
 # Type variable for event classes
 EventT = TypeVar("EventT", bound="DataEvent")
+
+
+class PollProfile(str, Enum):
+    """Polling interval profile based on game phase.
+
+    Used by stores to dynamically adjust polling frequency
+    as the game progresses through different phases.
+    """
+
+    PRE_GAME = "pre_game"
+    IN_GAME = "in_game"
+    LATE_GAME = "late_game"
+    POST_GAME = "post_game"
 
 
 class EventTypes(str, Enum):
@@ -444,6 +474,9 @@ class GameInitializeEvent(GameEvent):
 @register_event
 class GameStartEvent(GameEvent):
     """Game start event signaling transition from scheduled to in-progress."""
+
+    home_starters: list[PlayerIdentity] = Field(default_factory=list)
+    away_starters: list[PlayerIdentity] = Field(default_factory=list)
 
     event_type: Literal["event.game_start"] = "event.game_start"
 

@@ -46,7 +46,7 @@ class NFLStoreFactory(StoreFactory):
                 poll_intervals=poll_intervals,
             )
         else:
-            # Use default intervals: {"scoreboard": 60.0, "summary": 30.0, "plays": 10.0}
+            # Use default intervals (PRE_GAME profile)
             store = NFLStore(
                 store_id=store_id,
                 api=api,

@@ -1,6 +1,6 @@
 """ESPN data infrastructure module.
 
-Provides generic ESPN API integration for any ESPN-supported sport/league.
+Provides the ESPN API layer for sport-specific stores (NBA, NFL, etc.).
 
 Supported sports and leagues:
     - football/nfl, football/college-football
@@ -14,12 +14,7 @@ Supported sports and leagues:
     - racing/f1
 
 Example:
-    from dojozero.data.espn import ESPNStore, ESPNExternalAPI
-
-    # Create a store for any sport
-    nfl_store = ESPNStore(sport="football", league="nfl")
-    nba_store = ESPNStore(sport="basketball", league="nba")
-    epl_store = ESPNStore(sport="soccer", league="eng.1")
+    from dojozero.data.espn import ESPNExternalAPI
 
     # Use the API directly
     api = ESPNExternalAPI(sport="football", league="nfl")
@@ -27,40 +22,30 @@ Example:
 """
 
 from dojozero.data.espn._api import ESPNExternalAPI, get_espn_game_url, get_proxy
-from dojozero.data.espn._events import (
-    ESPNGameUpdateEvent,
-    ESPNPlayEvent,
-)
-from dojozero.data.espn._state_tracker import ESPNStateTracker
+from dojozero.data.espn._state_tracker import BaseGameStateTracker
 from dojozero.data.espn._stats_events import PreGameStatsEvent
 from dojozero.data.espn._stats_fetcher import fetch_pregame_stats
-from dojozero.data.espn._store import ESPNStore
 
-# Game status constants (re-exported from ESPNStateTracker for convenience)
-STATUS_SCHEDULED = ESPNStateTracker.STATUS_SCHEDULED
-STATUS_IN_PROGRESS = ESPNStateTracker.STATUS_IN_PROGRESS
-STATUS_FINAL = ESPNStateTracker.STATUS_FINAL
-STATUS_POSTPONED = ESPNStateTracker.STATUS_POSTPONED
-STATUS_CANCELLED = ESPNStateTracker.STATUS_CANCELLED
+# Game status constants (used by scheduler for game lifecycle detection)
+STATUS_SCHEDULED = 1
+STATUS_IN_PROGRESS = 2
+STATUS_FINAL = 3
+STATUS_POSTPONED = 4
+STATUS_CANCELLED = 5
 
 __all__ = [
     # API
     "ESPNExternalAPI",
     "get_proxy",
     "get_espn_game_url",
-    # Store
-    "ESPNStore",
-    # State Tracker
-    "ESPNStateTracker",
+    # State tracking
+    "BaseGameStateTracker",
     # Status Constants
     "STATUS_SCHEDULED",
     "STATUS_IN_PROGRESS",
     "STATUS_FINAL",
     "STATUS_POSTPONED",
     "STATUS_CANCELLED",
-    # Events (generic ESPN, lifecycle events are now unified in _models)
-    "ESPNGameUpdateEvent",
-    "ESPNPlayEvent",
     # Stats Insight Events
     "PreGameStatsEvent",
     "fetch_pregame_stats",

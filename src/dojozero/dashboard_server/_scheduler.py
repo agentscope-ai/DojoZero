@@ -337,7 +337,7 @@ class ScheduleManager:
         store: SchedulerStore | None = None,
         sync_interval_seconds: float = 300.0,  # 5 minutes default
         max_concurrent_launches: int = 10,  # Max trials to launch concurrently
-        grace_period_seconds: float = 300.0,  # 5 min grace period for finished games
+        grace_period_seconds: float = 60.0,  # Safety net (self-stop is primary at 10s)
     ):
         """Initialize the ScheduleManager.
 

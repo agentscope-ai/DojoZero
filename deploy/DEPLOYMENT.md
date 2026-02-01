@@ -110,7 +110,7 @@ ls -lh data/nba-betting/2025-12-17/
 
 ```bash
 # Update
-uv pip install --upgrade . "nba_api" "tavily-python" "dashscope"
+uv pip install --upgrade . "tavily-python" "dashscope"
 
 # Clean old game logs (30+ days)
 find data/nba-betting/ -name "*.log" -mtime +30 -delete

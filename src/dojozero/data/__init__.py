@@ -26,6 +26,7 @@ from dojozero.data._models import (
     TotalOdds,
     SportEvent,
     StatsInsightEvent,
+    PlayerIdentity,
     TeamIdentity,
     VenueInfo as SharedVenueInfo,
     WebSearchInsightEvent,
@@ -67,8 +68,6 @@ from dojozero.data.polymarket import (
     PolymarketStore,
 )
 from dojozero.data.espn import (
-    ESPNGameUpdateEvent,
-    ESPNPlayEvent,
     PreGameStatsEvent,
 )
 from dojozero.data.websearch import (
@@ -99,8 +98,6 @@ AnyDataEvent = Annotated[
         NFLPlayEvent,
         NFLDriveEvent,
         NFLGameUpdateEvent,
-        ESPNGameUpdateEvent,
-        ESPNPlayEvent,
         PreGameStatsEvent,
         InjuryReportEvent,
         PowerRankingEvent,
@@ -151,6 +148,7 @@ __all__ = [
     "GameResultEvent",
     "OddsUpdateEvent",
     # Shared models
+    "PlayerIdentity",
     "TeamIdentity",
     "SharedVenueInfo",
     "OddsInfo",
@@ -189,9 +187,6 @@ __all__ = [
     "NFLPlayEvent",
     "NFLDriveEvent",
     "NFLGameUpdateEvent",
-    # ESPN
-    "ESPNGameUpdateEvent",
-    "ESPNPlayEvent",
     # Polymarket
     "PolymarketAPI",
     "PolymarketStore",

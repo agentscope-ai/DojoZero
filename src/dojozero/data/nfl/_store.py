@@ -1,5 +1,6 @@
 """NFL data store implementation."""
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
@@ -9,6 +10,7 @@ from dojozero.data._models import (
     GameResultEvent,
     GameStartEvent,
     OddsUpdateEvent,
+    PollProfile,
 )
 from dojozero.data._models import (
     MoneylineOdds,
@@ -27,11 +29,19 @@ from dojozero.data.nfl._events import (
 )
 from dojozero.data.nfl._state_tracker import NFLGameStateTracker
 
+logger = logging.getLogger(__name__)
+
 
 class NFLStore(DataStore):
     """NFL data store for polling ESPN API and emitting events."""
 
     sport_type: str = "nfl"
+
+    _POLL_PROFILES: dict[PollProfile, dict[str, float]] = {
+        PollProfile.PRE_GAME: {"scoreboard": 120.0, "summary": 60.0, "plays": 30.0},
+        PollProfile.IN_GAME: {"scoreboard": 60.0, "summary": 15.0, "plays": 10.0},
+        PollProfile.LATE_GAME: {"scoreboard": 30.0, "summary": 10.0, "plays": 5.0},
+    }
 
     def __init__(
         self,
@@ -42,17 +52,17 @@ class NFLStore(DataStore):
     ):
         """Initialize NFL store.
 
-        Default polling intervals:
-        - scoreboard: 60.0 seconds (check for new games, odds updates)
-        - summary: 30.0 seconds (boxscore updates during games)
-        - plays: 10.0 seconds (play-by-play during games)
+        Default polling intervals (PRE_GAME profile):
+        - scoreboard: 120.0 seconds
+        - summary: 60.0 seconds
+        - plays: 30.0 seconds
+
+        Intervals adjust automatically based on game phase:
+        - IN_GAME: scoreboard=60s, summary=15s, plays=10s
+        - LATE_GAME (4Q+ and close score): scoreboard=30s, summary=10s, plays=5s
         """
         if poll_intervals is None:
-            poll_intervals = {
-                "scoreboard": 60.0,
-                "summary": 30.0,
-                "plays": 10.0,
-            }
+            poll_intervals = dict(self._POLL_PROFILES[PollProfile.PRE_GAME])
 
         super().__init__(
             store_id,
@@ -61,6 +71,7 @@ class NFLStore(DataStore):
             event_emitter,
         )
         self._state = NFLGameStateTracker()
+        self._current_poll_profile: PollProfile = PollProfile.PRE_GAME
 
     def _parse_api_response(
         self, data: dict[str, Any], target_event_id: str | None = None
@@ -91,6 +102,23 @@ class NFLStore(DataStore):
         if "plays" in data:
             plays_events = self._parse_plays(data["plays"], timestamp)
             events.extend(plays_events)
+
+        # Check if poll profile needs to change
+        espn_game_id = (self._poll_identifier or {}).get("espn_game_id", "")
+        if espn_game_id:
+            new_profile = self._state.get_poll_profile(espn_game_id)
+            if new_profile != self._current_poll_profile:
+                intervals = self._POLL_PROFILES.get(new_profile)
+                if intervals:
+                    for endpoint, interval in intervals.items():
+                        self.update_poll_interval(endpoint, interval)
+                logger.info(
+                    "Poll profile changed: %s -> %s for game %s",
+                    self._current_poll_profile.value,
+                    new_profile.value,
+                    espn_game_id,
+                )
+                self._current_poll_profile = new_profile
 
         return events
 
@@ -413,6 +441,11 @@ class NFLStore(DataStore):
                         home_team_dict["score"] = score
                     else:
                         away_team_dict["score"] = score
+
+                # Track period and scores for poll profile calculation
+                home_score = home_team_dict.get("score", 0) if home_team_dict else 0
+                away_score = away_team_dict.get("score", 0) if away_team_dict else 0
+                self._state.update_game_state(event_id, quarter, home_score, away_score)
 
                 # Only emit update if we should (skip duplicates for concluded games)
                 if should_emit_update:

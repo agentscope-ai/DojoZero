@@ -2,11 +2,15 @@
 
 from typing import Any, Sequence
 
+import logging
+
 from dojozero.data._models import (
     DataEvent,
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
+    PlayerIdentity,
+    PollProfile,
     TeamIdentity,
     VenueInfo,
 )
@@ -22,10 +26,19 @@ from dojozero.data.nba._events import (
 from dojozero.data.nba._state_tracker import GameStateTracker
 
 
+logger = logging.getLogger(__name__)
+
+
 class NBAStore(DataStore):
     """NBA data store for polling NBA API and emitting events."""
 
     sport_type: str = "nba"
+
+    _POLL_PROFILES: dict[PollProfile, dict[str, float]] = {
+        PollProfile.PRE_GAME: {"boxscore": 120.0, "play_by_play": 60.0},
+        PollProfile.IN_GAME: {"boxscore": 30.0, "play_by_play": 10.0},
+        PollProfile.LATE_GAME: {"boxscore": 15.0, "play_by_play": 5.0},
+    }
 
     def __init__(
         self,
@@ -36,16 +49,17 @@ class NBAStore(DataStore):
     ):
         """Initialize NBA store.
 
-        Default polling intervals:
-        - boxscore: 60.0 seconds (for complete game updates with all leaders)
-        - play_by_play: 20.0 seconds (for all play-by-play events and game status)
+        Default polling intervals (PRE_GAME profile):
+        - boxscore: 120.0 seconds
+        - play_by_play: 60.0 seconds
+
+        Intervals adjust automatically based on game phase:
+        - IN_GAME: boxscore=30s, play_by_play=10s
+        - LATE_GAME (4Q+ and close score): boxscore=15s, play_by_play=5s
         """
-        # Set default poll_intervals if not provided
+        # Set default poll_intervals if not provided (PRE_GAME profile)
         if poll_intervals is None:
-            poll_intervals = {
-                "boxscore": 60.0,  # Complete game updates with all leaders
-                "play_by_play": 20.0,  # All play-by-play events and game status detection
-            }
+            poll_intervals = dict(self._POLL_PROFILES[PollProfile.PRE_GAME])
 
         super().__init__(
             store_id,
@@ -55,6 +69,7 @@ class NBAStore(DataStore):
         )
         # Game state tracker manages all state variables in one place
         self._state = GameStateTracker()
+        self._current_poll_profile: PollProfile = PollProfile.PRE_GAME
 
     def _extract_player_stats_from_boxscore(
         self, boxscore_data: dict[str, Any]
@@ -83,6 +98,75 @@ class NBAStore(DataStore):
             "away": away_players if isinstance(away_players, list) else [],
         }
 
+    @staticmethod
+    def _build_player_identities(
+        players: list[dict[str, Any]], sport: str
+    ) -> list[PlayerIdentity]:
+        """Build ``PlayerIdentity`` list from boxscore player dicts."""
+        result: list[PlayerIdentity] = []
+        for p in players:
+            pid = str(p.get("personId", ""))
+            result.append(
+                PlayerIdentity(
+                    player_id=pid,
+                    name=p.get("name", ""),
+                    position=p.get("position", ""),
+                    jersey=p.get("jersey", ""),
+                    headshot_url=(
+                        f"https://a.espncdn.com/i/headshots/{sport}/players/full/{pid}.png"
+                        if pid
+                        else ""
+                    ),
+                )
+            )
+        return result
+
+    async def _enrich_boxscore_rosters(self, boxscore_data: dict[str, Any]) -> None:
+        """Fetch team rosters and inject into boxscore when players are missing.
+
+        Pre-game boxscores have team info but no player data.  This method
+        fetches rosters from the ESPN team_roster endpoint and merges them
+        into the boxscore dict so that ``_parse_api_response`` can build
+        ``PlayerIdentity`` lists for ``GameInitializeEvent``.
+        """
+        bs = boxscore_data.get("boxscore", {})
+        if not bs:
+            return
+
+        for side in ("homeTeam", "awayTeam"):
+            team_data = bs.get(side, {})
+            if not team_data or team_data.get("players"):
+                continue  # Already has players
+
+            team_id = str(team_data.get("teamId", ""))
+            if not team_id or not isinstance(self._api, NBAExternalAPI):
+                continue
+
+            try:
+                # Access the underlying ESPN API for team_roster
+                result = await self._api._api.fetch("team_roster", {"team_id": team_id})
+                athletes = result.get("team_roster", {}).get("athletes", [])
+                players: list[dict[str, Any]] = []
+                for a in athletes:
+                    if not isinstance(a, dict):
+                        continue
+                    pos = a.get("position", {})
+                    players.append(
+                        {
+                            "personId": a.get("id", 0),
+                            "name": a.get("displayName", ""),
+                            "position": pos.get("abbreviation", "")
+                            if isinstance(pos, dict)
+                            else "",
+                            "jersey": a.get("jersey", ""),
+                        }
+                    )
+                team_data["players"] = players
+            except Exception:
+                logger.debug(
+                    "Failed to fetch roster for team %s", team_id, exc_info=True
+                )
+
     def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
         """Parse NBA API response into DataEvents."""
         from datetime import datetime, timezone
@@ -108,6 +192,32 @@ class NBAStore(DataStore):
 
             # Check if this is the initial call (no team data available yet - pre-game)
             has_team_data = bool(home_team_data and away_team_data)
+
+            # Build team/player lookup maps for PBP enrichment
+            if has_team_data:
+                for team_data in (home_team_data, away_team_data):
+                    tid = str(team_data.get("teamId", ""))
+                    tri = team_data.get("teamTricode", "")
+                    self._state.update_team_lookup(tid, tri)
+                    for player in team_data.get("players", []):
+                        if isinstance(player, dict):
+                            pid = player.get("personId", 0)
+                            pname = player.get("name", "")
+                            self._state.update_player_lookup(int(pid), pname)
+
+                # Extract starters from boxscore (starter=True per player)
+                home_starters = [
+                    p
+                    for p in home_team_data.get("players", [])
+                    if isinstance(p, dict) and p.get("starter")
+                ]
+                away_starters = [
+                    p
+                    for p in away_team_data.get("players", [])
+                    if isinstance(p, dict) and p.get("starter")
+                ]
+                if home_starters or away_starters:
+                    self._state.set_starters(game_id, home_starters, away_starters)
 
             # Emit GameInitializeEvent on first call when team data is not yet available
             if not self._state.is_game_initialized(game_id) and not has_team_data:
@@ -164,9 +274,6 @@ class NBAStore(DataStore):
                 except (KeyError, TypeError, ValueError, AttributeError) as e:
                     # If we can't get game info, skip GameInitializeEvent
                     # It will be emitted when boxscore data becomes available
-                    import logging
-
-                    logger = logging.getLogger(__name__)
                     logger.debug(
                         "Could not get game info for GameInitializeEvent: game_id=%s, error=%s",
                         game_id,
@@ -187,6 +294,9 @@ class NBAStore(DataStore):
                 # Extract scores from statistics
                 home_score = home_stats.get("points", 0) or 0
                 away_score = away_stats.get("points", 0) or 0
+
+                # Track scores for poll profile calculation
+                self._state.update_scores(game_id, home_score, away_score)
 
                 # Extract all player stats from BoxScore (pass through raw data)
                 player_stats = self._extract_player_stats_from_boxscore(boxscore_data)
@@ -316,6 +426,13 @@ class NBAStore(DataStore):
                         except (KeyError, TypeError, ValueError, AttributeError):
                             pass  # Use defaults
 
+                        home_players = self._build_player_identities(
+                            home_team_data.get("players", []), "nba"
+                        )
+                        away_players = self._build_player_identities(
+                            away_team_data.get("players", []), "nba"
+                        )
+
                         events.append(
                             GameInitializeEvent(
                                 timestamp=timestamp,
@@ -330,6 +447,7 @@ class NBAStore(DataStore):
                                     alternate_color=home_alt_color,
                                     logo_url=home_logo,
                                     record=home_record,
+                                    players=home_players,
                                 ),
                                 away_team=TeamIdentity(
                                     team_id=str(away_team_data.get("teamId", "")),
@@ -340,6 +458,7 @@ class NBAStore(DataStore):
                                     alternate_color=away_alt_color,
                                     logo_url=away_logo,
                                     record=away_record,
+                                    players=away_players,
                                 ),
                                 venue=venue,
                                 game_time=game_time_dt,
@@ -375,6 +494,12 @@ class NBAStore(DataStore):
                             timestamp=datetime.now(timezone.utc),
                             game_id=game_id,
                             sport="nba",
+                            home_starters=self._build_player_identities(
+                                self._state.get_home_starters(game_id), "nba"
+                            ),
+                            away_starters=self._build_player_identities(
+                                self._state.get_away_starters(game_id), "nba"
+                            ),
                         )
                     )
                     self._state.set_previous_status(game_id, 2)  # In Progress
@@ -443,6 +568,13 @@ class NBAStore(DataStore):
                 player_name = action.get("playerName", "") or action.get("name", "")
                 team_id = str(action.get("teamId", ""))
                 team_tricode = action.get("teamTricode", "")
+
+                # Enrich from boxscore lookup maps when ESPN PBP
+                # only provides numeric IDs without names/tricodes
+                if team_id and not team_tricode:
+                    team_tricode = self._state.get_team_tricode(team_id)
+                if person_id and not player_name:
+                    player_name = self._state.get_player_name(int(person_id))
                 home_score = int(action.get("scoreHome", 0) or 0)
                 away_score = int(action.get("scoreAway", 0) or 0)
                 description = action.get("description", "")
@@ -477,6 +609,21 @@ class NBAStore(DataStore):
                     )
                 )
 
+        # Check if poll profile needs to change
+        new_profile = self._state.get_poll_profile(game_id)
+        if new_profile != self._current_poll_profile:
+            intervals = self._POLL_PROFILES.get(new_profile)
+            if intervals:
+                for endpoint, interval in intervals.items():
+                    self.update_poll_interval(endpoint, interval)
+            logger.info(
+                "Poll profile changed: %s -> %s for game %s",
+                self._current_poll_profile.value,
+                new_profile.value,
+                game_id,
+            )
+            self._current_poll_profile = new_profile
+
         return events
 
     async def _poll_api(
@@ -500,6 +647,12 @@ class NBAStore(DataStore):
                 # Fetch boxscore data
                 boxscore_data = await self._api.fetch("boxscore", boxscore_params)
                 if boxscore_data:
+                    # Pre-game: boxscore has teams but no players.
+                    # Fetch rosters so GameInitializeEvent carries full lineups.
+                    if not self._state.is_game_initialized(
+                        boxscore_data.get("boxscore", {}).get("gameId", "")
+                    ):
+                        await self._enrich_boxscore_rosters(boxscore_data)
                     boxscore_events = self._parse_api_response(boxscore_data)
                     events.extend(boxscore_events)
                     self._record_poll_time("boxscore")

@@ -122,8 +122,8 @@ class DataHub:
         self._pending_dispatch: dict[str, list[_EventEnvelope]] = defaultdict(list)
         self._max_pending_per_game: int = 200
 
-        # Pregame callback: invoked after GameInitializeEvent with stores paused
-        self._on_game_initialized: Callable[[str], Awaitable[None]] | None = None
+        # Pregame callbacks: invoked after GameInitializeEvent with stores paused
+        self._on_game_initialized_callbacks: list[Callable[[str], Awaitable[None]]] = []
 
     def subscribe_agent(
         self,
@@ -360,16 +360,21 @@ class DataHub:
             if phase == _GamePhase.PENDING:
                 self._game_phases[event_game_id] = _GamePhase.PREGAME
                 await self._deliver_event(envelope)
-                # Run pregame callback with stores paused so web searches
+                # Run pregame callbacks with stores paused so web searches
                 # complete before any new poll events arrive.
-                if self._on_game_initialized:
+                if self._on_game_initialized_callbacks:
                     logger.info(
                         "Pausing stores — waiting on pre-game events for game_id=%s",
                         event_game_id,
                     )
                     self._pause_connected_stores()
                     try:
-                        await self._on_game_initialized(event_game_id)
+                        await asyncio.gather(
+                            *(
+                                cb(event_game_id)
+                                for cb in self._on_game_initialized_callbacks
+                            )
+                        )
                     finally:
                         self._resume_connected_stores()
                         logger.info(
@@ -570,16 +575,19 @@ class DataHub:
         if store not in self._connected_stores:
             self._connected_stores.append(store)
 
-    def set_on_game_initialized(
+    def add_on_game_initialized(
         self, callback: Callable[[str], Awaitable[None]]
     ) -> None:
         """Register a callback invoked after ``GameInitializeEvent``.
 
-        The callback receives the ``game_id`` string.  While the callback
-        runs, all connected stores are paused so no new poll events race
+        Multiple callbacks can be registered; they all run concurrently
+        via ``asyncio.gather`` while connected stores are paused.
+
+        The callback receives the ``game_id`` string.  While the callbacks
+        run, all connected stores are paused so no new poll events race
         with pre-game work (e.g., web searches).
         """
-        self._on_game_initialized = callback
+        self._on_game_initialized_callbacks.append(callback)
 
     def _pause_connected_stores(self) -> None:
         """Pause polling on all connected stores."""

@@ -826,9 +826,9 @@ class TestScheduleManagerConcurrencyAndGracePeriod:
             store=None,
         )
 
-        # Defaults: max_concurrent_launches=10, grace_period_seconds=300.0
+        # Defaults: max_concurrent_launches=10, grace_period_seconds=60.0
         assert scheduler._max_concurrent_launches == 10
-        assert scheduler._grace_period_seconds == 300.0
+        assert scheduler._grace_period_seconds == 60.0
 
     def test_scheduled_trial_monitoring_fields_serialization(self):
         """Test that monitoring fields are serialized correctly."""

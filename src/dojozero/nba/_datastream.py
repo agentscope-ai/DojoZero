@@ -122,7 +122,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         )
         has_stats = self._stats_event_types and self._espn_api and self._game_context
         if (has_websearch or has_stats) and self._hub:
-            self._hub.set_on_game_initialized(self._on_game_initialized)
+            self._hub.add_on_game_initialized(self._on_game_initialized)
 
     async def _on_game_initialized(self, _game_id: str) -> None:
         """Hub callback: run pre-game data fetching while stores are paused."""
