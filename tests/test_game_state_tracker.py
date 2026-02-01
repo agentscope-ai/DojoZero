@@ -238,6 +238,57 @@ class TestBoxscoreCache:
         assert tracker.get_boxscore_cache("game2") == cache2
 
 
+class TestStarters:
+    """Tests for starting lineup tracking."""
+
+    def test_get_starters_returns_empty_initially(self, tracker):
+        """Test that starters are empty for unseen games."""
+        assert tracker.get_home_starters("game123") == []
+        assert tracker.get_away_starters("game123") == []
+
+    def test_set_and_get_starters(self, tracker):
+        """Test setting and getting starters."""
+        home = [{"personId": 1, "name": "Player A", "starter": True}]
+        away = [{"personId": 2, "name": "Player B", "starter": True}]
+        tracker.set_starters("game123", home, away)
+
+        assert tracker.get_home_starters("game123") == home
+        assert tracker.get_away_starters("game123") == away
+
+    def test_starters_separate_per_game(self, tracker):
+        """Test that starters are tracked per game."""
+        home1 = [{"personId": 1, "name": "Player A"}]
+        away1 = [{"personId": 2, "name": "Player B"}]
+        home2 = [{"personId": 3, "name": "Player C"}]
+        away2 = [{"personId": 4, "name": "Player D"}]
+
+        tracker.set_starters("game1", home1, away1)
+        tracker.set_starters("game2", home2, away2)
+
+        assert tracker.get_home_starters("game1") == home1
+        assert tracker.get_away_starters("game1") == away1
+        assert tracker.get_home_starters("game2") == home2
+        assert tracker.get_away_starters("game2") == away2
+
+    def test_starters_can_be_updated(self, tracker):
+        """Test that starters can be overwritten."""
+        initial = [{"personId": 1, "name": "Player A"}]
+        updated = [{"personId": 5, "name": "Player E"}]
+
+        tracker.set_starters("game123", initial, initial)
+        tracker.set_starters("game123", updated, updated)
+
+        assert tracker.get_home_starters("game123") == updated
+        assert tracker.get_away_starters("game123") == updated
+
+    def test_starters_empty_lists(self, tracker):
+        """Test setting empty starters."""
+        tracker.set_starters("game123", [], [])
+
+        assert tracker.get_home_starters("game123") == []
+        assert tracker.get_away_starters("game123") == []
+
+
 class TestTrackerStateIndependence:
     """Tests for tracker state independence and isolation."""
 

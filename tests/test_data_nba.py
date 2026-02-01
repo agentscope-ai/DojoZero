@@ -10,7 +10,7 @@ Games are identified by ESPN event IDs (e.g., '401810490').
 
 import os
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,7 +19,9 @@ from dojozero.data._models import (
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
+    PlayerIdentity,
 )
+from dojozero.data.nba._api import NBAExternalAPI, _id_from_ref
 from dojozero.data.nba._events import (
     NBAGameUpdateEvent as GameUpdateEvent,
     NBAPlayEvent as PlayByPlayEvent,
@@ -595,6 +597,610 @@ class TestNBAStoreExtractPlayerStats:
 
         assert result["home"] == []
         assert result["away"] == []
+
+
+# =============================================================================
+# Unit Tests for _id_from_ref helper (ESPN $ref URL parsing)
+# =============================================================================
+
+
+class TestIdFromRef:
+    """Tests for _id_from_ref ESPN $ref URL parser."""
+
+    def test_standard_team_ref(self):
+        """Test extracting team ID from standard $ref URL."""
+        obj = {
+            "$ref": "http://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/teams/24?lang=en&region=us"
+        }
+        assert _id_from_ref(obj) == "24"
+
+    def test_athlete_ref(self):
+        """Test extracting athlete ID from $ref URL."""
+        obj = {
+            "$ref": "http://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/athletes/5104157?lang=en"
+        }
+        assert _id_from_ref(obj) == "5104157"
+
+    def test_ref_without_query_string(self):
+        """Test $ref URL without query parameters."""
+        obj = {"$ref": "http://sports.core.api.espn.com/v2/teams/10"}
+        assert _id_from_ref(obj) == "10"
+
+    def test_empty_ref(self):
+        """Test empty $ref value returns empty string."""
+        assert _id_from_ref({"$ref": ""}) == ""
+
+    def test_missing_ref(self):
+        """Test missing $ref key returns empty string."""
+        assert _id_from_ref({}) == ""
+        assert _id_from_ref({"id": "24"}) == ""
+
+    def test_ref_with_trailing_slash(self):
+        """Test $ref URL with trailing slash."""
+        obj = {"$ref": "http://example.com/teams/24/"}
+        # rsplit on "/" gives empty last segment
+        assert _id_from_ref(obj) == ""
+
+
+# =============================================================================
+# Unit Tests for NBAExternalAPI._convert_play_to_action (ESPN play conversion)
+# =============================================================================
+
+
+class TestConvertPlayToAction:
+    """Tests for _convert_play_to_action with $ref fallback."""
+
+    @pytest.fixture
+    def api(self):
+        """Create NBAExternalAPI instance."""
+        return NBAExternalAPI()
+
+    def test_inline_team_and_player_ids(self, api):
+        """Test play with inline team and player data."""
+        play = {
+            "type": {"text": "Shot"},
+            "team": {"id": "24", "abbreviation": "SA"},
+            "period": {"number": 1},
+            "clock": {"displayValue": "10:30"},
+            "homeScore": 2,
+            "awayScore": 0,
+            "text": "Player makes shot",
+            "participants": [{"athlete": {"id": 5104157, "displayName": "John Doe"}}],
+            "scoringPlay": True,
+            "scoreValue": 2,
+            "sequenceNumber": "42",
+        }
+        result = api._convert_play_to_action(play, 0)
+
+        assert result["teamId"] == "24"
+        assert result["teamTricode"] == "SA"
+        assert result["personId"] == 5104157
+        assert result["playerName"] == "John Doe"
+        assert result["period"] == 1
+        assert result["clock"] == "10:30"
+        assert result["scoringPlay"] is True
+
+    def test_ref_fallback_for_team_id(self, api):
+        """Test team ID extraction falls back to $ref when inline id missing."""
+        play = {
+            "type": {"text": "Shot"},
+            "team": {"$ref": "http://sports.core.api.espn.com/v2/teams/24?lang=en"},
+            "period": {"number": 1},
+            "clock": {"displayValue": "10:30"},
+            "text": "Shot attempt",
+        }
+        result = api._convert_play_to_action(play, 0)
+
+        assert result["teamId"] == "24"
+
+    def test_ref_fallback_for_athlete_id(self, api):
+        """Test athlete ID extraction falls back to $ref."""
+        play = {
+            "type": {"text": "Shot"},
+            "team": {},
+            "period": {"number": 1},
+            "clock": {"displayValue": "10:30"},
+            "text": "Shot attempt",
+            "participants": [
+                {
+                    "athlete": {
+                        "$ref": "http://sports.core.api.espn.com/v2/athletes/5104157?lang=en"
+                    }
+                }
+            ],
+        }
+        result = api._convert_play_to_action(play, 0)
+
+        assert result["personId"] == 5104157
+
+    def test_game_end_detection(self, api):
+        """Test game end play type detection."""
+        play = {
+            "type": {"id": "13", "text": "End Period"},
+            "period": {"number": 4},
+            "clock": {"displayValue": "0:00"},
+            "text": "End of 4th Quarter",
+        }
+        result = api._convert_play_to_action(play, 0)
+
+        assert result["actionType"] == "game"
+        assert result["description"] == "Game End"
+
+    def test_invalid_play_returns_none(self, api):
+        """Test invalid play inputs return None."""
+        assert api._convert_play_to_action({}, 0) is None  # empty dict is falsy
+        assert api._convert_play_to_action(None, 0) is None
+        assert api._convert_play_to_action("invalid", 0) is None
+
+    def test_missing_participants(self, api):
+        """Test play with no participants."""
+        play = {
+            "type": {"text": "Timeout"},
+            "period": {"number": 2},
+            "clock": {"displayValue": "5:00"},
+            "text": "Timeout",
+        }
+        result = api._convert_play_to_action(play, 5)
+
+        assert result["personId"] == 0
+        assert result["playerName"] == ""
+        assert result["actionNumber"] == 5
+
+
+# =============================================================================
+# Unit Tests for PlayerIdentity model
+# =============================================================================
+
+
+class TestPlayerIdentity:
+    """Tests for PlayerIdentity Pydantic model."""
+
+    def test_creation_with_defaults(self):
+        """Test PlayerIdentity creation with default values."""
+        p = PlayerIdentity()
+        assert p.player_id == ""
+        assert p.name == ""
+        assert p.position == ""
+        assert p.jersey == ""
+        assert p.headshot_url == ""
+
+    def test_creation_with_values(self):
+        """Test PlayerIdentity creation with explicit values."""
+        p = PlayerIdentity(
+            player_id="3917376",
+            name="Jaylen Brown",
+            position="G",
+            jersey="7",
+            headshot_url="https://a.espncdn.com/i/headshots/nba/players/full/3917376.png",
+        )
+        assert p.player_id == "3917376"
+        assert p.name == "Jaylen Brown"
+        assert p.position == "G"
+        assert p.jersey == "7"
+
+    def test_frozen(self):
+        """Test PlayerIdentity is immutable."""
+        p = PlayerIdentity(player_id="1", name="Test")
+        with pytest.raises(Exception):  # ValidationError for frozen model
+            p.name = "Changed"
+
+    def test_serialization_aliases(self):
+        """Test that serialization aliases produce camelCase keys."""
+        p = PlayerIdentity(
+            player_id="123",
+            headshot_url="https://example.com/img.png",
+        )
+        dumped = p.model_dump(by_alias=True)
+        assert "playerId" in dumped
+        assert "headshotUrl" in dumped
+        assert dumped["playerId"] == "123"
+
+    def test_round_trip_via_dict(self):
+        """Test PlayerIdentity survives dict round-trip."""
+        original = PlayerIdentity(
+            player_id="3917376",
+            name="Jaylen Brown",
+            position="G",
+            jersey="7",
+            headshot_url="https://a.espncdn.com/i/headshots/nba/players/full/3917376.png",
+        )
+        data = original.model_dump()
+        restored = PlayerIdentity.model_validate(data)
+        assert restored == original
+
+
+# =============================================================================
+# Unit Tests for NBAStore._build_player_identities
+# =============================================================================
+
+
+class TestBuildPlayerIdentities:
+    """Tests for NBAStore._build_player_identities static method."""
+
+    def test_builds_from_boxscore_players(self):
+        """Test building PlayerIdentity list from boxscore player dicts."""
+        players = [
+            {
+                "personId": 3917376,
+                "name": "Jaylen Brown",
+                "position": "G",
+                "jersey": "7",
+            },
+            {
+                "personId": 4066354,
+                "name": "Payton Pritchard",
+                "position": "G",
+                "jersey": "11",
+            },
+        ]
+        result = NBAStore._build_player_identities(players, "nba")
+
+        assert len(result) == 2
+        assert result[0].player_id == "3917376"
+        assert result[0].name == "Jaylen Brown"
+        assert (
+            result[0].headshot_url
+            == "https://a.espncdn.com/i/headshots/nba/players/full/3917376.png"
+        )
+        assert result[1].player_id == "4066354"
+
+    def test_empty_player_list(self):
+        """Test building from empty list."""
+        result = NBAStore._build_player_identities([], "nba")
+        assert result == []
+
+    def test_missing_fields_use_defaults(self):
+        """Test that missing fields default gracefully."""
+        players = [{"personId": 0}]
+        result = NBAStore._build_player_identities(players, "nba")
+
+        assert len(result) == 1
+        assert result[0].player_id == "0"
+        assert result[0].name == ""
+        assert result[0].position == ""
+        # pid "0" is truthy string, so headshot URL is generated
+        assert "0.png" in result[0].headshot_url
+
+    def test_headshot_url_empty_for_missing_pid(self):
+        """Test that headshot URL is empty when player_id is missing."""
+        players = [{"name": "Unknown"}]
+        result = NBAStore._build_player_identities(players, "nba")
+
+        assert result[0].headshot_url == ""
+
+    def test_nfl_sport_type(self):
+        """Test headshot URL uses correct sport path for NFL."""
+        players = [{"personId": 12345, "name": "QB One"}]
+        result = NBAStore._build_player_identities(players, "nfl")
+
+        assert "/nfl/players/" in result[0].headshot_url
+
+
+# =============================================================================
+# Unit Tests for GameStartEvent with starters
+# =============================================================================
+
+
+class TestGameStartEventStarters:
+    """Tests for GameStartEvent home_starters/away_starters fields."""
+
+    def test_default_empty_starters(self):
+        """Test GameStartEvent defaults to empty starters."""
+        event = GameStartEvent(game_id="401810001", sport="nba")
+        assert event.home_starters == []
+        assert event.away_starters == []
+
+    def test_starters_populated(self):
+        """Test GameStartEvent with populated starters."""
+        starters = [
+            PlayerIdentity(player_id="1", name="PG", position="G"),
+            PlayerIdentity(player_id="2", name="SG", position="G"),
+            PlayerIdentity(player_id="3", name="SF", position="F"),
+            PlayerIdentity(player_id="4", name="PF", position="F"),
+            PlayerIdentity(player_id="5", name="C", position="C"),
+        ]
+        event = GameStartEvent(
+            game_id="401810001",
+            sport="nba",
+            home_starters=starters,
+            away_starters=starters,
+        )
+        assert len(event.home_starters) == 5
+        assert len(event.away_starters) == 5
+        assert event.home_starters[0].name == "PG"
+
+    def test_starters_round_trip(self):
+        """Test GameStartEvent starters survive to_dict/from_dict round-trip."""
+        starters = [
+            PlayerIdentity(
+                player_id="3917376",
+                name="Jaylen Brown",
+                position="G",
+                jersey="7",
+                headshot_url="https://a.espncdn.com/i/headshots/nba/players/full/3917376.png",
+            ),
+        ]
+        original = GameStartEvent(
+            game_id="401810001",
+            sport="nba",
+            home_starters=starters,
+            away_starters=[],
+        )
+        data = original.to_dict()
+        restored = GameStartEvent.from_dict(data)
+        assert isinstance(restored, GameStartEvent)
+
+        assert len(restored.home_starters) == 1
+        assert restored.home_starters[0].player_id == "3917376"
+        assert restored.home_starters[0].name == "Jaylen Brown"
+        assert restored.home_starters[0].headshot_url.endswith("3917376.png")
+        assert restored.away_starters == []
+
+    def test_starters_in_deserialized_union(self):
+        """Test GameStartEvent with starters deserializes via discriminated union."""
+        from dojozero.data import deserialize_data_event
+
+        data = {
+            "event_type": "event.game_start",
+            "game_id": "401810001",
+            "sport": "nba",
+            "home_starters": [
+                {
+                    "player_id": "123",
+                    "name": "Player A",
+                    "position": "G",
+                    "jersey": "1",
+                    "headshot_url": "",
+                },
+            ],
+            "away_starters": [],
+        }
+        event = deserialize_data_event(data)
+        assert isinstance(event, GameStartEvent)
+        assert len(event.home_starters) == 1
+        assert event.home_starters[0].player_id == "123"
+
+
+# =============================================================================
+# Unit Tests for GameStartEvent starters from store pipeline
+# =============================================================================
+
+
+class TestNBAStoreStartersPipeline:
+    """Tests for starters flowing through the NBAStore pipeline."""
+
+    def test_boxscore_extracts_starters_to_state(self, nba_store, sample_boxscore_data):
+        """Test that boxscore parsing extracts starters to state tracker."""
+        # Add starter flags to player data
+        sample_boxscore_data["boxscore"]["homeTeam"]["players"] = [
+            {
+                "personId": 1,
+                "name": "Starter A",
+                "position": "G",
+                "jersey": "1",
+                "starter": True,
+                "statistics": {},
+            },
+            {
+                "personId": 2,
+                "name": "Bench B",
+                "position": "F",
+                "jersey": "2",
+                "starter": False,
+                "statistics": {},
+            },
+        ]
+        sample_boxscore_data["boxscore"]["awayTeam"]["players"] = [
+            {
+                "personId": 3,
+                "name": "Starter C",
+                "position": "C",
+                "jersey": "3",
+                "starter": True,
+                "statistics": {},
+            },
+        ]
+
+        with patch("dojozero.data.nba._utils.get_game_info_by_id", return_value=None):
+            nba_store._parse_api_response(sample_boxscore_data)
+
+        game_id = "401810001"
+        home_starters = nba_store._state.get_home_starters(game_id)
+        away_starters = nba_store._state.get_away_starters(game_id)
+
+        assert len(home_starters) == 1
+        assert home_starters[0]["name"] == "Starter A"
+        assert len(away_starters) == 1
+        assert away_starters[0]["name"] == "Starter C"
+
+    def test_game_start_event_includes_starters(self, nba_store, sample_boxscore_data):
+        """Test that GameStartEvent emitted from PBP includes starters from boxscore."""
+        # Set up boxscore with starters
+        sample_boxscore_data["boxscore"]["homeTeam"]["players"] = [
+            {
+                "personId": 10,
+                "name": "Home PG",
+                "position": "G",
+                "jersey": "1",
+                "starter": True,
+                "statistics": {},
+            },
+            {
+                "personId": 11,
+                "name": "Home SG",
+                "position": "G",
+                "jersey": "2",
+                "starter": True,
+                "statistics": {},
+            },
+        ]
+        sample_boxscore_data["boxscore"]["awayTeam"]["players"] = [
+            {
+                "personId": 20,
+                "name": "Away PG",
+                "position": "G",
+                "jersey": "5",
+                "starter": True,
+                "statistics": {},
+            },
+        ]
+
+        # Process boxscore first (populates starters in state)
+        with patch("dojozero.data.nba._utils.get_game_info_by_id", return_value=None):
+            nba_store._parse_api_response(sample_boxscore_data)
+
+        # Now process PBP to trigger GameStartEvent
+        pbp_data = {
+            "play_by_play": {
+                "gameId": "401810001",
+                "actions": [
+                    {
+                        "actionNumber": 1,
+                        "actionType": "jumpball",
+                        "description": "Jump Ball",
+                    }
+                ],
+            }
+        }
+        events = nba_store._parse_api_response(pbp_data)
+        start_events = [e for e in events if isinstance(e, GameStartEvent)]
+
+        assert len(start_events) == 1
+        start = start_events[0]
+        assert len(start.home_starters) == 2
+        assert len(start.away_starters) == 1
+        assert start.home_starters[0].name == "Home PG"
+        assert (
+            start.home_starters[0].headshot_url
+            == "https://a.espncdn.com/i/headshots/nba/players/full/10.png"
+        )
+        assert start.away_starters[0].name == "Away PG"
+
+    def test_game_start_event_empty_starters_when_no_boxscore(self, nba_store):
+        """Test GameStartEvent has empty starters when boxscore hasn't been processed."""
+        pbp_data = {
+            "play_by_play": {
+                "gameId": "401810099",
+                "actions": [{"actionNumber": 1, "actionType": "jumpball"}],
+            }
+        }
+        events = nba_store._parse_api_response(pbp_data)
+        start_events = [e for e in events if isinstance(e, GameStartEvent)]
+
+        assert len(start_events) == 1
+        assert start_events[0].home_starters == []
+        assert start_events[0].away_starters == []
+
+
+# =============================================================================
+# Unit Tests for _enrich_boxscore_rosters
+# =============================================================================
+
+
+class TestEnrichBoxscoreRosters:
+    """Tests for NBAStore._enrich_boxscore_rosters."""
+
+    @pytest.fixture
+    def nba_store_with_mock_api(self):
+        """Create NBAStore with a mock NBAExternalAPI."""
+        mock_espn_api = AsyncMock()
+        mock_nba_api = MagicMock(spec=NBAExternalAPI)
+        mock_nba_api._api = mock_espn_api
+        store = NBAStore(store_id="test_nba_store", api=mock_nba_api)
+        return store, mock_espn_api
+
+    @pytest.mark.asyncio
+    async def test_enriches_missing_players(self, nba_store_with_mock_api):
+        """Test that rosters are fetched for teams missing player data."""
+        store, mock_espn_api = nba_store_with_mock_api
+        mock_espn_api.fetch.return_value = {
+            "team_roster": {
+                "athletes": [
+                    {
+                        "id": 100,
+                        "displayName": "Player X",
+                        "position": {"abbreviation": "G"},
+                        "jersey": "1",
+                    },
+                    {
+                        "id": 200,
+                        "displayName": "Player Y",
+                        "position": {"abbreviation": "F"},
+                        "jersey": "2",
+                    },
+                ]
+            }
+        }
+
+        boxscore_data = {
+            "boxscore": {
+                "homeTeam": {"teamId": "24", "teamName": "Spurs"},
+                "awayTeam": {
+                    "teamId": "5",
+                    "teamName": "Hornets",
+                    "players": [{"personId": 999}],
+                },
+            }
+        }
+
+        await store._enrich_boxscore_rosters(boxscore_data)
+
+        # Home team should have been enriched
+        home_players = boxscore_data["boxscore"]["homeTeam"]["players"]
+        assert len(home_players) == 2
+        assert home_players[0]["personId"] == 100
+        assert home_players[0]["name"] == "Player X"
+
+        # Away team already had players, should not be modified
+        away_players = boxscore_data["boxscore"]["awayTeam"]["players"]
+        assert len(away_players) == 1
+        assert away_players[0]["personId"] == 999
+
+    @pytest.mark.asyncio
+    async def test_skips_when_players_exist(self, nba_store_with_mock_api):
+        """Test that enrichment is skipped when players already exist."""
+        store, mock_espn_api = nba_store_with_mock_api
+
+        boxscore_data = {
+            "boxscore": {
+                "homeTeam": {"teamId": "24", "players": [{"personId": 1}]},
+                "awayTeam": {"teamId": "5", "players": [{"personId": 2}]},
+            }
+        }
+
+        await store._enrich_boxscore_rosters(boxscore_data)
+
+        # API should not have been called
+        mock_espn_api.fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handles_api_failure_gracefully(self, nba_store_with_mock_api):
+        """Test that API failures don't crash the enrichment."""
+        store, mock_espn_api = nba_store_with_mock_api
+        mock_espn_api.fetch.side_effect = Exception("API timeout")
+
+        boxscore_data = {
+            "boxscore": {
+                "homeTeam": {"teamId": "24", "teamName": "Spurs"},
+                "awayTeam": {"teamId": "5", "teamName": "Hornets"},
+            }
+        }
+
+        # Should not raise
+        await store._enrich_boxscore_rosters(boxscore_data)
+
+        # Players should still be missing (graceful failure)
+        assert "players" not in boxscore_data["boxscore"]["homeTeam"]
+
+    @pytest.mark.asyncio
+    async def test_skips_empty_boxscore(self, nba_store_with_mock_api):
+        """Test that empty boxscore is handled."""
+        store, mock_espn_api = nba_store_with_mock_api
+
+        await store._enrich_boxscore_rosters({"boxscore": {}})
+        await store._enrich_boxscore_rosters({})
+
+        mock_espn_api.fetch.assert_not_called()
 
 
 # =============================================================================
