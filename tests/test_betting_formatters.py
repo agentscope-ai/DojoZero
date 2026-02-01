@@ -26,6 +26,7 @@ class TestFormatBetExecuted:
     def test_basic_bet_executed(self):
         payload = BetExecutedPayload(
             bet_id="bet_12345",
+            agent_id="agent_001",
             event_id="game_001",
             selection="home",
             amount="100.0",
@@ -35,6 +36,7 @@ class TestFormatBetExecuted:
         )
         result = format_bet_executed(payload)
         assert "[Bet Executed]" in result
+        assert "agent_001" in result
         assert "bet_12345" in result
         assert "game_001" in result
         assert "home" in result
@@ -46,6 +48,7 @@ class TestFormatBetExecuted:
     def test_bet_executed_away_selection(self):
         payload = BetExecutedPayload(
             bet_id="bet_67890",
+            agent_id="agent_002",
             event_id="game_002",
             selection="away",
             amount="250.0",
@@ -62,6 +65,7 @@ class TestFormatBetExecuted:
     def test_bet_executed_large_amount(self):
         payload = BetExecutedPayload(
             bet_id="bet_big",
+            agent_id="agent_002",
             event_id="game_003",
             selection="home",
             amount="10000.0",

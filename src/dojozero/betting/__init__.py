@@ -59,7 +59,6 @@ from dojozero.betting._models import (
     ToolResultStep,
     CoTStep,
     AgentResponseMessage,
-    AgentBetMessage,
 )
 from dojozero.betting._broker import (
     BrokerOperator,

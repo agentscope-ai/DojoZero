@@ -275,6 +275,7 @@ class Bet(BaseModel):
 @dataclass
 class BetExecutedPayload:
     bet_id: str
+    agent_id: str
     event_id: str
     selection: str
     amount: str
@@ -375,34 +376,6 @@ class AgentResponseMessage(BaseModel):
     )
 
 
-class AgentBetMessage(BaseModel):
-    """Bet span for OTLP tracing"""
-
-    sequence: int = Field(default=0, description="Event sequence number")
-    stream_id: str = Field(default="", description="Stream identifier")
-    name: str = Field(default="", description="Agent name")
-    game_id: str = Field(default="", description="Game identifier")
-    bet_type: Literal["MONEYLINE", "SPREAD", "TOTAL"] = Field(
-        default="MONEYLINE", description="Type of bet"
-    )
-    bet_amount: float = Field(default=0.0, description="Bet amount")
-    bet_selection: Literal["home", "away", "over", "under"] = Field(
-        default="home", description="Selection"
-    )
-    bet_order_type: Literal["MARKET", "LIMIT"] = Field(
-        default="MARKET", description="Order type"
-    )
-    bet_limit_probability: Optional[float] = Field(
-        default=None, description="Limit probability for LIMIT orders (0-1)"
-    )
-    bet_spread_value: Optional[float] = Field(
-        default=None, description="Spread value for SPREAD bets"
-    )
-    bet_total_value: Optional[float] = Field(
-        default=None, description="Total value for TOTAL (over/under) bets"
-    )
-
-
 __all__ = [
     # Enums
     "BetOutcome",
@@ -429,5 +402,4 @@ __all__ = [
     "ToolResultStep",
     "CoTStep",
     "AgentResponseMessage",
-    "AgentBetMessage",
 ]

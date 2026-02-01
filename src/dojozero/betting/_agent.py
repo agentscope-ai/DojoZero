@@ -34,7 +34,6 @@ from dojozero.betting._models import (
     ToolResultStep,
     CoTStep,
     AgentResponseMessage,
-    AgentBetMessage,
     BetExecutedPayload,
     BetSettledPayload,
 )
@@ -590,20 +589,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         )
         emit_span(span)
 
-    def _emit_bet_message(self, message: AgentBetMessage) -> None:
-        """Emit a separate span for a bet action.
-
-        Args:
-            message: Structured bet span message
-        """
-        span = create_span_from_event(
-            trial_id=self.trial_id,
-            actor_id=self.actor_id,
-            operation_name="agent.bet",
-            extra_tags=message.model_dump(),
-        )
-        emit_span(span)
-
     def _format_events_for_llm(self, events: list[StreamEvent[Any]]) -> str:
         """Format multiple events into a consolidated LLM-friendly message.
 
@@ -737,17 +722,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 **(bet or {}),
             )
             self._emit_response_span(response_message)
-
-            # Emit separate bet span if bet was placed
-            if bet:
-                bet_message = AgentBetMessage(
-                    sequence=self._event_count,
-                    stream_id=primary_stream_id,
-                    name=self.name,
-                    game_id=game_id,
-                    **bet,
-                )
-                self._emit_bet_message(bet_message)
 
         # Compact memory for next iteration
         if len(memory_after_dicts) >= self._compression_threshold:

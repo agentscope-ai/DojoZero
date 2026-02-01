@@ -8,6 +8,7 @@ def format_bet_executed(payload: BetExecutedPayload) -> str:
     """Format BetExecutedPayload to readable text."""
     return (
         f"[Bet Executed] Bet ID: {payload.bet_id}\n"
+        f"- Agent: {payload.agent_id}\n"
         f"- Event: {payload.event_id}\n"
         f"- Selection: {payload.selection}\n"
         f"- Amount: ${payload.amount}\n"
