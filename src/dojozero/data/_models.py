@@ -39,6 +39,23 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # =============================================================================
 
 
+class PlayerIdentity(BaseModel):
+    """Player identification for roster/lineup data.
+
+    Included in :class:`TeamIdentity` so that ``GameInitializeEvent``
+    carries per-team rosters with starter designations and headshot URLs.
+    """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    player_id: str = Field(default="", serialization_alias="playerId")
+    name: str = ""
+    position: str = ""  # e.g., "G", "F", "C"
+    jersey: str = ""
+    headshot_url: str = Field(default="", serialization_alias="headshotUrl")
+    starter: bool = False
+
+
 class TeamIdentity(BaseModel):
     """Single representation for a team across the entire system.
 
@@ -60,6 +77,7 @@ class TeamIdentity(BaseModel):
     alternate_color: str = Field(default="", serialization_alias="alternateColor")
     logo_url: str = Field(default="", serialization_alias="logoUrl")
     record: str = ""  # Win-loss record, e.g., "42-18"
+    players: list[PlayerIdentity] = Field(default_factory=list)
 
     def __str__(self) -> str:
         return self.name

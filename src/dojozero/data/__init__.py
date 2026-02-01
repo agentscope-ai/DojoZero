@@ -26,6 +26,7 @@ from dojozero.data._models import (
     TotalOdds,
     SportEvent,
     StatsInsightEvent,
+    PlayerIdentity,
     TeamIdentity,
     VenueInfo as SharedVenueInfo,
     WebSearchInsightEvent,
@@ -147,6 +148,7 @@ __all__ = [
     "GameResultEvent",
     "OddsUpdateEvent",
     # Shared models
+    "PlayerIdentity",
     "TeamIdentity",
     "SharedVenueInfo",
     "OddsInfo",

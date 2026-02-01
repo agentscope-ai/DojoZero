@@ -324,6 +324,8 @@ class NBAExternalAPI(ExternalAPI):
             "personId": athlete_info.get("id", 0),
             "name": athlete_info.get("displayName", ""),
             "position": athlete_info.get("position", {}).get("abbreviation", ""),
+            "jersey": athlete_info.get("jersey", ""),
+            "starter": athlete.get("starter", False),
             "statistics": statistics,
         }
 

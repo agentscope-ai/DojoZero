@@ -9,6 +9,7 @@ from dojozero.data._models import (
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
+    PlayerIdentity,
     PollProfile,
     TeamIdentity,
     VenueInfo,
@@ -96,6 +97,30 @@ class NBAStore(DataStore):
             "home": home_players if isinstance(home_players, list) else [],
             "away": away_players if isinstance(away_players, list) else [],
         }
+
+    @staticmethod
+    def _build_player_identities(
+        players: list[dict[str, Any]], sport: str
+    ) -> list[PlayerIdentity]:
+        """Build ``PlayerIdentity`` list from boxscore player dicts."""
+        result: list[PlayerIdentity] = []
+        for p in players:
+            pid = str(p.get("personId", ""))
+            result.append(
+                PlayerIdentity(
+                    player_id=pid,
+                    name=p.get("name", ""),
+                    position=p.get("position", ""),
+                    jersey=p.get("jersey", ""),
+                    headshot_url=(
+                        f"https://a.espncdn.com/i/headshots/{sport}/players/full/{pid}.png"
+                        if pid
+                        else ""
+                    ),
+                    starter=bool(p.get("starter", False)),
+                )
+            )
+        return result
 
     def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
         """Parse NBA API response into DataEvents."""
@@ -342,6 +367,13 @@ class NBAStore(DataStore):
                         except (KeyError, TypeError, ValueError, AttributeError):
                             pass  # Use defaults
 
+                        home_players = self._build_player_identities(
+                            home_team_data.get("players", []), "nba"
+                        )
+                        away_players = self._build_player_identities(
+                            away_team_data.get("players", []), "nba"
+                        )
+
                         events.append(
                             GameInitializeEvent(
                                 timestamp=timestamp,
@@ -356,6 +388,7 @@ class NBAStore(DataStore):
                                     alternate_color=home_alt_color,
                                     logo_url=home_logo,
                                     record=home_record,
+                                    players=home_players,
                                 ),
                                 away_team=TeamIdentity(
                                     team_id=str(away_team_data.get("teamId", "")),
@@ -366,6 +399,7 @@ class NBAStore(DataStore):
                                     alternate_color=away_alt_color,
                                     logo_url=away_logo,
                                     record=away_record,
+                                    players=away_players,
                                 ),
                                 venue=venue,
                                 game_time=game_time_dt,
