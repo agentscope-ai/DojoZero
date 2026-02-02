@@ -381,6 +381,13 @@ def _extract_game_info_from_summary(
             "detail", ""
         )
 
+        # Extract season info
+        season_data = header.get("season", {}) or {}
+        season_year = int(season_data.get("year", 0) or 0)
+        season_type_code = int(season_data.get("type", 2) or 2)
+        season_type_map = {1: "preseason", 2: "regular", 3: "postseason"}
+        season_type = season_type_map.get(season_type_code, "regular")
+
         return GameInfo.model_validate(
             {
                 "gameId": game_id,
@@ -390,6 +397,8 @@ def _extract_game_info_from_summary(
                 "gameTimeUTC": game_time_utc,
                 "homeTeam": home_team,
                 "awayTeam": away_team,
+                "seasonYear": season_year,
+                "seasonType": season_type,
             }
         )
     except Exception as e:
