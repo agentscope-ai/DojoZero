@@ -348,6 +348,7 @@ class NFLGameTrialManager:
         oss_upload: bool = False,
         oss_bucket: str | None = None,
         oss_prefix: str | None = None,
+        server: str | None = None,
     ):
         """Initialize NFL game trial manager.
 
@@ -362,6 +363,7 @@ class NFLGameTrialManager:
             oss_upload: Whether to upload files to OSS after trial completion
             oss_bucket: Override OSS bucket name (default: from env)
             oss_prefix: Override OSS prefix (default: from env)
+            server: Dashboard Server URL for SLS/OSS integration
         """
         self.game = game
         self.event_id = str(game.get("eventId", ""))
@@ -374,6 +376,7 @@ class NFLGameTrialManager:
         self.oss_upload = oss_upload
         self.oss_bucket = oss_bucket
         self.oss_prefix = oss_prefix
+        self.server = server
 
         # Parse game time
         self.game_time_utc: datetime | None = game.get("gameTimeLTZ")
@@ -555,6 +558,9 @@ class NFLGameTrialManager:
             "--trial-id",
             self.trial_id,
         ]
+
+        if self.server:
+            cmd.extend(["--server", self.server])
 
         self.log(
             logging.INFO, "Starting trial for game %s: %s", self.event_id, " ".join(cmd)
@@ -835,6 +841,7 @@ async def run_trials_for_date(
     oss_upload: bool = False,
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
+    server: str | None = None,
 ) -> list[NFLGameTrialManager]:
     """Run trials for all NFL games on a given date.
 
@@ -848,6 +855,7 @@ async def run_trials_for_date(
         oss_upload: Whether to upload files to OSS after trial completion
         oss_bucket: Override OSS bucket name
         oss_prefix: Override OSS prefix
+        server: Dashboard Server URL for SLS/OSS integration
 
     Returns:
         List of NFLGameTrialManager instances
@@ -882,6 +890,7 @@ async def run_trials_for_date(
             oss_upload=oss_upload,
             oss_bucket=oss_bucket,
             oss_prefix=oss_prefix,
+            server=server,
         )
         managers.append(manager)
 
@@ -902,6 +911,7 @@ async def run_trials_for_week(
     oss_upload: bool = False,
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
+    server: str | None = None,
 ) -> list[NFLGameTrialManager]:
     """Run trials for all NFL games in a given week.
 
@@ -916,6 +926,7 @@ async def run_trials_for_week(
         oss_upload: Whether to upload files to OSS after trial completion
         oss_bucket: Override OSS bucket name
         oss_prefix: Override OSS prefix
+        server: Dashboard Server URL for SLS/OSS integration
 
     Returns:
         List of NFLGameTrialManager instances
@@ -949,6 +960,7 @@ async def run_trials_for_week(
             oss_upload=oss_upload,
             oss_bucket=oss_bucket,
             oss_prefix=oss_prefix,
+            server=server,
         )
         managers.append(manager)
 
@@ -968,6 +980,7 @@ async def run_trial_for_event(
     oss_upload: bool = False,
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
+    server: str | None = None,
 ) -> list[NFLGameTrialManager]:
     """Run trial for a specific NFL game by event ID.
 
@@ -981,6 +994,7 @@ async def run_trial_for_event(
         oss_upload: Whether to upload files to OSS after trial completion
         oss_bucket: Override OSS bucket name
         oss_prefix: Override OSS prefix
+        server: Dashboard Server URL for SLS/OSS integration
 
     Returns:
         List with single NFLGameTrialManager, or empty list if not found
@@ -1059,6 +1073,7 @@ async def run_trial_for_event(
             oss_upload=oss_upload,
             oss_bucket=oss_bucket,
             oss_prefix=oss_prefix,
+            server=server,
         )
         manager.generate_config_file()
         manager.log_status()
@@ -1072,13 +1087,18 @@ async def run_trial_for_event(
         await api.close()
 
 
-async def run_trials(managers: list[NFLGameTrialManager]) -> None:
+async def run_trials(
+    managers: list[NFLGameTrialManager],
+    max_concurrent_starts: int = 10,
+) -> None:
     """Run trials for all game managers.
 
     Args:
         managers: List of NFLGameTrialManager instances
+        max_concurrent_starts: Maximum number of trials to start concurrently
     """
     tasks = []
+    start_semaphore = asyncio.Semaphore(max_concurrent_starts)
 
     for manager in managers:
 
@@ -1089,10 +1109,14 @@ async def run_trials(managers: list[NFLGameTrialManager]) -> None:
                     logger.warning("Skipping start for game %s", manager.event_id)
                     return
 
-                started = await manager.start_trial()
-                if not started:
-                    logger.error("Failed to start trial for game %s", manager.event_id)
-                    return
+                async with start_semaphore:
+                    await asyncio.sleep(1.0)
+                    started = await manager.start_trial()
+                    if not started:
+                        logger.error(
+                            "Failed to start trial for game %s", manager.event_id
+                        )
+                        return
 
                 await manager.monitor_trial()
 
@@ -1278,10 +1302,12 @@ def main() -> int:
         help="Season type: 1=preseason, 2=regular, 3=postseason (default: 2)",
     )
     run_parser.add_argument(
+        "--game-id",
         "--event-id",
         type=str,
         default=None,
-        help="Specific ESPN event ID to run trial for",
+        dest="game_id",
+        help="Specific ESPN event/game ID to run trial for",
     )
     run_parser.add_argument(
         "--config",
@@ -1331,6 +1357,21 @@ def main() -> int:
         default=None,
         help="Override OSS prefix (default: from DOJOZERO_OSS_PREFIX env var)",
     )
+    run_parser.add_argument(
+        "--server",
+        type=str,
+        default=None,
+        help="Dashboard Server URL (e.g., http://localhost:8000). "
+        "When specified, trials are submitted to the server which handles "
+        "SLS trace export and OSS backup.",
+    )
+    run_parser.add_argument(
+        "--max-concurrent-starts",
+        type=int,
+        default=10,
+        help="Maximum number of trials to start concurrently (default: 10). "
+        "This prevents overwhelming the server with simultaneous submissions.",
+    )
 
     args = arg_parser.parse_args()
 
@@ -1374,10 +1415,10 @@ def main() -> int:
             return 1
 
         try:
-            if args.event_id:
+            if args.game_id:
                 managers = asyncio.run(
                     run_trial_for_event(
-                        event_id=args.event_id,
+                        event_id=args.game_id,
                         base_config=args.config,
                         pre_start_hours=args.pre_start_hours,
                         check_interval_seconds=args.check_interval,
@@ -1386,6 +1427,7 @@ def main() -> int:
                         oss_upload=args.oss_upload,
                         oss_bucket=args.oss_bucket,
                         oss_prefix=args.oss_prefix,
+                        server=args.server,
                     )
                 )
             elif args.week:
@@ -1401,6 +1443,7 @@ def main() -> int:
                         oss_upload=args.oss_upload,
                         oss_bucket=args.oss_bucket,
                         oss_prefix=args.oss_prefix,
+                        server=args.server,
                     )
                 )
             else:
@@ -1416,6 +1459,7 @@ def main() -> int:
                         oss_upload=args.oss_upload,
                         oss_bucket=args.oss_bucket,
                         oss_prefix=args.oss_prefix,
+                        server=args.server,
                     )
                 )
 
@@ -1423,7 +1467,9 @@ def main() -> int:
                 logger.info("No games found for trials")
                 return 0
 
-            asyncio.run(run_trials(managers))
+            asyncio.run(
+                run_trials(managers, max_concurrent_starts=args.max_concurrent_starts)
+            )
             return 0
 
         except KeyboardInterrupt:
