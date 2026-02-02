@@ -14,7 +14,7 @@ import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict
 
 from pydantic import TypeAdapter
@@ -1065,7 +1065,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     and h.spread_value == bet.spread_value
                     and h.total_value == bet.total_value
                 ):
-                    h.shares -= bet.shares
+                    # Round to 2 decimal places to maintain precision
+                    h.shares = (h.shares - bet.shares).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
                     # Remove holding if shares go to zero or negative
                     if h.shares <= 0:
                         account.holdings.remove(h)
@@ -1417,8 +1420,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
                 # Calculate shares: amount / probability (price per share)
                 # For market orders, use current probability; for limit orders, will be set on execution
+                # Round to 2 decimal places to avoid precision issues
                 shares = (
-                    bet_request.amount / execution_probability
+                    (bet_request.amount / execution_probability).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
                     if bet_request.order_type == OrderType.MARKET
                     else Decimal(0)
                 )
@@ -1476,7 +1482,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         Calculates shares = amount / probability and updates account holdings.
         """
         # Calculate shares: amount / probability (price per share)
-        shares = bet.amount / execution_probability
+        # Round to 2 decimal places to avoid precision issues
+        shares = (bet.amount / execution_probability).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
 
         # Update bet record
         bet.probability = execution_probability
@@ -1502,7 +1511,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         if existing_holding:
             # Aggregate: add shares to existing holding
-            existing_holding.shares += shares
+            # Round to 2 decimal places to maintain precision
+            existing_holding.shares = (existing_holding.shares + shares).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
         else:
             # Create new holding for this position
             account.holdings.append(
