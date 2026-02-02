@@ -31,6 +31,9 @@ from dojozero.data._models import (
 )
 from dojozero.data._models import MoneylineOdds, SpreadOdds, TotalOdds, OddsInfo
 
+# Constants
+SHARES_PRECISION = Decimal("0.01")  # Precision for shares: 2 decimal places
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -1013,7 +1016,7 @@ class TestBetSettlement:
         # Shares = amount / probability = 100 / 0.513 ≈ 194.93
         # Payout = shares * 1.00 = 194.93 (rounded to 2 decimal places)
         expected_shares = (Decimal("100.00") / Decimal("0.513")).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
+            SHARES_PRECISION, rounding=ROUND_HALF_UP
         )
         assert history[0].actual_payout == expected_shares * Decimal("1.00")
 
@@ -1296,7 +1299,7 @@ class TestStatistics:
         # Net profit = win_payout - total_wagered (Polymarket model)
         # Home bet: shares = 100 / 0.513 ≈ 194.93, payout = 194.93 (rounded to 2 decimals)
         home_shares = (Decimal("100.00") / Decimal("0.513")).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
+            SHARES_PRECISION, rounding=ROUND_HALF_UP
         )
         expected_profit = (home_shares * Decimal("1.00")) - Decimal("150.00")
         assert abs(stats.net_profit - expected_profit) < Decimal(
@@ -1523,10 +1526,10 @@ class TestIntegration:
         # 9. Check final balance (Polymarket model: shares * $1.00 for win)
         balance = await broker.get_balance(agent.actor_id)
         home_shares = (Decimal("100.00") / Decimal("0.513")).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
+            SHARES_PRECISION, rounding=ROUND_HALF_UP
         )
         expected = Decimal("850.00") + (home_shares * Decimal("1.00"))
-        assert abs(balance - expected) < Decimal("0.01")  # Allow small rounding
+        assert abs(balance - expected) < SHARES_PRECISION  # Allow small rounding
 
         # 10. Check statistics
         stats = await broker.get_statistics(agent.actor_id)
@@ -1724,10 +1727,10 @@ class TestSpreadBetting:
         # Use the actual probability from the bet (1/1.90 = 0.5263157894736842)
         bet_probability = history[0].probability
         expected_shares = (Decimal("100.00") / bet_probability).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
+            SHARES_PRECISION, rounding=ROUND_HALF_UP
         )
         expected_payout = expected_shares * Decimal("1.00")
-        assert abs(history[0].actual_payout - expected_payout) < Decimal("0.01")
+        assert abs(history[0].actual_payout - expected_payout) < SHARES_PRECISION
 
     async def test_settle_losing_spread_bet(self, broker_with_agent):
         """Test settling a losing spread bet"""
@@ -2051,10 +2054,10 @@ class TestTotalBetting:
         # Use the actual probability from the bet (1/1.88 = 0.5319148936170213)
         bet_probability = history[0].probability
         expected_shares = (Decimal("100.00") / bet_probability).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
+            SHARES_PRECISION, rounding=ROUND_HALF_UP
         )
         expected_payout = expected_shares * Decimal("1.00")
-        assert abs(history[0].actual_payout - expected_payout) < Decimal("0.01")
+        assert abs(history[0].actual_payout - expected_payout) < SHARES_PRECISION
 
     async def test_settle_losing_under_bet(self, broker_with_agent):
         """Test settling a losing under bet"""

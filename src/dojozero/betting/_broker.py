@@ -55,6 +55,9 @@ from dojozero.data._models import (
     OddsUpdateEvent,
 )
 
+# Constants
+SHARES_PRECISION = Decimal("0.01")  # Precision for shares: 2 decimal places
+
 # Logger for broker operations
 logger = logging.getLogger(__name__)
 
@@ -1067,7 +1070,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 ):
                     # Round to 2 decimal places to maintain precision
                     h.shares = (h.shares - bet.shares).quantize(
-                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                        SHARES_PRECISION, rounding=ROUND_HALF_UP
                     )
                     # Remove holding if shares go to zero or negative
                     if h.shares <= 0:
@@ -1423,7 +1426,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 # Round to 2 decimal places to avoid precision issues
                 shares = (
                     (bet_request.amount / execution_probability).quantize(
-                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                        SHARES_PRECISION, rounding=ROUND_HALF_UP
                     )
                     if bet_request.order_type == OrderType.MARKET
                     else Decimal(0)
@@ -1484,7 +1487,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Calculate shares: amount / probability (price per share)
         # Round to 2 decimal places to avoid precision issues
         shares = (bet.amount / execution_probability).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
+            SHARES_PRECISION, rounding=ROUND_HALF_UP
         )
 
         # Update bet record
@@ -1513,7 +1516,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             # Aggregate: add shares to existing holding
             # Round to 2 decimal places to maintain precision
             existing_holding.shares = (existing_holding.shares + shares).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
+                SHARES_PRECISION, rounding=ROUND_HALF_UP
             )
         else:
             # Create new holding for this position
