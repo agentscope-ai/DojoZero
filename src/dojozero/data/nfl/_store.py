@@ -343,6 +343,8 @@ class NFLStore(DataStore):
                             away_score=away_score,
                             home_team_name=home_team_info.get("displayName", ""),
                             away_team_name=away_team_info.get("displayName", ""),
+                            home_team_id=str(home_team_info.get("id", "")),
+                            away_team_id=str(away_team_info.get("id", "")),
                         )
                     )
 

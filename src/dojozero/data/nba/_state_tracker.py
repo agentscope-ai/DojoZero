@@ -26,10 +26,14 @@ class GameStateTracker(BaseGameStateTracker):
         self._current_clock: dict[str, str] = {}
         # Lookup maps populated from boxscore data for PBP enrichment
         self._team_tricode_lookup: dict[str, str] = {}  # team_id -> tricode
+        self._team_name_lookup: dict[str, str] = {}  # team_id -> display name
         self._player_name_lookup: dict[int, str] = {}  # player_id -> name
         # Starters extracted from boxscore (starter=True) for GameStartEvent
         self._home_starters: dict[str, list[dict[str, Any]]] = {}  # game_id -> players
         self._away_starters: dict[str, list[dict[str, Any]]] = {}  # game_id -> players
+        # Home/away team IDs per game for GameResultEvent team name lookup
+        self._home_team_id: dict[str, str] = {}  # game_id -> team_id
+        self._away_team_id: dict[str, str] = {}  # game_id -> team_id
 
     def has_seen_event(self, event_id: str) -> bool:
         """Check if event has been processed (deduplication)."""
@@ -73,10 +77,12 @@ class GameStateTracker(BaseGameStateTracker):
         self._current_home_score[game_id] = home_score
         self._current_away_score[game_id] = away_score
 
-    def update_team_lookup(self, team_id: str, tricode: str) -> None:
-        """Register a team_id -> tricode mapping from boxscore data."""
+    def update_team_lookup(self, team_id: str, tricode: str, name: str = "") -> None:
+        """Register team_id -> tricode and name mappings from boxscore data."""
         if team_id and tricode:
             self._team_tricode_lookup[team_id] = tricode
+        if team_id and name:
+            self._team_name_lookup[team_id] = name
 
     def update_player_lookup(self, player_id: int, name: str) -> None:
         """Register a player_id -> name mapping from boxscore data."""
@@ -87,9 +93,26 @@ class GameStateTracker(BaseGameStateTracker):
         """Look up team tricode by team_id."""
         return self._team_tricode_lookup.get(team_id, "")
 
+    def get_team_name(self, team_id: str) -> str:
+        """Look up team display name by team_id."""
+        return self._team_name_lookup.get(team_id, "")
+
     def get_player_name(self, player_id: int) -> str:
         """Look up player name by player_id."""
         return self._player_name_lookup.get(player_id, "")
+
+    def set_team_ids(self, game_id: str, home_team_id: str, away_team_id: str) -> None:
+        """Store home/away team IDs for a game."""
+        self._home_team_id[game_id] = home_team_id
+        self._away_team_id[game_id] = away_team_id
+
+    def get_home_team_id(self, game_id: str) -> str:
+        """Get home team ID for a game."""
+        return self._home_team_id.get(game_id, "")
+
+    def get_away_team_id(self, game_id: str) -> str:
+        """Get away team ID for a game."""
+        return self._away_team_id.get(game_id, "")
 
     def set_starters(
         self,

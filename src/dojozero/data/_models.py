@@ -490,6 +490,8 @@ class GameResultEvent(GameEvent):
     away_score: int = 0
     home_team_name: str = ""
     away_team_name: str = ""
+    home_team_id: str = ""
+    away_team_id: str = ""
 
     @model_validator(mode="before")
     @classmethod
