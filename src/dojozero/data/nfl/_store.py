@@ -78,18 +78,28 @@ class NFLStore(DataStore):
         # Game start time for computing game_timestamp on events
         self._game_start_time: datetime | None = None
 
-    # NFL game clock offsets in seconds from game start.
-    # Quarter = 900s (15 min). Halftime between Q2/Q3 ≈ 1200s (20 min).
+    # Real-time multiplier: an NFL quarter has 15 min of game clock but takes
+    # ~45 min of real time (stoppages, play clock, commercials, reviews).
+    # A typical game is ~3h15m (195 min) for 60 min of game clock → 3.25x.
+    _GAME_CLOCK_MULTIPLIER: float = 3.25
+
+    # Real-time quarter offsets in seconds from game start.
+    # Each quarter ≈ 900s * 3.25 = 2925s real time.
+    # Halftime ≈ 1200s (20 min) real time (not multiplied).
     _QUARTER_OFFSETS: dict[int, int] = {
-        1: 0,
-        2: 900,
-        3: 3000,  # 1800 (two quarters) + 1200 (halftime)
-        4: 3900,
-        5: 4800,  # OT
+        1: 0,  # Q1 start
+        2: 2925,  # Q2 start: 1 quarter
+        3: 7050,  # Q3 start: 2 quarters (5850) + halftime (1200)
+        4: 9975,  # Q4 start: 3 quarters (8775) + halftime (1200)
+        5: 12900,  # OT start: 4 quarters (11700) + halftime (1200)
     }
 
     def _compute_game_timestamp(self, period: int, clock: str) -> datetime | None:
         """Compute approximate wallclock time from game clock.
+
+        Maps game clock (period + countdown) to real elapsed time using a
+        multiplier that accounts for stoppages, commercials, and play clock.
+        A 15-min quarter takes ~45 min of real time (3.25x multiplier).
 
         Args:
             period: Quarter number (1-4, 5 for OT)
@@ -112,9 +122,10 @@ class NFLStore(DataStore):
             except (ValueError, TypeError):
                 pass
 
-        offset = self._QUARTER_OFFSETS.get(period, 4800)
-        elapsed = offset + (900 - remaining)
-        return self._game_start_time + timedelta(seconds=elapsed)
+        offset = self._QUARTER_OFFSETS.get(period, 12900)
+        # Elapsed within the quarter: game clock consumed × real-time multiplier
+        elapsed_in_quarter = (900 - remaining) * self._GAME_CLOCK_MULTIPLIER
+        return self._game_start_time + timedelta(seconds=offset + elapsed_in_quarter)
 
     def _parse_api_response(
         self, data: dict[str, Any], target_event_id: str | None = None
@@ -602,13 +613,9 @@ class NFLStore(DataStore):
         start = drive.get("start", {}) or {}
         end = drive.get("end", {}) or {}
 
-        start_period = int((start.get("period", {}) or {}).get("number", 0) or 0)
-        start_clock = (start.get("clock", {}) or {}).get("displayValue", "")
-
         events.append(
             NFLDriveEvent(
                 timestamp=timestamp,
-                game_timestamp=self._compute_game_timestamp(start_period, start_clock),
                 game_id=event_id,
                 sport="nfl",
                 segment_id=drive_id,
@@ -617,8 +624,8 @@ class NFLStore(DataStore):
                 drive_number=drive_number,
                 team_id=team_id,
                 team_tricode=team_abbreviation,
-                start_period=start_period,
-                start_clock=start_clock,
+                start_period=int((start.get("period", {}) or {}).get("number", 0) or 0),
+                start_clock=(start.get("clock", {}) or {}).get("displayValue", ""),
                 start_yard_line=int(start.get("yardLine", 0) or 0),
                 end_period=int((end.get("period", {}) or {}).get("number", 0) or 0),
                 end_clock=(end.get("clock", {}) or {}).get("displayValue", ""),
@@ -691,6 +698,20 @@ class NFLStore(DataStore):
                 clock.get("displayValue", "") if isinstance(clock, dict) else ""
             )
 
+            # Parse wallclock time (actual UTC time the play occurred)
+            play_game_timestamp: datetime | None = None
+            wallclock = play.get("wallclock", "")
+            if wallclock:
+                try:
+                    play_game_timestamp = datetime.fromisoformat(
+                        str(wallclock).replace("Z", "+00:00")
+                    )
+                except (ValueError, TypeError):
+                    pass
+            # Fall back to computed timestamp from game clock
+            if not play_game_timestamp:
+                play_game_timestamp = self._compute_game_timestamp(quarter, game_clock)
+
             # Get scoring info
             is_scoring = bool(play.get("scoringPlay", False))
             score_value = int(play.get("scoreValue", 0) or 0)
@@ -727,7 +748,7 @@ class NFLStore(DataStore):
             events.append(
                 NFLPlayEvent(
                     timestamp=timestamp,
-                    game_timestamp=self._compute_game_timestamp(quarter, game_clock),
+                    game_timestamp=play_game_timestamp,
                     game_id=event_id,
                     sport="nfl",
                     play_id=play_id,
