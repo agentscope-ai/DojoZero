@@ -296,6 +296,7 @@ class NFLStore(DataStore):
                         OddsUpdateEvent(
                             timestamp=timestamp,
                             game_id=event_id,
+                            sport="nfl",
                             odds=OddsInfo(
                                 provider=provider,
                                 spreads=[SpreadOdds(spread=spread)],
@@ -327,6 +328,7 @@ class NFLStore(DataStore):
                         GameStartEvent(
                             timestamp=timestamp,
                             game_id=event_id,
+                            sport="nfl",
                         )
                     )
 
@@ -346,6 +348,7 @@ class NFLStore(DataStore):
                         GameResultEvent(
                             timestamp=timestamp,
                             game_id=event_id,
+                            sport="nfl",
                             winner=winner,
                             home_score=home_score,
                             away_score=away_score,
@@ -474,6 +477,7 @@ class NFLStore(DataStore):
                         NFLGameUpdateEvent(
                             timestamp=timestamp,
                             game_id=event_id,
+                            sport="nfl",
                             period=quarter,
                             game_clock=game_clock,
                             home_score=home_team_dict.get("score", 0)
@@ -548,6 +552,7 @@ class NFLStore(DataStore):
             NFLDriveEvent(
                 timestamp=timestamp,
                 game_id=event_id,
+                sport="nfl",
                 segment_id=drive_id,
                 segment_number=drive_number,
                 drive_id=drive_id,
@@ -602,6 +607,7 @@ class NFLStore(DataStore):
                 GameStartEvent(
                     timestamp=timestamp,
                     game_id=event_id,
+                    sport="nfl",
                 )
             )
             self._state.mark_game_started(event_id)
@@ -630,13 +636,24 @@ class NFLStore(DataStore):
             is_scoring = bool(play.get("scoringPlay", False))
             score_value = int(play.get("scoreValue", 0) or 0)
 
-            # Get team info
+            # Get team info — handle both inline dict and $ref URL formats
             team = play.get("team", {})
             team_id = ""
             team_abbrev = ""
             if isinstance(team, dict):
                 team_id = str(team.get("id", ""))
                 team_abbrev = team.get("abbreviation", "")
+                # Core API returns $ref URL like ".../teams/26"
+                if not team_id and "$ref" in team:
+                    ref = team["$ref"]
+                    parts = ref.rstrip("/").split("/")
+                    if parts:
+                        team_id = parts[-1].split("?")[0]
+            # Resolve abbreviation from state tracker if we have team_id but no abbrev
+            if team_id and not team_abbrev:
+                from dojozero.data.nfl._utils import get_team_abbreviation
+
+                team_abbrev = get_team_abbreviation(team_id) or ""
 
             # Get start info for down/distance
             start = play.get("start", {})
@@ -652,6 +669,7 @@ class NFLStore(DataStore):
                 NFLPlayEvent(
                     timestamp=timestamp,
                     game_id=event_id,
+                    sport="nfl",
                     play_id=play_id,
                     sequence_number=int(play.get("sequenceNumber", 0) or 0),
                     period=quarter,
@@ -667,6 +685,7 @@ class NFLStore(DataStore):
                     home_score=int(play.get("homeScore", 0) or 0),
                     away_score=int(play.get("awayScore", 0) or 0),
                     team_id=team_id,
+                    team_tricode=team_abbrev,
                     team_abbreviation=team_abbrev,
                     is_turnover=bool(play.get("isTurnover", False)),
                 )
