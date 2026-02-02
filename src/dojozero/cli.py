@@ -212,6 +212,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum sleep time in seconds between events (caps long delays). Default: 20.0 seconds",
     )
     backtest_parser.add_argument(
+        "--emit-traces",
+        action="store_true",
+        default=False,
+        dest="emit_traces",
+        help="Emit data events to the trace backend (SLS/Jaeger) with rebased timestamps "
+        "so replay trials are visible in Arena UI. Requires --trace-backend.",
+    )
+    backtest_parser.add_argument(
         "--server",
         help="Submit backtest to a running Dashboard Server (e.g., http://localhost:8000). "
         "The server must have access to the event file at the same path.",
@@ -1175,6 +1183,7 @@ async def _backtest_single_file(
     speed: float,
     max_sleep: float,
     orchestrator: "TrialOrchestrator",
+    emit_traces: bool = False,
 ) -> None:
     """Run backtest for a single file.
 
@@ -1186,6 +1195,7 @@ async def _backtest_single_file(
         speed: Backtest speed multiplier
         max_sleep: Maximum sleep between events
         orchestrator: TrialOrchestrator instance
+        emit_traces: Emit data events to trace backend with rebased timestamps
     """
     # Prepare trial spec from params
     spec = await _prepare_trial_spec(trial_id, params_payload)
@@ -1224,6 +1234,9 @@ async def _backtest_single_file(
         hub_id=hub_id,
         persistence_file=str(event_file),
     )
+
+    if emit_traces:
+        hub.enable_backtest_traces(trial_id=trial_id)
 
     # Create BacktestCoordinator
     from dojozero.data import BacktestCoordinator
@@ -1339,6 +1352,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     params_payload = _load_yaml_mapping(args.params, label="params")
     speed = args.backtest_speed
     max_sleep = args.backtest_max_sleep
+    emit_traces = args.emit_traces
 
     if speed <= 0:
         raise DojoZeroCLIError(f"Backtest speed must be positive, got: {speed}")
@@ -1424,6 +1438,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
                     speed=speed,
                     max_sleep=max_sleep,
                     orchestrator=orchestrator,
+                    emit_traces=emit_traces,
                 )
                 completed += 1
                 LOGGER.info("Completed backtest for %s", event_file.name)

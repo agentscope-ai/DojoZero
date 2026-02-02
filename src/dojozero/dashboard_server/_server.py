@@ -73,6 +73,7 @@ class BacktestConfig(BaseModel):
     file: str  # Path to event file (must be accessible on server)
     speed: float = 1.0
     max_sleep: float = 20.0
+    emit_traces: bool = False  # Emit data events to SLS with rebased timestamps
 
 
 # Backward compatibility alias (deprecated)
@@ -147,6 +148,7 @@ async def _launch_backtest_trial(
     event_file: Path,
     speed: float,
     max_sleep: float,
+    emit_traces: bool = False,
 ) -> TrialStatus:
     """Launch a trial in backtest mode.
 
@@ -177,6 +179,9 @@ async def _launch_backtest_trial(
         hub_id=hub_id,
         persistence_file=str(event_file),
     )
+
+    if emit_traces:
+        hub.enable_backtest_traces(trial_id=spec.trial_id)
 
     # Create BacktestCoordinator
     coordinator = BacktestCoordinator(data_hub=hub, backtest_file=event_file)
@@ -667,6 +672,7 @@ def create_dashboard_app(
             # Capture backtest settings (for closure below)
             backtest_speed = request.backtest.speed
             backtest_max_sleep = request.backtest.max_sleep
+            backtest_emit_traces = request.backtest.emit_traces
 
             # Convert metadata to backtest-specific type with required backtest fields
             from dataclasses import asdict
@@ -691,6 +697,7 @@ def create_dashboard_app(
                     event_file=event_file,
                     speed=backtest_speed,
                     max_sleep=backtest_max_sleep,
+                    emit_traces=backtest_emit_traces,
                 )
 
             launch_coro_factory = make_backtest_coro
