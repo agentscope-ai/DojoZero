@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 import yaml
 from dateutil import parser
 
@@ -73,7 +74,7 @@ async def get_nfl_games_for_date(
                 hour=0, minute=0, second=0, microsecond=0
             )
             requested_date = parsed_date.date()
-        except Exception:
+        except (ValueError, OverflowError):
             if print_games:
                 print(f"Error: Could not parse date: {game_date}")
             return []
@@ -117,7 +118,7 @@ async def get_nfl_games_for_date(
                     if game_time_utc.tzinfo is None:
                         game_time_utc = game_time_utc.replace(tzinfo=timezone.utc)
                     game_time_ltz = game_time_utc.astimezone(tz=None)
-                except Exception:
+                except (ValueError, OverflowError):
                     pass
 
             # Get competitors
@@ -194,7 +195,7 @@ async def get_nfl_games_for_date(
 
         return games
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
         logger.error("Error fetching NFL games for date %s: %s", game_date, e)
         if print_games:
             print(f"Error fetching games: {e}")
@@ -248,7 +249,7 @@ async def get_nfl_games_for_week(
                     if game_time_utc.tzinfo is None:
                         game_time_utc = game_time_utc.replace(tzinfo=timezone.utc)
                     game_time_ltz = game_time_utc.astimezone(tz=None)
-                except Exception:
+                except (ValueError, OverflowError):
                     pass
 
             competitors = comp.get("competitors", [])
@@ -324,7 +325,7 @@ async def get_nfl_games_for_week(
 
         return games
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
         logger.error("Error fetching NFL games for week %d: %s", week, e)
         if print_games:
             print(f"Error fetching games: {e}")
@@ -604,7 +605,7 @@ class NFLGameTrialManager:
             )
 
             return True
-        except Exception as e:
+        except OSError as e:
             self.log(
                 logging.ERROR, "Failed to start trial for game %s: %s", self.event_id, e
             )
@@ -683,7 +684,7 @@ class NFLGameTrialManager:
                         self.stop_trial()
                         self.completed = True
                         break
-            except Exception as e:
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
                 self.log(
                     logging.WARNING,
                     "Error checking game status for %s: %s",
@@ -721,7 +722,7 @@ class NFLGameTrialManager:
                 try:
                     self._log_file_handle.flush()
                     self._log_file_handle.close()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — cleanup
                     self.log(
                         logging.WARNING,
                         "Error closing log file for game %s: %s",
@@ -732,7 +733,7 @@ class NFLGameTrialManager:
                     self._log_file_handle = None
 
             self.log(logging.INFO, "Trial stopped for game %s", self.event_id)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — cleanup
             self.log(
                 logging.ERROR, "Error stopping trial for game %s: %s", self.event_id, e
             )
@@ -820,7 +821,7 @@ class NFLGameTrialManager:
                 self.event_id,
             )
 
-        except Exception as e:
+        except (ValueError, FileNotFoundError, OSError) as e:
             self.log(
                 logging.ERROR,
                 "Failed to upload files to OSS for game %s: %s",
@@ -1018,7 +1019,7 @@ async def run_trial_for_event(
                     "competitions": competitions,
                 }
                 logger.info("Found game %s via summary endpoint", event_id)
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, KeyError) as e:
             logger.warning("Summary fetch for %s failed: %s", event_id, e)
 
         # Fall back to current scoreboard
@@ -1050,7 +1051,7 @@ async def run_trial_for_event(
                 if game_time.tzinfo is None:
                     game_time = game_time.replace(tzinfo=timezone.utc)
                 game_time_ltz = game_time.astimezone(tz=None)
-            except Exception:
+            except (ValueError, OverflowError):
                 pass
 
         competitors = comp.get("competitors", [])
@@ -1104,7 +1105,7 @@ async def run_trial_for_event(
 
         return [manager]
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
         logger.error("Error fetching game %s: %s", event_id, e)
         return []
     finally:
@@ -1150,8 +1151,10 @@ async def run_trials(
 
                 manager.log_status()
 
-            except Exception as e:
-                logger.error("Error in trial for game %s: %s", manager.event_id, e)
+            except Exception as e:  # noqa: BLE001 — top-level per-game handler
+                logger.error(
+                    "Error in trial for game %s: %s", manager.event_id, e, exc_info=True
+                )
                 manager.log_status()
 
         tasks.append(asyncio.create_task(run_game(manager)))
@@ -1499,7 +1502,7 @@ def main() -> int:
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
             return 130
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — top-level fatal handler
             logger.error("Fatal error: %s", e, exc_info=True)
             return 1
 
