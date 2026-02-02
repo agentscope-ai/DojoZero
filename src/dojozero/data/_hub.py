@@ -643,8 +643,9 @@ class DataHub:
                     if event:
                         self._backtest_events.append(event)
 
-        # Sort events by timestamp
-        self._backtest_events.sort(key=lambda e: e.timestamp)
+        # Sort events by game_timestamp (actual game time) when available,
+        # falling back to timestamp (poll time) for events without game clock data
+        self._backtest_events.sort(key=lambda e: e.game_timestamp or e.timestamp)
 
         # Compute time offset for trace emission (rebase first event to "now")
         if self._emit_backtest_traces and self._backtest_events:

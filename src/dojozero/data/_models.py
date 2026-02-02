@@ -392,6 +392,7 @@ class DataEvent(BaseModel, ABC):
     event_type: str = ""  # Narrowed to Literal on concrete subclasses
 
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    game_timestamp: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""

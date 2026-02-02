@@ -118,10 +118,14 @@ class BacktestCoordinator:
 
             event_count += 1
 
+            # Use game_timestamp (actual game time) when available for pacing,
+            # falling back to timestamp (poll time) for events without game clock data
+            event_time = event.game_timestamp or event.timestamp
+
             # Calculate delay based on speed (only if we have a previous event)
             if last_event_time is not None and self._speed_up > 0:
                 # Calculate time difference between events
-                time_diff = (event.timestamp - last_event_time).total_seconds()
+                time_diff = (event_time - last_event_time).total_seconds()
                 # Adjust for speed
                 delay = time_diff / self._speed_up
                 # Cap delay at max_sleep to avoid excessively long waits
@@ -130,7 +134,7 @@ class BacktestCoordinator:
                 if delay > 0:
                     await asyncio.sleep(delay)
 
-            last_event_time = event.timestamp
+            last_event_time = event_time
 
             # Progress callback
             if self._progress_callback:

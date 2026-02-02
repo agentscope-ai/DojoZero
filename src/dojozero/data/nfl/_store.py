@@ -1,7 +1,7 @@
 """NFL data store implementation."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
 from dojozero.data._models import (
@@ -75,6 +75,46 @@ class NFLStore(DataStore):
         self._current_poll_profile: PollProfile = PollProfile.PRE_GAME
         # Cache: team_id -> list[PlayerIdentity]
         self._roster_cache: dict[str, list[PlayerIdentity]] = {}
+        # Game start time for computing game_timestamp on events
+        self._game_start_time: datetime | None = None
+
+    # NFL game clock offsets in seconds from game start.
+    # Quarter = 900s (15 min). Halftime between Q2/Q3 ≈ 1200s (20 min).
+    _QUARTER_OFFSETS: dict[int, int] = {
+        1: 0,
+        2: 900,
+        3: 3000,  # 1800 (two quarters) + 1200 (halftime)
+        4: 3900,
+        5: 4800,  # OT
+    }
+
+    def _compute_game_timestamp(self, period: int, clock: str) -> datetime | None:
+        """Compute approximate wallclock time from game clock.
+
+        Args:
+            period: Quarter number (1-4, 5 for OT)
+            clock: Game clock countdown string (e.g., "12:34")
+
+        Returns:
+            Approximate datetime when the event occurred, or None if
+            game start time is unknown or inputs are invalid.
+        """
+        if not self._game_start_time or period < 1:
+            return None
+
+        # Parse clock "MM:SS" → seconds remaining in quarter
+        remaining = 900  # default to start of quarter
+        if clock:
+            try:
+                parts = clock.split(":")
+                if len(parts) == 2:
+                    remaining = int(parts[0]) * 60 + int(parts[1])
+            except (ValueError, TypeError):
+                pass
+
+        offset = self._QUARTER_OFFSETS.get(period, 4800)
+        elapsed = offset + (900 - remaining)
+        return self._game_start_time + timedelta(seconds=elapsed)
 
     def _parse_api_response(
         self, data: dict[str, Any], target_event_id: str | None = None
@@ -232,9 +272,13 @@ class NFLStore(DataStore):
                 home_team_id = str(home_team_info.get("id", ""))
                 away_team_id = str(away_team_info.get("id", ""))
 
+                # Store game start time for computing game_timestamp
+                self._game_start_time = game_time
+
                 events.append(
                     GameInitializeEvent(
                         timestamp=timestamp,
+                        game_timestamp=game_time,
                         game_id=event_id,
                         sport="nfl",
                         home_team=TeamIdentity(
@@ -327,6 +371,7 @@ class NFLStore(DataStore):
                     events.append(
                         GameStartEvent(
                             timestamp=timestamp,
+                            game_timestamp=self._game_start_time,
                             game_id=event_id,
                             sport="nfl",
                         )
@@ -344,9 +389,15 @@ class NFLStore(DataStore):
                         else ""
                     )
 
+                    # Compute game_timestamp from final period/clock
+                    final_period = int(status_data.get("period", 4) or 4)
+                    final_clock = status_data.get("displayClock", "0:00") or "0:00"
                     events.append(
                         GameResultEvent(
                             timestamp=timestamp,
+                            game_timestamp=self._compute_game_timestamp(
+                                final_period, final_clock
+                            ),
                             game_id=event_id,
                             sport="nfl",
                             winner=winner,
@@ -476,6 +527,9 @@ class NFLStore(DataStore):
                     events.append(
                         NFLGameUpdateEvent(
                             timestamp=timestamp,
+                            game_timestamp=self._compute_game_timestamp(
+                                quarter, game_clock
+                            ),
                             game_id=event_id,
                             sport="nfl",
                             period=quarter,
@@ -548,9 +602,13 @@ class NFLStore(DataStore):
         start = drive.get("start", {}) or {}
         end = drive.get("end", {}) or {}
 
+        start_period = int((start.get("period", {}) or {}).get("number", 0) or 0)
+        start_clock = (start.get("clock", {}) or {}).get("displayValue", "")
+
         events.append(
             NFLDriveEvent(
                 timestamp=timestamp,
+                game_timestamp=self._compute_game_timestamp(start_period, start_clock),
                 game_id=event_id,
                 sport="nfl",
                 segment_id=drive_id,
@@ -559,8 +617,8 @@ class NFLStore(DataStore):
                 drive_number=drive_number,
                 team_id=team_id,
                 team_tricode=team_abbreviation,
-                start_period=int((start.get("period", {}) or {}).get("number", 0) or 0),
-                start_clock=(start.get("clock", {}) or {}).get("displayValue", ""),
+                start_period=start_period,
+                start_clock=start_clock,
                 start_yard_line=int(start.get("yardLine", 0) or 0),
                 end_period=int((end.get("period", {}) or {}).get("number", 0) or 0),
                 end_clock=(end.get("clock", {}) or {}).get("displayValue", ""),
@@ -606,6 +664,7 @@ class NFLStore(DataStore):
             events.append(
                 GameStartEvent(
                     timestamp=timestamp,
+                    game_timestamp=self._game_start_time,
                     game_id=event_id,
                     sport="nfl",
                 )
@@ -668,6 +727,7 @@ class NFLStore(DataStore):
             events.append(
                 NFLPlayEvent(
                     timestamp=timestamp,
+                    game_timestamp=self._compute_game_timestamp(quarter, game_clock),
                     game_id=event_id,
                     sport="nfl",
                     play_id=play_id,
