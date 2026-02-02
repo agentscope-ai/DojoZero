@@ -492,17 +492,33 @@ class NFLStore(DataStore):
         drives = data.get("drives", {}) or {}
         previous_drives = drives.get("previous", []) or []
         if previous_drives:
+            # Build index mapping: drive_id -> 1-based position in the full list
+            drive_index: dict[str, int] = {}
+            for idx, d in enumerate(previous_drives):
+                if d and isinstance(d, dict):
+                    did = str(d.get("id", ""))
+                    if did:
+                        drive_index[did] = idx + 1
+
             new_drives = self._state.filter_new_drives(event_id, previous_drives)
             for drive in new_drives:
                 if not drive or not isinstance(drive, dict):
                     continue
-                drive_events = self._parse_drive(event_id, drive, timestamp)
+                d_id = str(drive.get("id", ""))
+                d_num = drive_index.get(d_id, 0)
+                drive_events = self._parse_drive(
+                    event_id, drive, timestamp, drive_number=d_num
+                )
                 events.extend(drive_events)
 
         return events
 
     def _parse_drive(
-        self, event_id: str, drive: dict[str, Any], timestamp: datetime
+        self,
+        event_id: str,
+        drive: dict[str, Any],
+        timestamp: datetime,
+        drive_number: int = 0,
     ) -> list[DataEvent]:
         """Parse a single drive into events."""
         events: list[DataEvent] = []
@@ -525,13 +541,7 @@ class NFLStore(DataStore):
                 timestamp=timestamp,
                 game_id=event_id,
                 drive_id=drive_id,
-                drive_number=len(
-                    [
-                        d
-                        for d in self._state._seen_drive_ids
-                        if d.startswith(f"{event_id}_drive_")
-                    ]
-                ),
+                drive_number=drive_number,
                 team_id=team_id,
                 team_tricode=team_abbreviation,
                 start_period=int((start.get("period", {}) or {}).get("number", 0) or 0),
