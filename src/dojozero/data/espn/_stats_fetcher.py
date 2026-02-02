@@ -691,10 +691,13 @@ def _parse_player_stats(
         player_stats: dict[str, dict[str, float]] = {}
 
         # Select sport-appropriate stat category mapping
-        stat_category_map = (
-            _NFL_LEADER_CATEGORIES if sport == "nfl" else _NBA_LEADER_CATEGORIES
-        )
-        sort_keys = _NFL_SORT_KEYS if sport == "nfl" else _NBA_SORT_KEYS
+        _SPORT_LEADER_CONFIGS: dict[str, dict[str, Any]] = {
+            "nfl": {"categories": _NFL_LEADER_CATEGORIES, "sort_keys": _NFL_SORT_KEYS},
+            "nba": {"categories": _NBA_LEADER_CATEGORIES, "sort_keys": _NBA_SORT_KEYS},
+        }
+        _leader_cfg = _SPORT_LEADER_CONFIGS.get(sport, _SPORT_LEADER_CONFIGS["nba"])
+        stat_category_map = _leader_cfg["categories"]
+        sort_keys = _leader_cfg["sort_keys"]
 
         for cat in categories:
             cat_name = cat.get("name", "")
