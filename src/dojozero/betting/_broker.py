@@ -990,6 +990,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             settled_count,
         )
 
+        # Log final broker state after settlement
+        await self._log_accounts_and_bets_status("broker_result")
+
     async def _settle_bet(
         self, bet: Bet, winner: str, final_score: Dict[str, int]
     ) -> None:
