@@ -418,7 +418,7 @@ class NFLStore(DataStore):
                         continue
                     line_scores = comp.get("linescores", []) or []
                     scores = [
-                        int(ls.get("value", 0) or 0)
+                        int(ls.get("value", 0) or ls.get("displayValue", 0) or 0)
                         for ls in line_scores
                         if ls and isinstance(ls, dict)
                     ]
