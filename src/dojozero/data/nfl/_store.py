@@ -10,6 +10,7 @@ from dojozero.data._models import (
     GameResultEvent,
     GameStartEvent,
     OddsUpdateEvent,
+    PlayerIdentity,
     PollProfile,
 )
 from dojozero.data._models import (
@@ -72,6 +73,8 @@ class NFLStore(DataStore):
         )
         self._state = NFLGameStateTracker()
         self._current_poll_profile: PollProfile = PollProfile.PRE_GAME
+        # Cache: team_id -> list[PlayerIdentity]
+        self._roster_cache: dict[str, list[PlayerIdentity]] = {}
 
     def _parse_api_response(
         self, data: dict[str, Any], target_event_id: str | None = None
@@ -226,13 +229,16 @@ class NFLStore(DataStore):
                 season_type = season_type_map.get(season_type_code, "regular")
                 season_year = season.get("year", 0) if isinstance(season, dict) else 0
 
+                home_team_id = str(home_team_info.get("id", ""))
+                away_team_id = str(away_team_info.get("id", ""))
+
                 events.append(
                     GameInitializeEvent(
                         timestamp=timestamp,
                         game_id=event_id,
                         sport="nfl",
                         home_team=TeamIdentity(
-                            team_id=str(home_team_info.get("id", "")),
+                            team_id=home_team_id,
                             name=home_team_info.get("displayName", ""),
                             tricode=home_team_info.get("abbreviation", ""),
                             location=home_team_info.get("location", ""),
@@ -240,9 +246,10 @@ class NFLStore(DataStore):
                             alternate_color=home_team_info.get("alternateColor", ""),
                             logo_url=home_team_info.get("logo", ""),
                             record=home_record,
+                            players=self._roster_cache.get(home_team_id, []),
                         ),
                         away_team=TeamIdentity(
-                            team_id=str(away_team_info.get("id", "")),
+                            team_id=away_team_id,
                             name=away_team_info.get("displayName", ""),
                             tricode=away_team_info.get("abbreviation", ""),
                             location=away_team_info.get("location", ""),
@@ -250,6 +257,7 @@ class NFLStore(DataStore):
                             alternate_color=away_team_info.get("alternateColor", ""),
                             logo_url=away_team_info.get("logo", ""),
                             record=away_record,
+                            players=self._roster_cache.get(away_team_id, []),
                         ),
                         venue=VenueInfo(
                             venue_id=str(venue_data.get("id", "")),
@@ -703,6 +711,65 @@ class NFLStore(DataStore):
             return 2
         return 0
 
+    async def _prefetch_rosters_from_scoreboard(
+        self, scoreboard_data: dict[str, Any], target_event_id: str
+    ) -> None:
+        """Extract team IDs from scoreboard and pre-fetch their rosters."""
+        sb = scoreboard_data.get("scoreboard", {})
+        for game in sb.get("events", []):
+            if not game or str(game.get("id", "")) != target_event_id:
+                continue
+            comps = game.get("competitions", [])
+            if not comps:
+                continue
+            for comp in comps[0].get("competitors", []):
+                if not comp or not isinstance(comp, dict):
+                    continue
+                team = comp.get("team", {}) or {}
+                team_id = str(team.get("id", ""))
+                if team_id:
+                    await self._fetch_roster(team_id)
+
+    async def _fetch_roster(self, team_id: str) -> list[PlayerIdentity]:
+        """Fetch and cache team roster from ESPN API.
+
+        Returns cached roster if already fetched.
+        """
+        if team_id in self._roster_cache:
+            return self._roster_cache[team_id]
+
+        players: list[PlayerIdentity] = []
+        if not self._api:
+            return players
+
+        try:
+            result = await self._api.fetch("team_roster", {"team_id": team_id})
+            athletes = result.get("team_roster", {}).get("athletes", [])
+            for a in athletes:
+                if not isinstance(a, dict):
+                    continue
+                pid = str(a.get("id", ""))
+                pos = a.get("position", {})
+                players.append(
+                    PlayerIdentity(
+                        player_id=pid,
+                        name=a.get("displayName", ""),
+                        position=pos.get("abbreviation", "")
+                        if isinstance(pos, dict)
+                        else "",
+                        jersey=str(a.get("jersey", "")),
+                        headshot_url=f"https://a.espncdn.com/i/headshots/nfl/players/full/{pid}.png"
+                        if pid
+                        else "",
+                    )
+                )
+            logger.debug("Fetched %d players for team %s", len(players), team_id)
+        except Exception:
+            logger.debug("Failed to fetch roster for team %s", team_id, exc_info=True)
+
+        self._roster_cache[team_id] = players
+        return players
+
     async def _poll_api(
         self,
         event_type: str | None = None,
@@ -730,6 +797,12 @@ class NFLStore(DataStore):
 
             scoreboard_data = await self._api.fetch("scoreboard", scoreboard_params)
             if scoreboard_data:
+                # Pre-fetch rosters before parsing if game not initialized
+                if espn_game_id and not self._state.is_game_initialized(espn_game_id):
+                    await self._prefetch_rosters_from_scoreboard(
+                        scoreboard_data, espn_game_id
+                    )
+
                 # Pass espn_game_id to filter to single game (if configured)
                 scoreboard_events = self._parse_api_response(
                     scoreboard_data, espn_game_id
