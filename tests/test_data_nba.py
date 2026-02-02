@@ -300,6 +300,88 @@ class TestNBAStoreParsePlayByPlay:
         assert result_events[0].home_score == 107
         assert result_events[0].away_score == 79
 
+    def test_game_result_emitted_after_plays(self, nba_store):
+        """Test that GameResultEvent is emitted after all NBAPlayEvents."""
+        nba_store._state.set_previous_status("401810001", 2)
+        nba_store._state.mark_pbp_available("401810001")
+
+        pbp_data = {
+            "play_by_play": {
+                "gameId": "401810001",
+                "actions": [
+                    {
+                        "actionNumber": 437,
+                        "actionType": "2pt",
+                        "description": "Made Shot",
+                        "scoreHome": "107",
+                        "scoreAway": "79",
+                    },
+                    {
+                        "actionNumber": 438,
+                        "actionType": "end period",
+                        "description": "End of the 4th Quarter",
+                        "scoreHome": "107",
+                        "scoreAway": "79",
+                    },
+                    {
+                        "actionNumber": 439,
+                        "actionType": "end game",
+                        "description": "End of Game",
+                        "period": 4,
+                        "scoreHome": "107",
+                        "scoreAway": "79",
+                    },
+                ],
+            }
+        }
+
+        events = nba_store._parse_api_response(pbp_data)
+
+        play_events = [e for e in events if isinstance(e, PlayByPlayEvent)]
+        result_events = [e for e in events if isinstance(e, GameResultEvent)]
+        assert len(play_events) == 3
+        assert len(result_events) == 1
+
+        # GameResultEvent must come after all play events in the list
+        last_play_idx = max(
+            i for i, e in enumerate(events) if isinstance(e, PlayByPlayEvent)
+        )
+        result_idx = next(
+            i for i, e in enumerate(events) if isinstance(e, GameResultEvent)
+        )
+        assert result_idx > last_play_idx
+
+    def test_game_result_includes_team_names(self, nba_store):
+        """Test that GameResultEvent includes team names from boxscore state."""
+        # Populate team lookup via boxscore first
+        nba_store._state.set_team_ids("401810001", "24", "5")
+        nba_store._state.update_team_lookup("24", "SA", "San Antonio Spurs")
+        nba_store._state.update_team_lookup("5", "CHA", "Charlotte Hornets")
+        nba_store._state.set_previous_status("401810001", 2)
+        nba_store._state.mark_pbp_available("401810001")
+
+        pbp_data = {
+            "play_by_play": {
+                "gameId": "401810001",
+                "actions": [
+                    {
+                        "actionNumber": 999,
+                        "actionType": "game",
+                        "description": "Game End",
+                        "scoreHome": "110",
+                        "scoreAway": "105",
+                    }
+                ],
+            }
+        }
+
+        events = nba_store._parse_api_response(pbp_data)
+        result_events = [e for e in events if isinstance(e, GameResultEvent)]
+
+        assert len(result_events) == 1
+        assert result_events[0].home_team_name == "San Antonio Spurs"
+        assert result_events[0].away_team_name == "Charlotte Hornets"
+
     def test_parse_pbp_away_team_wins(self, nba_store):
         """Test GameResultEvent with away team winning."""
         nba_store._state.set_previous_status("401810001", 2)
