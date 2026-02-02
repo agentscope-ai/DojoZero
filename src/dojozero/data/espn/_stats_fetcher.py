@@ -156,10 +156,10 @@ async def fetch_pregame_stats(
         away_schedule_raw, away_team_id, away_team_name, game_date
     )
     home_players = _parse_player_stats(
-        home_roster_raw, home_leaders_raw, home_team_id, home_team_name
+        home_roster_raw, home_leaders_raw, home_team_id, home_team_name, sport
     )
     away_players = _parse_player_stats(
-        away_roster_raw, away_leaders_raw, away_team_id, away_team_name
+        away_roster_raw, away_leaders_raw, away_team_id, away_team_name, sport
     )
     home_standings = _parse_standings(standings_raw, home_team_id, home_team_name)
     away_standings = _parse_standings(standings_raw, away_team_id, away_team_name)
@@ -605,17 +605,46 @@ def _parse_home_away_splits(
         return None
 
 
+_NBA_LEADER_CATEGORIES: dict[str, str] = {
+    "pointsPerGame": "ppg",
+    "assistsPerGame": "apg",
+    "reboundsPerGame": "rpg",
+    "stealsPerGame": "spg",
+    "blocksPerGame": "bpg",
+    "fieldGoalPercentage": "fg_pct",
+    "minutesPerGame": "mpg",
+}
+
+_NFL_LEADER_CATEGORIES: dict[str, str] = {
+    "passingYards": "pass_yds",
+    "passingTouchdowns": "pass_td",
+    "rushingYards": "rush_yds",
+    "rushingTouchdowns": "rush_td",
+    "receivingYards": "rec_yds",
+    "receivingTouchdowns": "rec_td",
+    "totalTackles": "tackles",
+    "sacks": "sacks",
+    "interceptions": "int",
+    "totalTouchdowns": "total_td",
+}
+
+# Keys used to compute the sort value for player ranking per sport.
+_NBA_SORT_KEYS: list[str] = ["ppg", "apg", "rpg"]
+_NFL_SORT_KEYS: list[str] = ["pass_yds", "rush_yds", "rec_yds", "total_td"]
+
+
 def _parse_player_stats(
     roster_raw: dict[str, Any],
     leaders_raw: dict[str, Any],
     team_id: str,
     team_name: str,
+    sport: str = "nba",
 ) -> TeamPlayerStats | None:
     """Parse key player stats from team roster + leaders data.
 
-    Uses the leaders endpoint to get per-game stats (PPG, APG, RPG) per
-    athlete, then merges with roster data for name/jersey/position.  Players
-    are sorted by (PPG + APG + RPG) descending so the most impactful players
+    Uses the leaders endpoint to get per-game stats per athlete, then
+    merges with roster data for name/jersey/position.  Players are sorted
+    by a sport-appropriate composite value so the most impactful players
     appear first.
     """
     try:
@@ -648,19 +677,14 @@ def _parse_player_stats(
         leaders_data = leaders_raw.get("team_leaders", {})
         categories = leaders_data.get("categories", [])
 
-        # Map: athlete_id -> {ppg, apg, rpg, ...}
+        # Map: athlete_id -> {stat_key: value, ...}
         player_stats: dict[str, dict[str, float]] = {}
 
-        # Stat categories we care about
-        stat_category_map = {
-            "pointsPerGame": "ppg",
-            "assistsPerGame": "apg",
-            "reboundsPerGame": "rpg",
-            "stealsPerGame": "spg",
-            "blocksPerGame": "bpg",
-            "fieldGoalPercentage": "fg_pct",
-            "minutesPerGame": "mpg",
-        }
+        # Select sport-appropriate stat category mapping
+        stat_category_map = (
+            _NFL_LEADER_CATEGORIES if sport == "nfl" else _NBA_LEADER_CATEGORIES
+        )
+        sort_keys = _NFL_SORT_KEYS if sport == "nfl" else _NBA_SORT_KEYS
 
         for cat in categories:
             cat_name = cat.get("name", "")
@@ -685,25 +709,21 @@ def _parse_player_stats(
         if not player_stats:
             return None
 
-        # Build player list sorted by PPG + APG + RPG descending
+        # Build player list sorted by composite value descending
         players: list[dict[str, Any]] = []
         for ath_id, stats in player_stats.items():
             roster_info = roster_map.get(ath_id, {})
-            sort_value = stats.get("ppg", 0) + stats.get("apg", 0) + stats.get("rpg", 0)
+            sort_value = sum(stats.get(k, 0) for k in sort_keys)
             player_info: dict[str, Any] = {
                 "id": ath_id,
                 "name": roster_info.get("name", ""),
                 "jersey": roster_info.get("jersey", ""),
                 "position": roster_info.get("position", ""),
-                "ppg": round(stats.get("ppg", 0), 1),
-                "apg": round(stats.get("apg", 0), 1),
-                "rpg": round(stats.get("rpg", 0), 1),
                 "_sort": sort_value,
             }
-            # Include other stats if available
-            for key in ("spg", "bpg", "fg_pct", "mpg"):
-                if key in stats:
-                    player_info[key] = round(stats[key], 1)
+            # Include all collected stats
+            for key, val in stats.items():
+                player_info[key] = round(val, 1)
             players.append(player_info)
 
         players.sort(key=lambda p: p.pop("_sort", 0), reverse=True)
