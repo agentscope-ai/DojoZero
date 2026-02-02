@@ -79,9 +79,21 @@ class NFLTeamGameStats(BaseModel):
 
         def parse_int(val: Any) -> int:
             try:
-                return int(str(val).split("/")[0])
+                return int(str(val).split("/")[0].split("-")[0])
             except (ValueError, TypeError):
                 return 0
+
+        def _split_eff(val: str) -> tuple[int, int]:
+            """Split efficiency stat like '7-13' or '7/13' into (made, attempts)."""
+            s = str(val)
+            for sep in ("-", "/"):
+                if sep in s:
+                    parts = s.split(sep)
+                    try:
+                        return int(parts[0]), int(parts[-1])
+                    except (ValueError, TypeError):
+                        pass
+            return 0, 0
 
         def parse_time(val: str) -> int:
             try:
@@ -119,24 +131,16 @@ class NFLTeamGameStats(BaseModel):
             time_of_possession=parse_time(stats_dict.get("possessionTime", "0:00")),
             penalties=penalties_count,
             penalty_yards=penalties_yards,
-            third_down_conversions=parse_int(
-                stats_dict.get("thirdDownEff", "0/0").split("/")[0]
-            ),
-            third_down_attempts=parse_int(
-                stats_dict.get("thirdDownEff", "0/0").split("/")[-1]
-            ),
-            fourth_down_conversions=parse_int(
-                stats_dict.get("fourthDownEff", "0/0").split("/")[0]
-            ),
-            fourth_down_attempts=parse_int(
-                stats_dict.get("fourthDownEff", "0/0").split("/")[-1]
-            ),
-            red_zone_attempts=parse_int(
-                stats_dict.get("redZoneAttempts", "0/0").split("/")[-1]
-            ),
-            red_zone_conversions=parse_int(
-                stats_dict.get("redZoneAttempts", "0/0").split("/")[0]
-            ),
+            third_down_conversions=_split_eff(stats_dict.get("thirdDownEff", "0-0"))[0],
+            third_down_attempts=_split_eff(stats_dict.get("thirdDownEff", "0-0"))[1],
+            fourth_down_conversions=_split_eff(stats_dict.get("fourthDownEff", "0-0"))[
+                0
+            ],
+            fourth_down_attempts=_split_eff(stats_dict.get("fourthDownEff", "0-0"))[1],
+            red_zone_conversions=_split_eff(stats_dict.get("redZoneAttempts", "0-0"))[
+                0
+            ],
+            red_zone_attempts=_split_eff(stats_dict.get("redZoneAttempts", "0-0"))[1],
         )
 
 

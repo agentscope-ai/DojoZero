@@ -531,17 +531,18 @@ class NBAStore(DataStore):
             new_actions = self._state.filter_new_actions(game_id, actions)
 
             # Emit ALL play-by-play events (no filtering - let agents decide)
+            timestamp = datetime.now(timezone.utc)
             for action in new_actions:
-                # Parse timestamp from action
-                timestamp = datetime.now(timezone.utc)
+                # Parse wallclock time from action (when the play actually happened)
+                game_timestamp: datetime | None = None
                 time_actual = action.get("timeActual")
                 if time_actual:
                     try:
                         from dojozero.data.nba._utils import parse_iso_datetime
 
-                        timestamp = parse_iso_datetime(time_actual)
+                        game_timestamp = parse_iso_datetime(time_actual)
                     except (ValueError, AttributeError):
-                        pass  # Use default timestamp
+                        pass
 
                 # Extract action data
                 action_type = action.get("actionType", "")
@@ -576,6 +577,7 @@ class NBAStore(DataStore):
                 events.append(
                     NBAPlayEvent(
                         timestamp=timestamp,
+                        game_timestamp=game_timestamp,
                         game_id=game_id,
                         sport="nba",
                         event_id=pbp_event_id,

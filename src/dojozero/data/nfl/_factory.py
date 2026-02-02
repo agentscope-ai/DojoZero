@@ -54,12 +54,15 @@ class NFLStoreFactory(StoreFactory):
 
         # Set poll identifier - espn_game_id is used to fetch game data from ESPN API
         # game_date is used for trace emission metadata
-        store.set_poll_identifier(
-            {
-                "espn_game_id": espn_game_id,
-                "game_date": metadata.game_date,
-            }
-        )
+        # dates (YYYYMMDD) is used to filter the scoreboard to the game's date
+        poll_id: dict[str, str] = {
+            "espn_game_id": espn_game_id,
+            "game_date": metadata.game_date,
+        }
+        if metadata.game_date:
+            # Convert YYYY-MM-DD to YYYYMMDD for ESPN scoreboard API
+            poll_id["dates"] = metadata.game_date.replace("-", "")
+        store.set_poll_identifier(poll_id)
 
         # Connect to hub
         hub.connect_store(store)

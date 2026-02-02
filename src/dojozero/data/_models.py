@@ -50,9 +50,10 @@ class PlayerIdentity(BaseModel):
 
     player_id: str = Field(default="", serialization_alias="playerId")
     name: str = ""
-    position: str = ""  # e.g., "G", "F", "C"
+    position: str = ""  # e.g., "G", "F", "C", "QB", "WR", "LB"
     jersey: str = ""
     headshot_url: str = Field(default="", serialization_alias="headshotUrl")
+    group: str = ""  # e.g., "offense", "defense", "specialTeam" (NFL only)
 
 
 class TeamIdentity(BaseModel):
@@ -392,6 +393,7 @@ class DataEvent(BaseModel, ABC):
     event_type: str = ""  # Narrowed to Literal on concrete subclasses
 
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    game_timestamp: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert event to dictionary for serialization."""
