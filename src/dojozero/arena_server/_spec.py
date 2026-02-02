@@ -8,7 +8,7 @@ Payload types are NOT defined here. They use the canonical models directly:
 - betting/_models.py: Bet, Account, AgentResponseMessage, CoTStep
 
 The category is derived from the event's `event_type` field.
-Serialization uses `model_dump(by_alias=True)` for camelCase output.
+Serialization uses `model_dump()` for snake_case output.
 """
 
 from __future__ import annotations

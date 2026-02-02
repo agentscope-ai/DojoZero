@@ -723,6 +723,18 @@ class SLSTraceReader:
                     # Convert event_x to event.x (only first underscore)
                     normalized_key = "event." + key[6:]
                     tags[normalized_key] = value
+                elif key.startswith("broker."):
+                    tags[key] = value
+                elif key.startswith("broker_"):
+                    # Convert broker_x to broker.x (only first underscore)
+                    normalized_key = "broker." + key[7:]
+                    tags[normalized_key] = value
+                elif key.startswith("trial."):
+                    tags[key] = value
+                elif key.startswith("trial_"):
+                    # Convert trial_x to trial.x
+                    normalized_key = "trial." + key[6:]
+                    tags[normalized_key] = value
                 elif key.startswith("game_") or key.startswith("sport_"):
                     # Domain fields - convert underscore to dot
                     normalized_key = key.replace("_", ".")
@@ -731,6 +743,10 @@ class SLSTraceReader:
                     # Simple domain fields - convert underscore to dot
                     normalized_key = key.replace("_", ".")
                     tags[normalized_key] = value
+                else:
+                    # Agent spans use non-prefixed tags (e.g., name, content, cot_steps)
+                    # Also capture any other domain-specific fields
+                    tags[key] = value
 
             span = SpanData(
                 trace_id=trace_id,
@@ -743,7 +759,7 @@ class SLSTraceReader:
                 logs=row.get("logs", []),
             )
 
-            # Debug: log first event span tags
+            # Debug: log first span of each category
             if operation_name.startswith("event.") and not hasattr(
                 self, "_event_debug_logged"
             ):
@@ -754,6 +770,30 @@ class SLSTraceReader:
                     operation_name,
                     len(event_tags),
                     {k: str(v)[:50] for k, v in list(event_tags.items())[:5]},
+                )
+
+            if operation_name.startswith("broker.") and not hasattr(
+                self, "_broker_debug_logged"
+            ):
+                self._broker_debug_logged = True
+                broker_tags = {k: v for k, v in tags.items() if k.startswith("broker.")}
+                LOGGER.info(
+                    "Converted broker span: op=%s, broker_tags_count=%d, sample=%s",
+                    operation_name,
+                    len(broker_tags),
+                    {k: str(v)[:50] for k, v in list(broker_tags.items())[:5]},
+                )
+
+            if operation_name.startswith("agent.") and not hasattr(
+                self, "_agent_debug_logged"
+            ):
+                self._agent_debug_logged = True
+                # Agent spans use non-prefixed tags
+                LOGGER.info(
+                    "Converted agent span: op=%s, all_tags_count=%d, sample=%s",
+                    operation_name,
+                    len(tags),
+                    {k: str(v)[:50] for k, v in list(tags.items())[:10]},
                 )
 
             return span

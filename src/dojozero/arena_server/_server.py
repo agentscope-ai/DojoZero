@@ -57,10 +57,10 @@ from dojozero.arena_server._models import (
 from dojozero.arena_server._replay import (
     create_replay_websocket_handler,
 )
+from dojozero.betting import AgentResponseMessage
 from dojozero.core._models import (
     AgentAction,
     AgentInfo,
-    BettingResultSpan,
     LeaderboardEntry,
     TrialLifecycleSpan,
     deserialize_span,
@@ -352,7 +352,7 @@ class SpanBroadcaster:
         if not clients:
             return
 
-        text = message.model_dump_json(by_alias=True)
+        text = message.model_dump_json()
         disconnected: list[WebSocket] = []
 
         for websocket in clients:
@@ -371,7 +371,7 @@ class SpanBroadcaster:
     ) -> None:
         """Send a message to a specific client."""
         try:
-            text = message.model_dump_json(by_alias=True)
+            text = message.model_dump_json()
             await websocket.send_text(text)
         except Exception as e:
             LOGGER.warning("Failed to send message to client: %s", e)
@@ -839,9 +839,9 @@ async def _extract_agent_actions(
 
             # Try typed deserialization for known span types
             typed = deserialize_span(span)
-            if isinstance(typed, BettingResultSpan):
-                agent_id = typed.agent_id
-                agent_name = typed.agent_name or agent_id
+            if isinstance(typed, AgentResponseMessage):
+                agent_id = typed.name
+                agent_name = agent_id
             else:
                 # Fallback to raw tags for custom action spans
                 agent_id = span.tags.get("agent.id", span.tags.get("agent_id", ""))
@@ -948,23 +948,24 @@ async def _compute_leaderboard(
         for span in spans:
             typed = deserialize_span(span)
 
-            if not isinstance(typed, BettingResultSpan):
+            if not isinstance(typed, AgentResponseMessage):
                 continue
 
-            agent_id = typed.agent_id
+            agent_id = typed.name
             if not agent_id:
                 continue
 
             if agent_id not in agent_stats:
                 agent_stats[agent_id] = _AgentStats(
-                    agent=_get_agent_info(agent_id, typed.agent_name or agent_id),
+                    agent=_get_agent_info(agent_id, typed.name or agent_id),
                 )
 
+            # TODO: need to handle this in new data format
             acc = agent_stats[agent_id]
-            acc.winnings += typed.payout
+            acc.winnings += typed.bet_amount if typed.bet_amount else 0
             acc.total_bets += 1
-            acc.total_wagered += typed.wager
-            if typed.won:
+            acc.total_wagered += typed.bet_amount if typed.bet_amount else 0
+            if typed.bet_amount:
                 acc.wins += 1
 
     # Convert to sorted list
@@ -1204,7 +1205,7 @@ def create_arena_app(
             all_games=all_games,
             live_agent_actions=agent_actions,
         )
-        return JSONResponse(content=response.model_dump(by_alias=True))
+        return JSONResponse(content=response.model_dump())
 
     @app.get("/api/stats")
     async def get_stats(
@@ -1234,7 +1235,7 @@ def create_arena_app(
             return await _compute_stats(state.trace_reader, trial_ids)
 
         stats = await state.cache.get_stats(fetch_stats)
-        return JSONResponse(content=stats.model_dump(by_alias=True))
+        return JSONResponse(content=stats.model_dump())
 
     @app.get("/api/games")
     async def get_games(
@@ -1300,7 +1301,7 @@ def create_arena_app(
         filtered = all_games[:limit]
         return JSONResponse(
             content={
-                "games": [g.model_dump(by_alias=True) for g in filtered],
+                "games": [g.model_dump() for g in filtered],
                 "total": len(all_games),
             }
         )
@@ -1346,7 +1347,7 @@ def create_arena_app(
 
         response = LeaderboardResponse(leaderboard=leaderboard)
         return JSONResponse(
-            content=response.model_dump(by_alias=True),
+            content=response.model_dump(),
         )
 
     @app.get("/api/agent-actions")
@@ -1377,7 +1378,7 @@ def create_arena_app(
 
         response = AgentActionsResponse(actions=actions)
         return JSONResponse(
-            content=response.model_dump(by_alias=True),
+            content=response.model_dump(),
         )
 
     # -------------------------------------------------------------------------
@@ -1473,7 +1474,7 @@ def create_arena_app(
                     heartbeat = WSHeartbeatMessage(
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     )
-                    await websocket.send_text(heartbeat.model_dump_json(by_alias=True))
+                    await websocket.send_text(heartbeat.model_dump_json())
 
         except WebSocketDisconnect:
             LOGGER.info("WebSocket disconnected for trial '%s'", trial_id)

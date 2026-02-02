@@ -5,11 +5,11 @@ allowing frontend developers to test and debug without needing a live trial.
 
 Usage:
     Connect to: /ws/test/replay
-    
+
     Control commands (send as JSON):
         {"command": "speed", "value": 2}     - Set playback speed (0.5x to 10x)
         {"command": "pause"}                  - Pause playback
-        {"command": "resume"}                 - Resume playback  
+        {"command": "resume"}                 - Resume playback
         {"command": "reset"}                  - Reset to beginning
         {"command": "skip", "value": 10}      - Skip forward N events
         {"command": "seek", "value": 50}      - Jump to event index N
@@ -56,7 +56,7 @@ class ReplayStatusMessage(BaseModel):
 @dataclass
 class ReplayController:
     """Controls the replay of recorded snapshot data.
-    
+
     Manages playback state including position, speed, and pause status.
     Provides methods for controlling playback via WebSocket commands.
     """
@@ -66,7 +66,7 @@ class ReplayController:
     speed: float = 1.0  # Playback speed multiplier
     is_paused: bool = False
     base_interval: float = 0.5  # Base interval between events in seconds
-    
+
     # Number of initial items to send as snapshot (non-play events typically)
     snapshot_size: int = 10
 
@@ -77,7 +77,7 @@ class ReplayController:
         if not path.exists():
             LOGGER.warning("Snapshot file not found: %s", path)
             return cls(items=[])
-        
+
         try:
             with open(path) as f:
                 data = json.load(f)
@@ -111,10 +111,7 @@ class ReplayController:
 
     def skip(self, count: int) -> None:
         """Skip forward by count events."""
-        self.current_index = min(
-            self.current_index + count, 
-            len(self.items) - 1
-        )
+        self.current_index = min(self.current_index + count, len(self.items) - 1)
         LOGGER.debug("Skipped to index %d", self.current_index)
 
     def seek(self, index: int) -> None:
@@ -238,7 +235,11 @@ async def _handle_command(
         # Send all events from 0 to target_index as snapshot
         snapshot_items = controller.items[:target_index]
         controller.current_index = target_index
-        LOGGER.debug("Seek to %d, sending %d items as snapshot", target_index, len(snapshot_items))
+        LOGGER.debug(
+            "Seek to %d, sending %d items as snapshot",
+            target_index,
+            len(snapshot_items),
+        )
     elif command == "status":
         pass  # Just return status
     else:
@@ -255,10 +256,10 @@ def create_replay_websocket_handler(
     snapshot_path: Path | str | None = None,
 ) -> Callable[[WebSocket], Coroutine[Any, Any, None]]:
     """Create a WebSocket handler for replay functionality.
-    
+
     Args:
         snapshot_path: Path to snapshot JSON file. Defaults to bundled snapshot_data.json.
-    
+
     Returns:
         An async function that handles WebSocket connections for replay.
     """
@@ -271,13 +272,15 @@ def create_replay_websocket_handler(
 
         # Create a fresh controller for each connection
         controller = ReplayController.from_file(path)
-        
+
         if not controller.items:
-            await websocket.send_json({
-                "type": "error",
-                "message": "No replay data available",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": "No replay data available",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             await websocket.close()
             return
 
@@ -335,7 +338,7 @@ def create_replay_websocket_handler(
                         ended_msg = _make_trial_ended_message(trial_id)
                         await websocket.send_json(ended_msg)
                         LOGGER.info("Replay completed, sent trial_ended")
-                        
+
                         # Pause at end, client can reset to replay
                         controller.pause()
                         status = controller.get_status()

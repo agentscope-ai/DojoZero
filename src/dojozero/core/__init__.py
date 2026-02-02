@@ -59,7 +59,6 @@ from ._models import (
     AgentAction,
     AgentInfo,
     LeaderboardEntry,
-    BettingResultSpan,
     SpanModel,
     TrialLifecycleSpan,
     deserialize_span,
@@ -126,7 +125,6 @@ __all__ = [
     "AgentInfo",
     "LeaderboardEntry",
     # Span Models
-    "BettingResultSpan",
     "SpanModel",
     "TrialLifecycleSpan",
     "deserialize_span",

@@ -272,25 +272,37 @@ class Bet(BaseModel):
     settlement_time: Optional[datetime] = None
 
 
-@dataclass
-class BetExecutedPayload:
-    bet_id: str
-    agent_id: str
-    event_id: str
-    selection: str
-    amount: str
-    execution_probability: str  # Probability (0-1) at which bet was executed
-    shares: str  # Number of shares purchased
-    execution_time: str
+class BetExecutedPayload(BaseModel):
+    """Bet execution payload for tracing (broker.bet span)."""
+
+    bet_id: str = ""
+    agent_id: str = ""
+    event_id: str = ""
+    selection: str = ""
+    amount: str = ""
+    execution_probability: str = ""  # Probability (0-1) at which bet was executed
+    shares: str = ""  # Number of shares purchased
+    execution_time: str = ""
 
 
-@dataclass
-class BetSettledPayload:
-    bet_id: str
-    event_id: str
-    outcome: BetOutcome  # Store the enum directly
-    payout: str
-    winner: str
+class BetSettledPayload(BaseModel):
+    """Bet settlement payload for tracing."""
+
+    bet_id: str = ""
+    event_id: str = ""
+    outcome: Optional[BetOutcome] = None  # Store the enum directly
+    payout: str = ""
+    winner: str = ""
+
+
+class BrokerStateUpdate(BaseModel):
+    """Broker state snapshot for tracing (broker.state_update span)."""
+
+    change_type: str = ""
+    accounts_count: int = 0
+    bets_count: int = 0
+    accounts: Dict[str, Account] = Field(default_factory=dict)
+    bets: Dict[str, Bet] = Field(default_factory=dict)
 
 
 # =============================================================================
@@ -376,6 +388,44 @@ class AgentResponseMessage(BaseModel):
     )
 
 
+class AgentRegistration(BaseModel):
+    """Agent registration payload for tracing (agent.registered span)."""
+
+    agent_id: str = Field(default="", description="Unique ID for the agent")
+    name: str = Field(default="", description="degen-qwen3")
+    model: str = Field(
+        default="", description="Model provider (e.g., 'gemini', 'claude', 'openai')"
+    )
+    system_prompt: str = Field(default="", description="Agent's system prompt")
+    tag: str = Field(
+        default="", description="Agent tag (e.g., 'degen', 'whale', 'shark')"
+    )
+    cdn_url: str = Field(default="", description="Avatar image URL")
+
+
+class AgentsBatchRegistration(BaseModel):
+    """Batch agent registration payload for initializing multiple agents at once."""
+
+    agents: List[AgentRegistration] = Field(
+        default_factory=list,
+        description="List of agents to register. Each agent is identified by agent_id.",
+    )
+
+    def get_agent_by_id(self, agent_id: str) -> Optional[AgentRegistration]:
+        """Get agent by agent_id"""
+        for agent in self.agents:
+            if agent.agent_id == agent_id:
+                return agent
+        return None
+
+    def add_agent(self, agent: AgentRegistration) -> None:
+        """Add an agent to the batch"""
+        # Check if agent_id already exists
+        if self.get_agent_by_id(agent.agent_id):
+            raise ValueError(f"Agent with agent_id '{agent.agent_id}' already exists")
+        self.agents.append(agent)
+
+
 __all__ = [
     # Enums
     "BetOutcome",
@@ -394,12 +444,15 @@ __all__ = [
     "BetRequestTotal",
     "BetSettledPayload",
     "BettingEvent",
+    "BrokerStateUpdate",
     "Holding",
     "Statistics",
     # Agent Message Models
+    "AgentRegistration",
+    "AgentsBatchRegistration",
+    "AgentResponseMessage",
+    "CoTStep",
     "ReasoningStep",
     "ToolCallStep",
     "ToolResultStep",
-    "CoTStep",
-    "AgentResponseMessage",
 ]

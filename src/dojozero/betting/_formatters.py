@@ -20,7 +20,7 @@ def format_bet_executed(payload: BetExecutedPayload) -> str:
 
 def format_bet_settled(payload: BetSettledPayload) -> str:
     """Format BetSettledPayload to readable text."""
-    outcome_str = payload.outcome.value  # WIN or LOSS
+    outcome_str = payload.outcome.value if payload.outcome else "UNKNOWN"  # WIN or LOSS
     return (
         f"[Bet Settled] Bet ID: {payload.bet_id}\n"
         f"- Event: {payload.event_id}\n"

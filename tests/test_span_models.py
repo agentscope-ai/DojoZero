@@ -6,14 +6,22 @@ into the appropriate Pydantic model via deserialize_span().
 Span categories handled:
 - trial.started/stopped/terminated → TrialLifecycleSpan
 - event.* → DataEvent subclasses (from data/_models.py)
-- *result*, *payout* → BettingResultSpan
+- broker.bet → BetExecutedPayload
+- broker.state_update → BrokerStateUpdate
+- agent.response → AgentResponseMessage
+- agent.registered → AgentRegistrationPayload
 - Other spans → None (not recognized)
 """
 
 import json
 
+from dojozero.betting._models import (
+    AgentRegistration,
+    AgentResponseMessage,
+    BetExecutedPayload,
+    BrokerStateUpdate,
+)
 from dojozero.core._models import (
-    BettingResultSpan,
     TrialLifecycleSpan,
     deserialize_span,
 )
@@ -93,57 +101,6 @@ class TestTrialLifecycleSpan:
 
 
 # ---------------------------------------------------------------------------
-# BettingResultSpan
-# ---------------------------------------------------------------------------
-
-
-class TestBettingResultSpan:
-    def test_result_span_with_payout(self):
-        span = _make_span(
-            "betting.result",
-            tags={
-                "agent.id": "agent-001",
-                "agent.name": "BettingAgent",
-                "payout": 150.0,
-                "wager": 100.0,
-                "won": "win",
-            },
-        )
-        result = deserialize_span(span)
-        assert isinstance(result, BettingResultSpan)
-        assert result.agent_id == "agent-001"
-        assert result.agent_name == "BettingAgent"
-        assert result.payout == 150.0
-        assert result.wager == 100.0
-        assert result.won is True
-
-    def test_result_span_with_alternate_tag_names(self):
-        """Uses agent_id/profit/amount fallback tag names."""
-        span = _make_span(
-            "game_result_payout",
-            tags={
-                "agent_id": "agent-002",
-                "agent_name": "SafeAgent",
-                "profit": -50.0,
-                "amount": 50.0,
-                "result": "loss",
-            },
-        )
-        result = deserialize_span(span)
-        assert isinstance(result, BettingResultSpan)
-        assert result.agent_id == "agent-002"
-        assert result.payout == -50.0
-        assert result.wager == 50.0
-        assert result.won is False
-
-    def test_won_boolean_true(self):
-        span = _make_span("payout_result", tags={"won": True})
-        result = deserialize_span(span)
-        assert isinstance(result, BettingResultSpan)
-        assert result.won is True
-
-
-# ---------------------------------------------------------------------------
 # DataEvent dispatch
 # ---------------------------------------------------------------------------
 
@@ -173,6 +130,116 @@ class TestDataEventDispatch:
 
 
 # ---------------------------------------------------------------------------
+# BrokerSpan dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestBrokerSpanDispatch:
+    def test_broker_bet_span(self):
+        """broker.bet dispatches to BetExecutedPayload."""
+        span = _make_span(
+            "broker.bet",
+            tags={
+                "broker.bet_id": "bet-001",
+                "broker.agent_id": "agent-001",
+                "broker.event_id": "event-001",
+                "broker.selection": "home",
+                "broker.amount": "100.00",
+                "broker.execution_probability": "0.55",
+                "broker.shares": "181.82",
+                "broker.execution_time": "2025-03-15T10:30:00Z",
+            },
+        )
+        result = deserialize_span(span)
+        assert result is not None
+        assert isinstance(result, BetExecutedPayload)
+        assert result.bet_id == "bet-001"
+        assert result.agent_id == "agent-001"
+        assert result.selection == "home"
+        assert result.amount == "100.00"
+
+    def test_broker_state_update_span(self):
+        """broker.state_update dispatches to BrokerStateUpdate."""
+        span = _make_span(
+            "broker.state_update",
+            tags={
+                "broker.change_type": "bet_placed",
+                "broker.accounts_count": 2,
+                "broker.bets_count": 5,
+                "broker.accounts": json.dumps({}),
+                "broker.bets": json.dumps({}),
+            },
+        )
+        result = deserialize_span(span)
+        assert result is not None
+        assert isinstance(result, BrokerStateUpdate)
+        assert result.change_type == "bet_placed"
+        assert result.accounts_count == 2
+        assert result.bets_count == 5
+
+
+# ---------------------------------------------------------------------------
+# AgentSpan dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestAgentSpanDispatch:
+    def test_agent_response_span(self):
+        """agent.response dispatches to AgentResponseMessage."""
+        span = _make_span(
+            "agent.response",
+            tags={
+                "sequence": 1,
+                "stream_id": "stream-001",
+                "name": "Claude",
+                "content": "I'll bet on the home team.",
+                "trigger": "odds_update",
+                "game_id": "game-001",
+                "cot_steps": json.dumps(
+                    [{"step_type": "reasoning", "text": "Analyzing..."}]
+                ),
+                "bet_type": "MONEYLINE",
+                "bet_amount": 100.0,
+                "bet_selection": "home",
+            },
+        )
+        result = deserialize_span(span)
+        assert result is not None
+        assert isinstance(result, AgentResponseMessage)
+        assert result.name == "Claude"
+        assert result.content == "I'll bet on the home team."
+        assert result.bet_type == "MONEYLINE"
+        assert result.bet_amount == 100.0
+
+    def test_agent_registered_span(self):
+        """agent.registered dispatches to AgentRegistrationPayload."""
+        span = _make_span(
+            "agent.registered",
+            tags={
+                "agent_id": "degen-claude-001",
+                "name": "Claude",
+                "model": "claude",
+                "system_prompt": "You are a sports betting agent.",
+                "tag": "degen",
+                "cdn_url": "https://example.com/avatar.png",
+            },
+        )
+        result = deserialize_span(span)
+        assert result is not None
+        assert isinstance(result, AgentRegistration)
+        assert result.agent_id == "degen-claude-001"
+        assert result.name == "Claude"
+        assert result.model == "claude"
+        assert result.tag == "degen"
+
+    def test_unknown_agent_operation_returns_none(self):
+        """Unknown agent.* operations return None."""
+        span = _make_span("agent.unknown_action", tags={"foo": "bar"})
+        result = deserialize_span(span)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
 # Dispatch: unrecognized → None
 # ---------------------------------------------------------------------------
 
@@ -188,20 +255,8 @@ class TestUnrecognizedSpan:
         result = deserialize_span(span)
         assert result is None
 
-    def test_agent_spans_not_handled(self):
-        """Agent spans (agent.*) are no longer deserialized - return None."""
-        span = _make_span("agent.response", tags={"event.content": "Hello"})
+    def test_fuzzy_result_payout_not_handled(self):
+        """Fuzzy matching on 'result'/'payout' is no longer supported."""
+        span = _make_span("betting.result", tags={"payout": 100.0})
         result = deserialize_span(span)
-        assert result is None
-
-    def test_broker_spans_not_handled(self):
-        """Broker spans are no longer deserialized - return None."""
-        span = _make_span("broker.state_update", tags={"broker.change_type": "bet"})
-        result = deserialize_span(span)
-        assert result is None
-
-    def test_registration_spans_not_handled(self):
-        """Actor registration spans are no longer deserialized - return None."""
-        span = _make_span("agent.registered", tags={"actor.id": "a1"})
-        result = deserialize_span(span)
-        assert result is None
+        assert result is None  # No longer matched
