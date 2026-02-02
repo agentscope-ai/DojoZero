@@ -19,6 +19,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import matplotlib
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+
+matplotlib.use("Agg")
+
 # Add parent directory to path to import dojozero modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -517,7 +523,7 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
             ml = (e.get("odds") or {}).get("moneyline", {})
             logger.info(
                 "  %s  home=%.1f%% (%.2f)  away=%.1f%% (%.2f)",
-                e.get("game_timestamp", e.get("timestamp", ""))[:19],
+                (e.get("game_timestamp") or e.get("timestamp") or "")[:19],
                 ml.get("home_probability", 0) * 100,
                 ml.get("home_odds", 0),
                 ml.get("away_probability", 0) * 100,
@@ -562,9 +568,123 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     cook_jsonl(input_path, output_path)
+    plot_odds(output_path)
 
     logger.info("Done: %s", output_path)
     return 0
+
+
+def plot_odds(output_path: Path) -> None:
+    """Generate odds progression plot from cooked JSONL."""
+    timestamps: list[datetime] = []
+    home_probs: list[float] = []
+    scoring_times: list[datetime] = []
+    scoring_labels: list[str] = []
+    home_tricode = "HOME"
+    away_tricode = "AWAY"
+    game_date = ""
+
+    with open(output_path) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            e = json.loads(line)
+            etype = e.get("event_type", "")
+
+            if etype == "event.game_initialize":
+                ht = e.get("home_team", {})
+                at = e.get("away_team", {})
+                if isinstance(ht, dict):
+                    home_tricode = ht.get("tricode") or ht.get("abbrev") or "HOME"
+                if isinstance(at, dict):
+                    away_tricode = at.get("tricode") or at.get("abbrev") or "AWAY"
+                gt = e.get("game_time", "")
+                if gt:
+                    game_date = gt[:10]
+
+            elif etype == "event.odds_update":
+                ts = e.get("game_timestamp") or e.get("timestamp")
+                if ts:
+                    t = datetime.fromisoformat(str(ts))
+                    ml = (e.get("odds") or {}).get("moneyline", {})
+                    hp = ml.get("home_probability", 0)
+                    timestamps.append(t)
+                    home_probs.append(hp * 100)
+
+            elif etype == "event.nfl_play" and e.get("is_scoring_play"):
+                ts = e.get("game_timestamp")
+                if ts:
+                    t = datetime.fromisoformat(str(ts))
+                    hs = e.get("home_score", 0)
+                    aws = e.get("away_score", 0)
+                    scoring_times.append(t)
+                    scoring_labels.append(f"{hs}-{aws}")
+
+    if not timestamps:
+        logger.warning("No odds events found, skipping plot")
+        return
+
+    # Convert datetimes to matplotlib numeric format for type safety
+    ts_num = mdates.date2num(timestamps)
+    score_num = mdates.date2num(scoring_times) if scoring_times else []
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.fill_between(
+        ts_num,
+        home_probs,
+        50,
+        where=[p >= 50 for p in home_probs],
+        alpha=0.15,
+        color="#1f77b4",
+        interpolate=True,
+    )
+    ax.fill_between(
+        ts_num,
+        home_probs,
+        50,
+        where=[p < 50 for p in home_probs],
+        alpha=0.15,
+        color="#d62728",
+        interpolate=True,
+    )
+    ax.plot(
+        ts_num,
+        home_probs,
+        color="#1f77b4",
+        linewidth=1.5,
+        label=f"{home_tricode} (home) win %",
+    )
+    ax.axhline(y=50, color="gray", linestyle="--", alpha=0.5, linewidth=0.8)
+
+    for t_num, label in zip(score_num, scoring_labels):
+        ax.axvline(x=t_num, color="green", alpha=0.3, linewidth=0.8)
+        ax.annotate(
+            label,
+            xy=(t_num, 93),
+            fontsize=7,
+            ha="center",
+            color="#2ca02c",
+            rotation=45,
+        )
+
+    n_odds = len(timestamps)
+    title = (
+        f"Simulated Moneyline Odds: {away_tricode} @ {home_tricode}"
+        f" ({game_date})  |  {n_odds:,} events @ 5s intervals"
+    )
+    ax.set_xlabel("Game Time (UTC)")
+    ax.set_ylabel("Home Win Probability (%)")
+    ax.set_title(title)
+    ax.set_ylim(0, 100)
+    ax.legend(loc="lower right")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    plot_path = output_path.with_suffix(".png")
+    fig.savefig(plot_path, dpi=150)
+    plt.close(fig)
+    logger.info("Odds plot saved: %s", plot_path)
 
 
 if __name__ == "__main__":

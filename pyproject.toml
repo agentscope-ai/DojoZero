@@ -27,6 +27,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.29.0",
     "alibabacloud-credentials>=1.0.0",
     "aliyun-log-python-sdk",
+    "matplotlib>=3.10.8",
 ]
 
 [project.scripts]
