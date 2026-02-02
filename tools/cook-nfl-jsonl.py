@@ -131,7 +131,6 @@ def make_odds_event(
 
     event = OddsUpdateEvent(
         timestamp=datetime.fromisoformat(ts),
-        game_timestamp=datetime.fromisoformat(ts),
         game_id=game_id,
         sport=sport,
         home_tricode=home_tricode,
