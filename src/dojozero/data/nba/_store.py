@@ -204,7 +204,7 @@ class NBAStore(DataStore):
                     tri = team_data.get("teamTricode", "")
                     city = team_data.get("teamCity", "")
                     tname = team_data.get("teamName", "")
-                    display_name = f"{city} {tname}".strip() if (city or tname) else ""
+                    display_name = f"{city} {tname}".strip()
                     self._state.update_team_lookup(tid, tri, display_name)
                     for player in team_data.get("players", []):
                         if isinstance(player, dict):
