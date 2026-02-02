@@ -148,7 +148,12 @@ class TestLLMConfigLoading:
             assert "model_name" in llm_config, (
                 f"LLM config {llm_path} LLM[{i}] missing 'model_name'"
             )
-            assert llm_config["model_type"] in ("openai", "dashscope"), (
+            assert llm_config["model_type"] in (
+                "openai",
+                "dashscope",
+                "anthropic",
+                "gemini",
+            ), (
                 f"LLM config {llm_path} LLM[{i}] has unknown model_type: {llm_config['model_type']}"
             )
 

@@ -1,5 +1,4 @@
 llm:
-  - model_type: openai
+  - model_type: gemini
     model_name: gemini-3-pro-preview
-    api_key_env: DOJOZERO_OPENAI_API_KEY
-    base_url_env: DOJOZERO_OPENAI_BASE_URL
+    api_key_env: DOJOZERO_GEMINI_API_KEY

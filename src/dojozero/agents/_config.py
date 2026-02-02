@@ -9,16 +9,24 @@ from agentscope.formatter import (
     FormatterBase,
     OpenAIChatFormatter,
     DashScopeChatFormatter,
+    AnthropicChatFormatter,
+    GeminiChatFormatter,
 )
-from agentscope.model import ChatModelBase, OpenAIChatModel, DashScopeChatModel
+from agentscope.model import (
+    ChatModelBase,
+    OpenAIChatModel,
+    DashScopeChatModel,
+    AnthropicChatModel,
+    GeminiChatModel,
+)
 
-ModelType = Literal["openai", "dashscope"]
+ModelType = Literal["openai", "dashscope", "anthropic", "gemini"]
 
 
 class LLMConfig(TypedDict, total=False):
     """LLM configuration."""
 
-    model_type: ModelType  # "openai" or "dashscope"
+    model_type: ModelType  # "openai", "dashscope", "anthropic", or "gemini"
     model_name: str
     api_key_env: str
     base_url_env: str
@@ -161,34 +169,19 @@ def get_api_key(llm_config: LLMConfig | dict[str, Any]) -> str:
     return os.environ.get(env_var, "")
 
 
-def get_base_url(llm_config: LLMConfig | dict[str, Any]) -> str | None:
-    """Get base URL from environment variable."""
-    env_var = llm_config.get("base_url_env", "DOJOZERO_OPENAI_BASE_URL")
-    return os.environ.get(env_var)
-
-
 def create_model(llm_config: LLMConfig) -> ChatModelBase:
     """Create model from LLM config dict."""
     model_type = llm_config.get("model_type", "openai")
     model_name = llm_config.get("model_name", "qwen3-max")
     api_key = get_api_key(llm_config)
-    base_url = get_base_url(llm_config)
-    # Default max_tokens to 16384, required by some providers (e.g., Bedrock)
-    max_tokens = llm_config.get("max_tokens", 16384)
-
     if model_type == "openai":
-        client_kwargs: dict[str, Any] | None = (
-            {"base_url": base_url} if base_url else None
-        )
-        generate_kwargs: dict[str, Any] = {"max_tokens": max_tokens}
-        return OpenAIChatModel(
-            model_name=model_name,
-            api_key=api_key,
-            client_kwargs=client_kwargs,
-            generate_kwargs=generate_kwargs,
-        )
+        return OpenAIChatModel(model_name=model_name, api_key=api_key)
     elif model_type == "dashscope":
         return DashScopeChatModel(model_name=model_name, api_key=api_key)
+    elif model_type == "anthropic":
+        return AnthropicChatModel(model_name=model_name, api_key=api_key)
+    elif model_type == "gemini":
+        return GeminiChatModel(model_name=model_name, api_key=api_key)
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 
@@ -199,6 +192,10 @@ def create_formatter(model_type: str) -> FormatterBase:
         return OpenAIChatFormatter()
     elif model_type == "dashscope":
         return DashScopeChatFormatter()
+    elif model_type == "anthropic":
+        return AnthropicChatFormatter()
+    elif model_type == "gemini":
+        return GeminiChatFormatter()
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 

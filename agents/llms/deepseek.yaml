@@ -1,5 +1,4 @@
 llm:
-  - model_type: openai
+  - model_type: dashscope
     model_name: deepseek-v3.2
-    api_key_env: DOJOZERO_OPENAI_API_KEY
-    base_url_env: DOJOZERO_OPENAI_BASE_URL
+    api_key_env: DOJOZERO_DASHSCOPE_API_KEY
