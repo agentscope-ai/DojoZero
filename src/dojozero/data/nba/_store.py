@@ -598,7 +598,6 @@ class NBAStore(DataStore):
 
             # Emit GameResultEvent AFTER all play events for correct ordering
             if game_ended:
-                last_action = actions[-1]
                 home_score = int(last_action.get("scoreHome", 0) or 0)
                 away_score = int(last_action.get("scoreAway", 0) or 0)
                 winner = (
