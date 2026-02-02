@@ -250,8 +250,9 @@ async def get_game_info_by_id_async(game_id: str) -> GameInfo | None:
 
     api = NFLExternalAPI()
     try:
-        summary = await api.fetch("summary", {"event": game_id})
-        if not summary:
+        resp = await api.fetch("summary", {"event_id": game_id})
+        summary = resp.get("summary", {})
+        if not summary or not summary.get("header"):
             logger.debug("No summary data for game_id=%s", game_id)
             return None
 

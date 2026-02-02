@@ -404,8 +404,8 @@ class NFLGameTrialManager:
         with open(self.base_config, "r") as f:
             config = yaml.safe_load(f)
 
-        # Update event_id in config
-        config["scenario"]["config"]["event_id"] = self.event_id
+        # Update espn_game_id in config
+        config["scenario"]["config"]["espn_game_id"] = self.event_id
 
         # Determine file paths
         if self.data_dir:
@@ -1001,25 +1001,45 @@ async def run_trial_for_event(
     """
     logger.info("Searching for NFL game with event ID: %s", event_id)
 
-    # Search in current week's games first
     api = NFLExternalAPI()
     try:
-        data = await api.fetch("scoreboard")
-        scoreboard = data.get("scoreboard", {})
-        events = scoreboard.get("events", [])
-
+        # Try fetching the specific game via summary endpoint (works for any date)
         target_event = None
-        for event in events:
-            if event.get("id") == event_id:
-                target_event = event
-                break
+        try:
+            resp = await api.fetch("summary", {"event_id": event_id})
+            summary_data = resp.get("summary", {})
+            header = summary_data.get("header", {})
+            competitions = header.get("competitions", [])
+            if competitions:
+                # Build a scoreboard-compatible event dict from summary data
+                target_event = {
+                    "id": event_id,
+                    "shortName": header.get("shortName", ""),
+                    "competitions": competitions,
+                }
+                logger.info("Found game %s via summary endpoint", event_id)
+        except Exception as e:
+            logger.warning("Summary fetch for %s failed: %s", event_id, e)
+
+        # Fall back to current scoreboard
+        if not target_event:
+            data = await api.fetch("scoreboard")
+            scoreboard = data.get("scoreboard", {})
+            events = scoreboard.get("events", [])
+            for event in events:
+                if event.get("id") == event_id:
+                    target_event = event
+                    break
 
         if not target_event:
-            logger.error("Event ID %s not found in current scoreboard", event_id)
+            logger.error(
+                "Event ID %s not found via summary or current scoreboard", event_id
+            )
             return []
 
         # Parse the event into our format
-        comp = target_event.get("competitions", [{}])[0]
+        comps = target_event.get("competitions", [{}])
+        comp = comps[0] if comps else {}
         status = comp.get("status", {}).get("type", {})
 
         game_time_str = comp.get("date", "")
@@ -1049,13 +1069,17 @@ async def run_trial_for_event(
             else:
                 away_team = team_data
 
+        short_name = target_event.get("shortName", "")
+        if not short_name and away_team and home_team:
+            short_name = f"{away_team.get('abbreviation', '???')} @ {home_team.get('abbreviation', '???')}"
+
         game = {
             "eventId": event_id,
             "gameStatus": int(status.get("id", "1")),
             "gameStatusText": status.get("description", "Scheduled"),
             "gameTimeUTC": game_time_str,
             "gameTimeLTZ": game_time_ltz,
-            "shortName": target_event.get("shortName", ""),
+            "shortName": short_name,
             "homeTeam": home_team,
             "awayTeam": away_team,
         }
