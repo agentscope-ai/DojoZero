@@ -540,6 +540,8 @@ class NFLStore(DataStore):
             NFLDriveEvent(
                 timestamp=timestamp,
                 game_id=event_id,
+                segment_id=drive_id,
+                segment_number=drive_number,
                 drive_id=drive_id,
                 drive_number=drive_number,
                 team_id=team_id,
@@ -692,12 +694,12 @@ class NFLStore(DataStore):
         Returns:
             Points scored (0, 3, 6, 7, 8, or 2 for safety)
         """
-        result_lower = result.lower()
-        if "touchdown" in result_lower:
+        result_upper = result.strip().upper()
+        if result_upper in ("TD", "TOUCHDOWN"):
             return 7  # Assume extra point made
-        elif "field goal" in result_lower:
+        elif result_upper in ("FG", "FIELD GOAL"):
             return 3
-        elif "safety" in result_lower:
+        elif result_upper in ("SF", "SAFETY"):
             return 2
         return 0
 
