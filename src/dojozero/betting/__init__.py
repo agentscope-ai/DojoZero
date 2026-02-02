@@ -100,5 +100,4 @@ __all__ = [
     "ToolResultStep",
     "CoTStep",
     "AgentResponseMessage",
-    "AgentBetMessage",
 ]

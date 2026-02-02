@@ -1,23 +1,18 @@
 """Typed Pydantic models for spans, API responses, and display.
 
-This module provides typed models for two complementary purposes:
-
-**Span deserialization** — converting raw ``SpanData`` from the tracing layer
-into typed models so consumers (arena server, dashboards) get IDE autocomplete
-and type safety instead of manual ``span.tags.get()`` calls.
+This module provides:
 
 **API contracts** — shared models (AgentInfo, AgentAction, LeaderboardEntry)
-used by both agents (to assemble structured span data) and the arena server
-(to serve typed JSON to the frontend).
+used by the arena server to serve typed JSON to the frontend.
 
-Span Categories
----------------
-TrialLifecycleSpan   trial.started / trial.stopped / trial.terminated
-AgentMessageSpan     agent.input / agent.response / agent.tool_result
-BrokerStateSpan      broker.state_update
-ActorRegistrationSpan  *.registered
-BettingResultSpan    operation_name contains "result" or "payout"
-DataEvent            event.* prefix (delegated to deserialize_event_from_span)
+**Span deserialization** — converting raw SpanData into typed models.
+For DataEvent spans (event.*), we reconstruct the original event types.
+For trial/agent/broker spans, we use minimal internal models.
+
+Span Categories:
+- event.* → DataEvent subclasses (from data/_models.py)
+- trial.started/stopped/terminated → TrialLifecycleSpan
+- *result*, *payout* → BettingResultSpan (for leaderboard aggregation)
 """
 
 from __future__ import annotations
@@ -28,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dojozero.core._tracing import SpanData, deserialize_event_from_span
+from dojozero.core._tracing import SpanData
 
 if TYPE_CHECKING:
     from dojozero.data._models import DataEvent
@@ -36,7 +31,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# API / Display Models
+# API / Display Models (for aggregated API responses)
 # ============================================================================
 
 
@@ -78,10 +73,9 @@ class LeaderboardEntry(BaseModel):
 
 
 # ============================================================================
-# Trial Lifecycle
+# Trial Lifecycle (internal span model for phase detection)
 # ============================================================================
 
-# Known metadata fields from BettingTrialMetadata (trial.* tags)
 _TRIAL_METADATA_FIELDS = frozenset(
     {
         "home_team_tricode",
@@ -97,7 +91,7 @@ _TRIAL_METADATA_FIELDS = frozenset(
 
 
 class TrialLifecycleSpan(BaseModel):
-    """Deserialized trial.started / trial.stopped / trial.terminated span."""
+    """Deserialized trial.started/stopped/terminated span."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -105,7 +99,7 @@ class TrialLifecycleSpan(BaseModel):
     phase: str = ""  # "started", "stopped", "terminated"
     start_time: int = 0  # microseconds since epoch
 
-    # Metadata from trial.* tags (BettingTrialMetadata fields)
+    # Metadata from trial.* tags
     home_team_tricode: str = ""
     away_team_tricode: str = ""
     home_team_name: str = ""
@@ -115,79 +109,11 @@ class TrialLifecycleSpan(BaseModel):
     sport_type: str = ""
     espn_game_id: str = ""
 
-    # Catch-all for forward compatibility with new metadata fields
     extra_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # ============================================================================
-# Agent Messages
-# ============================================================================
-
-
-class AgentMessageSpan(BaseModel):
-    """Deserialized agent.input / agent.response / agent.tool_result span."""
-
-    model_config = ConfigDict(frozen=True)
-
-    category: Literal["agent_message"] = "agent_message"
-    operation: str = ""  # agent.input, agent.response, agent.tool_result
-    start_time: int = 0
-    actor_id: str = ""
-    sequence: int = 0
-    stream_id: str = ""
-    role: str = ""  # "user", "assistant", "system"
-    name: str = ""
-    content: str = ""
-    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
-    tool_call_id: str = ""
-    message_id: str = ""
-    game_id: str = ""
-
-
-# ============================================================================
-# Broker State
-# ============================================================================
-
-
-class BrokerStateSpan(BaseModel):
-    """Deserialized broker.state_update span."""
-
-    model_config = ConfigDict(frozen=True)
-
-    category: Literal["broker_state"] = "broker_state"
-    start_time: int = 0
-    actor_id: str = ""
-    change_type: str = ""  # bet_placed, bet_executed, bet_settled, ...
-    accounts_count: int = 0
-    bets_count: int = 0
-    accounts: list[dict[str, Any]] = Field(default_factory=list)
-    bets: list[dict[str, Any]] = Field(default_factory=list)
-
-
-# ============================================================================
-# Actor Registration
-# ============================================================================
-
-
-class ActorRegistrationSpan(BaseModel):
-    """Deserialized *.registered span (agent, datastream, operator)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    category: Literal["actor_registration"] = "actor_registration"
-    start_time: int = 0
-    actor_id: str = ""
-    actor_type: str = ""  # "agent", "datastream", "operator"
-    name: str = ""
-    model: str = ""
-    model_provider: str = ""
-    system_prompt: str = ""
-    tools: list[str] = Field(default_factory=list)
-    source_type: str = ""
-
-
-# ============================================================================
-# Betting Results
+# Betting Result (for leaderboard aggregation)
 # ============================================================================
 
 
@@ -208,14 +134,14 @@ class BettingResultSpan(BaseModel):
 
 
 # ============================================================================
-# Union type
+# Union type for all internal span models
 # ============================================================================
 
+# SpanModel is either:
+# - A DataEvent (from data._models, for event.* spans)
+# - An internal span model (TrialLifecycleSpan, BettingResultSpan)
 SpanModel = Union[
     TrialLifecycleSpan,
-    AgentMessageSpan,
-    BrokerStateSpan,
-    ActorRegistrationSpan,
     BettingResultSpan,
     "DataEvent",
 ]
@@ -241,7 +167,6 @@ def _deserialize_trial_lifecycle(span: SpanData) -> TrialLifecycleSpan:
     tags = span.tags
     phase = tags.get("dojozero.trial.phase", "")
     if not phase:
-        # Fallback: extract from operation_name "trial.<phase>"
         phase = span.operation_name.removeprefix("trial.")
 
     kwargs: dict[str, Any] = {
@@ -253,7 +178,7 @@ def _deserialize_trial_lifecycle(span: SpanData) -> TrialLifecycleSpan:
     for key, value in tags.items():
         if not key.startswith("trial."):
             continue
-        field = key[6:]  # Remove "trial." prefix
+        field = key[6:]
         if field in _TRIAL_METADATA_FIELDS:
             kwargs[field] = str(value) if value is not None else ""
         elif field != "phase":
@@ -261,85 +186,6 @@ def _deserialize_trial_lifecycle(span: SpanData) -> TrialLifecycleSpan:
 
     kwargs["extra_metadata"] = extra
     return TrialLifecycleSpan(**kwargs)
-
-
-def _deserialize_agent_message(span: SpanData) -> AgentMessageSpan:
-    """Deserialize an agent.input/response/tool_result span."""
-    tags = span.tags
-    tool_calls_raw = tags.get("event.tool_calls")
-    tool_calls: list[dict[str, Any]] = []
-    if tool_calls_raw:
-        parsed = _json_parse(tool_calls_raw)
-        if isinstance(parsed, list):
-            tool_calls = parsed
-
-    return AgentMessageSpan(
-        operation=span.operation_name,
-        start_time=span.start_time,
-        actor_id=str(tags.get("actor.id", "")),
-        sequence=int(tags.get("sequence", 0)),
-        stream_id=str(tags.get("event.stream_id", "")),
-        role=str(tags.get("event.role", "")),
-        name=str(tags.get("event.name", "")),
-        content=str(tags.get("event.content", "")),
-        tool_calls=tool_calls,
-        tool_call_id=str(tags.get("event.tool_call_id", "")),
-        message_id=str(tags.get("event.message_id", "")),
-        game_id=str(tags.get("game.id", "")),
-    )
-
-
-def _deserialize_broker_state(span: SpanData) -> BrokerStateSpan:
-    """Deserialize a broker.state_update span."""
-    tags = span.tags
-
-    accounts_raw = _json_parse(tags.get("broker.accounts", "{}"))
-    bets_raw = _json_parse(tags.get("broker.bets", "{}"))
-
-    # Broker stores accounts/bets as JSON dicts keyed by ID; normalize to lists
-    accounts_list: list[dict[str, Any]] = []
-    if isinstance(accounts_raw, dict):
-        accounts_list = list(accounts_raw.values())
-    elif isinstance(accounts_raw, list):
-        accounts_list = accounts_raw
-
-    bets_list: list[dict[str, Any]] = []
-    if isinstance(bets_raw, dict):
-        bets_list = list(bets_raw.values())
-    elif isinstance(bets_raw, list):
-        bets_list = bets_raw
-
-    return BrokerStateSpan(
-        start_time=span.start_time,
-        actor_id=str(tags.get("actor.id", "")),
-        change_type=str(tags.get("broker.change_type", "")),
-        accounts_count=int(tags.get("broker.accounts_count", 0)),
-        bets_count=int(tags.get("broker.bets_count", 0)),
-        accounts=accounts_list,
-        bets=bets_list,
-    )
-
-
-def _deserialize_actor_registration(span: SpanData) -> ActorRegistrationSpan:
-    """Deserialize a *.registered span."""
-    tags = span.tags
-
-    tools_raw = _json_parse(tags.get("resource.tools", "[]"))
-    tools: list[str] = []
-    if isinstance(tools_raw, list):
-        tools = [str(t) for t in tools_raw]
-
-    return ActorRegistrationSpan(
-        start_time=span.start_time,
-        actor_id=str(tags.get("actor.id", "")),
-        actor_type=str(tags.get("actor.type", "")),
-        name=str(tags.get("resource.name", "")),
-        model=str(tags.get("resource.model", "")),
-        model_provider=str(tags.get("resource.model_provider", "")),
-        system_prompt=str(tags.get("resource.system_prompt", "")),
-        tools=tools,
-        source_type=str(tags.get("resource.source_type", "")),
-    )
 
 
 def _deserialize_betting_result(span: SpanData) -> BettingResultSpan:
@@ -361,51 +207,82 @@ def _deserialize_betting_result(span: SpanData) -> BettingResultSpan:
     )
 
 
+def _deserialize_data_event(span: SpanData) -> "DataEvent | None":
+    """Reconstruct a DataEvent from span tags.
+
+    Uses the span's operation_name as event_type and extracts
+    event.* tags as event fields.
+    """
+    from dojozero.data import deserialize_data_event
+
+    event_dict: dict[str, Any] = {"event_type": span.operation_name}
+
+    # Debug: log first event to see tag structure
+    if not hasattr(_deserialize_data_event, "_debug_logged"):
+        _deserialize_data_event._debug_logged = True
+        event_tags = {k: v for k, v in span.tags.items() if k.startswith("event.")}
+        logger.info(
+            "Deserializing event: op=%s, event_tags=%s, all_tags_keys=%s",
+            span.operation_name,
+            {k: str(v)[:50] for k, v in list(event_tags.items())[:5]},
+            list(span.tags.keys())[:10],
+        )
+
+    for key, value in span.tags.items():
+        if not key.startswith("event."):
+            continue
+        field_name = key[6:]  # Remove "event." prefix
+        event_dict[field_name] = _json_parse(value)
+
+    # Debug: log the final event_dict
+    if len(event_dict) <= 1:
+        logger.warning(
+            "Event has no data fields: op=%s, tags_keys=%s",
+            span.operation_name,
+            list(span.tags.keys()),
+        )
+
+    return deserialize_data_event(event_dict)
+
+
 # ============================================================================
 # Unified deserializer
 # ============================================================================
 
-# Operation names that map to trial lifecycle
 _TRIAL_OPS = frozenset({"trial.started", "trial.stopped", "trial.terminated"})
-
-# Operation names that map to agent messages
-_AGENT_MESSAGE_OPS = frozenset({"agent.input", "agent.response", "agent.tool_result"})
 
 
 def deserialize_span(span: SpanData) -> SpanModel | None:
     """Deserialize a SpanData into a typed model based on operation_name.
 
     Dispatch order:
-        1. trial.started/stopped/terminated -> TrialLifecycleSpan
-        2. agent.input/response/tool_result -> AgentMessageSpan
-        3. broker.state_update -> BrokerStateSpan
-        4. *.registered -> ActorRegistrationSpan
-        5. "result" or "payout" in name -> BettingResultSpan
-        6. event.* prefix -> DataEvent (via deserialize_event_from_span)
-        7. Unrecognized -> None
+        1. trial.started/stopped/terminated → TrialLifecycleSpan
+        2. event.* prefix → DataEvent (via deserialize_data_event)
+        3. "result" or "payout" in name → BettingResultSpan
+        4. Unrecognized → None
     """
     op = span.operation_name
+
+    if not op:
+        logger.debug("Span has empty operation_name, skipping")
+        return None
 
     if op in _TRIAL_OPS:
         return _deserialize_trial_lifecycle(span)
 
-    if op in _AGENT_MESSAGE_OPS:
-        return _deserialize_agent_message(span)
-
-    if op == "broker.state_update":
-        return _deserialize_broker_state(span)
-
-    if op.endswith(".registered"):
-        return _deserialize_actor_registration(span)
+    # DataEvent spans: event.* prefix
+    if op.startswith("event."):
+        result = _deserialize_data_event(span)
+        if result is None:
+            logger.debug("Failed to deserialize DataEvent: op=%s", op)
+        return result
 
     # Betting result spans: fuzzy match on operation name
     if "result" in op or "payout" in op:
         return _deserialize_betting_result(span)
 
-    # DataEvent spans: event.* prefix
-    if op.startswith("event."):
-        return deserialize_event_from_span(span)
-
+    # Unknown span type
+    logger.debug("Unknown span operation: %s", op)
     return None
 
 
@@ -417,20 +294,26 @@ def deserialize_span(span: SpanData) -> SpanModel | None:
 def serialize_span_for_ws(model: SpanModel) -> dict[str, Any]:
     """Serialize a deserialized span model to a WebSocket-ready dict.
 
-    Returns ``{"category": "<category>", "data": {...}}`` where ``data``
-    contains the typed fields from the Pydantic model.
+    Returns {"category": "<category>", "data": {...}} where data
+    contains the typed fields serialized with camelCase aliases.
 
-    DataEvent instances use ``category = "event"`` and serialize via
-    ``to_dict()`` (which includes ``event_type``).  All other span models
-    use their ``category`` Literal field and serialize via ``model_dump()``.
+    DataEvent instances use their event_type as category.
+    Internal span models use their category field.
     """
-    # Import lazily to avoid circular import at module level
     from dojozero.data._models import DataEvent
 
     if isinstance(model, DataEvent):
-        return {"category": "event", "data": model.to_dict()}
+        # Use event_type as category, serialize with camelCase aliases
+        return {
+            "category": model.event_type,
+            "data": model.model_dump(mode="json", by_alias=True),
+        }
     else:
-        return {"category": model.category, "data": model.model_dump(mode="json")}
+        # Internal span model
+        return {
+            "category": model.category,
+            "data": model.model_dump(mode="json", by_alias=True),
+        }
 
 
 __all__ = [
@@ -439,10 +322,7 @@ __all__ = [
     "AgentInfo",
     "LeaderboardEntry",
     # Span Models
-    "ActorRegistrationSpan",
-    "AgentMessageSpan",
     "BettingResultSpan",
-    "BrokerStateSpan",
     "SpanModel",
     "TrialLifecycleSpan",
     # Helpers

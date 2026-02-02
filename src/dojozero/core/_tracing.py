@@ -417,9 +417,10 @@ class SLSTraceReader:
             start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
 
         # SLS query for trial.started spans
-        # Note: Infrastructure fields use _ prefix (_service, _operation_name, _trace_id)
+        # Note: __source__ is the SLS system field (from PutLogsRequest.source)
+        # Content fields like _operation_name are stored as log content
         query = (
-            f'_service:"{self._service_name}" AND '
+            f"__source__:{self._service_name} AND "
             f'_operation_name:"trial.started" | '
             f"SELECT DISTINCT _trace_id as trial_id LIMIT {limit}"
         )
@@ -487,41 +488,97 @@ class SLSTraceReader:
             from_time = start_time
 
         # SLS query for spans with specific trial_id
-        # Note: _trace_id contains the trial_id
-        # Simple search query without SQL - results are returned in time order by default
-        query = f'_service:"{self._service_name}" AND _trace_id:"{trial_id}"'
-
-        params = {
-            "type": "log",
-            "from": str(int(from_time.timestamp())),
-            "to": str(int(now.timestamp())),
-            "query": query,
-            "line": "1000",  # Limit number of results
-        }
+        # Note: __source__ is the SLS system field (from PutLogsRequest.source)
+        # _trace_id is a content field
+        # Use simple search query (no SQL) to get raw log entries with all fields
+        query = f'__source__:{self._service_name} AND _trace_id:"{trial_id}"'
 
         resource = f"/logstores/{self._logstore}"
-        headers = self._sign_request("GET", resource, params)
+        url = f"{self._get_base_url()}{resource}"
+
+        # Pagination: SLS GetLogs API limits to 100 rows per request in search mode
+        # We paginate using offset parameter to get all data
+        page_size = 100  # SLS max per request in search mode
+        max_total = 10000  # Safety limit to prevent infinite loops
+        all_rows: list[dict[str, Any]] = []
+        offset = 0
 
         try:
-            response = await self._client.get(
-                f"{self._get_base_url()}{resource}",
-                params=params,
-                headers=headers,
-            )
-            response.raise_for_status()
-            data = response.json()
+            while offset < max_total:
+                params = {
+                    "type": "log",
+                    "from": str(int(from_time.timestamp())),
+                    "to": str(int(now.timestamp())),
+                    "query": query,
+                    "line": str(page_size),
+                    "offset": str(offset),
+                }
+                headers = self._sign_request("GET", resource, params)
 
-            # SLS may return list directly or dict with "data" key
+                LOGGER.debug(
+                    "SLS get_spans request: offset=%d, query=%s", offset, query
+                )
+                response = await self._client.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                )
+                if response.status_code != 200:
+                    LOGGER.error(
+                        "SLS get_spans error response: status=%d, body=%s",
+                        response.status_code,
+                        response.text[:500] if response.text else "(empty)",
+                    )
+                response.raise_for_status()
+                data = response.json()
+
+                # SLS may return list directly or dict with "data" key
+                rows = data if isinstance(data, list) else data.get("data", [])
+
+                if not rows:
+                    break  # No more data
+
+                all_rows.extend(rows)
+
+                if len(rows) < page_size:
+                    break  # Last page (less than full page means no more data)
+
+                offset += page_size
+
+            LOGGER.info(
+                "SLS get_spans: trial_id=%s, total_rows=%d (pages=%d)",
+                trial_id,
+                len(all_rows),
+                (offset // page_size) + 1,
+            )
+
+            # Convert rows to spans
             spans: list[SpanData] = []
-            rows = data if isinstance(data, list) else data.get("data", [])
-            for row in rows:
+            if all_rows and len(all_rows) > 0:
+                # Log first row keys for debugging
+                first_row = all_rows[0] if isinstance(all_rows[0], dict) else {}
+                LOGGER.debug(
+                    "SLS first row keys: %s",
+                    list(first_row.keys())[:10],
+                )
+            for row in all_rows:
                 if isinstance(row, dict):
                     span = self._convert_sls_row_to_span(row)
                     if span:
                         spans.append(span)
+                    else:
+                        LOGGER.debug(
+                            "Failed to convert row, keys=%s",
+                            list(row.keys())[:10],
+                        )
 
             # Sort by start time
             spans.sort(key=lambda s: s.start_time)
+            LOGGER.info(
+                "SLS get_spans: converted %d/%d rows to spans",
+                len(spans),
+                len(rows),
+            )
             return spans
         except httpx.HTTPStatusError as e:
             LOGGER.error("SLS HTTP error getting spans for trial '%s': %s", trial_id, e)
@@ -546,6 +603,31 @@ class SLSTraceReader:
         - Infrastructure tags with _ prefix (_actor_id, _sequence)
         """
         try:
+            # Debug: log first few rows to understand the data format
+            if not hasattr(self, "_debug_logged"):
+                self._debug_logged = True
+                LOGGER.info(
+                    "SLS row sample (first row): all_keys=%s",
+                    sorted(row.keys()),
+                )
+                # Log a few event_ fields if present
+                event_fields = {k: v for k, v in row.items() if k.startswith("event_")}
+                if event_fields:
+                    LOGGER.info(
+                        "SLS event_ fields sample (%d total): %s",
+                        len(event_fields),
+                        {k: str(v)[:100] for k, v in list(event_fields.items())[:10]},
+                    )
+                else:
+                    # Check for any fields with event data
+                    LOGGER.warning(
+                        "No event_ fields found! Sample non-system fields: %s",
+                        {
+                            k: str(v)[:50]
+                            for k, v in list(row.items())[:15]
+                            if not k.startswith("__")
+                        },
+                    )
             # Support _ prefix (current), underscore (legacy), and camelCase (OTLP)
             trace_id = row.get(
                 "_trace_id",
@@ -598,18 +680,38 @@ class SLSTraceReader:
             # Also check for domain and infrastructure fields directly in the row
             # Domain fields: game_id, sport_type, game_date, event_*
             # Infrastructure fields with _ prefix: _actor_id, _sequence
+            # System fields to skip: __time__, __source__, etc.
+            skip_prefixes = ("__",)  # SLS system fields
+            extracted_infra = {
+                "_trace_id",
+                "_span_id",
+                "_operation_name",
+                "_duration_us",
+                "_parent_span_id",
+                "_service",
+                "_event_time",
+            }
+
             for key, value in row.items():
-                # Skip infrastructure fields (already extracted above)
+                # Skip SLS system fields (double underscore)
+                if any(key.startswith(p) for p in skip_prefixes):
+                    continue
+
+                # Skip already-extracted infrastructure fields
+                if key in extracted_infra:
+                    continue
+
+                # Infrastructure tags with single underscore prefix
                 if key.startswith("_"):
                     # Infrastructure tag - normalize to dot notation for internal use
-                    if key in ("_actor_id", "_sequence"):
-                        normalized_key = key[1:].replace(
-                            "_", "."
-                        )  # _actor_id -> actor.id
-                        if key == "_actor_id":
-                            normalized_key = "actor.id"
-                        tags[normalized_key] = value
-                elif key.startswith("dojozero."):
+                    if key == "_actor_id":
+                        tags["actor.id"] = value
+                    elif key == "_sequence":
+                        tags["sequence"] = value
+                    # Skip other _ prefixed fields we don't recognize
+                    continue
+
+                if key.startswith("dojozero."):
                     tags[key] = value
                 elif key.startswith("dojozero_"):
                     # Convert dojozero_x_y to dojozero.x.y
@@ -621,12 +723,16 @@ class SLSTraceReader:
                     # Convert event_x to event.x (only first underscore)
                     normalized_key = "event." + key[6:]
                     tags[normalized_key] = value
-                elif key in ("game_id", "sport_type", "game_date"):
-                    # Domain fields - convert to dot notation
+                elif key.startswith("game_") or key.startswith("sport_"):
+                    # Domain fields - convert underscore to dot
+                    normalized_key = key.replace("_", ".")
+                    tags[normalized_key] = value
+                elif key in ("game_id", "sport_type", "game_date", "sequence"):
+                    # Simple domain fields - convert underscore to dot
                     normalized_key = key.replace("_", ".")
                     tags[normalized_key] = value
 
-            return SpanData(
+            span = SpanData(
                 trace_id=trace_id,
                 span_id=span_id,
                 operation_name=operation_name,
@@ -636,6 +742,21 @@ class SLSTraceReader:
                 tags=tags,
                 logs=row.get("logs", []),
             )
+
+            # Debug: log first event span tags
+            if operation_name.startswith("event.") and not hasattr(
+                self, "_event_debug_logged"
+            ):
+                self._event_debug_logged = True
+                event_tags = {k: v for k, v in tags.items() if k.startswith("event.")}
+                LOGGER.info(
+                    "Converted event span: op=%s, event_tags_count=%d, sample=%s",
+                    operation_name,
+                    len(event_tags),
+                    {k: str(v)[:50] for k, v in list(event_tags.items())[:5]},
+                )
+
+            return span
         except (KeyError, ValueError, TypeError) as e:
             LOGGER.warning("Failed to convert SLS row to span: %s", e)
             return None

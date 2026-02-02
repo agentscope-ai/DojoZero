@@ -54,6 +54,9 @@ from dojozero.arena_server._models import (
     WSSpanMessage,
     WSTrialEndedMessage,
 )
+from dojozero.arena_server._replay import (
+    create_replay_websocket_handler,
+)
 from dojozero.core._models import (
     AgentAction,
     AgentInfo,
@@ -304,11 +307,36 @@ class SpanBroadcaster:
         Deserializes each raw SpanData into a typed model and sends
         a WSSnapshotMessage with all items.
         """
+        LOGGER.info(
+            "send_snapshot: trial=%s, span_count=%d",
+            trial_id,
+            len(spans),
+        )
         items = []
+        unrecognized_ops: list[str] = []
         for span in spans:
+            LOGGER.debug(
+                "Processing span: op='%s', tags_keys=%s",
+                span.operation_name,
+                list(span.tags.keys())[:5],
+            )
             typed = deserialize_span(span)
             if typed is not None:
                 items.append(serialize_span_for_ws(typed))
+            else:
+                unrecognized_ops.append(span.operation_name)
+
+        if unrecognized_ops:
+            LOGGER.warning(
+                "Unrecognized spans (first 5): %s",
+                unrecognized_ops[:5],
+            )
+
+        LOGGER.info(
+            "send_snapshot: recognized %d/%d spans",
+            len(items),
+            len(spans),
+        )
         message = WSSnapshotMessage(
             trial_id=trial_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1356,6 +1384,25 @@ def create_arena_app(
     # WebSocket Endpoint for Real-time Streaming
     # -------------------------------------------------------------------------
 
+    @app.websocket("/ws/test/replay")
+    async def test_replay_stream(websocket: WebSocket):
+        """WebSocket endpoint for testing with recorded replay data.
+
+        This endpoint replays the bundled snapshot_data.json file, allowing
+        frontend developers to test and debug without needing a live trial.
+
+        Control commands (send as JSON):
+            {"command": "speed", "value": 2}  - Set playback speed (0.1x to 10x)
+            {"command": "pause"}              - Pause playback
+            {"command": "resume"}             - Resume playback
+            {"command": "reset"}              - Reset to beginning
+            {"command": "skip", "value": 10}  - Skip forward N events
+            {"command": "seek", "value": 50}  - Jump to event index N
+            {"command": "status"}             - Get current playback status
+        """
+        handler = create_replay_websocket_handler()
+        await handler(websocket)
+
     @app.websocket("/ws/trials/{trial_id}/stream")
     async def trial_stream(websocket: WebSocket, trial_id: str):
         """WebSocket endpoint for real-time span streaming.
@@ -1447,6 +1494,78 @@ def create_arena_app(
             "status": "ok",
             "static_dir": str(state.static_dir) if state.static_dir else None,
         }
+
+    # -------------------------------------------------------------------------
+    # Test/Replay Endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/test/replay-info")
+    async def get_replay_info() -> JSONResponse:
+        """Get information about the available replay data.
+
+        Returns metadata about the bundled snapshot_data.json file,
+        including total items, categories breakdown, and trial info.
+        """
+        from collections import Counter
+
+        from dojozero.arena_server._replay import DEFAULT_SNAPSHOT_PATH
+
+        if not DEFAULT_SNAPSHOT_PATH.exists():
+            return JSONResponse(
+                content={"error": "No replay data available"},
+                status_code=404,
+            )
+
+        import json
+
+        with open(DEFAULT_SNAPSHOT_PATH) as f:
+            data = json.load(f)
+
+        items = data.get("items", [])
+        categories = Counter(item.get("category", "unknown") for item in items)
+
+        # Extract basic trial info from first items
+        trial_info = {}
+        for item in items[:20]:
+            if item.get("category") == "event.game_initialize":
+                game_data = item.get("data", {})
+                trial_info = {
+                    "game_id": game_data.get("game_id"),
+                    "sport": game_data.get("sport"),
+                    "home_team": game_data.get("home_team", {}).get("name"),
+                    "away_team": game_data.get("away_team", {}).get("name"),
+                }
+                break
+
+        return JSONResponse(
+            content={
+                "total_items": len(items),
+                "categories": dict(categories.most_common()),
+                "trial_info": trial_info,
+                "websocket_url": "/ws/test/replay",
+                "commands": [
+                    {
+                        "command": "speed",
+                        "value": "number",
+                        "description": "Set playback speed (0.1x to 10x)",
+                    },
+                    {"command": "pause", "description": "Pause playback"},
+                    {"command": "resume", "description": "Resume playback"},
+                    {"command": "reset", "description": "Reset to beginning"},
+                    {
+                        "command": "skip",
+                        "value": "number",
+                        "description": "Skip forward N events",
+                    },
+                    {
+                        "command": "seek",
+                        "value": "number",
+                        "description": "Jump to event index N",
+                    },
+                    {"command": "status", "description": "Get current playback status"},
+                ],
+            }
+        )
 
     # -------------------------------------------------------------------------
     # Static File Serving (SPA support)
