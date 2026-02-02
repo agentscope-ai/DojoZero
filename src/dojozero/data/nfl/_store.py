@@ -379,12 +379,21 @@ class NFLStore(DataStore):
                     status_code == NFLGameStateTracker.STATUS_IN_PROGRESS
                     and previous_status != NFLGameStateTracker.STATUS_IN_PROGRESS
                 ):
+                    # Starters will be populated asynchronously via
+                    # _fetch_game_starters() called from _poll_api; store
+                    # them in state tracker and include here if available.
+                    home_team_id = str(home_team_info.get("id", ""))
+                    away_team_id = str(away_team_info.get("id", ""))
+                    home_starters = self._state.get_starters(event_id, home_team_id)
+                    away_starters = self._state.get_starters(event_id, away_team_id)
                     events.append(
                         GameStartEvent(
                             timestamp=timestamp,
                             game_timestamp=self._game_start_time,
                             game_id=event_id,
                             sport="nfl",
+                            home_starters=home_starters,
+                            away_starters=away_starters,
                         )
                     )
 
@@ -668,12 +677,24 @@ class NFLStore(DataStore):
 
         # Detect game start
         if new_plays and not self._state.has_game_started(event_id):
+            # Include starters if available (fetched during scoreboard prefetch)
+            home_tid, away_tid = "", ""
+            poll_id = self._poll_identifier or {}
+            # Try to extract team IDs from the first play's context
+            if poll_id.get("espn_game_id") == event_id:
+                for tid in self._roster_cache:
+                    if not home_tid:
+                        home_tid = tid
+                    elif not away_tid:
+                        away_tid = tid
             events.append(
                 GameStartEvent(
                     timestamp=timestamp,
                     game_timestamp=self._game_start_time,
                     game_id=event_id,
                     sport="nfl",
+                    home_starters=self._state.get_starters(event_id, home_tid),
+                    away_starters=self._state.get_starters(event_id, away_tid),
                 )
             )
             self._state.mark_game_started(event_id)
@@ -845,7 +866,23 @@ class NFLStore(DataStore):
         try:
             result = await self._api.fetch("team_roster", {"team_id": team_id})
             athletes = result.get("team_roster", {}).get("athletes", [])
-            for a in athletes:
+            # NFL roster API returns position groups: [{position, items: [...]}]
+            # NBA roster API returns flat list: [{id, displayName, ...}]
+            # Handle both formats, tagging NFL players with their group.
+            flat_athletes: list[tuple[dict, str]] = []  # (athlete_dict, group)
+            for entry in athletes:
+                if not isinstance(entry, dict):
+                    continue
+                if "displayName" in entry or "fullName" in entry:
+                    # Flat format (NBA-style) — no group
+                    flat_athletes.append((entry, ""))
+                else:
+                    # Grouped format (NFL-style) — tag with group name
+                    group_name = entry.get("position", "")  # "offense", "defense", etc.
+                    for item in entry.get("items", []):
+                        flat_athletes.append((item, group_name))
+
+            for a, group in flat_athletes:
                 if not isinstance(a, dict):
                     continue
                 pid = str(a.get("id", ""))
@@ -861,6 +898,7 @@ class NFLStore(DataStore):
                         headshot_url=f"https://a.espncdn.com/i/headshots/nfl/players/full/{pid}.png"
                         if pid
                         else "",
+                        group=group,
                     )
                 )
             logger.debug("Fetched %d players for team %s", len(players), team_id)
@@ -869,6 +907,74 @@ class NFLStore(DataStore):
 
         self._roster_cache[team_id] = players
         return players
+
+    async def _fetch_game_starters(
+        self, event_id: str, home_team_id: str, away_team_id: str
+    ) -> None:
+        """Fetch game-day starters from core API and store in state tracker.
+
+        Cross-references game roster entries (which have starter flags but only
+        last names) with the team roster cache (which has full details).
+        """
+        if not self._api:
+            return
+
+        for team_id in (home_team_id, away_team_id):
+            # Skip if already fetched
+            if self._state.get_starters(event_id, team_id):
+                continue
+
+            try:
+                result = await self._api.fetch(
+                    "game_roster",
+                    {"event_id": event_id, "team_id": team_id},
+                )
+                entries = result.get("game_roster", {}).get("entries", [])
+
+                # Build lookup from roster cache: player_id -> PlayerIdentity
+                roster_lookup: dict[str, PlayerIdentity] = {}
+                for p in self._roster_cache.get(team_id, []):
+                    roster_lookup[p.player_id] = p
+
+                starters: list[PlayerIdentity] = []
+                for entry in entries:
+                    if not isinstance(entry, dict) or not entry.get("starter"):
+                        continue
+                    # Extract athlete ID from $ref URL
+                    ath_ref = (entry.get("athlete") or {}).get("$ref", "")
+                    ath_id = ""
+                    if "/athletes/" in ath_ref:
+                        ath_id = ath_ref.split("/athletes/")[-1].split("?")[0]
+
+                    if ath_id and ath_id in roster_lookup:
+                        starters.append(roster_lookup[ath_id])
+                    elif ath_id:
+                        # Fallback: use game roster entry data (last name only)
+                        starters.append(
+                            PlayerIdentity(
+                                player_id=ath_id,
+                                name=entry.get("displayName", ""),
+                                position="",
+                                jersey=str(entry.get("jersey", "")),
+                                headshot_url=f"https://a.espncdn.com/i/headshots/nfl/players/full/{ath_id}.png",
+                            )
+                        )
+
+                if starters:
+                    self._state.set_starters(event_id, team_id, starters)
+                    logger.debug(
+                        "Fetched %d starters for team %s in game %s",
+                        len(starters),
+                        team_id,
+                        event_id,
+                    )
+            except Exception:
+                logger.debug(
+                    "Failed to fetch game starters for team %s in game %s",
+                    team_id,
+                    event_id,
+                    exc_info=True,
+                )
 
     async def _poll_api(
         self,
@@ -902,6 +1008,23 @@ class NFLStore(DataStore):
                     await self._prefetch_rosters_from_scoreboard(
                         scoreboard_data, espn_game_id
                     )
+                    # Also fetch game-day starters once rosters are cached
+                    sb = scoreboard_data.get("scoreboard", {})
+                    for game in sb.get("events", []):
+                        if str(game.get("id", "")) != espn_game_id:
+                            continue
+                        comps = game.get("competitions", [])
+                        if not comps:
+                            continue
+                        team_ids = []
+                        for comp in comps[0].get("competitors", []):
+                            tid = str((comp.get("team") or {}).get("id", ""))
+                            if tid:
+                                team_ids.append(tid)
+                        if len(team_ids) >= 2:
+                            await self._fetch_game_starters(
+                                espn_game_id, team_ids[0], team_ids[1]
+                            )
 
                 # Pass espn_game_id to filter to single game (if configured)
                 scoreboard_events = self._parse_api_response(

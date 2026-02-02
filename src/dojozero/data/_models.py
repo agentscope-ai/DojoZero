@@ -50,9 +50,10 @@ class PlayerIdentity(BaseModel):
 
     player_id: str = Field(default="", serialization_alias="playerId")
     name: str = ""
-    position: str = ""  # e.g., "G", "F", "C"
+    position: str = ""  # e.g., "G", "F", "C", "QB", "WR", "LB"
     jersey: str = ""
     headshot_url: str = Field(default="", serialization_alias="headshotUrl")
+    group: str = ""  # e.g., "offense", "defense", "specialTeam" (NFL only)
 
 
 class TeamIdentity(BaseModel):
