@@ -27,6 +27,14 @@ from dojozero.data.espn._utils import safe_score
 
 logger = logging.getLogger(__name__)
 
+# Per-sport defaults for pregame stats.
+# NBA plays 3-4 games/week; 10 recent games ≈ 2-3 weeks.
+# NFL plays 1 game/week; use 5 recent games are more telling.
+_RECENT_FORM_GAMES: dict[str, int] = {
+    "nba": 10,
+    "nfl": 5,
+}
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -128,14 +136,16 @@ async def fetch_pregame_stats(
     )
 
     # Parse each section independently
+    recent_form_n = _RECENT_FORM_GAMES.get(sport, 10)
+
     season_series = _parse_season_series(
         home_schedule_raw, home_team_id, away_team_id, home_team_name, away_team_name
     )
     home_recent_form = _parse_recent_form(
-        home_schedule_raw, home_team_id, home_team_name, game_date
+        home_schedule_raw, home_team_id, home_team_name, game_date, last_n=recent_form_n
     )
     away_recent_form = _parse_recent_form(
-        away_schedule_raw, away_team_id, away_team_name, game_date
+        away_schedule_raw, away_team_id, away_team_name, game_date, last_n=recent_form_n
     )
     home_schedule = _parse_schedule_density(
         home_schedule_raw, home_team_id, home_team_name, game_date
