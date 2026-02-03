@@ -208,11 +208,19 @@ class NBAExternalAPI(ExternalAPI):
                     away_team_data["statistics"] = away_team_data.get("statistics", {})
                     away_team_data["statistics"]["points"] = int(score) if score else 0
 
-        # Extract game date/time from header competition
+        # Extract game date/time and status from header competition
+        # Note: summary endpoint status does NOT carry period/displayClock
+        # (only scoreboard does). Period/clock come from PBP state tracker.
+        # However, status.type.name (e.g., STATUS_FINAL) IS available and useful
+        # for detecting game conclusion.
         status_data: dict[str, Any] = {}
         if competitions and competitions[0] and isinstance(competitions[0], dict):
             comp = competitions[0]
             status_data["date"] = comp.get("date", "")
+            # Extract game status type (STATUS_SCHEDULED, STATUS_IN_PROGRESS, STATUS_FINAL)
+            comp_status = comp.get("status", {}) or {}
+            status_type = comp_status.get("type", {}) or {}
+            status_data["statusType"] = status_type.get("name", "")
 
         return {
             "boxscore": {
