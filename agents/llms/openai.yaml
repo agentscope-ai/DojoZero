@@ -1,5 +1,6 @@
 llm:
   - model_type: openai
-    model_name: gpt-4o-2024-11-20
+    model_name: gpt-5.2-2025-12-11
     api_key_env: DOJOZERO_OPENAI_API_KEY
-    base_url_env: DOJOZERO_OPENAI_BASE_URL
+    model_display_name: openai
+    cdn_url: https://img.alicdn.com/imgextra/i1/O1CN01ESEMwe1ZfGqicfO7r_!!6000000003221-55-tps-24-24.svg

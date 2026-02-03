@@ -1,7 +1,7 @@
 """NFL data store implementation."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
 from dojozero.data._models import (
@@ -10,6 +10,7 @@ from dojozero.data._models import (
     GameResultEvent,
     GameStartEvent,
     OddsUpdateEvent,
+    PlayerIdentity,
     PollProfile,
 )
 from dojozero.data._models import (
@@ -72,6 +73,59 @@ class NFLStore(DataStore):
         )
         self._state = NFLGameStateTracker()
         self._current_poll_profile: PollProfile = PollProfile.PRE_GAME
+        # Cache: team_id -> list[PlayerIdentity]
+        self._roster_cache: dict[str, list[PlayerIdentity]] = {}
+        # Game start time for computing game_timestamp on events
+        self._game_start_time: datetime | None = None
+
+    # Real-time multiplier: an NFL quarter has 15 min of game clock but takes
+    # ~45 min of real time (stoppages, play clock, commercials, reviews).
+    # A typical game is ~3h15m (195 min) for 60 min of game clock → 3.25x.
+    _GAME_CLOCK_MULTIPLIER: float = 3.25
+
+    # Real-time quarter offsets in seconds from game start.
+    # Each quarter ≈ 900s * 3.25 = 2925s real time.
+    # Halftime ≈ 1200s (20 min) real time (not multiplied).
+    _QUARTER_OFFSETS: dict[int, int] = {
+        1: 0,  # Q1 start
+        2: 2925,  # Q2 start: 1 quarter
+        3: 7050,  # Q3 start: 2 quarters (5850) + halftime (1200)
+        4: 9975,  # Q4 start: 3 quarters (8775) + halftime (1200)
+        5: 12900,  # OT start: 4 quarters (11700) + halftime (1200)
+    }
+
+    def _compute_game_timestamp(self, period: int, clock: str) -> datetime | None:
+        """Compute approximate wallclock time from game clock.
+
+        Maps game clock (period + countdown) to real elapsed time using a
+        multiplier that accounts for stoppages, commercials, and play clock.
+        A 15-min quarter takes ~45 min of real time (3.25x multiplier).
+
+        Args:
+            period: Quarter number (1-4, 5 for OT)
+            clock: Game clock countdown string (e.g., "12:34")
+
+        Returns:
+            Approximate datetime when the event occurred, or None if
+            game start time is unknown or inputs are invalid.
+        """
+        if not self._game_start_time or period < 1:
+            return None
+
+        # Parse clock "MM:SS" → seconds remaining in quarter
+        remaining = 900  # default to start of quarter
+        if clock:
+            try:
+                parts = clock.split(":")
+                if len(parts) == 2:
+                    remaining = int(parts[0]) * 60 + int(parts[1])
+            except (ValueError, TypeError):
+                pass
+
+        offset = self._QUARTER_OFFSETS.get(period, 12900)
+        # Elapsed within the quarter: game clock consumed × real-time multiplier
+        elapsed_in_quarter = (900 - remaining) * self._GAME_CLOCK_MULTIPLIER
+        return self._game_start_time + timedelta(seconds=offset + elapsed_in_quarter)
 
     def _parse_api_response(
         self, data: dict[str, Any], target_event_id: str | None = None
@@ -226,13 +280,20 @@ class NFLStore(DataStore):
                 season_type = season_type_map.get(season_type_code, "regular")
                 season_year = season.get("year", 0) if isinstance(season, dict) else 0
 
+                home_team_id = str(home_team_info.get("id", ""))
+                away_team_id = str(away_team_info.get("id", ""))
+
+                # Store game start time for computing game_timestamp
+                self._game_start_time = game_time
+
                 events.append(
                     GameInitializeEvent(
                         timestamp=timestamp,
+                        game_timestamp=game_time,
                         game_id=event_id,
                         sport="nfl",
                         home_team=TeamIdentity(
-                            team_id=str(home_team_info.get("id", "")),
+                            team_id=home_team_id,
                             name=home_team_info.get("displayName", ""),
                             tricode=home_team_info.get("abbreviation", ""),
                             location=home_team_info.get("location", ""),
@@ -240,9 +301,10 @@ class NFLStore(DataStore):
                             alternate_color=home_team_info.get("alternateColor", ""),
                             logo_url=home_team_info.get("logo", ""),
                             record=home_record,
+                            players=self._roster_cache.get(home_team_id, []),
                         ),
                         away_team=TeamIdentity(
-                            team_id=str(away_team_info.get("id", "")),
+                            team_id=away_team_id,
                             name=away_team_info.get("displayName", ""),
                             tricode=away_team_info.get("abbreviation", ""),
                             location=away_team_info.get("location", ""),
@@ -250,6 +312,7 @@ class NFLStore(DataStore):
                             alternate_color=away_team_info.get("alternateColor", ""),
                             logo_url=away_team_info.get("logo", ""),
                             record=away_record,
+                            players=self._roster_cache.get(away_team_id, []),
                         ),
                         venue=VenueInfo(
                             venue_id=str(venue_data.get("id", "")),
@@ -288,6 +351,7 @@ class NFLStore(DataStore):
                         OddsUpdateEvent(
                             timestamp=timestamp,
                             game_id=event_id,
+                            sport="nfl",
                             odds=OddsInfo(
                                 provider=provider,
                                 spreads=[SpreadOdds(spread=spread)],
@@ -315,10 +379,21 @@ class NFLStore(DataStore):
                     status_code == NFLGameStateTracker.STATUS_IN_PROGRESS
                     and previous_status != NFLGameStateTracker.STATUS_IN_PROGRESS
                 ):
+                    # Starters will be populated asynchronously via
+                    # _fetch_game_starters() called from _poll_api; store
+                    # them in state tracker and include here if available.
+                    home_team_id = str(home_team_info.get("id", ""))
+                    away_team_id = str(away_team_info.get("id", ""))
+                    home_starters = self._state.get_starters(event_id, home_team_id)
+                    away_starters = self._state.get_starters(event_id, away_team_id)
                     events.append(
                         GameStartEvent(
                             timestamp=timestamp,
+                            game_timestamp=self._game_start_time,
                             game_id=event_id,
+                            sport="nfl",
+                            home_starters=home_starters,
+                            away_starters=away_starters,
                         )
                     )
 
@@ -334,15 +409,24 @@ class NFLStore(DataStore):
                         else ""
                     )
 
+                    # Compute game_timestamp from final period/clock
+                    final_period = int(status_data.get("period", 4) or 4)
+                    final_clock = status_data.get("displayClock", "0:00") or "0:00"
                     events.append(
                         GameResultEvent(
                             timestamp=timestamp,
+                            game_timestamp=self._compute_game_timestamp(
+                                final_period, final_clock
+                            ),
                             game_id=event_id,
+                            sport="nfl",
                             winner=winner,
                             home_score=home_score,
                             away_score=away_score,
                             home_team_name=home_team_info.get("displayName", ""),
                             away_team_name=away_team_info.get("displayName", ""),
+                            home_team_id=str(home_team_info.get("id", "")),
+                            away_team_id=str(away_team_info.get("id", "")),
                         )
                     )
 
@@ -405,7 +489,7 @@ class NFLStore(DataStore):
                         continue
                     line_scores = comp.get("linescores", []) or []
                     scores = [
-                        int(ls.get("value", 0) or 0)
+                        int(ls.get("value", 0) or ls.get("displayValue", 0) or 0)
                         for ls in line_scores
                         if ls and isinstance(ls, dict)
                     ]
@@ -463,7 +547,11 @@ class NFLStore(DataStore):
                     events.append(
                         NFLGameUpdateEvent(
                             timestamp=timestamp,
+                            game_timestamp=self._compute_game_timestamp(
+                                quarter, game_clock
+                            ),
                             game_id=event_id,
+                            sport="nfl",
                             period=quarter,
                             game_clock=game_clock,
                             home_score=home_team_dict.get("score", 0)
@@ -490,17 +578,33 @@ class NFLStore(DataStore):
         drives = data.get("drives", {}) or {}
         previous_drives = drives.get("previous", []) or []
         if previous_drives:
+            # Build index mapping: drive_id -> 1-based position in the full list
+            drive_index: dict[str, int] = {}
+            for idx, d in enumerate(previous_drives):
+                if d and isinstance(d, dict):
+                    did = str(d.get("id", ""))
+                    if did:
+                        drive_index[did] = idx + 1
+
             new_drives = self._state.filter_new_drives(event_id, previous_drives)
             for drive in new_drives:
                 if not drive or not isinstance(drive, dict):
                     continue
-                drive_events = self._parse_drive(event_id, drive, timestamp)
+                d_id = str(drive.get("id", ""))
+                d_num = drive_index.get(d_id, 0)
+                drive_events = self._parse_drive(
+                    event_id, drive, timestamp, drive_number=d_num
+                )
                 events.extend(drive_events)
 
         return events
 
     def _parse_drive(
-        self, event_id: str, drive: dict[str, Any], timestamp: datetime
+        self,
+        event_id: str,
+        drive: dict[str, Any],
+        timestamp: datetime,
+        drive_number: int = 0,
     ) -> list[DataEvent]:
         """Parse a single drive into events."""
         events: list[DataEvent] = []
@@ -522,14 +626,11 @@ class NFLStore(DataStore):
             NFLDriveEvent(
                 timestamp=timestamp,
                 game_id=event_id,
+                sport="nfl",
+                segment_id=drive_id,
+                segment_number=drive_number,
                 drive_id=drive_id,
-                drive_number=len(
-                    [
-                        d
-                        for d in self._state._seen_drive_ids
-                        if d.startswith(f"{event_id}_drive_")
-                    ]
-                ),
+                drive_number=drive_number,
                 team_id=team_id,
                 team_tricode=team_abbreviation,
                 start_period=int((start.get("period", {}) or {}).get("number", 0) or 0),
@@ -576,10 +677,24 @@ class NFLStore(DataStore):
 
         # Detect game start
         if new_plays and not self._state.has_game_started(event_id):
+            # Include starters if available (fetched during scoreboard prefetch)
+            home_tid, away_tid = "", ""
+            poll_id = self._poll_identifier or {}
+            # Try to extract team IDs from the first play's context
+            if poll_id.get("espn_game_id") == event_id:
+                for tid in self._roster_cache:
+                    if not home_tid:
+                        home_tid = tid
+                    elif not away_tid:
+                        away_tid = tid
             events.append(
                 GameStartEvent(
                     timestamp=timestamp,
+                    game_timestamp=self._game_start_time,
                     game_id=event_id,
+                    sport="nfl",
+                    home_starters=self._state.get_starters(event_id, home_tid),
+                    away_starters=self._state.get_starters(event_id, away_tid),
                 )
             )
             self._state.mark_game_started(event_id)
@@ -604,17 +719,42 @@ class NFLStore(DataStore):
                 clock.get("displayValue", "") if isinstance(clock, dict) else ""
             )
 
+            # Parse wallclock time (actual UTC time the play occurred)
+            play_game_timestamp: datetime | None = None
+            wallclock = play.get("wallclock", "")
+            if wallclock:
+                try:
+                    play_game_timestamp = datetime.fromisoformat(
+                        str(wallclock).replace("Z", "+00:00")
+                    )
+                except (ValueError, TypeError):
+                    pass
+            # Fall back to computed timestamp from game clock
+            if not play_game_timestamp:
+                play_game_timestamp = self._compute_game_timestamp(quarter, game_clock)
+
             # Get scoring info
             is_scoring = bool(play.get("scoringPlay", False))
             score_value = int(play.get("scoreValue", 0) or 0)
 
-            # Get team info
+            # Get team info — handle both inline dict and $ref URL formats
             team = play.get("team", {})
             team_id = ""
             team_abbrev = ""
             if isinstance(team, dict):
                 team_id = str(team.get("id", ""))
                 team_abbrev = team.get("abbreviation", "")
+                # Core API returns $ref URL like ".../teams/26"
+                if not team_id and "$ref" in team:
+                    ref = team["$ref"]
+                    parts = ref.rstrip("/").split("/")
+                    if parts:
+                        team_id = parts[-1].split("?")[0]
+            # Resolve abbreviation from state tracker if we have team_id but no abbrev
+            if team_id and not team_abbrev:
+                from dojozero.data.nfl._utils import get_team_abbreviation
+
+                team_abbrev = get_team_abbreviation(team_id) or ""
 
             # Get start info for down/distance
             start = play.get("start", {})
@@ -629,7 +769,9 @@ class NFLStore(DataStore):
             events.append(
                 NFLPlayEvent(
                     timestamp=timestamp,
+                    game_timestamp=play_game_timestamp,
                     game_id=event_id,
+                    sport="nfl",
                     play_id=play_id,
                     sequence_number=int(play.get("sequenceNumber", 0) or 0),
                     period=quarter,
@@ -645,6 +787,7 @@ class NFLStore(DataStore):
                     home_score=int(play.get("homeScore", 0) or 0),
                     away_score=int(play.get("awayScore", 0) or 0),
                     team_id=team_id,
+                    team_tricode=team_abbrev,
                     team_abbreviation=team_abbrev,
                     is_turnover=bool(play.get("isTurnover", False)),
                 )
@@ -680,14 +823,158 @@ class NFLStore(DataStore):
         Returns:
             Points scored (0, 3, 6, 7, 8, or 2 for safety)
         """
-        result_lower = result.lower()
-        if "touchdown" in result_lower:
+        result_upper = result.strip().upper()
+        if result_upper in ("TD", "TOUCHDOWN"):
             return 7  # Assume extra point made
-        elif "field goal" in result_lower:
+        elif result_upper in ("FG", "FIELD GOAL"):
             return 3
-        elif "safety" in result_lower:
+        elif result_upper in ("SF", "SAFETY"):
             return 2
         return 0
+
+    async def _prefetch_rosters_from_scoreboard(
+        self, scoreboard_data: dict[str, Any], target_event_id: str
+    ) -> None:
+        """Extract team IDs from scoreboard and pre-fetch their rosters."""
+        sb = scoreboard_data.get("scoreboard", {})
+        for game in sb.get("events", []):
+            if not game or str(game.get("id", "")) != target_event_id:
+                continue
+            comps = game.get("competitions", [])
+            if not comps:
+                continue
+            for comp in comps[0].get("competitors", []):
+                if not comp or not isinstance(comp, dict):
+                    continue
+                team = comp.get("team", {}) or {}
+                team_id = str(team.get("id", ""))
+                if team_id:
+                    await self._fetch_roster(team_id)
+
+    async def _fetch_roster(self, team_id: str) -> list[PlayerIdentity]:
+        """Fetch and cache team roster from ESPN API.
+
+        Returns cached roster if already fetched.
+        """
+        if team_id in self._roster_cache:
+            return self._roster_cache[team_id]
+
+        players: list[PlayerIdentity] = []
+        if not self._api:
+            return players
+
+        try:
+            result = await self._api.fetch("team_roster", {"team_id": team_id})
+            athletes = result.get("team_roster", {}).get("athletes", [])
+            # NFL roster API returns position groups: [{position, items: [...]}]
+            # NBA roster API returns flat list: [{id, displayName, ...}]
+            # Handle both formats, tagging NFL players with their group.
+            flat_athletes: list[tuple[dict, str]] = []  # (athlete_dict, group)
+            for entry in athletes:
+                if not isinstance(entry, dict):
+                    continue
+                if "displayName" in entry or "fullName" in entry:
+                    # Flat format (NBA-style) — no group
+                    flat_athletes.append((entry, ""))
+                else:
+                    # Grouped format (NFL-style) — tag with group name
+                    group_name = entry.get("position", "")  # "offense", "defense", etc.
+                    for item in entry.get("items", []):
+                        flat_athletes.append((item, group_name))
+
+            for a, group in flat_athletes:
+                if not isinstance(a, dict):
+                    continue
+                pid = str(a.get("id", ""))
+                pos = a.get("position", {})
+                players.append(
+                    PlayerIdentity(
+                        player_id=pid,
+                        name=a.get("displayName", ""),
+                        position=pos.get("abbreviation", "")
+                        if isinstance(pos, dict)
+                        else "",
+                        jersey=str(a.get("jersey", "")),
+                        headshot_url=f"https://a.espncdn.com/i/headshots/nfl/players/full/{pid}.png"
+                        if pid
+                        else "",
+                        group=group,
+                    )
+                )
+            logger.debug("Fetched %d players for team %s", len(players), team_id)
+        except Exception:
+            logger.debug("Failed to fetch roster for team %s", team_id, exc_info=True)
+
+        self._roster_cache[team_id] = players
+        return players
+
+    async def _fetch_game_starters(
+        self, event_id: str, home_team_id: str, away_team_id: str
+    ) -> None:
+        """Fetch game-day starters from core API and store in state tracker.
+
+        Cross-references game roster entries (which have starter flags but only
+        last names) with the team roster cache (which has full details).
+        """
+        if not self._api:
+            return
+
+        for team_id in (home_team_id, away_team_id):
+            # Skip if already fetched
+            if self._state.get_starters(event_id, team_id):
+                continue
+
+            try:
+                result = await self._api.fetch(
+                    "game_roster",
+                    {"event_id": event_id, "team_id": team_id},
+                )
+                entries = result.get("game_roster", {}).get("entries", [])
+
+                # Build lookup from roster cache: player_id -> PlayerIdentity
+                roster_lookup: dict[str, PlayerIdentity] = {}
+                for p in self._roster_cache.get(team_id, []):
+                    roster_lookup[p.player_id] = p
+
+                starters: list[PlayerIdentity] = []
+                for entry in entries:
+                    if not isinstance(entry, dict) or not entry.get("starter"):
+                        continue
+                    # Extract athlete ID from $ref URL
+                    ath_ref = (entry.get("athlete") or {}).get("$ref", "")
+                    ath_id = ""
+                    if "/athletes/" in ath_ref:
+                        ath_id = ath_ref.split("/athletes/")[-1].split("?")[0]
+
+                    if ath_id and ath_id in roster_lookup:
+                        starters.append(roster_lookup[ath_id])
+                    elif ath_id:
+                        # Fallback: use game roster entry data (last name only)
+                        starters.append(
+                            PlayerIdentity(
+                                player_id=ath_id,
+                                name=entry.get("displayName", ""),
+                                position="",
+                                jersey=str(entry.get("jersey", "")),
+                                headshot_url=f"https://a.espncdn.com/i/headshots/nfl/players/full/{ath_id}.png",
+                            )
+                        )
+
+                if starters:
+                    self._state.set_starters(event_id, team_id, starters)
+                    logger.debug(
+                        "Fetched %d starters for team %s in game %s",
+                        len(starters),
+                        team_id,
+                        event_id,
+                    )
+            except Exception:
+                logger.debug(
+                    "Failed to fetch game starters for team %s in game %s",
+                    team_id,
+                    event_id,
+                    exc_info=True,
+                )
 
     async def _poll_api(
         self,
@@ -716,6 +1003,29 @@ class NFLStore(DataStore):
 
             scoreboard_data = await self._api.fetch("scoreboard", scoreboard_params)
             if scoreboard_data:
+                # Pre-fetch rosters before parsing if game not initialized
+                if espn_game_id and not self._state.is_game_initialized(espn_game_id):
+                    await self._prefetch_rosters_from_scoreboard(
+                        scoreboard_data, espn_game_id
+                    )
+                    # Also fetch game-day starters once rosters are cached
+                    sb = scoreboard_data.get("scoreboard", {})
+                    for game in sb.get("events", []):
+                        if str(game.get("id", "")) != espn_game_id:
+                            continue
+                        comps = game.get("competitions", [])
+                        if not comps:
+                            continue
+                        team_ids = []
+                        for comp in comps[0].get("competitors", []):
+                            tid = str((comp.get("team") or {}).get("id", ""))
+                            if tid:
+                                team_ids.append(tid)
+                        if len(team_ids) >= 2:
+                            await self._fetch_game_starters(
+                                espn_game_id, team_ids[0], team_ids[1]
+                            )
+
                 # Pass espn_game_id to filter to single game (if configured)
                 scoreboard_events = self._parse_api_response(
                     scoreboard_data, espn_game_id

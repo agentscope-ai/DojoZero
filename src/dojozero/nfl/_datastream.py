@@ -1,8 +1,8 @@
-"""NFL pre-game betting DataStream with web search event class lifecycle."""
+"""NFL pre-game betting DataStream with web search and ESPN stats lifecycle."""
 
 import asyncio
 import logging
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from dojozero.core import RuntimeContext
 from dojozero.data import DataHub
@@ -11,6 +11,9 @@ from dojozero.data._streams import DataHubDataStream as BaseDataHubDataStream
 from dojozero.data.websearch._api import WebSearchAPI
 from dojozero.data.websearch._context import GameContext
 from dojozero.data.websearch._events import WebSearchEventMixin
+
+if TYPE_CHECKING:
+    from dojozero.data.espn._api import ESPNExternalAPI
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +60,13 @@ class NFLPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
     websearch_event_types: list[
         str
     ]  # Canonical suffixes that need web search (e.g., ["injury_report"])
+    stats_event_types: list[
+        str
+    ]  # Suffixes that need ESPN stats (e.g., ["pregame_stats"])
+    home_team_id: str  # ESPN team ID for home team
+    away_team_id: str  # ESPN team ID for away team
+    season_year: int
+    season_type: str  # "regular", "postseason", "preseason"
 
 
 class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
@@ -78,6 +88,8 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         search_api: WebSearchAPI | None = None,
         game_context: GameContext | None = None,
         websearch_event_types: list[str] | None = None,
+        stats_event_types: list[str] | None = None,
+        espn_api: "ESPNExternalAPI | None" = None,
         sport_type: str = "",
     ) -> None:
         super().__init__(
@@ -91,6 +103,8 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         self._search_api = search_api
         self._game_context = game_context
         self._websearch_event_types = set(websearch_event_types or [])
+        self._stats_event_types = set(stats_event_types or [])
+        self._espn_api = espn_api
         self._search_initialized = False
 
     async def start(self) -> None:
@@ -99,24 +113,32 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         await super().start()
 
         # Register a callback on the hub so that when GameInitializeEvent
-        # fires, stores are paused and web searches run before polling
-        # resumes.  This replaces the old approach of blocking start().
-        if (
-            self._websearch_event_types
-            and self._search_api
-            and self._game_context
-            and self._hub
-        ):
+        # fires, stores are paused and pregame data fetching runs before
+        # polling resumes.
+        has_websearch = (
+            self._websearch_event_types and self._search_api and self._game_context
+        )
+        has_stats = self._stats_event_types and self._espn_api and self._game_context
+        if (has_websearch or has_stats) and self._hub:
             self._hub.add_on_game_initialized(self._on_game_initialized)
 
     async def _on_game_initialized(self, _game_id: str) -> None:
-        """Hub callback: run pre-game web searches while stores are paused."""
+        """Hub callback: run pre-game data fetching while stores are paused."""
         if not self._search_initialized:
             self._search_initialized = True
-            await self._run_web_searches()
+            # Run web searches and stats fetch concurrently
+            tasks: list[asyncio.Task[None]] = []
+            if self._websearch_event_types and self._search_api:
+                tasks.append(asyncio.create_task(self._run_web_searches()))
+            if self._stats_event_types and self._espn_api and self._game_context:
+                tasks.append(asyncio.create_task(self._run_stats_fetch()))
+            if tasks:
+                await asyncio.gather(*tasks)
 
     # Timeout (seconds) for each individual web search (search + LLM).
     _WEB_SEARCH_TIMEOUT: float = 120.0
+    # Timeout (seconds) for the ESPN stats fetch.
+    _STATS_FETCH_TIMEOUT: float = 60.0
 
     async def _run_web_searches(self) -> None:
         """Trigger web searches for all configured event classes in parallel.
@@ -199,6 +221,55 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             len(event_classes),
         )
 
+    async def _run_stats_fetch(self) -> None:
+        """Fetch pre-game stats from ESPN API and publish to hub."""
+        from dojozero.data.espn._stats_fetcher import fetch_pregame_stats
+
+        assert self._espn_api is not None
+        assert self._game_context is not None
+        ctx = self._game_context
+
+        logger.info(
+            "stream '%s' fetching pregame stats from ESPN",
+            self.actor_id,
+        )
+
+        try:
+            event = await asyncio.wait_for(
+                fetch_pregame_stats(
+                    self._espn_api,
+                    home_team_id=ctx.home_team_id,
+                    away_team_id=ctx.away_team_id,
+                    game_id=ctx.game_id,
+                    game_date=ctx.game_date,
+                    sport=ctx.sport,
+                    season_year=ctx.season_year,
+                    season_type=ctx.season_type,
+                    home_team_name=ctx.home_team,
+                    away_team_name=ctx.away_team,
+                ),
+                timeout=self._STATS_FETCH_TIMEOUT,
+            )
+            if event and self._hub:
+                await self._hub.receive_event(event)
+                logger.info(
+                    "stream '%s' published PreGameStatsEvent",
+                    self.actor_id,
+                )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "stream '%s' timed out fetching pregame stats after %.0fs",
+                self.actor_id,
+                self._STATS_FETCH_TIMEOUT,
+            )
+        except Exception as e:
+            logger.error(
+                "stream '%s' failed to fetch pregame stats: %s",
+                self.actor_id,
+                e,
+                exc_info=True,
+            )
+
     @classmethod
     def from_dict(
         cls,
@@ -214,13 +285,16 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             persistence_file = config.get("persistence_file", "outputs/events.jsonl")
             hub = DataHub(hub_id=hub_id, persistence_file=persistence_file)
 
-        # Build search API and game context if websearch event types configured
+        # Build search API and game context
         search_api: WebSearchAPI | None = None
         game_context: GameContext | None = None
+        espn_api: ESPNExternalAPI | None = None
 
         ws_event_types = config.get("websearch_event_types", [])
-        if ws_event_types:
-            search_api = WebSearchAPI()
+        stats_event_types = config.get("stats_event_types", [])
+
+        # Build GameContext if any pregame data fetching is needed
+        if ws_event_types or stats_event_types:
             game_context = GameContext(
                 sport=context.sport_type,
                 home_team=config.get("home_team_name", ""),
@@ -229,7 +303,19 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
                 away_tricode=config.get("away_team_abbreviation", ""),
                 game_date=config.get("game_date", ""),
                 game_id=config.get("game_id", ""),
+                home_team_id=config.get("home_team_id", ""),
+                away_team_id=config.get("away_team_id", ""),
+                season_year=config.get("season_year", 0),
+                season_type=config.get("season_type", ""),
             )
+
+        if ws_event_types:
+            search_api = WebSearchAPI()
+
+        if stats_event_types:
+            from dojozero.data.espn._api import ESPNExternalAPI as _ESPNExternalAPI
+
+            espn_api = _ESPNExternalAPI(sport="football", league="nfl")
 
         return cls(
             actor_id=config["actor_id"],
@@ -240,5 +326,7 @@ class NFLPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             search_api=search_api,
             game_context=game_context,
             websearch_event_types=ws_event_types,
+            stats_event_types=stats_event_types,
+            espn_api=espn_api,
             sport_type=context.sport_type,
         )

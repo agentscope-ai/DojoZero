@@ -13,10 +13,6 @@ scenario:
       - injury_report
       - power_ranking
       - expert_prediction
-
-    # ESPN pregame stats (fetched from ESPN API during pregame phase)
-    - id: stats_stream
-      event_types:
       - pregame_stats
 
     # Game lifecycle
@@ -57,7 +53,7 @@ scenario:
 
     agents:
     - id: degen_agent
-      name: degen
+      persona: degen
       class: BettingAgent
       persona_config_path: agents/personas/degen.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -65,41 +61,38 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - stats_stream
       - game_update_stream
       - odds_update_stream
       - game_lifecycle_stream
       - play_by_play_stream
-    - id: oracle_agent
-      name: oracle
+    - id: mystic_agent
+      persona: mystic
       class: BettingAgent
-      persona_config_path: agents/personas/oracle.yaml
+      persona_config_path: agents/personas/mystic.yaml
       llm_config_path: agents/llms/qwen.yaml
       operators:
         - betting_broker
       data_streams:
         - pre_game_insights_stream
-        - stats_stream
         - game_update_stream
         - odds_update_stream
         - game_lifecycle_stream
         - play_by_play_stream
-    - id: professor_agent
-      name: professor
+    - id: pundit_agent
+      persona: pundit
       class: BettingAgent
-      persona_config_path: agents/personas/professor.yaml
+      persona_config_path: agents/personas/pundit.yaml
       llm_config_path: agents/llms/qwen.yaml
       operators:
         - betting_broker
       data_streams:
         - pre_game_insights_stream
-        - stats_stream
         - game_update_stream
         - odds_update_stream
         - game_lifecycle_stream
         - play_by_play_stream
     - id: shark_agent
-      name: shark
+      persona: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -107,13 +100,12 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - stats_stream
       - game_update_stream
       - odds_update_stream
       - game_lifecycle_stream
       - play_by_play_stream
     - id: sheep_agent
-      name: sheep
+      persona: sheep
       class: BettingAgent
       persona_config_path: agents/personas/sheep.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -121,13 +113,12 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - stats_stream
       - game_update_stream
       - odds_update_stream
       - game_lifecycle_stream
       - play_by_play_stream
     - id: whale_agent
-      name: whale
+      persona: whale
       class: BettingAgent
       persona_config_path: agents/personas/whale.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -135,7 +126,6 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - stats_stream
       - game_update_stream
       - odds_update_stream
       - game_lifecycle_stream

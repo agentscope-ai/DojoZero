@@ -195,10 +195,17 @@ class NBAStore(DataStore):
 
             # Build team/player lookup maps for PBP enrichment
             if has_team_data:
+                home_tid = str(home_team_data.get("teamId", ""))
+                away_tid = str(away_team_data.get("teamId", ""))
+                if home_tid and away_tid:
+                    self._state.set_team_ids(game_id, home_tid, away_tid)
                 for team_data in (home_team_data, away_team_data):
                     tid = str(team_data.get("teamId", ""))
                     tri = team_data.get("teamTricode", "")
-                    self._state.update_team_lookup(tid, tri)
+                    city = team_data.get("teamCity", "")
+                    tname = team_data.get("teamName", "")
+                    display_name = f"{city} {tname}".strip()
+                    self._state.update_team_lookup(tid, tri, display_name)
                     for player in team_data.get("players", []):
                         if isinstance(player, dict):
                             pid = player.get("personId", 0)
@@ -504,7 +511,10 @@ class NBAStore(DataStore):
                     )
                     self._state.set_previous_status(game_id, 2)  # In Progress
 
-            # Check for game end (last action is "Game End" or "End of Game")
+            # Detect game end (last action is "Game End" or "End of Game")
+            # We detect here but emit GameResultEvent AFTER play events
+            # so that plays are always ordered before the result.
+            game_ended = False
             if actions:
                 last_action = actions[-1]
                 if (
@@ -513,49 +523,26 @@ class NBAStore(DataStore):
                     and "end" in last_action.get("description", "").lower()
                     and "game" in last_action.get("description", "").lower()
                 ):
-                    # Game has ended
                     previous_status = self._state.get_previous_status(game_id)
-                    if (
-                        previous_status != 3
-                    ):  # Only emit if not already marked as finished
-                        # Get final scores from last action
-                        home_score = int(last_action.get("scoreHome", 0) or 0)
-                        away_score = int(last_action.get("scoreAway", 0) or 0)
-                        winner = (
-                            "home"
-                            if home_score > away_score
-                            else "away"
-                            if away_score > home_score
-                            else ""
-                        )
-
-                        events.append(
-                            GameResultEvent(
-                                timestamp=datetime.now(timezone.utc),
-                                game_id=game_id,
-                                sport="nba",
-                                winner=winner,
-                                home_score=home_score,
-                                away_score=away_score,
-                            )
-                        )
-                        self._state.set_previous_status(game_id, 3)  # Finished
+                    if previous_status != 3:
+                        game_ended = True
 
             # Deduplication: filter out actions we've already processed using event_id
             new_actions = self._state.filter_new_actions(game_id, actions)
 
             # Emit ALL play-by-play events (no filtering - let agents decide)
+            timestamp = datetime.now(timezone.utc)
             for action in new_actions:
-                # Parse timestamp from action
-                timestamp = datetime.now(timezone.utc)
+                # Parse wallclock time from action (when the play actually happened)
+                game_timestamp: datetime | None = None
                 time_actual = action.get("timeActual")
                 if time_actual:
                     try:
                         from dojozero.data.nba._utils import parse_iso_datetime
 
-                        timestamp = parse_iso_datetime(time_actual)
+                        game_timestamp = parse_iso_datetime(time_actual)
                     except (ValueError, AttributeError):
-                        pass  # Use default timestamp
+                        pass
 
                 # Extract action data
                 action_type = action.get("actionType", "")
@@ -590,6 +577,7 @@ class NBAStore(DataStore):
                 events.append(
                     NBAPlayEvent(
                         timestamp=timestamp,
+                        game_timestamp=game_timestamp,
                         game_id=game_id,
                         sport="nba",
                         event_id=pbp_event_id,
@@ -609,6 +597,35 @@ class NBAStore(DataStore):
                         score_value=score_value,
                     )
                 )
+
+            # Emit GameResultEvent AFTER all play events for correct ordering
+            if game_ended:
+                home_score = int(last_action.get("scoreHome", 0) or 0)
+                away_score = int(last_action.get("scoreAway", 0) or 0)
+                winner = (
+                    "home"
+                    if home_score > away_score
+                    else "away"
+                    if away_score > home_score
+                    else ""
+                )
+                home_tid = self._state.get_home_team_id(game_id)
+                away_tid = self._state.get_away_team_id(game_id)
+                events.append(
+                    GameResultEvent(
+                        timestamp=datetime.now(timezone.utc),
+                        game_id=game_id,
+                        sport="nba",
+                        winner=winner,
+                        home_score=home_score,
+                        away_score=away_score,
+                        home_team_name=self._state.get_team_name(home_tid),
+                        away_team_name=self._state.get_team_name(away_tid),
+                        home_team_id=home_tid,
+                        away_team_id=away_tid,
+                    )
+                )
+                self._state.set_previous_status(game_id, 3)  # Finished
 
         # Check if poll profile needs to change
         new_profile = self._state.get_poll_profile(game_id)

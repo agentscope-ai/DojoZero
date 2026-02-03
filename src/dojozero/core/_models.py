@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# API / Display Models (for aggregated API responses)
+# API / Display Models
 # ============================================================================
 
 
@@ -82,9 +82,10 @@ class LeaderboardEntry(BaseModel):
 
 
 # ============================================================================
-# Trial Lifecycle (internal span model for phase detection)
+# Trial Lifecycle
 # ============================================================================
 
+# Known metadata fields from BettingTrialMetadata (trial.* tags)
 _TRIAL_METADATA_FIELDS = frozenset(
     {
         "home_team_tricode",
@@ -100,7 +101,7 @@ _TRIAL_METADATA_FIELDS = frozenset(
 
 
 class TrialLifecycleSpan(BaseModel):
-    """Deserialized trial.started/stopped/terminated span."""
+    """Deserialized trial.started / trial.stopped / trial.terminated span."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -108,7 +109,7 @@ class TrialLifecycleSpan(BaseModel):
     phase: str = ""  # "started", "stopped", "terminated"
     start_time: int = 0  # microseconds since epoch
 
-    # Metadata from trial.* tags
+    # Metadata from trial.* tags (BettingTrialMetadata fields)
     home_team_tricode: str = ""
     away_team_tricode: str = ""
     home_team_name: str = ""
@@ -118,6 +119,7 @@ class TrialLifecycleSpan(BaseModel):
     sport_type: str = ""
     espn_game_id: str = ""
 
+    # Catch-all for forward compatibility with new metadata fields
     extra_metadata: dict[str, Any] = Field(default_factory=dict)
 
 

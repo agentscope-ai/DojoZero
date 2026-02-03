@@ -147,6 +147,8 @@ class ESPNExternalAPI(ExternalAPI):
             return await self._fetch_team_roster(params)
         elif endpoint == "team_leaders":
             return await self._fetch_team_leaders(params)
+        elif endpoint == "game_roster":
+            return await self._fetch_game_roster(params)
         else:
             logger.warning("Unknown endpoint: %s", endpoint)
             return {}
@@ -523,6 +525,55 @@ class ESPNExternalAPI(ExternalAPI):
         except Exception as e:
             logger.error("Error fetching team leaders for %s: %s", team_id, e)
             return {"team_leaders": {"categories": []}}
+
+    async def _fetch_game_roster(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Fetch game-specific roster for a team in an event.
+
+        Uses the core API to get the list of players on the game-day roster,
+        including starter and did-not-play flags.
+
+        Params:
+            event_id: ESPN event ID (required)
+            team_id: ESPN team ID (required)
+
+        Returns:
+            {"game_roster": {"entries": [...]}} where each entry has:
+            - playerId, displayName (last name), jersey, starter, didNotPlay,
+              athlete.$ref, position.$ref
+        """
+        event_id = params.get("event_id")
+        team_id = params.get("team_id")
+        if not event_id or not team_id:
+            logger.warning("game_roster endpoint requires event_id and team_id params")
+            return {"game_roster": {"entries": []}}
+
+        url = (
+            f"{self.core_api_url}/events/{event_id}"
+            f"/competitions/{event_id}/competitors/{team_id}/roster"
+        )
+
+        session = await self._get_session()
+        try:
+            async with session.get(url, proxy=self._proxy) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "Game roster request failed: status=%d, event=%s, team=%s",
+                        response.status,
+                        event_id,
+                        team_id,
+                    )
+                    return {"game_roster": {"entries": []}}
+
+                data = await response.json()
+                return {"game_roster": data}
+        except Exception as e:
+            logger.error(
+                "Error fetching game roster for event %s team %s: %s",
+                event_id,
+                team_id,
+                e,
+            )
+            return {"game_roster": {"entries": []}}
 
 
 def get_espn_game_url(event_id: str, sport: str = "nba") -> str:

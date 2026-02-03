@@ -440,11 +440,6 @@ register_trial_builder(
                     "injury_report",
                     "power_ranking",
                     "expert_prediction",
-                ],
-            },
-            {
-                "id": "stats_stream",
-                "event_types": [
                     "pregame_stats",
                 ],
             },
@@ -494,7 +489,6 @@ register_trial_builder(
                 "operators": ["betting_broker"],
                 "data_streams": [
                     "pre_game_insights_stream",
-                    "stats_stream",
                     "game_update_stream",
                     "odds_update_stream",
                     "game_lifecycle_stream",

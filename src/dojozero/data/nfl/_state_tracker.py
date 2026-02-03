@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from dojozero.data._models import PlayerIdentity
 from dojozero.data.espn._state_tracker import BaseGameStateTracker
 
 
@@ -14,6 +15,7 @@ class NFLGameStateTracker(BaseGameStateTracker):
     - _seen_drive_ids: Deduplication for drive events
     - _last_odds: Cache last odds to detect changes
     - _current_drive: Track current drive ID per game
+    - _starters: Game-day starters per team
     """
 
     def __init__(self) -> None:
@@ -22,6 +24,8 @@ class NFLGameStateTracker(BaseGameStateTracker):
         self._seen_drive_ids: set[str] = set()
         self._last_odds: dict[str, dict[str, Any]] = {}
         self._current_drive: dict[str, str] = {}
+        # key = "{event_id}_{team_id}" -> list of starters
+        self._starters: dict[str, list[PlayerIdentity]] = {}
 
     # -- Drive deduplication --------------------------------------------------
 
@@ -62,6 +66,18 @@ class NFLGameStateTracker(BaseGameStateTracker):
     def set_current_drive(self, event_id: str, drive_id: str) -> None:
         """Set current drive ID for game."""
         self._current_drive[event_id] = drive_id
+
+    # -- Starters tracking -----------------------------------------------------
+
+    def set_starters(
+        self, event_id: str, team_id: str, starters: list[PlayerIdentity]
+    ) -> None:
+        """Store game-day starters for a team."""
+        self._starters[f"{event_id}_{team_id}"] = starters
+
+    def get_starters(self, event_id: str, team_id: str) -> list[PlayerIdentity]:
+        """Get game-day starters for a team (empty list if not fetched yet)."""
+        return self._starters.get(f"{event_id}_{team_id}", [])
 
     # -- Filtering ------------------------------------------------------------
 

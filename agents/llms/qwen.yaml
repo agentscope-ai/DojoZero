@@ -1,5 +1,7 @@
 llm:
-  - model_type: openai
+  - model_type: dashscope
     model_name: qwen3-max
-    api_key_env: DOJOZERO_OPENAI_API_KEY
-    base_url_env: DOJOZERO_OPENAI_BASE_URL
+    api_key_env: DOJOZERO_DASHSCOPE_API_KEY
+    model_display_name: qwen
+    cdn_url: https://img.alicdn.com/imgextra/i4/O1CN011RklS01Jiu8iNxiEc_!!6000000001063-55-tps-24-24.svg
+

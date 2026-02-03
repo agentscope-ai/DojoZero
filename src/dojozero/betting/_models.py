@@ -359,7 +359,7 @@ class AgentResponseMessage(BaseModel):
 
     sequence: int = Field(default=0, description="Event sequence number")
     stream_id: str = Field(default="", description="Stream identifier")
-    name: str = Field(default="", description="Agent name")
+    agent_id: str = Field(default="", description="Agent id")
     content: str = Field(default="", description="Main text response from agent")
     cot_steps: list[CoTStep] = Field(
         default_factory=list, description="Chain of thought process steps"
@@ -388,42 +388,27 @@ class AgentResponseMessage(BaseModel):
     )
 
 
-class AgentRegistration(BaseModel):
+class AgentInfo(BaseModel):
     """Agent registration payload for tracing (agent.registered span)."""
 
     agent_id: str = Field(default="", description="Unique ID for the agent")
     name: str = Field(default="", description="degen-qwen3")
-    model: str = Field(
-        default="", description="Model provider (e.g., 'gemini', 'claude', 'openai')"
-    )
+    model: str = Field(default="", description="exactly model name")
+    model_display_name: str = Field(default="", description="Model display name")
     system_prompt: str = Field(default="", description="Agent's system prompt")
-    tag: str = Field(
+    persona: str = Field(
         default="", description="Agent tag (e.g., 'degen', 'whale', 'shark')"
     )
     cdn_url: str = Field(default="", description="Avatar image URL")
 
 
-class AgentsBatchRegistration(BaseModel):
+class AgentList(BaseModel):
     """Batch agent registration payload for initializing multiple agents at once."""
 
-    agents: List[AgentRegistration] = Field(
+    agents: List[AgentInfo] = Field(
         default_factory=list,
         description="List of agents to register. Each agent is identified by agent_id.",
     )
-
-    def get_agent_by_id(self, agent_id: str) -> Optional[AgentRegistration]:
-        """Get agent by agent_id"""
-        for agent in self.agents:
-            if agent.agent_id == agent_id:
-                return agent
-        return None
-
-    def add_agent(self, agent: AgentRegistration) -> None:
-        """Add an agent to the batch"""
-        # Check if agent_id already exists
-        if self.get_agent_by_id(agent.agent_id):
-            raise ValueError(f"Agent with agent_id '{agent.agent_id}' already exists")
-        self.agents.append(agent)
 
 
 __all__ = [
@@ -448,11 +433,9 @@ __all__ = [
     "Holding",
     "Statistics",
     # Agent Message Models
-    "AgentRegistration",
-    "AgentsBatchRegistration",
-    "AgentResponseMessage",
-    "CoTStep",
     "ReasoningStep",
     "ToolCallStep",
     "ToolResultStep",
+    "CoTStep",
+    "AgentResponseMessage",
 ]

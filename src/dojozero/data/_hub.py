@@ -5,7 +5,7 @@ import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -105,6 +105,8 @@ class DataHub:
         self._backtest_mode = False
         self._backtest_events: list[DataEvent] = []
         self._backtest_index = 0
+        self._emit_backtest_traces = False
+        self._backtest_time_offset: timedelta | None = None
 
         # Track connected stores for lifecycle management
         self._connected_stores: list["DataStore"] = []
@@ -201,6 +203,7 @@ class DataHub:
         sport_type: str,
         game_id: str = "",
         game_date: str = "",
+        timestamp_override: datetime | None = None,
     ) -> None:
         """Emit an event as a span to the trace backend.
 
@@ -210,6 +213,7 @@ class DataHub:
             sport_type: Sport type of the source store (e.g., "nba", "nfl")
             game_id: Game ID from the source store (authoritative, fallback to event)
             game_date: Game date from the source store (YYYY-MM-DD, authoritative)
+            timestamp_override: If set, use this instead of event.timestamp for the span
         """
         try:
             from dojozero.core._tracing import create_span_from_event, emit_span
@@ -278,7 +282,7 @@ class DataHub:
                 trial_id=self.trial_id,
                 actor_id=actor_id,
                 operation_name=event_type,
-                start_time=event.timestamp,
+                start_time=timestamp_override or event.timestamp,
                 extra_tags=tags,
             )
             emit_span(span)
@@ -639,8 +643,36 @@ class DataHub:
                     if event:
                         self._backtest_events.append(event)
 
-        # Sort events by timestamp
-        self._backtest_events.sort(key=lambda e: e.timestamp)
+        # Sort events by game_timestamp (actual game time) when available,
+        # falling back to timestamp (poll time) for events without game clock data
+        self._backtest_events.sort(key=lambda e: e.game_timestamp or e.timestamp)
+
+        # Compute time offset for trace emission (rebase first event to "now")
+        if self._emit_backtest_traces and self._backtest_events:
+            first_ts = self._backtest_events[0].timestamp
+            self._backtest_time_offset = datetime.now(timezone.utc) - first_ts
+            logger.info(
+                "Backtest trace rebasing enabled: offset=%s (first event at %s)",
+                self._backtest_time_offset,
+                first_ts.isoformat(),
+            )
+
+    def enable_backtest_traces(self, trial_id: str) -> None:
+        """Enable trace emission during backtest with rebased timestamps.
+
+        When enabled, data events replayed from the JSONL file are emitted to
+        the trace backend (SLS/Jaeger) with timestamps rebased so the first
+        event starts at "now".  This makes replay trials visible in the Arena
+        UI alongside agent-generated events that carry wall-clock timestamps.
+
+        Must be called *before* ``start_backtest()`` so the time offset can be
+        computed once events are loaded.
+
+        Args:
+            trial_id: Trial identifier for trace emission.
+        """
+        self.trial_id = trial_id
+        self._emit_backtest_traces = True
 
     # Backward compatibility alias (deprecated)
     async def start_replay(self, replay_file: Path | str) -> None:
@@ -680,6 +712,17 @@ class DataHub:
         event = self._backtest_events[self._backtest_index]
         self._backtest_index += 1
 
+        # Emit rebased trace span if enabled
+        if self._emit_backtest_traces and self.trial_id and self._backtest_time_offset:
+            rebased_ts = event.timestamp + self._backtest_time_offset
+            self._emit_event_span(
+                event,
+                actor_id="backtest",
+                sport_type=getattr(event, "sport", ""),
+                game_id=getattr(event, "game_id", ""),
+                timestamp_override=rebased_ts,
+            )
+
         # Dispatch event as if it just arrived
         await self._dispatch_event(event)
 
@@ -705,6 +748,8 @@ class DataHub:
         self._backtest_mode = False
         self._backtest_events = []
         self._backtest_index = 0
+        self._emit_backtest_traces = False
+        self._backtest_time_offset = None
 
     # Backward compatibility alias (deprecated)
     def stop_replay(self) -> None:

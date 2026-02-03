@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 import yaml
 from dateutil import parser
 
@@ -73,7 +74,7 @@ async def get_nfl_games_for_date(
                 hour=0, minute=0, second=0, microsecond=0
             )
             requested_date = parsed_date.date()
-        except Exception:
+        except (ValueError, OverflowError):
             if print_games:
                 print(f"Error: Could not parse date: {game_date}")
             return []
@@ -117,7 +118,7 @@ async def get_nfl_games_for_date(
                     if game_time_utc.tzinfo is None:
                         game_time_utc = game_time_utc.replace(tzinfo=timezone.utc)
                     game_time_ltz = game_time_utc.astimezone(tz=None)
-                except Exception:
+                except (ValueError, OverflowError):
                     pass
 
             # Get competitors
@@ -194,7 +195,7 @@ async def get_nfl_games_for_date(
 
         return games
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
         logger.error("Error fetching NFL games for date %s: %s", game_date, e)
         if print_games:
             print(f"Error fetching games: {e}")
@@ -248,7 +249,7 @@ async def get_nfl_games_for_week(
                     if game_time_utc.tzinfo is None:
                         game_time_utc = game_time_utc.replace(tzinfo=timezone.utc)
                     game_time_ltz = game_time_utc.astimezone(tz=None)
-                except Exception:
+                except (ValueError, OverflowError):
                     pass
 
             competitors = comp.get("competitors", [])
@@ -324,7 +325,7 @@ async def get_nfl_games_for_week(
 
         return games
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
         logger.error("Error fetching NFL games for week %d: %s", week, e)
         if print_games:
             print(f"Error fetching games: {e}")
@@ -348,6 +349,7 @@ class NFLGameTrialManager:
         oss_upload: bool = False,
         oss_bucket: str | None = None,
         oss_prefix: str | None = None,
+        server: str | None = None,
     ):
         """Initialize NFL game trial manager.
 
@@ -362,6 +364,7 @@ class NFLGameTrialManager:
             oss_upload: Whether to upload files to OSS after trial completion
             oss_bucket: Override OSS bucket name (default: from env)
             oss_prefix: Override OSS prefix (default: from env)
+            server: Dashboard Server URL for SLS/OSS integration
         """
         self.game = game
         self.event_id = str(game.get("eventId", ""))
@@ -374,6 +377,7 @@ class NFLGameTrialManager:
         self.oss_upload = oss_upload
         self.oss_bucket = oss_bucket
         self.oss_prefix = oss_prefix
+        self.server = server
 
         # Parse game time
         self.game_time_utc: datetime | None = game.get("gameTimeLTZ")
@@ -401,8 +405,8 @@ class NFLGameTrialManager:
         with open(self.base_config, "r") as f:
             config = yaml.safe_load(f)
 
-        # Update event_id in config
-        config["scenario"]["config"]["event_id"] = self.event_id
+        # Update espn_game_id in config
+        config["scenario"]["config"]["espn_game_id"] = self.event_id
 
         # Determine file paths
         if self.data_dir:
@@ -556,6 +560,9 @@ class NFLGameTrialManager:
             self.trial_id,
         ]
 
+        if self.server:
+            cmd.extend(["--server", self.server])
+
         self.log(
             logging.INFO, "Starting trial for game %s: %s", self.event_id, " ".join(cmd)
         )
@@ -598,7 +605,7 @@ class NFLGameTrialManager:
             )
 
             return True
-        except Exception as e:
+        except OSError as e:
             self.log(
                 logging.ERROR, "Failed to start trial for game %s: %s", self.event_id, e
             )
@@ -677,7 +684,7 @@ class NFLGameTrialManager:
                         self.stop_trial()
                         self.completed = True
                         break
-            except Exception as e:
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
                 self.log(
                     logging.WARNING,
                     "Error checking game status for %s: %s",
@@ -715,7 +722,7 @@ class NFLGameTrialManager:
                 try:
                     self._log_file_handle.flush()
                     self._log_file_handle.close()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — cleanup
                     self.log(
                         logging.WARNING,
                         "Error closing log file for game %s: %s",
@@ -726,7 +733,7 @@ class NFLGameTrialManager:
                     self._log_file_handle = None
 
             self.log(logging.INFO, "Trial stopped for game %s", self.event_id)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — cleanup
             self.log(
                 logging.ERROR, "Error stopping trial for game %s: %s", self.event_id, e
             )
@@ -814,7 +821,7 @@ class NFLGameTrialManager:
                 self.event_id,
             )
 
-        except Exception as e:
+        except (ValueError, FileNotFoundError, OSError) as e:
             self.log(
                 logging.ERROR,
                 "Failed to upload files to OSS for game %s: %s",
@@ -835,6 +842,7 @@ async def run_trials_for_date(
     oss_upload: bool = False,
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
+    server: str | None = None,
 ) -> list[NFLGameTrialManager]:
     """Run trials for all NFL games on a given date.
 
@@ -848,6 +856,7 @@ async def run_trials_for_date(
         oss_upload: Whether to upload files to OSS after trial completion
         oss_bucket: Override OSS bucket name
         oss_prefix: Override OSS prefix
+        server: Dashboard Server URL for SLS/OSS integration
 
     Returns:
         List of NFLGameTrialManager instances
@@ -882,6 +891,7 @@ async def run_trials_for_date(
             oss_upload=oss_upload,
             oss_bucket=oss_bucket,
             oss_prefix=oss_prefix,
+            server=server,
         )
         managers.append(manager)
 
@@ -902,6 +912,7 @@ async def run_trials_for_week(
     oss_upload: bool = False,
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
+    server: str | None = None,
 ) -> list[NFLGameTrialManager]:
     """Run trials for all NFL games in a given week.
 
@@ -916,6 +927,7 @@ async def run_trials_for_week(
         oss_upload: Whether to upload files to OSS after trial completion
         oss_bucket: Override OSS bucket name
         oss_prefix: Override OSS prefix
+        server: Dashboard Server URL for SLS/OSS integration
 
     Returns:
         List of NFLGameTrialManager instances
@@ -949,6 +961,7 @@ async def run_trials_for_week(
             oss_upload=oss_upload,
             oss_bucket=oss_bucket,
             oss_prefix=oss_prefix,
+            server=server,
         )
         managers.append(manager)
 
@@ -968,6 +981,7 @@ async def run_trial_for_event(
     oss_upload: bool = False,
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
+    server: str | None = None,
 ) -> list[NFLGameTrialManager]:
     """Run trial for a specific NFL game by event ID.
 
@@ -981,31 +995,52 @@ async def run_trial_for_event(
         oss_upload: Whether to upload files to OSS after trial completion
         oss_bucket: Override OSS bucket name
         oss_prefix: Override OSS prefix
+        server: Dashboard Server URL for SLS/OSS integration
 
     Returns:
         List with single NFLGameTrialManager, or empty list if not found
     """
     logger.info("Searching for NFL game with event ID: %s", event_id)
 
-    # Search in current week's games first
     api = NFLExternalAPI()
     try:
-        data = await api.fetch("scoreboard")
-        scoreboard = data.get("scoreboard", {})
-        events = scoreboard.get("events", [])
-
+        # Try fetching the specific game via summary endpoint (works for any date)
         target_event = None
-        for event in events:
-            if event.get("id") == event_id:
-                target_event = event
-                break
+        try:
+            resp = await api.fetch("summary", {"event_id": event_id})
+            summary_data = resp.get("summary", {})
+            header = summary_data.get("header", {})
+            competitions = header.get("competitions", [])
+            if competitions:
+                # Build a scoreboard-compatible event dict from summary data
+                target_event = {
+                    "id": event_id,
+                    "shortName": header.get("shortName", ""),
+                    "competitions": competitions,
+                }
+                logger.info("Found game %s via summary endpoint", event_id)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, KeyError) as e:
+            logger.warning("Summary fetch for %s failed: %s", event_id, e)
+
+        # Fall back to current scoreboard
+        if not target_event:
+            data = await api.fetch("scoreboard")
+            scoreboard = data.get("scoreboard", {})
+            events = scoreboard.get("events", [])
+            for event in events:
+                if event.get("id") == event_id:
+                    target_event = event
+                    break
 
         if not target_event:
-            logger.error("Event ID %s not found in current scoreboard", event_id)
+            logger.error(
+                "Event ID %s not found via summary or current scoreboard", event_id
+            )
             return []
 
         # Parse the event into our format
-        comp = target_event.get("competitions", [{}])[0]
+        comps = target_event.get("competitions", [{}])
+        comp = comps[0] if comps else {}
         status = comp.get("status", {}).get("type", {})
 
         game_time_str = comp.get("date", "")
@@ -1016,7 +1051,7 @@ async def run_trial_for_event(
                 if game_time.tzinfo is None:
                     game_time = game_time.replace(tzinfo=timezone.utc)
                 game_time_ltz = game_time.astimezone(tz=None)
-            except Exception:
+            except (ValueError, OverflowError):
                 pass
 
         competitors = comp.get("competitors", [])
@@ -1035,13 +1070,17 @@ async def run_trial_for_event(
             else:
                 away_team = team_data
 
+        short_name = target_event.get("shortName", "")
+        if not short_name and away_team and home_team:
+            short_name = f"{away_team.get('abbreviation', '???')} @ {home_team.get('abbreviation', '???')}"
+
         game = {
             "eventId": event_id,
             "gameStatus": int(status.get("id", "1")),
             "gameStatusText": status.get("description", "Scheduled"),
             "gameTimeUTC": game_time_str,
             "gameTimeLTZ": game_time_ltz,
-            "shortName": target_event.get("shortName", ""),
+            "shortName": short_name,
             "homeTeam": home_team,
             "awayTeam": away_team,
         }
@@ -1059,26 +1098,32 @@ async def run_trial_for_event(
             oss_upload=oss_upload,
             oss_bucket=oss_bucket,
             oss_prefix=oss_prefix,
+            server=server,
         )
         manager.generate_config_file()
         manager.log_status()
 
         return [manager]
 
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
         logger.error("Error fetching game %s: %s", event_id, e)
         return []
     finally:
         await api.close()
 
 
-async def run_trials(managers: list[NFLGameTrialManager]) -> None:
+async def run_trials(
+    managers: list[NFLGameTrialManager],
+    max_concurrent_starts: int = 10,
+) -> None:
     """Run trials for all game managers.
 
     Args:
         managers: List of NFLGameTrialManager instances
+        max_concurrent_starts: Maximum number of trials to start concurrently
     """
     tasks = []
+    start_semaphore = asyncio.Semaphore(max_concurrent_starts)
 
     for manager in managers:
 
@@ -1089,10 +1134,14 @@ async def run_trials(managers: list[NFLGameTrialManager]) -> None:
                     logger.warning("Skipping start for game %s", manager.event_id)
                     return
 
-                started = await manager.start_trial()
-                if not started:
-                    logger.error("Failed to start trial for game %s", manager.event_id)
-                    return
+                async with start_semaphore:
+                    await asyncio.sleep(1.0)
+                    started = await manager.start_trial()
+                    if not started:
+                        logger.error(
+                            "Failed to start trial for game %s", manager.event_id
+                        )
+                        return
 
                 await manager.monitor_trial()
 
@@ -1102,8 +1151,10 @@ async def run_trials(managers: list[NFLGameTrialManager]) -> None:
 
                 manager.log_status()
 
-            except Exception as e:
-                logger.error("Error in trial for game %s: %s", manager.event_id, e)
+            except Exception as e:  # noqa: BLE001 — top-level per-game handler
+                logger.error(
+                    "Error in trial for game %s: %s", manager.event_id, e, exc_info=True
+                )
                 manager.log_status()
 
         tasks.append(asyncio.create_task(run_game(manager)))
@@ -1278,10 +1329,12 @@ def main() -> int:
         help="Season type: 1=preseason, 2=regular, 3=postseason (default: 2)",
     )
     run_parser.add_argument(
+        "--game-id",
         "--event-id",
         type=str,
         default=None,
-        help="Specific ESPN event ID to run trial for",
+        dest="game_id",
+        help="Specific ESPN event/game ID to run trial for",
     )
     run_parser.add_argument(
         "--config",
@@ -1331,6 +1384,21 @@ def main() -> int:
         default=None,
         help="Override OSS prefix (default: from DOJOZERO_OSS_PREFIX env var)",
     )
+    run_parser.add_argument(
+        "--server",
+        type=str,
+        default=None,
+        help="Dashboard Server URL (e.g., http://localhost:8000). "
+        "When specified, trials are submitted to the server which handles "
+        "SLS trace export and OSS backup.",
+    )
+    run_parser.add_argument(
+        "--max-concurrent-starts",
+        type=int,
+        default=10,
+        help="Maximum number of trials to start concurrently (default: 10). "
+        "This prevents overwhelming the server with simultaneous submissions.",
+    )
 
     args = arg_parser.parse_args()
 
@@ -1374,10 +1442,10 @@ def main() -> int:
             return 1
 
         try:
-            if args.event_id:
+            if args.game_id:
                 managers = asyncio.run(
                     run_trial_for_event(
-                        event_id=args.event_id,
+                        event_id=args.game_id,
                         base_config=args.config,
                         pre_start_hours=args.pre_start_hours,
                         check_interval_seconds=args.check_interval,
@@ -1386,6 +1454,7 @@ def main() -> int:
                         oss_upload=args.oss_upload,
                         oss_bucket=args.oss_bucket,
                         oss_prefix=args.oss_prefix,
+                        server=args.server,
                     )
                 )
             elif args.week:
@@ -1401,6 +1470,7 @@ def main() -> int:
                         oss_upload=args.oss_upload,
                         oss_bucket=args.oss_bucket,
                         oss_prefix=args.oss_prefix,
+                        server=args.server,
                     )
                 )
             else:
@@ -1416,6 +1486,7 @@ def main() -> int:
                         oss_upload=args.oss_upload,
                         oss_bucket=args.oss_bucket,
                         oss_prefix=args.oss_prefix,
+                        server=args.server,
                     )
                 )
 
@@ -1423,13 +1494,15 @@ def main() -> int:
                 logger.info("No games found for trials")
                 return 0
 
-            asyncio.run(run_trials(managers))
+            asyncio.run(
+                run_trials(managers, max_concurrent_starts=args.max_concurrent_starts)
+            )
             return 0
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
             return 130
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — top-level fatal handler
             logger.error("Fatal error: %s", e, exc_info=True)
             return 1
 

@@ -10,6 +10,7 @@ import inspect
 import json
 import logging
 from collections import deque
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence, TypedDict
 
 from agentscope.agent import ReActAgent
@@ -27,7 +28,7 @@ from dojozero.agents import (
 )
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
-from dojozero.data._models import DataEvent, extract_game_id
+from dojozero.data._models import DataEvent, EventTypes, extract_game_id
 from dojozero.betting._models import (
     ReasoningStep,
     ToolCallStep,
@@ -338,6 +339,10 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         self._tail_events: int = 10
         self._max_event_chars: int = 200
 
+        # Throttle settings for odds updates (at most once per cooldown period)
+        self._odds_update_cooldown = timedelta(minutes=3)
+        self._last_odds_update_time: datetime | None = None
+
     @property
     def name(self) -> str:
         """Agent name from the internal ReActAgent."""
@@ -623,6 +628,47 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         return "\n".join(lines)
 
+    def _filter_throttled_events(
+        self, events: list[StreamEvent[Any]]
+    ) -> list[StreamEvent[Any]]:
+        """Filter out events that should be throttled.
+
+        Currently throttles ODDS_UPDATE events to at most once per cooldown period.
+
+        Args:
+            events: List of events to filter
+
+        Returns:
+            Filtered list of events (throttled events removed)
+        """
+        now = datetime.now(timezone.utc)
+        filtered: list[StreamEvent[Any]] = []
+
+        for event in events:
+            payload = event.payload
+
+            # Check if this is an OddsUpdateEvent that should be throttled
+            if isinstance(payload, DataEvent):
+                event_type = getattr(payload, "event_type", None)
+                if event_type == EventTypes.ODDS_UPDATE:
+                    if (
+                        self._last_odds_update_time
+                        and (now - self._last_odds_update_time)
+                        < self._odds_update_cooldown
+                    ):
+                        logger.debug(
+                            "agent '%s' throttling odds_update (last update: %s ago)",
+                            self.actor_id,
+                            now - self._last_odds_update_time,
+                        )
+                        continue  # Skip this event
+                    # Update last processed time
+                    self._last_odds_update_time = now
+
+            filtered.append(event)
+
+        return filtered
+
     async def _process_events(self, events: list[StreamEvent[Any]]) -> None:
         """Process a batch of events.
 
@@ -630,6 +676,12 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             events: List of events to process together
         """
         if not events:
+            return
+
+        # Apply throttling filter BEFORE any processing
+        events = self._filter_throttled_events(events)
+        if not events:
+            logger.debug("agent '%s' all events throttled, skipping", self.actor_id)
             return
 
         # Update event count
@@ -713,7 +765,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             response_message = AgentResponseMessage(
                 sequence=self._event_count,
                 stream_id=primary_stream_id,
-                name=self.name,
+                agent_id=self.actor_id,
                 content=text_content,
                 cot_steps=cot_steps,
                 trigger=trigger,

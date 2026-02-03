@@ -13,6 +13,7 @@ scenario:
       - injury_report
       - power_ranking
       - expert_prediction
+      - pregame_stats
 
     # Game lifecycle
     - id: game_lifecycle_stream
