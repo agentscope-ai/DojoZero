@@ -392,7 +392,7 @@ def deserialize_span(span: SpanData) -> SpanModel | None:
     if op in _AGENT_MESSAGE_OPS:
         return _deserialize_agent_message(span)
 
-    if op == "broker.state_update":
+    if op in ["broker.state_update","broker.bet"]:
         return _deserialize_broker_state(span)
 
     if op.endswith(".registered"):
