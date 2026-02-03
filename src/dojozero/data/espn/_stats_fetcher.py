@@ -455,17 +455,22 @@ def _parse_schedule_density(
 
         game_dt = datetime.strptime(game_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
-        # Days rest = days since last completed game
+        # Days since last completed game and actual rest days
         last_game_date_str = completed[-1].get("date", "")[:10]
         if last_game_date_str:
             last_game_dt = datetime.strptime(last_game_date_str, "%Y-%m-%d").replace(
                 tzinfo=timezone.utc
             )
-            days_rest = (game_dt - last_game_dt).days
+            days_since_last_game = (game_dt - last_game_dt).days
+            # Actual rest days = days between games minus 1
+            # (Feb 1 → Feb 3 = 2 days apart = 1 rest day)
+            days_rest = max(0, days_since_last_game - 1)
         else:
+            days_since_last_game = 0
             days_rest = 0
 
-        is_b2b = days_rest <= 1
+        # Back-to-back = games on consecutive days (1 day apart, 0 rest days)
+        is_b2b = days_since_last_game == 1
 
         # Count games in last 7 and 14 days (before game_date)
         games_7 = 0
