@@ -82,11 +82,27 @@ class VenueInfo(BaseModel):
     city: str = ""
     state: str = ""
     indoor: bool = True
+    timezone: str = ""  # IANA timezone (e.g., "America/New_York")
 
     @field_validator("venue_id", mode="before")
     @classmethod
     def coerce_venue_id(cls, v: Any) -> str:
         return str(v) if v is not None else ""
+
+    @field_validator("timezone", mode="before")
+    @classmethod
+    def derive_timezone(cls, v: Any, info: Any) -> str:
+        """Derive timezone from state if not explicitly provided."""
+        if v:
+            return str(v)
+        # Get state from the data being validated
+        data = info.data if hasattr(info, "data") else {}
+        state = data.get("state", "")
+        if state:
+            from dojozero.data._models import get_timezone_for_state
+
+            return get_timezone_for_state(state)
+        return "America/New_York"  # Default to Eastern
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(by_alias=False)

@@ -270,6 +270,7 @@ class NBAStore(DataStore):
                                         city=game_info.venue.city,
                                         state=game_info.venue.state,
                                         indoor=game_info.venue.indoor,
+                                        timezone=game_info.venue.timezone,
                                     ),
                                     game_time=game_info.game_time_utc or timestamp,
                                     broadcast=game_info.broadcast,
@@ -444,6 +445,7 @@ class NBAStore(DataStore):
                                     city=game_info.venue.city,
                                     state=game_info.venue.state,
                                     indoor=game_info.venue.indoor,
+                                    timezone=game_info.venue.timezone,
                                 )
                                 broadcast = game_info.broadcast
                                 season_year = game_info.season_year

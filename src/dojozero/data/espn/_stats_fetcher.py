@@ -12,6 +12,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from dojozero.utils.time import utc_iso_to_local_date
+
 from dojozero.data._models import (
     HomeAwaySplits,
     ScheduleDensity,
@@ -26,6 +28,7 @@ from dojozero.data.espn._stats_events import PreGameStatsEvent
 from dojozero.data.espn._utils import safe_score
 
 logger = logging.getLogger(__name__)
+
 
 # Per-sport defaults for pregame stats.
 # NBA plays 3-4 games/week; 10 recent games ≈ 2-3 weeks.
@@ -52,6 +55,7 @@ async def fetch_pregame_stats(
     season_type: str,
     home_team_name: str = "",
     away_team_name: str = "",
+    venue_timezone: str = "",
 ) -> PreGameStatsEvent:
     """Fetch all pre-game stats from ESPN and build a PreGameStatsEvent.
 
@@ -64,12 +68,14 @@ async def fetch_pregame_stats(
         home_team_id: ESPN team ID for the home team.
         away_team_id: ESPN team ID for the away team.
         game_id: ESPN event/game ID.
-        game_date: Game date in YYYY-MM-DD format.
+        game_date: Game date in YYYY-MM-DD format (in venue local time).
         sport: Sport identifier ("nba", "nfl").
         season_year: Season year (e.g., 2025).
         season_type: Season type ("regular", "postseason", "preseason").
         home_team_name: Full home team name (for display).
         away_team_name: Full away team name (for display).
+        venue_timezone: IANA timezone of the venue (e.g., "America/New_York").
+            Used to convert UTC timestamps to local dates. Defaults to US Eastern.
 
     Returns:
         PreGameStatsEvent with all available sections populated.
@@ -138,20 +144,38 @@ async def fetch_pregame_stats(
     # Parse each section independently
     recent_form_n = _RECENT_FORM_GAMES.get(sport, 10)
 
+    # Use venue timezone for date conversions (defaults to US Eastern if not specified)
+    tz = venue_timezone
+
     season_series = _parse_season_series(
-        home_schedule_raw, home_team_id, away_team_id, home_team_name, away_team_name
+        home_schedule_raw,
+        home_team_id,
+        away_team_id,
+        home_team_name,
+        away_team_name,
+        tz,
     )
     home_recent_form = _parse_recent_form(
-        home_schedule_raw, home_team_id, home_team_name, game_date, last_n=recent_form_n
+        home_schedule_raw,
+        home_team_id,
+        home_team_name,
+        game_date,
+        tz,
+        last_n=recent_form_n,
     )
     away_recent_form = _parse_recent_form(
-        away_schedule_raw, away_team_id, away_team_name, game_date, last_n=recent_form_n
+        away_schedule_raw,
+        away_team_id,
+        away_team_name,
+        game_date,
+        tz,
+        last_n=recent_form_n,
     )
     home_schedule = _parse_schedule_density(
-        home_schedule_raw, home_team_id, home_team_name, game_date
+        home_schedule_raw, home_team_id, home_team_name, game_date, tz
     )
     away_schedule = _parse_schedule_density(
-        away_schedule_raw, away_team_id, away_team_name, game_date
+        away_schedule_raw, away_team_id, away_team_name, game_date, tz
     )
     home_team_stats = _parse_team_statistics(
         home_stats_raw, home_team_id, home_team_name
@@ -160,10 +184,10 @@ async def fetch_pregame_stats(
         away_stats_raw, away_team_id, away_team_name
     )
     home_splits = _parse_home_away_splits(
-        home_schedule_raw, home_team_id, home_team_name, game_date
+        home_schedule_raw, home_team_id, home_team_name, game_date, tz
     )
     away_splits = _parse_home_away_splits(
-        away_schedule_raw, away_team_id, away_team_name, game_date
+        away_schedule_raw, away_team_id, away_team_name, game_date, tz
     )
     home_players = _parse_player_stats(
         home_roster_raw, home_leaders_raw, home_team_id, home_team_name, sport
@@ -235,17 +259,24 @@ async def _safe_fetch(
         return {}
 
 
-def _get_completed_events(raw: dict[str, Any], game_date: str) -> list[dict[str, Any]]:
+def _get_completed_events(
+    raw: dict[str, Any], game_date: str, tz: str = ""
+) -> list[dict[str, Any]]:
     """Extract completed game events from a team schedule response.
 
     Only includes games before ``game_date`` that have a final status.
+
+    Args:
+        raw: Raw schedule response from ESPN API.
+        game_date: Game date in YYYY-MM-DD format (local time).
+        tz: IANA timezone for date conversion (defaults to US Eastern).
     """
     schedule = raw.get("team_schedule", {})
     events: list[dict[str, Any]] = schedule.get("events", [])
     completed = []
     for ev in events:
         # Skip events on or after game_date
-        ev_date = ev.get("date", "")[:10]  # "2025-01-15T..."  → "2025-01-15"
+        ev_date = utc_iso_to_local_date(ev.get("date", ""), tz)
         if ev_date >= game_date:
             continue
         # Only include completed games (status.type.completed == true)
@@ -287,6 +318,7 @@ def _parse_season_series(
     away_team_id: str,
     home_team_name: str,  # noqa: ARG001
     away_team_name: str,  # noqa: ARG001
+    tz: str = "",
 ) -> SeasonSeries | None:
     """Parse season series (H2H this season) from home team schedule."""
     try:
@@ -324,7 +356,7 @@ def _parse_season_series(
 
             games.append(
                 {
-                    "date": ev.get("date", "")[:10],
+                    "date": utc_iso_to_local_date(ev.get("date", ""), tz),
                     "home_score": team_score
                     if team_comp and team_comp.get("homeAway") == "home"
                     else opp_score,
@@ -354,11 +386,12 @@ def _parse_recent_form(
     team_id: str,
     team_name: str,
     game_date: str,
+    tz: str = "",
     last_n: int = 10,
 ) -> TeamRecentForm | None:
     """Parse recent form (last N completed games) for a team."""
     try:
-        completed = _get_completed_events(schedule_raw, game_date)
+        completed = _get_completed_events(schedule_raw, game_date, tz)
         # Sort by date descending and take last N
         completed.sort(key=lambda e: e.get("date", ""), reverse=True)
         recent = completed[:last_n]
@@ -413,7 +446,7 @@ def _parse_recent_form(
 
             games.append(
                 {
-                    "date": ev.get("date", "")[:10],
+                    "date": utc_iso_to_local_date(ev.get("date", ""), tz),
                     "opponent": opp_name,
                     "score": f"{team_score}-{opp_score}",
                     "result": result,
@@ -443,10 +476,11 @@ def _parse_schedule_density(
     team_id: str,
     team_name: str,
     game_date: str,
+    tz: str = "",
 ) -> ScheduleDensity | None:
     """Parse schedule density (rest days, back-to-back, games in last 7/14 days)."""
     try:
-        completed = _get_completed_events(schedule_raw, game_date)
+        completed = _get_completed_events(schedule_raw, game_date, tz)
         if not completed:
             return None
 
@@ -456,7 +490,7 @@ def _parse_schedule_density(
         game_dt = datetime.strptime(game_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
         # Days since last completed game and actual rest days
-        last_game_date_str = completed[-1].get("date", "")[:10]
+        last_game_date_str = utc_iso_to_local_date(completed[-1].get("date", ""), tz)
         if last_game_date_str:
             last_game_dt = datetime.strptime(last_game_date_str, "%Y-%m-%d").replace(
                 tzinfo=timezone.utc
@@ -476,7 +510,7 @@ def _parse_schedule_density(
         games_7 = 0
         games_14 = 0
         for ev in completed:
-            ev_date_str = ev.get("date", "")[:10]
+            ev_date_str = utc_iso_to_local_date(ev.get("date", ""), tz)
             if not ev_date_str:
                 continue
             ev_dt = datetime.strptime(ev_date_str, "%Y-%m-%d").replace(
@@ -555,10 +589,11 @@ def _parse_home_away_splits(
     team_id: str,
     team_name: str,
     game_date: str,
+    tz: str = "",
 ) -> HomeAwaySplits | None:
     """Parse home/away record and stats from team schedule."""
     try:
-        completed = _get_completed_events(schedule_raw, game_date)
+        completed = _get_completed_events(schedule_raw, game_date, tz)
         if not completed:
             return None
 

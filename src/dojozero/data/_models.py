@@ -86,6 +86,87 @@ class TeamIdentity(BaseModel):
         return bool(self.name)
 
 
+# US state abbreviation to IANA timezone mapping for NBA/NFL venues
+US_STATE_TO_TIMEZONE: dict[str, str] = {
+    # Eastern Time (UTC-5 / UTC-4 DST)
+    "NY": "America/New_York",
+    "MA": "America/New_York",
+    "FL": "America/New_York",
+    "GA": "America/New_York",
+    "NC": "America/New_York",
+    "SC": "America/New_York",
+    "OH": "America/New_York",
+    "IN": "America/Indiana/Indianapolis",
+    "MI": "America/Detroit",
+    "PA": "America/New_York",
+    "DC": "America/New_York",
+    "MD": "America/New_York",
+    "VA": "America/New_York",
+    "NJ": "America/New_York",
+    "CT": "America/New_York",
+    "RI": "America/New_York",
+    "NH": "America/New_York",
+    "VT": "America/New_York",
+    "ME": "America/New_York",
+    "DE": "America/New_York",
+    "WV": "America/New_York",
+    "KY": "America/New_York",
+    # Central Time (UTC-6 / UTC-5 DST)
+    "IL": "America/Chicago",
+    "TX": "America/Chicago",
+    "MN": "America/Chicago",
+    "WI": "America/Chicago",
+    "TN": "America/Chicago",
+    "OK": "America/Chicago",
+    "LA": "America/Chicago",
+    "MO": "America/Chicago",
+    "AR": "America/Chicago",
+    "MS": "America/Chicago",
+    "AL": "America/Chicago",
+    "IA": "America/Chicago",
+    "KS": "America/Chicago",
+    "NE": "America/Chicago",
+    "SD": "America/Chicago",
+    "ND": "America/Chicago",
+    # Mountain Time (UTC-7 / UTC-6 DST)
+    "CO": "America/Denver",
+    "UT": "America/Denver",
+    "AZ": "America/Phoenix",  # No DST
+    "NM": "America/Denver",
+    "MT": "America/Denver",
+    "WY": "America/Denver",
+    "ID": "America/Boise",
+    # Pacific Time (UTC-8 / UTC-7 DST)
+    "CA": "America/Los_Angeles",
+    "OR": "America/Los_Angeles",
+    "WA": "America/Los_Angeles",
+    "NV": "America/Los_Angeles",
+    # Alaska/Hawaii (rare for major sports)
+    "AK": "America/Anchorage",
+    "HI": "Pacific/Honolulu",
+}
+
+# Default timezone when state is unknown
+DEFAULT_TIMEZONE = "America/New_York"
+
+
+def get_timezone_for_state(state: str) -> str:
+    """Get IANA timezone for a US state abbreviation.
+
+    Args:
+        state: Two-letter US state abbreviation (e.g., "NY", "CA").
+
+    Returns:
+        IANA timezone string (e.g., "America/New_York").
+        Defaults to America/New_York if state is unknown.
+    """
+    return (
+        US_STATE_TO_TIMEZONE.get(state.upper(), DEFAULT_TIMEZONE)
+        if state
+        else DEFAULT_TIMEZONE
+    )
+
+
 class VenueInfo(BaseModel):
     """Venue/stadium information."""
 
@@ -96,6 +177,7 @@ class VenueInfo(BaseModel):
     city: str = ""
     state: str = ""
     indoor: bool = True
+    timezone: str = ""  # IANA timezone (e.g., "America/New_York")
 
 
 class MoneylineOdds(BaseModel):

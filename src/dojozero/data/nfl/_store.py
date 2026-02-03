@@ -19,6 +19,7 @@ from dojozero.data._models import (
     SpreadOdds,
     TeamIdentity,
     VenueInfo,
+    get_timezone_for_state,
 )
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.nfl._api import NFLExternalAPI
@@ -320,6 +321,9 @@ class NFLStore(DataStore):
                             city=venue_address.get("city", ""),
                             state=venue_address.get("state", ""),
                             indoor=venue_data.get("indoor", True),
+                            timezone=get_timezone_for_state(
+                                venue_address.get("state", "")
+                            ),
                         ),
                         game_time=game_time,
                         broadcast=broadcast,
