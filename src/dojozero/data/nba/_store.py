@@ -270,6 +270,7 @@ class NBAStore(DataStore):
                                         city=game_info.venue.city,
                                         state=game_info.venue.state,
                                         indoor=game_info.venue.indoor,
+                                        timezone=game_info.venue.timezone,
                                     ),
                                     game_time=game_info.game_time_utc or timestamp,
                                     broadcast=game_info.broadcast,
@@ -286,6 +287,17 @@ class NBAStore(DataStore):
                         game_id,
                         e,
                     )
+
+            # Check for game conclusion from boxscore status (STATUS_FINAL)
+            # This allows detecting game end even before PBP processes the "End Game" action
+            status_data = boxscore_data.get("status", {})
+            status_type = status_data.get("statusType", "")
+            if status_type == "STATUS_FINAL":
+                # Mark game as concluded in state tracker if not already
+                if not self._state.is_game_concluded(game_id):
+                    self._state.set_previous_status(
+                        game_id, self._state.STATUS_FINAL
+                    )  # STATUS_FINAL
 
             # Skip emitting game updates if game is concluded and we've already emitted the final update
             game_concluded = self._state.is_game_concluded(game_id)
@@ -308,65 +320,82 @@ class NBAStore(DataStore):
                 # Extract all player stats from BoxScore (pass through raw data)
                 player_stats = self._extract_player_stats_from_boxscore(boxscore_data)
 
-                # Get latest period/clock from play-by-play state tracker
-                # (boxscore endpoint doesn't carry period/clock reliably)
+                # Get latest period/clock from play-by-play state tracker.
+                # The state tracker only stores valid values (period > 0), so this
+                # returns the last valid period/clock even if API returns invalid data.
+                # For concluded games with no PBP data yet, default to period 4
+                # (NBA regulation). OT games will be corrected when PBP is processed.
                 period = self._state.get_current_period(game_id)
                 game_clock = self._state.get_current_clock(game_id)
-                # Game time from header status (if available)
-                status_data = boxscore_data.get("status", {})
-                game_time_utc = status_data.get("date", "") or ""
+                if not period and game_concluded:
+                    period = 4  # NBA regulation
+                    game_clock = "0:00"
 
-                # Emit GameUpdateEvent with complete BoxScore data
-                # Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay
-                events.append(
-                    NBAGameUpdateEvent(
-                        timestamp=timestamp,
-                        game_id=game_id,
-                        sport="nba",
-                        period=period,
-                        game_clock=game_clock,
-                        game_time_utc=game_time_utc,
-                        home_score=home_score,
-                        away_score=away_score,
-                        home_team_stats=NBATeamGameStats(
-                            team_id=home_team_data.get("teamId", 0),
-                            team_name=home_team_data.get("teamName", ""),
-                            team_city=home_team_data.get("teamCity", ""),
-                            team_tricode=home_team_data.get("teamTricode", ""),
-                            score=home_score,
-                        ),
-                        away_team_stats=NBATeamGameStats(
-                            team_id=away_team_data.get("teamId", 0),
-                            team_name=away_team_data.get("teamName", ""),
-                            team_city=away_team_data.get("teamCity", ""),
-                            team_tricode=away_team_data.get("teamTricode", ""),
-                            score=away_score,
-                        ),
-                        player_stats=NBAGamePlayerStats(
-                            home=[
-                                NBAPlayerStats(
-                                    player_id=p.get("personId", 0),
-                                    name=p.get("name", ""),
-                                    position=p.get("position", ""),
-                                    statistics=p.get("statistics", {}),
-                                )
-                                for p in player_stats.get("home", [])
-                            ],
-                            away=[
-                                NBAPlayerStats(
-                                    player_id=p.get("personId", 0),
-                                    name=p.get("name", ""),
-                                    position=p.get("position", ""),
-                                    statistics=p.get("statistics", {}),
-                                )
-                                for p in player_stats.get("away", [])
-                            ],
-                        ),
+                # Skip emission if period is still 0 after fallback and game had PBP
+                # tracking active. This prevents post-game garbage data from being emitted.
+                # Note: If PBP was never available, period=0 is expected (pre-game or boxscore-only).
+                if not period and self._state.is_pbp_available(game_id):
+                    logger.debug(
+                        "Skipping game update with invalid period=0 for game %s "
+                        "(PBP was available, scores: %d-%d)",
+                        game_id,
+                        home_score,
+                        away_score,
                     )
-                )
-                # Mark final update as emitted if game is concluded
-                if game_concluded:
-                    self._state.mark_final_update_emitted(game_id)
+                else:
+                    game_time_utc = status_data.get("date", "") or ""
+
+                    # Emit GameUpdateEvent with complete BoxScore data
+                    # Note: Game status (start/end) is handled by GameStartEvent and GameResultEvent from PlayByPlay
+                    events.append(
+                        NBAGameUpdateEvent(
+                            timestamp=timestamp,
+                            game_id=game_id,
+                            sport="nba",
+                            period=period,
+                            game_clock=game_clock,
+                            game_time_utc=game_time_utc,
+                            home_score=home_score,
+                            away_score=away_score,
+                            home_team_stats=NBATeamGameStats(
+                                team_id=home_team_data.get("teamId", 0),
+                                team_name=home_team_data.get("teamName", ""),
+                                team_city=home_team_data.get("teamCity", ""),
+                                team_tricode=home_team_data.get("teamTricode", ""),
+                                score=home_score,
+                            ),
+                            away_team_stats=NBATeamGameStats(
+                                team_id=away_team_data.get("teamId", 0),
+                                team_name=away_team_data.get("teamName", ""),
+                                team_city=away_team_data.get("teamCity", ""),
+                                team_tricode=away_team_data.get("teamTricode", ""),
+                                score=away_score,
+                            ),
+                            player_stats=NBAGamePlayerStats(
+                                home=[
+                                    NBAPlayerStats(
+                                        player_id=p.get("personId", 0),
+                                        name=p.get("name", ""),
+                                        position=p.get("position", ""),
+                                        statistics=p.get("statistics", {}),
+                                    )
+                                    for p in player_stats.get("home", [])
+                                ],
+                                away=[
+                                    NBAPlayerStats(
+                                        player_id=p.get("personId", 0),
+                                        name=p.get("name", ""),
+                                        position=p.get("position", ""),
+                                        statistics=p.get("statistics", {}),
+                                    )
+                                    for p in player_stats.get("away", [])
+                                ],
+                            ),
+                        )
+                    )
+                    # Mark final update as emitted if game is concluded
+                    if game_concluded:
+                        self._state.mark_final_update_emitted(game_id)
 
                 # Also emit GameInitializeEvent if not already emitted (when data becomes available)
                 if not self._state.is_game_initialized(game_id):
@@ -418,6 +447,7 @@ class NBAStore(DataStore):
                                     city=game_info.venue.city,
                                     state=game_info.venue.state,
                                     indoor=game_info.venue.indoor,
+                                    timezone=game_info.venue.timezone,
                                 )
                                 broadcast = game_info.broadcast
                                 season_year = game_info.season_year
@@ -655,8 +685,7 @@ class NBAStore(DataStore):
 
         events = []
 
-        # Poll boxscore data (for complete game updates with all leaders)
-        # Check if enough time has passed since last poll
+        # Poll boxscore data first (for game_initialize and game updates)
         if identifier and "espn_game_id" in identifier:
             if self._should_poll_endpoint("boxscore"):
                 espn_game_id = identifier["espn_game_id"]
@@ -676,7 +705,6 @@ class NBAStore(DataStore):
                     self._record_poll_time("boxscore")
 
         # Poll play-by-play events (for all PBP events and game status detection)
-        # Check if enough time has passed since last poll
         if identifier and "espn_game_id" in identifier:
             if self._should_poll_endpoint("play_by_play"):
                 espn_game_id = identifier["espn_game_id"]

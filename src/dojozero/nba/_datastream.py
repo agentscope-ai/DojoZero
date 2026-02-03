@@ -69,6 +69,7 @@ class NBAPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
     away_team_id: str  # ESPN team ID for away team
     season_year: int
     season_type: str
+    venue_timezone: str  # IANA timezone for venue (e.g., "America/New_York")
 
 
 class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
@@ -249,6 +250,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
                     season_type=ctx.season_type,
                     home_team_name=ctx.home_team,
                     away_team_name=ctx.away_team,
+                    venue_timezone=ctx.venue_timezone,
                 ),
                 timeout=self._STATS_FETCH_TIMEOUT,
             )
@@ -309,6 +311,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
                 away_team_id=config.get("away_team_id", ""),
                 season_year=config.get("season_year", 0),
                 season_type=config.get("season_type", ""),
+                venue_timezone=config.get("venue_timezone", ""),
             )
 
         if ws_event_types:

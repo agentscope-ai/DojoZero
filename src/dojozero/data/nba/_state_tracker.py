@@ -60,9 +60,15 @@ class GameStateTracker(BaseGameStateTracker):
         self._boxscore_leaders_cache[game_id] = leaders
 
     def update_game_clock(self, game_id: str, period: int, clock: str) -> None:
-        """Update the latest period and clock from play-by-play."""
-        self._current_period[game_id] = period
-        self._current_clock[game_id] = clock
+        """Update the latest period and clock from play-by-play.
+
+        Only updates when period > 0 to preserve last valid state.
+        This prevents invalid period=0/clock="" data from overwriting
+        valid game state after game conclusion.
+        """
+        if period > 0:
+            self._current_period[game_id] = period
+            self._current_clock[game_id] = clock
 
     def get_current_period(self, game_id: str) -> int:
         """Get latest period from play-by-play."""

@@ -16,6 +16,7 @@ class NFLGameStateTracker(BaseGameStateTracker):
     - _last_odds: Cache last odds to detect changes
     - _current_drive: Track current drive ID per game
     - _starters: Game-day starters per team
+    - _last_valid_clock: Last valid game clock per game (to handle post-game invalid data)
     """
 
     def __init__(self) -> None:
@@ -26,6 +27,29 @@ class NFLGameStateTracker(BaseGameStateTracker):
         self._current_drive: dict[str, str] = {}
         # key = "{event_id}_{team_id}" -> list of starters
         self._starters: dict[str, list[PlayerIdentity]] = {}
+        # Track last valid game clock per game
+        self._last_valid_clock: dict[str, str] = {}
+
+    # -- Period/clock tracking ------------------------------------------------
+
+    def update_game_clock(self, event_id: str, period: int, clock: str) -> None:
+        """Update the latest period and clock from summary.
+
+        Only updates when period > 0 to preserve last valid state.
+        This prevents invalid period=0/clock="" data from overwriting
+        valid game state after game conclusion.
+        """
+        if period > 0:
+            self._current_period[event_id] = period
+            self._last_valid_clock[event_id] = clock
+
+    def get_last_valid_period(self, event_id: str) -> int:
+        """Get last valid period (quarter) for game."""
+        return self._current_period.get(event_id, 0)
+
+    def get_last_valid_clock(self, event_id: str) -> str:
+        """Get last valid game clock for game."""
+        return self._last_valid_clock.get(event_id, "")
 
     # -- Drive deduplication --------------------------------------------------
 

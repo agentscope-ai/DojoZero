@@ -19,6 +19,7 @@ from dojozero.data._models import (
     SpreadOdds,
     TeamIdentity,
     VenueInfo,
+    get_timezone_for_state,
 )
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.nfl._api import NFLExternalAPI
@@ -320,6 +321,9 @@ class NFLStore(DataStore):
                             city=venue_address.get("city", ""),
                             state=venue_address.get("state", ""),
                             indoor=venue_data.get("indoor", True),
+                            timezone=get_timezone_for_state(
+                                venue_address.get("state", "")
+                            ),
                         ),
                         game_time=game_time,
                         broadcast=broadcast,
@@ -471,7 +475,22 @@ class NFLStore(DataStore):
 
                 # Extract game state from status
                 quarter = int(status.get("period", 0) or 0)
-                game_clock = status.get("displayClock", "")
+                game_clock = status.get("displayClock", "") or ""
+
+                # Track valid period/clock in state tracker (only updates if period > 0)
+                # This preserves the last valid state for use as fallback
+                self._state.update_game_clock(event_id, quarter, game_clock)
+
+                # If API returned invalid period (0), try to use last valid values
+                if not quarter:
+                    last_valid_period = self._state.get_last_valid_period(event_id)
+                    if last_valid_period > 0:
+                        quarter = last_valid_period
+                        game_clock = self._state.get_last_valid_clock(event_id)
+                    elif game_concluded:
+                        # Fallback for concluded games with no PBP history
+                        quarter = 4  # NFL regulation
+                        game_clock = "0:00"
 
                 # Get possession and down info from situation
                 situation = data.get("situation", {}) or {}
@@ -533,46 +552,58 @@ class NFLStore(DataStore):
 
                 # Only emit update if we should (skip duplicates for concluded games)
                 if should_emit_update:
-                    # Build structured team stats from raw dicts
-                    home_stats = (
-                        NFLTeamGameStats.from_espn_api(home_team_dict)
-                        if home_team_dict
-                        else NFLTeamGameStats()
-                    )
-                    away_stats = (
-                        NFLTeamGameStats.from_espn_api(away_team_dict)
-                        if away_team_dict
-                        else NFLTeamGameStats()
-                    )
-                    events.append(
-                        NFLGameUpdateEvent(
-                            timestamp=timestamp,
-                            game_timestamp=self._compute_game_timestamp(
-                                quarter, game_clock
-                            ),
-                            game_id=event_id,
-                            sport="nfl",
-                            period=quarter,
-                            game_clock=game_clock,
-                            home_score=home_team_dict.get("score", 0)
-                            if home_team_dict
-                            else 0,
-                            away_score=away_team_dict.get("score", 0)
-                            if away_team_dict
-                            else 0,
-                            possession=possession_team,
-                            down=down,
-                            distance=distance,
-                            yard_line=yard_line,
-                            home_team_stats=home_stats,
-                            away_team_stats=away_stats,
-                            home_line_scores=home_line_scores,
-                            away_line_scores=away_line_scores,
+                    # Skip emission if period is still 0 after fallback and game had started.
+                    # This prevents post-game garbage data from being emitted.
+                    # Note: If game hasn't started, period=0 is expected (pre-game state).
+                    if not quarter and self._state.has_game_started(event_id):
+                        logger.debug(
+                            "Skipping game update with invalid period=0 for game %s "
+                            "(game started, scores: %d-%d)",
+                            event_id,
+                            home_score,
+                            away_score,
                         )
-                    )
-                    # Mark final update as emitted if game is concluded
-                    if game_concluded:
-                        self._state.mark_final_update_emitted(event_id)
+                    else:
+                        # Build structured team stats from raw dicts
+                        home_stats = (
+                            NFLTeamGameStats.from_espn_api(home_team_dict)
+                            if home_team_dict
+                            else NFLTeamGameStats()
+                        )
+                        away_stats = (
+                            NFLTeamGameStats.from_espn_api(away_team_dict)
+                            if away_team_dict
+                            else NFLTeamGameStats()
+                        )
+                        events.append(
+                            NFLGameUpdateEvent(
+                                timestamp=timestamp,
+                                game_timestamp=self._compute_game_timestamp(
+                                    quarter, game_clock
+                                ),
+                                game_id=event_id,
+                                sport="nfl",
+                                period=quarter,
+                                game_clock=game_clock,
+                                home_score=home_team_dict.get("score", 0)
+                                if home_team_dict
+                                else 0,
+                                away_score=away_team_dict.get("score", 0)
+                                if away_team_dict
+                                else 0,
+                                possession=possession_team,
+                                down=down,
+                                distance=distance,
+                                yard_line=yard_line,
+                                home_team_stats=home_stats,
+                                away_team_stats=away_stats,
+                                home_line_scores=home_line_scores,
+                                away_line_scores=away_line_scores,
+                            )
+                        )
+                        # Mark final update as emitted if game is concluded
+                        if game_concluded:
+                            self._state.mark_final_update_emitted(event_id)
 
         # Parse drives
         drives = data.get("drives", {}) or {}

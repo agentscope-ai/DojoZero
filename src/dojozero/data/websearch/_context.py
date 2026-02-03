@@ -22,6 +22,7 @@ class GameContext:
     away_team_id: str = ""  # ESPN team ID for away team
     season_year: int = 0
     season_type: str = ""  # "regular", "postseason", "preseason"
+    venue_timezone: str = ""  # IANA timezone (e.g., "America/New_York")
 
     @property
     def teams(self) -> str:
