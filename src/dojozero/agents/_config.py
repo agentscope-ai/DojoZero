@@ -31,6 +31,9 @@ class LLMConfig(TypedDict, total=False):
     api_key_env: str
     base_url_env: str
     max_tokens: int  # Max tokens for response generation (default: 16384)
+    # Display fields for agent registration
+    model_display_name: str  # Human-readable model name (e.g., "qwen", "claude")
+    cdn_url: str  # Avatar image URL for the model
 
 
 class PersonaConfig(TypedDict):
@@ -79,6 +82,11 @@ def _parse_llm_config(llm_data: dict[str, Any]) -> LLMConfig:
         llm_config["base_url_env"] = llm_data["base_url_env"]
     if "max_tokens" in llm_data:
         llm_config["max_tokens"] = llm_data["max_tokens"]
+    # Parse display fields for agent registration
+    if "model_display_name" in llm_data:
+        llm_config["model_display_name"] = llm_data["model_display_name"]
+    if "cdn_url" in llm_data:
+        llm_config["cdn_url"] = llm_data["cdn_url"]
     return llm_config
 
 

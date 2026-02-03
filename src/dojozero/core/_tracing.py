@@ -96,12 +96,15 @@ class TraceReader(Protocol):
         self,
         trial_id: str,
         start_time: datetime | None = None,
+        operation_names: list[str] | None = None,
     ) -> list[SpanData]:
         """Get spans for a trial.
 
         Args:
             trial_id: The trial ID to get spans for.
             start_time: If provided, only return spans with start_time > this value.
+            operation_names: If provided, only return spans with operation_name in this list.
+                             Exact match with OR logic. None means no filtering.
         """
         ...
 
@@ -187,6 +190,7 @@ class JaegerTraceReader:
         self,
         trial_id: str,
         start_time: datetime | None = None,
+        operation_names: list[str] | None = None,
     ) -> list[SpanData]:
         """Get spans for a trial from Jaeger.
 
@@ -194,7 +198,30 @@ class JaegerTraceReader:
             trial_id: The trial ID to get spans for.
             start_time: If provided, only return spans with start_time > this value
                         (filtered client-side as Jaeger API doesn't support this).
+            operation_names: If provided, only return spans with operation_name in this list.
+                             Makes separate requests per operation and merges results.
         """
+        # If operation_names is provided, make separate requests and merge
+        if operation_names:
+            all_spans: list[SpanData] = []
+            for op_name in operation_names:
+                spans = await self._get_spans_for_operation(
+                    trial_id, start_time, op_name
+                )
+                all_spans.extend(spans)
+            # Sort by start time
+            all_spans.sort(key=lambda s: s.start_time)
+            return all_spans
+        else:
+            return await self._get_spans_for_operation(trial_id, start_time, None)
+
+    async def _get_spans_for_operation(
+        self,
+        trial_id: str,
+        start_time: datetime | None,
+        operation_name: str | None,
+    ) -> list[SpanData]:
+        """Get spans for a trial with optional single operation filter."""
         tags_json = json.dumps({"dojozero.trial.id": trial_id})
 
         # Calculate time range for the query (default: last 30 days to now)
@@ -210,6 +237,10 @@ class JaegerTraceReader:
             "end": end_us,
             "limit": 1000,
         }
+
+        # Add operation filter if specified
+        if operation_name:
+            params["operation"] = operation_name
 
         response = await self._client.get(
             f"{self._base_url}/api/traces",
@@ -417,10 +448,9 @@ class SLSTraceReader:
             start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
 
         # SLS query for trial.started spans
-        # Note: __source__ is the SLS system field (from PutLogsRequest.source)
-        # Content fields like _operation_name are stored as log content
+        # Note: Infrastructure fields use _ prefix (_service, _operation_name, _trace_id)
         query = (
-            f"__source__:{self._service_name} AND "
+            f'_service:"{self._service_name}" AND '
             f'_operation_name:"trial.started" | '
             f"SELECT DISTINCT _trace_id as trial_id LIMIT {limit}"
         )
@@ -469,12 +499,15 @@ class SLSTraceReader:
         self,
         trial_id: str,
         start_time: datetime | None = None,
+        operation_names: list[str] | None = None,
     ) -> list[SpanData]:
         """Get spans for a trial from SLS.
 
         Args:
             trial_id: The trial ID to get spans for.
             start_time: If provided, only return spans after this time.
+            operation_names: If provided, only return spans with operation_name in this list.
+                             Exact match with OR logic. None means no filtering.
 
         Returns:
             List of SpanData sorted by start time.
@@ -488,10 +521,16 @@ class SLSTraceReader:
             from_time = start_time
 
         # SLS query for spans with specific trial_id
-        # Note: __source__ is the SLS system field (from PutLogsRequest.source)
-        # _trace_id is a content field
-        # Use simple search query (no SQL) to get raw log entries with all fields
-        query = f'__source__:{self._service_name} AND _trace_id:"{trial_id}"'
+        # Note: _trace_id contains the trial_id
+        # Simple search query without SQL - results are returned in time order by default
+        query = f'_service:"{self._service_name}" AND _trace_id:"{trial_id}"'
+
+        # Add operation_names filter with OR logic if specified
+        if operation_names:
+            op_conditions = " OR ".join(
+                f'_operation_name:"{op}"' for op in operation_names
+            )
+            query = f"{query} AND ({op_conditions})"
 
         resource = f"/logstores/{self._logstore}"
         url = f"{self._get_base_url()}{resource}"
@@ -603,31 +642,6 @@ class SLSTraceReader:
         - Infrastructure tags with _ prefix (_actor_id, _sequence)
         """
         try:
-            # Debug: log first few rows to understand the data format
-            if not hasattr(self, "_debug_logged"):
-                self._debug_logged = True
-                LOGGER.info(
-                    "SLS row sample (first row): all_keys=%s",
-                    sorted(row.keys()),
-                )
-                # Log a few event_ fields if present
-                event_fields = {k: v for k, v in row.items() if k.startswith("event_")}
-                if event_fields:
-                    LOGGER.info(
-                        "SLS event_ fields sample (%d total): %s",
-                        len(event_fields),
-                        {k: str(v)[:100] for k, v in list(event_fields.items())[:10]},
-                    )
-                else:
-                    # Check for any fields with event data
-                    LOGGER.warning(
-                        "No event_ fields found! Sample non-system fields: %s",
-                        {
-                            k: str(v)[:50]
-                            for k, v in list(row.items())[:15]
-                            if not k.startswith("__")
-                        },
-                    )
             # Support _ prefix (current), underscore (legacy), and camelCase (OTLP)
             trace_id = row.get(
                 "_trace_id",
@@ -748,7 +762,7 @@ class SLSTraceReader:
                     # Also capture any other domain-specific fields
                     tags[key] = value
 
-            span = SpanData(
+            return SpanData(
                 trace_id=trace_id,
                 span_id=span_id,
                 operation_name=operation_name,
@@ -758,45 +772,6 @@ class SLSTraceReader:
                 tags=tags,
                 logs=row.get("logs", []),
             )
-
-            # Debug: log first span of each category
-            if operation_name.startswith("event.") and not hasattr(
-                self, "_event_debug_logged"
-            ):
-                self._event_debug_logged = True
-                event_tags = {k: v for k, v in tags.items() if k.startswith("event.")}
-                LOGGER.info(
-                    "Converted event span: op=%s, event_tags_count=%d, sample=%s",
-                    operation_name,
-                    len(event_tags),
-                    {k: str(v)[:50] for k, v in list(event_tags.items())[:5]},
-                )
-
-            if operation_name.startswith("broker.") and not hasattr(
-                self, "_broker_debug_logged"
-            ):
-                self._broker_debug_logged = True
-                broker_tags = {k: v for k, v in tags.items() if k.startswith("broker.")}
-                LOGGER.info(
-                    "Converted broker span: op=%s, broker_tags_count=%d, sample=%s",
-                    operation_name,
-                    len(broker_tags),
-                    {k: str(v)[:50] for k, v in list(broker_tags.items())[:5]},
-                )
-
-            if operation_name.startswith("agent.") and not hasattr(
-                self, "_agent_debug_logged"
-            ):
-                self._agent_debug_logged = True
-                # Agent spans use non-prefixed tags
-                LOGGER.info(
-                    "Converted agent span: op=%s, all_tags_count=%d, sample=%s",
-                    operation_name,
-                    len(tags),
-                    {k: str(v)[:50] for k, v in list(tags.items())[:10]},
-                )
-
-            return span
         except (KeyError, ValueError, TypeError) as e:
             LOGGER.warning("Failed to convert SLS row to span: %s", e)
             return None

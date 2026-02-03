@@ -736,6 +736,8 @@ class TrialOrchestrator:
             self._emit_actor_registration_span(
                 spec.trial_id, runtime.actor_id, "agent", actor_spec.config
             )
+        # Emit batch agent initialization span with all agent metadata
+        self._emit_agents_initialize_span(spec.trial_id, spec)
         for actor_spec in spec.data_streams:
             actor_spec.trial_id = spec.trial_id
             runtime = await self._materialize_actor(
@@ -1456,6 +1458,67 @@ class TrialOrchestrator:
         )
         emit_span(span)
         LOGGER.debug("Emitted trial.%s span for trial '%s'", phase, trial_id)
+
+    def _emit_agents_initialize_span(
+        self,
+        trial_id: str,
+        spec: TrialSpec,
+    ) -> None:
+        """Emit a batch agent initialization span with all agent metadata.
+
+        This emits a single 'agent.agent_initialize' span containing an AgentList
+        with all agent metadata (persona, model, system_prompt, cdn_url, etc.).
+        """
+        from ._tracing import emit_span, SpanData
+        from dojozero.betting._models import AgentInfo, AgentList
+        from uuid import uuid4
+        import time
+        import json
+
+        # Build AgentInfo list from agent specs
+        agent_infos: list[AgentInfo] = []
+
+        for agent_spec in spec.agents:
+            config = agent_spec.config or {}
+            llm_config = config.get("llm", {})
+
+            agent_info = AgentInfo(
+                agent_id=agent_spec.actor_id,
+                persona=config.get("persona", ""),
+                model=llm_config.get("model_name", ""),
+                model_display_name=config.get(
+                    "model_display_name", llm_config.get("model_display_name", "")
+                ),
+                system_prompt=config.get("sys_prompt", ""),
+                cdn_url=config.get("cdn_url", llm_config.get("cdn_url", "")),
+            )
+            agent_infos.append(agent_info)
+
+        agent_list = AgentList(agents=agent_infos)
+
+        # Create span
+        now_us = int(time.time() * 1_000_000)
+        span_id = uuid4().hex[:16]
+
+        # Serialize AgentList to tags
+        tags: dict[str, Any] = {
+            "agents": json.dumps([a.model_dump() for a in agent_list.agents]),
+        }
+
+        span = SpanData(
+            trace_id=trial_id,
+            span_id=span_id,
+            operation_name="agent.agent_initialize",
+            start_time=now_us,
+            duration=0,
+            tags=tags,
+        )
+        emit_span(span)
+        LOGGER.debug(
+            "Emitted agent.agent_initialize span for trial '%s' with %d agents",
+            trial_id,
+            len(agent_infos),
+        )
 
 
 __all__ = [

@@ -322,6 +322,10 @@ class Statistics(BaseModel):
     roi: float
 
 
+class StatisticsList(BaseModel):
+    StatisticsList: List[Dict[str, Statistics]] = Field(default_factory=list)
+
+
 # =============================================================================
 # Agent Message Models for Tracing
 # =============================================================================
@@ -389,16 +393,17 @@ class AgentResponseMessage(BaseModel):
 
 
 class AgentInfo(BaseModel):
-    """Agent registration payload for tracing (agent.registered span)."""
+    """Agent registration payload for tracing (agent.agent_initialize span)."""
 
     agent_id: str = Field(default="", description="Unique ID for the agent")
-    name: str = Field(default="", description="degen-qwen3")
-    model: str = Field(default="", description="exactly model name")
-    model_display_name: str = Field(default="", description="Model display name")
-    system_prompt: str = Field(default="", description="Agent's system prompt")
     persona: str = Field(
-        default="", description="Agent tag (e.g., 'degen', 'whale', 'shark')"
+        default="", description="Agent persona tag (e.g., 'degen', 'whale', 'shark')"
     )
+    model: str = Field(default="", description="Exact model name (e.g., qwen3-max)")
+    model_display_name: str = Field(
+        default="", description="Human-readable model name (e.g., qwen, claude)"
+    )
+    system_prompt: str = Field(default="", description="Agent's system prompt")
     cdn_url: str = Field(default="", description="Avatar image URL")
 
 
@@ -432,10 +437,13 @@ __all__ = [
     "BrokerStateUpdate",
     "Holding",
     "Statistics",
+    "StatisticsList",
     # Agent Message Models
     "ReasoningStep",
     "ToolCallStep",
     "ToolResultStep",
     "CoTStep",
     "AgentResponseMessage",
+    "AgentInfo",
+    "AgentList",
 ]

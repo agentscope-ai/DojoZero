@@ -9,14 +9,14 @@ Span categories handled:
 - broker.bet → BetExecutedPayload
 - broker.state_update → BrokerStateUpdate
 - agent.response → AgentResponseMessage
-- agent.registered → AgentRegistrationPayload
+- agent.registered → AgentList
 - Other spans → None (not recognized)
 """
 
 import json
 
 from dojozero.betting._models import (
-    AgentRegistration,
+    AgentList,
     AgentResponseMessage,
     BetExecutedPayload,
     BrokerStateUpdate,
@@ -191,7 +191,7 @@ class TestAgentSpanDispatch:
             tags={
                 "sequence": 1,
                 "stream_id": "stream-001",
-                "name": "Claude",
+                "agent_id": "Claude",
                 "content": "I'll bet on the home team.",
                 "trigger": "odds_update",
                 "game_id": "game-001",
@@ -206,31 +206,37 @@ class TestAgentSpanDispatch:
         result = deserialize_span(span)
         assert result is not None
         assert isinstance(result, AgentResponseMessage)
-        assert result.name == "Claude"
+        assert result.agent_id == "Claude"
         assert result.content == "I'll bet on the home team."
         assert result.bet_type == "MONEYLINE"
         assert result.bet_amount == 100.0
 
-    def test_agent_registered_span(self):
-        """agent.registered dispatches to AgentRegistrationPayload."""
+    def test_agent_initialize_span(self):
+        """agent.agent_initialize dispatches to AgentList."""
         span = _make_span(
-            "agent.registered",
+            "agent.agent_initialize",
             tags={
-                "agent_id": "degen-claude-001",
-                "name": "Claude",
-                "model": "claude",
-                "system_prompt": "You are a sports betting agent.",
-                "tag": "degen",
-                "cdn_url": "https://example.com/avatar.png",
+                "agents": json.dumps(
+                    [
+                        {
+                            "agent_id": "degen-claude-001",
+                            "model": "claude",
+                            "model_display_name": "claude",
+                            "system_prompt": "You are a sports betting agent.",
+                            "persona": "degen",
+                            "cdn_url": "https://example.com/avatar.png",
+                        }
+                    ]
+                ),
             },
         )
         result = deserialize_span(span)
         assert result is not None
-        assert isinstance(result, AgentRegistration)
-        assert result.agent_id == "degen-claude-001"
-        assert result.name == "Claude"
-        assert result.model == "claude"
-        assert result.tag == "degen"
+        assert isinstance(result, AgentList)
+        assert len(result.agents) == 1
+        assert result.agents[0].agent_id == "degen-claude-001"
+        assert result.agents[0].model == "claude"
+        assert result.agents[0].persona == "degen"
 
     def test_unknown_agent_operation_returns_none(self):
         """Unknown agent.* operations return None."""

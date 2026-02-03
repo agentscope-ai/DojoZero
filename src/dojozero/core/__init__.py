@@ -57,7 +57,6 @@ from ._registry import (
 )
 from ._models import (
     AgentAction,
-    AgentInfo,
     LeaderboardEntry,
     SpanModel,
     TrialLifecycleSpan,
@@ -122,7 +121,6 @@ __all__ = [
     "TrialStatus",
     # API Models
     "AgentAction",
-    "AgentInfo",
     "LeaderboardEntry",
     # Span Models
     "SpanModel",
