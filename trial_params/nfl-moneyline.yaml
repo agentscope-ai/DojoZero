@@ -53,7 +53,7 @@ scenario:
 
     agents:
     - id: basic_agent
-      name: basic
+      persona: basic
       class: BettingAgent
       persona_config_path: agents/personas/basic.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -66,7 +66,7 @@ scenario:
       - game_lifecycle_stream
       - nfl_play_stream
     - id: shark_agent
-      name: shark
+      person: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -79,7 +79,7 @@ scenario:
       - game_lifecycle_stream
       - nfl_play_stream
     - id: sheep_agent
-      name: sheep
+      persona: sheep
       class: BettingAgent
       persona_config_path: agents/personas/sheep.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -92,7 +92,7 @@ scenario:
       - game_lifecycle_stream
       - nfl_play_stream
     - id: whale_agent
-      name: whale
+      persona: whale
       class: BettingAgent
       persona_config_path: agents/personas/whale.yaml
       llm_config_path: agents/llms/qwen.yaml

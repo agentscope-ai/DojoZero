@@ -96,12 +96,15 @@ class TraceReader(Protocol):
         self,
         trial_id: str,
         start_time: datetime | None = None,
+        operation_names: list[str] | None = None,
     ) -> list[SpanData]:
         """Get spans for a trial.
 
         Args:
             trial_id: The trial ID to get spans for.
             start_time: If provided, only return spans with start_time > this value.
+            operation_names: If provided, only return spans with operation_name in this list.
+                             Exact match with OR logic. None means no filtering.
         """
         ...
 
@@ -187,6 +190,7 @@ class JaegerTraceReader:
         self,
         trial_id: str,
         start_time: datetime | None = None,
+        operation_names: list[str] | None = None,
     ) -> list[SpanData]:
         """Get spans for a trial from Jaeger.
 
@@ -194,7 +198,30 @@ class JaegerTraceReader:
             trial_id: The trial ID to get spans for.
             start_time: If provided, only return spans with start_time > this value
                         (filtered client-side as Jaeger API doesn't support this).
+            operation_names: If provided, only return spans with operation_name in this list.
+                             Makes separate requests per operation and merges results.
         """
+        # If operation_names is provided, make separate requests and merge
+        if operation_names:
+            all_spans: list[SpanData] = []
+            for op_name in operation_names:
+                spans = await self._get_spans_for_operation(
+                    trial_id, start_time, op_name
+                )
+                all_spans.extend(spans)
+            # Sort by start time
+            all_spans.sort(key=lambda s: s.start_time)
+            return all_spans
+        else:
+            return await self._get_spans_for_operation(trial_id, start_time, None)
+
+    async def _get_spans_for_operation(
+        self,
+        trial_id: str,
+        start_time: datetime | None,
+        operation_name: str | None,
+    ) -> list[SpanData]:
+        """Get spans for a trial with optional single operation filter."""
         tags_json = json.dumps({"dojozero.trial.id": trial_id})
 
         # Calculate time range for the query (default: last 30 days to now)
@@ -210,6 +237,10 @@ class JaegerTraceReader:
             "end": end_us,
             "limit": 1000,
         }
+
+        # Add operation filter if specified
+        if operation_name:
+            params["operation"] = operation_name
 
         response = await self._client.get(
             f"{self._base_url}/api/traces",
@@ -468,12 +499,15 @@ class SLSTraceReader:
         self,
         trial_id: str,
         start_time: datetime | None = None,
+        operation_names: list[str] | None = None,
     ) -> list[SpanData]:
         """Get spans for a trial from SLS.
 
         Args:
             trial_id: The trial ID to get spans for.
             start_time: If provided, only return spans after this time.
+            operation_names: If provided, only return spans with operation_name in this list.
+                             Exact match with OR logic. None means no filtering.
 
         Returns:
             List of SpanData sorted by start time.
@@ -491,37 +525,99 @@ class SLSTraceReader:
         # Simple search query without SQL - results are returned in time order by default
         query = f'_service:"{self._service_name}" AND _trace_id:"{trial_id}"'
 
-        params = {
-            "type": "log",
-            "from": str(int(from_time.timestamp())),
-            "to": str(int(now.timestamp())),
-            "query": query,
-            "line": "1000",  # Limit number of results
-        }
+        # Add operation_names filter with OR logic if specified
+        if operation_names:
+            op_conditions = " OR ".join(
+                f'_operation_name:"{op}"' for op in operation_names
+            )
+            query = f"{query} AND ({op_conditions})"
 
         resource = f"/logstores/{self._logstore}"
-        headers = self._sign_request("GET", resource, params)
+        url = f"{self._get_base_url()}{resource}"
+
+        # Pagination: SLS GetLogs API limits to 100 rows per request in search mode
+        # We paginate using offset parameter to get all data
+        page_size = 100  # SLS max per request in search mode
+        max_total = 10000  # Safety limit to prevent infinite loops
+        all_rows: list[dict[str, Any]] = []
+        offset = 0
 
         try:
-            response = await self._client.get(
-                f"{self._get_base_url()}{resource}",
-                params=params,
-                headers=headers,
-            )
-            response.raise_for_status()
-            data = response.json()
+            while offset < max_total:
+                params = {
+                    "type": "log",
+                    "from": str(int(from_time.timestamp())),
+                    "to": str(int(now.timestamp())),
+                    "query": query,
+                    "line": str(page_size),
+                    "offset": str(offset),
+                }
+                headers = self._sign_request("GET", resource, params)
 
-            # SLS may return list directly or dict with "data" key
+                LOGGER.debug(
+                    "SLS get_spans request: offset=%d, query=%s", offset, query
+                )
+                response = await self._client.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                )
+                if response.status_code != 200:
+                    LOGGER.error(
+                        "SLS get_spans error response: status=%d, body=%s",
+                        response.status_code,
+                        response.text[:500] if response.text else "(empty)",
+                    )
+                response.raise_for_status()
+                data = response.json()
+
+                # SLS may return list directly or dict with "data" key
+                rows = data if isinstance(data, list) else data.get("data", [])
+
+                if not rows:
+                    break  # No more data
+
+                all_rows.extend(rows)
+
+                if len(rows) < page_size:
+                    break  # Last page (less than full page means no more data)
+
+                offset += page_size
+
+            LOGGER.info(
+                "SLS get_spans: trial_id=%s, total_rows=%d (pages=%d)",
+                trial_id,
+                len(all_rows),
+                (offset // page_size) + 1,
+            )
+
+            # Convert rows to spans
             spans: list[SpanData] = []
-            rows = data if isinstance(data, list) else data.get("data", [])
-            for row in rows:
+            if all_rows and len(all_rows) > 0:
+                # Log first row keys for debugging
+                first_row = all_rows[0] if isinstance(all_rows[0], dict) else {}
+                LOGGER.debug(
+                    "SLS first row keys: %s",
+                    list(first_row.keys())[:10],
+                )
+            for row in all_rows:
                 if isinstance(row, dict):
                     span = self._convert_sls_row_to_span(row)
                     if span:
                         spans.append(span)
+                    else:
+                        LOGGER.debug(
+                            "Failed to convert row, keys=%s",
+                            list(row.keys())[:10],
+                        )
 
             # Sort by start time
             spans.sort(key=lambda s: s.start_time)
+            LOGGER.info(
+                "SLS get_spans: converted %d/%d rows to spans",
+                len(spans),
+                len(rows),
+            )
             return spans
         except httpx.HTTPStatusError as e:
             LOGGER.error("SLS HTTP error getting spans for trial '%s': %s", trial_id, e)
@@ -598,18 +694,38 @@ class SLSTraceReader:
             # Also check for domain and infrastructure fields directly in the row
             # Domain fields: game_id, sport_type, game_date, event_*
             # Infrastructure fields with _ prefix: _actor_id, _sequence
+            # System fields to skip: __time__, __source__, etc.
+            skip_prefixes = ("__",)  # SLS system fields
+            extracted_infra = {
+                "_trace_id",
+                "_span_id",
+                "_operation_name",
+                "_duration_us",
+                "_parent_span_id",
+                "_service",
+                "_event_time",
+            }
+
             for key, value in row.items():
-                # Skip infrastructure fields (already extracted above)
+                # Skip SLS system fields (double underscore)
+                if any(key.startswith(p) for p in skip_prefixes):
+                    continue
+
+                # Skip already-extracted infrastructure fields
+                if key in extracted_infra:
+                    continue
+
+                # Infrastructure tags with single underscore prefix
                 if key.startswith("_"):
                     # Infrastructure tag - normalize to dot notation for internal use
-                    if key in ("_actor_id", "_sequence"):
-                        normalized_key = key[1:].replace(
-                            "_", "."
-                        )  # _actor_id -> actor.id
-                        if key == "_actor_id":
-                            normalized_key = "actor.id"
-                        tags[normalized_key] = value
-                elif key.startswith("dojozero."):
+                    if key == "_actor_id":
+                        tags["actor.id"] = value
+                    elif key == "_sequence":
+                        tags["sequence"] = value
+                    # Skip other _ prefixed fields we don't recognize
+                    continue
+
+                if key.startswith("dojozero."):
                     tags[key] = value
                 elif key.startswith("dojozero_"):
                     # Convert dojozero_x_y to dojozero.x.y
@@ -621,10 +737,30 @@ class SLSTraceReader:
                     # Convert event_x to event.x (only first underscore)
                     normalized_key = "event." + key[6:]
                     tags[normalized_key] = value
-                elif key in ("game_id", "sport_type", "game_date"):
-                    # Domain fields - convert to dot notation
+                elif key.startswith("broker."):
+                    tags[key] = value
+                elif key.startswith("broker_"):
+                    # Convert broker_x to broker.x (only first underscore)
+                    normalized_key = "broker." + key[7:]
+                    tags[normalized_key] = value
+                elif key.startswith("trial."):
+                    tags[key] = value
+                elif key.startswith("trial_"):
+                    # Convert trial_x to trial.x
+                    normalized_key = "trial." + key[6:]
+                    tags[normalized_key] = value
+                elif key.startswith("game_") or key.startswith("sport_"):
+                    # Domain fields - convert underscore to dot
                     normalized_key = key.replace("_", ".")
                     tags[normalized_key] = value
+                elif key in ("game_id", "sport_type", "game_date", "sequence"):
+                    # Simple domain fields - convert underscore to dot
+                    normalized_key = key.replace("_", ".")
+                    tags[normalized_key] = value
+                else:
+                    # Agent spans use non-prefixed tags (e.g., name, content, cot_steps)
+                    # Also capture any other domain-specific fields
+                    tags[key] = value
 
             return SpanData(
                 trace_id=trace_id,

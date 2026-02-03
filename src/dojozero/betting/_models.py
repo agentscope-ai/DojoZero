@@ -272,25 +272,37 @@ class Bet(BaseModel):
     settlement_time: Optional[datetime] = None
 
 
-@dataclass
-class BetExecutedPayload:
-    bet_id: str
-    agent_id: str
-    event_id: str
-    selection: str
-    amount: str
-    execution_probability: str  # Probability (0-1) at which bet was executed
-    shares: str  # Number of shares purchased
-    execution_time: str
+class BetExecutedPayload(BaseModel):
+    """Bet execution payload for tracing (broker.bet span)."""
+
+    bet_id: str = ""
+    agent_id: str = ""
+    event_id: str = ""
+    selection: str = ""
+    amount: str = ""
+    execution_probability: str = ""  # Probability (0-1) at which bet was executed
+    shares: str = ""  # Number of shares purchased
+    execution_time: str = ""
 
 
-@dataclass
-class BetSettledPayload:
-    bet_id: str
-    event_id: str
-    outcome: BetOutcome  # Store the enum directly
-    payout: str
-    winner: str
+class BetSettledPayload(BaseModel):
+    """Bet settlement payload for tracing."""
+
+    bet_id: str = ""
+    event_id: str = ""
+    outcome: Optional[BetOutcome] = None  # Store the enum directly
+    payout: str = ""
+    winner: str = ""
+
+
+class BrokerStateUpdate(BaseModel):
+    """Broker state snapshot for tracing (broker.state_update span)."""
+
+    change_type: str = ""
+    accounts_count: int = 0
+    bets_count: int = 0
+    accounts: Dict[str, Account] = Field(default_factory=dict)
+    bets: Dict[str, Bet] = Field(default_factory=dict)
 
 
 # =============================================================================
@@ -308,6 +320,10 @@ class Statistics(BaseModel):
     win_rate: float
     net_profit: Decimal
     roi: float
+
+
+class StatisticsList(BaseModel):
+    StatisticsList: List[Dict[str, Statistics]] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -347,7 +363,7 @@ class AgentResponseMessage(BaseModel):
 
     sequence: int = Field(default=0, description="Event sequence number")
     stream_id: str = Field(default="", description="Stream identifier")
-    name: str = Field(default="", description="Agent name")
+    agent_id: str = Field(default="", description="Agent id")
     content: str = Field(default="", description="Main text response from agent")
     cot_steps: list[CoTStep] = Field(
         default_factory=list, description="Chain of thought process steps"
@@ -376,6 +392,30 @@ class AgentResponseMessage(BaseModel):
     )
 
 
+class AgentInfo(BaseModel):
+    """Agent registration payload for tracing (agent.agent_initialize span)."""
+
+    agent_id: str = Field(default="", description="Unique ID for the agent")
+    persona: str = Field(
+        default="", description="Agent persona tag (e.g., 'degen', 'whale', 'shark')"
+    )
+    model: str = Field(default="", description="Exact model name (e.g., qwen3-max)")
+    model_display_name: str = Field(
+        default="", description="Human-readable model name (e.g., qwen, claude)"
+    )
+    system_prompt: str = Field(default="", description="Agent's system prompt")
+    cdn_url: str = Field(default="", description="Avatar image URL")
+
+
+class AgentList(BaseModel):
+    """Batch agent registration payload for initializing multiple agents at once."""
+
+    agents: List[AgentInfo] = Field(
+        default_factory=list,
+        description="List of agents to register. Each agent is identified by agent_id.",
+    )
+
+
 __all__ = [
     # Enums
     "BetOutcome",
@@ -394,12 +434,16 @@ __all__ = [
     "BetRequestTotal",
     "BetSettledPayload",
     "BettingEvent",
+    "BrokerStateUpdate",
     "Holding",
     "Statistics",
+    "StatisticsList",
     # Agent Message Models
     "ReasoningStep",
     "ToolCallStep",
     "ToolResultStep",
     "CoTStep",
     "AgentResponseMessage",
+    "AgentInfo",
+    "AgentList",
 ]

@@ -54,10 +54,12 @@ from dojozero.arena_server._models import (
     WSSpanMessage,
     WSTrialEndedMessage,
 )
+from dojozero.arena_server._replay import (
+    create_replay_websocket_handler,
+)
+from dojozero.betting import AgentInfo, AgentList, AgentResponseMessage
 from dojozero.core._models import (
     AgentAction,
-    AgentInfo,
-    BettingResultSpan,
     LeaderboardEntry,
     TrialLifecycleSpan,
     deserialize_span,
@@ -198,35 +200,80 @@ def _get_team_identity(tricode: str, league: str = "NBA") -> TeamIdentity:
     return TeamIdentity(name=tricode, tricode=tricode, color=_DEFAULT_TEAM_COLOR)
 
 
-# Agent color palette for visual distinction
-_AGENT_COLORS = [
-    "#3B82F6",  # Blue
-    "#8B5CF6",  # Purple
-    "#10B981",  # Green
-    "#F59E0B",  # Amber
-    "#EF4444",  # Red
-    "#EC4899",  # Pink
-    "#14B8A6",  # Teal
-    "#6366F1",  # Indigo
-]
+# ============================================================================
+# Global Agent Cache
+# ============================================================================
+
+# Global agent cache: agent_id → AgentInfo
+# Populated lazily from agent.agent_initialize spans
+_AGENT_CACHE: dict[str, AgentInfo] = {}
+_AGENT_CACHE_LOCK = asyncio.Lock()
 
 
-def _get_agent_info(agent_id: str, agent_name: str | None = None) -> AgentInfo:
-    """Get agent info with consistent display fields.
+async def _populate_agent_cache(
+    trace_reader: TraceReader,
+    trial_id: str,
+) -> None:
+    """Populate agent cache from agent.agent_initialize spans.
 
-    Returns AgentInfo with id, name, avatar, color, model for frontend display.
+    This function is called lazily when an agent_id is not found in cache.
+    It queries the trace store for agent.agent_initialize spans and populates
+    the cache with AgentInfo objects.
     """
-    name = agent_name or agent_id
-    # Generate consistent color based on agent_id hash
-    color_idx = hash(agent_id) % len(_AGENT_COLORS)
-    avatar = name[0].upper() if name else "?"
+    try:
+        spans = await trace_reader.get_spans(
+            trial_id,
+            operation_names=["agent.agent_initialize"],
+        )
+    except Exception as e:
+        LOGGER.warning(
+            "Failed to get agent.agent_initialize spans for trial '%s': %s",
+            trial_id,
+            e,
+        )
+        return
 
-    return AgentInfo(
-        id=agent_id,
-        name=name,
-        avatar=avatar,
-        color=_AGENT_COLORS[color_idx],
-    )
+    async with _AGENT_CACHE_LOCK:
+        for span in spans:
+            typed = deserialize_span(span)
+            if isinstance(typed, AgentList):
+                for agent_info in typed.agents:
+                    if agent_info.agent_id:
+                        _AGENT_CACHE[agent_info.agent_id] = agent_info
+                        LOGGER.debug(
+                            "Cached agent: %s (from trial %s)",
+                            agent_info.agent_id,
+                            trial_id,
+                        )
+
+
+async def get_cached_agent(
+    trace_reader: TraceReader,
+    agent_id: str,
+    trial_id: str,
+) -> AgentInfo | None:
+    """Get agent info from cache, populating if needed.
+
+    Uses lazy loading: if agent_id is not in cache, queries trace store
+    for agent.agent_initialize spans from the given trial.
+
+    Args:
+        trace_reader: TraceReader to query for agent info
+        agent_id: The agent ID to look up
+        trial_id: The trial ID to query if cache miss
+
+    Returns:
+        AgentInfo if found, None otherwise
+    """
+    # Check cache first
+    if agent_id in _AGENT_CACHE:
+        return _AGENT_CACHE[agent_id]
+
+    # Cache miss: try to populate from trace store
+    await _populate_agent_cache(trace_reader, trial_id)
+
+    # Check again after population
+    return _AGENT_CACHE.get(agent_id)
 
 
 LOGGER = logging.getLogger("dojozero.arena_server")
@@ -304,11 +351,36 @@ class SpanBroadcaster:
         Deserializes each raw SpanData into a typed model and sends
         a WSSnapshotMessage with all items.
         """
+        LOGGER.info(
+            "send_snapshot: trial=%s, span_count=%d",
+            trial_id,
+            len(spans),
+        )
         items = []
+        unrecognized_ops: list[str] = []
         for span in spans:
+            LOGGER.debug(
+                "Processing span: op='%s', tags_keys=%s",
+                span.operation_name,
+                list(span.tags.keys())[:5],
+            )
             typed = deserialize_span(span)
             if typed is not None:
                 items.append(serialize_span_for_ws(typed))
+            else:
+                unrecognized_ops.append(span.operation_name)
+
+        if unrecognized_ops:
+            LOGGER.warning(
+                "Unrecognized spans (first 5): %s",
+                unrecognized_ops[:5],
+            )
+
+        LOGGER.info(
+            "send_snapshot: recognized %d/%d spans",
+            len(items),
+            len(spans),
+        )
         message = WSSnapshotMessage(
             trial_id=trial_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -324,7 +396,7 @@ class SpanBroadcaster:
         if not clients:
             return
 
-        text = message.model_dump_json(by_alias=True)
+        text = message.model_dump_json()
         disconnected: list[WebSocket] = []
 
         for websocket in clients:
@@ -343,7 +415,7 @@ class SpanBroadcaster:
     ) -> None:
         """Send a message to a specific client."""
         try:
-            text = message.model_dump_json(by_alias=True)
+            text = message.model_dump_json()
             await websocket.send_text(text)
         except Exception as e:
             LOGGER.warning("Failed to send message to client: %s", e)
@@ -619,11 +691,24 @@ async def _extract_trial_info_from_traces(
 ) -> dict[str, Any]:
     """Extract trial phase and metadata from trace spans.
 
+    Uses filtered queries to only fetch relevant spans (trial lifecycle,
+    game_initialize, game_result) instead of all spans.
+
     Returns:
         dict with "phase", "metadata", and optional "game_init" extracted from spans
     """
     try:
-        spans = await trace_reader.get_spans(trial_id)
+        # Only fetch spans needed for trial info extraction
+        spans = await trace_reader.get_spans(
+            trial_id,
+            operation_names=[
+                "trial.started",
+                "trial.stopped",
+                "trial.terminated",
+                "event.game_initialize",
+                "event.game_result",
+            ],
+        )
     except Exception as e:
         LOGGER.warning("Failed to get spans for trial '%s': %s", trial_id, e)
         return {"phase": "unknown", "metadata": {}}
@@ -781,7 +866,7 @@ async def _extract_agent_actions(
 ) -> list[AgentAction]:
     """Extract recent agent actions from trial spans.
 
-    Looks for spans like "agent.action", "bet.placed", "agent.thinking" etc.
+    Queries agent.response spans and returns full AgentResponseMessage objects.
 
     Returns:
         List of recent agent actions sorted by time (newest first)
@@ -792,59 +877,36 @@ async def _extract_agent_actions(
     RECENT_TRIALS_LIMIT = 10
     for trial_id in trial_ids[:RECENT_TRIALS_LIMIT]:
         try:
-            # Get recent spans only
+            # Get recent agent.response spans only
             start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
-            spans = await trace_reader.get_spans(trial_id, start_time=start_time)
+            spans = await trace_reader.get_spans(
+                trial_id,
+                start_time=start_time,
+                operation_names=["agent.response"],
+            )
         except Exception as e:
             LOGGER.warning("Failed to get spans for trial '%s': %s", trial_id, e)
             continue
 
         for span in spans:
-            op_name = span.operation_name
-
-            # Look for action-related spans
-            if not any(
-                keyword in op_name
-                for keyword in ["bet.placed", "agent.action", "agent.thinking", "bet."]
-            ):
+            typed = deserialize_span(span)
+            if not isinstance(typed, AgentResponseMessage):
                 continue
 
-            # Try typed deserialization for known span types
-            typed = deserialize_span(span)
-            if isinstance(typed, BettingResultSpan):
-                agent_id = typed.agent_id
-                agent_name = typed.agent_name or agent_id
-            else:
-                # Fallback to raw tags for custom action spans
-                agent_id = span.tags.get("agent.id", span.tags.get("agent_id", ""))
-                agent_name = span.tags.get(
-                    "agent.name", span.tags.get("agent_name", agent_id)
-                )
+            agent_id = typed.agent_id
+            if not agent_id:
+                continue
 
-            action_text = span.tags.get(
-                "action.description",
-                span.tags.get("description", op_name),
-            )
-
-            # Calculate time ago
-            span_time = datetime.fromtimestamp(
-                span.start_time / 1_000_000, tz=timezone.utc
-            )
-            seconds_ago = (datetime.now(timezone.utc) - span_time).total_seconds()
-
-            if seconds_ago < 60:
-                time_ago = f"{int(seconds_ago)}s ago"
-            elif seconds_ago < 3600:
-                time_ago = f"{int(seconds_ago // 60)}m ago"
-            else:
-                time_ago = f"{int(seconds_ago // 3600)}h ago"
+            # Get agent info from cache (lazy loading)
+            agent_info = await get_cached_agent(trace_reader, agent_id, trial_id)
+            if agent_info is None:
+                # Fallback: create minimal AgentInfo
+                agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
 
             all_actions.append(
                 AgentAction(
-                    id=span.span_id,
-                    agent=_get_agent_info(agent_id, agent_name),
-                    action=action_text,
-                    time=time_ago,
+                    agent=agent_info,
+                    response=typed,
                     timestamp=span.start_time,
                 )
             )
@@ -896,9 +958,13 @@ async def _compute_leaderboard(
 ) -> list[LeaderboardEntry]:
     """Compute agent leaderboard from trial results.
 
+    Uses broker.final_stats spans when available for accurate statistics.
+    Falls back to counting agent.response spans if final_stats not found.
+
     Returns:
         List of agents sorted by winnings (highest first)
     """
+    from dojozero.betting import StatisticsList
 
     # Accumulator for per-agent stats
     @dataclass
@@ -913,31 +979,73 @@ async def _compute_leaderboard(
 
     for trial_id in trial_ids:
         try:
-            spans = await trace_reader.get_spans(trial_id)
-        except Exception:
-            continue
+            # Try to get broker.final_stats first (most accurate)
+            spans = await trace_reader.get_spans(
+                trial_id,
+                operation_names=["broker.final_stats"],
+            )
 
-        for span in spans:
-            typed = deserialize_span(span)
+            if spans:
+                # Use final_stats if available
+                for span in spans:
+                    typed = deserialize_span(span)
+                    if isinstance(typed, StatisticsList):
+                        for agent_stats_dict in typed.StatisticsList:
+                            for agent_id, stats in agent_stats_dict.items():
+                                agent_info = await get_cached_agent(
+                                    trace_reader, agent_id, trial_id
+                                )
+                                if agent_info is None:
+                                    agent_info = AgentInfo(
+                                        agent_id=agent_id, persona=agent_id
+                                    )
 
-            if not isinstance(typed, BettingResultSpan):
-                continue
+                                if agent_id not in agent_stats:
+                                    agent_stats[agent_id] = _AgentStats(
+                                        agent=agent_info
+                                    )
 
-            agent_id = typed.agent_id
-            if not agent_id:
-                continue
-
-            if agent_id not in agent_stats:
-                agent_stats[agent_id] = _AgentStats(
-                    agent=_get_agent_info(agent_id, typed.agent_name or agent_id),
+                                acc = agent_stats[agent_id]
+                                acc.winnings += float(stats.net_profit)
+                                acc.wins += stats.wins
+                                acc.total_bets += stats.total_bets
+                                acc.total_wagered += float(stats.total_wagered)
+            else:
+                # Fallback: count from agent.response spans
+                response_spans = await trace_reader.get_spans(
+                    trial_id,
+                    operation_names=["agent.response"],
                 )
 
-            acc = agent_stats[agent_id]
-            acc.winnings += typed.payout
-            acc.total_bets += 1
-            acc.total_wagered += typed.wager
-            if typed.won:
-                acc.wins += 1
+                for span in response_spans:
+                    typed = deserialize_span(span)
+                    if not isinstance(typed, AgentResponseMessage):
+                        continue
+
+                    agent_id = typed.agent_id
+                    if not agent_id:
+                        continue
+
+                    if agent_id not in agent_stats:
+                        agent_info = await get_cached_agent(
+                            trace_reader, agent_id, trial_id
+                        )
+                        if agent_info is None:
+                            agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
+                        agent_stats[agent_id] = _AgentStats(agent=agent_info)
+
+                    acc = agent_stats[agent_id]
+                    if typed.bet_amount:
+                        acc.total_bets += 1
+                        acc.total_wagered += typed.bet_amount
+
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to get spans for leaderboard from trial '%s': %s",
+                trial_id,
+                e,
+            )
+            continue
 
     # Convert to sorted list
     leaderboard: list[LeaderboardEntry] = []
@@ -1176,7 +1284,7 @@ def create_arena_app(
             all_games=all_games,
             live_agent_actions=agent_actions,
         )
-        return JSONResponse(content=response.model_dump(by_alias=True))
+        return JSONResponse(content=response.model_dump())
 
     @app.get("/api/stats")
     async def get_stats(
@@ -1206,7 +1314,7 @@ def create_arena_app(
             return await _compute_stats(state.trace_reader, trial_ids)
 
         stats = await state.cache.get_stats(fetch_stats)
-        return JSONResponse(content=stats.model_dump(by_alias=True))
+        return JSONResponse(content=stats.model_dump())
 
     @app.get("/api/games")
     async def get_games(
@@ -1272,7 +1380,7 @@ def create_arena_app(
         filtered = all_games[:limit]
         return JSONResponse(
             content={
-                "games": [g.model_dump(by_alias=True) for g in filtered],
+                "games": [g.model_dump() for g in filtered],
                 "total": len(all_games),
             }
         )
@@ -1318,7 +1426,7 @@ def create_arena_app(
 
         response = LeaderboardResponse(leaderboard=leaderboard)
         return JSONResponse(
-            content=response.model_dump(by_alias=True),
+            content=response.model_dump(),
         )
 
     @app.get("/api/agent-actions")
@@ -1349,12 +1457,31 @@ def create_arena_app(
 
         response = AgentActionsResponse(actions=actions)
         return JSONResponse(
-            content=response.model_dump(by_alias=True),
+            content=response.model_dump(),
         )
 
     # -------------------------------------------------------------------------
     # WebSocket Endpoint for Real-time Streaming
     # -------------------------------------------------------------------------
+
+    @app.websocket("/ws/test/replay")
+    async def test_replay_stream(websocket: WebSocket):
+        """WebSocket endpoint for testing with recorded replay data.
+
+        This endpoint replays the bundled snapshot_data.json file, allowing
+        frontend developers to test and debug without needing a live trial.
+
+        Control commands (send as JSON):
+            {"command": "speed", "value": 2}  - Set playback speed (0.1x to 10x)
+            {"command": "pause"}              - Pause playback
+            {"command": "resume"}             - Resume playback
+            {"command": "reset"}              - Reset to beginning
+            {"command": "skip", "value": 10}  - Skip forward N events
+            {"command": "seek", "value": 50}  - Jump to event index N
+            {"command": "status"}             - Get current playback status
+        """
+        handler = create_replay_websocket_handler()
+        await handler(websocket)
 
     @app.websocket("/ws/trials/{trial_id}/stream")
     async def trial_stream(websocket: WebSocket, trial_id: str):
@@ -1426,7 +1553,7 @@ def create_arena_app(
                     heartbeat = WSHeartbeatMessage(
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     )
-                    await websocket.send_text(heartbeat.model_dump_json(by_alias=True))
+                    await websocket.send_text(heartbeat.model_dump_json())
 
         except WebSocketDisconnect:
             LOGGER.info("WebSocket disconnected for trial '%s'", trial_id)
@@ -1447,6 +1574,78 @@ def create_arena_app(
             "status": "ok",
             "static_dir": str(state.static_dir) if state.static_dir else None,
         }
+
+    # -------------------------------------------------------------------------
+    # Test/Replay Endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/test/replay-info")
+    async def get_replay_info() -> JSONResponse:
+        """Get information about the available replay data.
+
+        Returns metadata about the bundled snapshot_data.json file,
+        including total items, categories breakdown, and trial info.
+        """
+        from collections import Counter
+
+        from dojozero.arena_server._replay import DEFAULT_SNAPSHOT_PATH
+
+        if not DEFAULT_SNAPSHOT_PATH.exists():
+            return JSONResponse(
+                content={"error": "No replay data available"},
+                status_code=404,
+            )
+
+        import json
+
+        with open(DEFAULT_SNAPSHOT_PATH) as f:
+            data = json.load(f)
+
+        items = data.get("items", [])
+        categories = Counter(item.get("category", "unknown") for item in items)
+
+        # Extract basic trial info from first items
+        trial_info = {}
+        for item in items[:20]:
+            if item.get("category") == "event.game_initialize":
+                game_data = item.get("data", {})
+                trial_info = {
+                    "game_id": game_data.get("game_id"),
+                    "sport": game_data.get("sport"),
+                    "home_team": game_data.get("home_team", {}).get("name"),
+                    "away_team": game_data.get("away_team", {}).get("name"),
+                }
+                break
+
+        return JSONResponse(
+            content={
+                "total_items": len(items),
+                "categories": dict(categories.most_common()),
+                "trial_info": trial_info,
+                "websocket_url": "/ws/test/replay",
+                "commands": [
+                    {
+                        "command": "speed",
+                        "value": "number",
+                        "description": "Set playback speed (0.1x to 10x)",
+                    },
+                    {"command": "pause", "description": "Pause playback"},
+                    {"command": "resume", "description": "Resume playback"},
+                    {"command": "reset", "description": "Reset to beginning"},
+                    {
+                        "command": "skip",
+                        "value": "number",
+                        "description": "Skip forward N events",
+                    },
+                    {
+                        "command": "seek",
+                        "value": "number",
+                        "description": "Jump to event index N",
+                    },
+                    {"command": "status", "description": "Get current playback status"},
+                ],
+            }
+        )
 
     # -------------------------------------------------------------------------
     # Static File Serving (SPA support)

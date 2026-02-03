@@ -57,15 +57,11 @@ from ._registry import (
 )
 from ._models import (
     AgentAction,
-    AgentInfo,
     LeaderboardEntry,
-    ActorRegistrationSpan,
-    AgentMessageSpan,
-    BettingResultSpan,
-    BrokerStateSpan,
     SpanModel,
     TrialLifecycleSpan,
     deserialize_span,
+    serialize_span_for_ws,
 )
 from ._tracing import (
     JaegerTraceReader,
@@ -125,16 +121,12 @@ __all__ = [
     "TrialStatus",
     # API Models
     "AgentAction",
-    "AgentInfo",
     "LeaderboardEntry",
     # Span Models
-    "ActorRegistrationSpan",
-    "AgentMessageSpan",
-    "BettingResultSpan",
-    "BrokerStateSpan",
     "SpanModel",
     "TrialLifecycleSpan",
     "deserialize_span",
+    "serialize_span_for_ws",
     # Trace Store
     "JaegerTraceReader",
     "SpanData",

@@ -46,7 +46,7 @@ def load_agent_configs_cached(
                 config_cache[cache_key] = load_agent_config(
                     persona_config_path,
                     llm_config_path,
-                    name=agent_dict.get("name", ""),
+                    name=agent_dict.get("persona", ""),
                 )
 
     return config_cache
@@ -84,7 +84,7 @@ def get_expanded_agent_ids(
             yaml_config = load_agent_config(
                 persona_config_path,
                 llm_config_path,
-                name=agent_dict.get("name", ""),
+                name=agent_dict.get("persona", ""),
             )
 
         expanded_ids = []
@@ -185,7 +185,7 @@ def build_agent_specs(
                 yaml_config = load_agent_config(
                     persona_config_path,
                     llm_config_path,
-                    name=agent_dict.get("name", ""),
+                    name=agent_dict.get("persona", ""),
                 )
 
             expanded_configs = expand_agent_config(yaml_config)
@@ -195,11 +195,19 @@ def build_agent_specs(
                 model_name = single_config["llm"].get("model_name", "unknown")
                 expanded_actor_id = f"{agent_id}-{model_name}"
 
+                # Extract persona from agent_dict (e.g., "degen" from persona field)
+                persona = agent_dict.get("persona", "")
+
                 agent_config: dict[str, Any] = {
                     "actor_id": expanded_actor_id,
-                    "name": single_config["name"],
+                    "persona": persona,
                     "sys_prompt": single_config["sys_prompt"],
                     "llm": single_config["llm"],
+                    # Display fields for agent registration
+                    "model_display_name": single_config["llm"].get(
+                        "model_display_name", ""
+                    ),
+                    "cdn_url": single_config["llm"].get("cdn_url", ""),
                 }
 
                 agent_spec = AgentSpec(
@@ -218,28 +226,38 @@ def build_agent_specs(
                 )
         else:
             # Inline config mode (no expansion)
-            agent_config = {
+            inline_agent_config: dict[str, Any] = {
                 "actor_id": agent_id,
             }
             # Copy optional config fields
-            if agent_dict.get("name"):
-                agent_config["name"] = agent_dict["name"]
+            if agent_dict.get("persona"):
+                inline_agent_config["persona"] = agent_dict["persona"]
             if agent_dict.get("sys_prompt"):
-                agent_config["sys_prompt"] = agent_dict["sys_prompt"]
+                inline_agent_config["sys_prompt"] = agent_dict["sys_prompt"]
 
             # Build LLM config if model_type or model_name are specified
             if agent_dict.get("model_type") or agent_dict.get("model_name"):
-                llm_config: LLMConfig = {}
+                inline_llm_config: LLMConfig = {}
                 if agent_dict.get("model_type"):
-                    llm_config["model_type"] = agent_dict["model_type"]
+                    inline_llm_config["model_type"] = agent_dict["model_type"]
                 if agent_dict.get("model_name"):
-                    llm_config["model_name"] = agent_dict["model_name"]
-                agent_config["llm"] = llm_config
+                    inline_llm_config["model_name"] = agent_dict["model_name"]
+                if agent_dict.get("model_display_name"):
+                    inline_llm_config["model_display_name"] = agent_dict[
+                        "model_display_name"
+                    ]
+                if agent_dict.get("cdn_url"):
+                    inline_llm_config["cdn_url"] = agent_dict["cdn_url"]
+                inline_agent_config["llm"] = inline_llm_config
+                inline_agent_config["model_display_name"] = agent_dict.get(
+                    "model_display_name", ""
+                )
+                inline_agent_config["cdn_url"] = agent_dict.get("cdn_url", "")
 
             agent_spec = AgentSpec(
                 actor_id=agent_id,
                 actor_cls=agent_cls,
-                config=agent_config,
+                config=inline_agent_config,
                 operator_ids=tuple(operator_ids) if operator_ids else (),
                 data_stream_ids=tuple(data_stream_ids),
             )

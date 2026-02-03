@@ -51,6 +51,7 @@ dev = [
     "tavily-python>=0.7.12",
     "agentscope>=1.0.8",
     "python-dateutil>=2.8.0",
+    "websockets>=15.0.1",
 ]
 
 [tool.ruff]
