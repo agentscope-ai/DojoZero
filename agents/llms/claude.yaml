@@ -3,4 +3,5 @@ llm:
     model_name: claude-opus-4-5-20251101
     api_key_env: DOJOZERO_ANTHROPIC_API_KEY
     model_display_name: claude
-    
+    cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01kiSypx1Oxcwxq1bPV_!!6000000001772-55-tps-24-24.svg
+
