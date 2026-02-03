@@ -295,7 +295,7 @@ class NBAStore(DataStore):
             if status_type == "STATUS_FINAL":
                 # Mark game as concluded in state tracker if not already
                 if not self._state.is_game_concluded(game_id):
-                    self._state.set_previous_status(game_id, 3)  # STATUS_FINAL
+                    self._state.set_previous_status(game_id, self._state.STATUS_FINAL)  # STATUS_FINAL
 
             # Skip emitting game updates if game is concluded and we've already emitted the final update
             game_concluded = self._state.is_game_concluded(game_id)
