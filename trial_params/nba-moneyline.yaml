@@ -53,7 +53,7 @@ scenario:
 
     agents:
     - id: degen_agent
-      name: degen
+      persona: degen
       class: BettingAgent
       persona_config_path: agents/personas/degen.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -66,7 +66,7 @@ scenario:
       - game_lifecycle_stream
       - play_by_play_stream
     - id: oracle_agent
-      name: oracle
+      persona: oracle
       class: BettingAgent
       persona_config_path: agents/personas/oracle.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -79,7 +79,7 @@ scenario:
         - game_lifecycle_stream
         - play_by_play_stream
     - id: professor_agent
-      name: professor
+      persona: professor
       class: BettingAgent
       persona_config_path: agents/personas/professor.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -92,7 +92,7 @@ scenario:
         - game_lifecycle_stream
         - play_by_play_stream
     - id: shark_agent
-      name: shark
+      persona: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -105,7 +105,7 @@ scenario:
       - game_lifecycle_stream
       - play_by_play_stream
     - id: sheep_agent
-      name: sheep
+      persona: sheep
       class: BettingAgent
       persona_config_path: agents/personas/sheep.yaml
       llm_config_path: agents/llms/qwen.yaml
@@ -118,7 +118,7 @@ scenario:
       - game_lifecycle_stream
       - play_by_play_stream
     - id: whale_agent
-      name: whale
+      persona: whale
       class: BettingAgent
       persona_config_path: agents/personas/whale.yaml
       llm_config_path: agents/llms/qwen.yaml

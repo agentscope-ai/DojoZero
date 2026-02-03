@@ -376,6 +376,31 @@ class AgentResponseMessage(BaseModel):
     )
 
 
+class AgentInfo(BaseModel):
+    """Agent registration payload for tracing (agent.registered span)."""
+
+    agent_id: str = Field(default="", description="Unique ID for the agent")
+    name: str = Field(default="", description="degen-qwen3")
+    model: str = Field(
+        default="", description="exactly model name"
+    )
+    model_display_name: str = Field(default="", description="Model display name")
+    system_prompt: str = Field(default="", description="Agent's system prompt")
+    persona: str = Field(
+        default="", description="Agent tag (e.g., 'degen', 'whale', 'shark')"
+    )
+    cdn_url: str = Field(default="", description="Avatar image URL")
+
+
+class AgentList(BaseModel):
+    """Batch agent registration payload for initializing multiple agents at once."""
+
+    agents: List[AgentInfo] = Field(
+        default_factory=list,
+        description="List of agents to register. Each agent is identified by agent_id.",
+    )
+
+
 __all__ = [
     # Enums
     "BetOutcome",

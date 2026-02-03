@@ -2,16 +2,21 @@ llm:
   - model_type: dashscope
     model_name: qwen3-max
     api_key_env: DOJOZERO_DASHSCOPE_API_KEY
+    model_display_name: qwen
   - model_type: dashscope
     model_name: deepseek-v3.2
+    model_display_name: deepseek
     api_key_env: DOJOZERO_DASHSCOPE_API_KEY
   - model_type: anthropic
     model_name: claude-opus-4-5-20251101
     api_key_env: DOJOZERO_ANTHROPIC_API_KEY
+    model_display_name: claude
   - model_type: gemini
     model_name: gemini-3-pro-preview
     api_key_env: DOJOZERO_GEMINI_API_KEY
+    model_display_name: gemini
   - model_type: openai
     model_name: gpt-5.2-2025-12-11
     api_key_env: DOJOZERO_OPENAI_API_KEY
+    model_display_name: openai
     

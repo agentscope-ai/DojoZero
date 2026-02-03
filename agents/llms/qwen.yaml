@@ -2,3 +2,4 @@ llm:
   - model_type: dashscope
     model_name: qwen3-max
     api_key_env: DOJOZERO_DASHSCOPE_API_KEY
+    model_display_name: qwen
