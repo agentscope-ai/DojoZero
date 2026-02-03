@@ -37,7 +37,6 @@ from dojozero.betting._models import (
     Holding,
     OrderType,
     Statistics,
-    StatisticsList,
     VALID_STATUS_TRANSITIONS,
 )
 from dojozero.core import (
@@ -1236,12 +1235,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             bets_json = bets_adapter.dump_json(self._bets).decode()
 
             # Calculate estimated_profit and estimated_net_value for each account
-            estimated_profits: Dict[str, str] = {}
             estimated_net_values: Dict[str, str] = {}
             for agent_id, account in self._accounts.items():
                 estimated_profit = self._calculate_estimated_profit_for_account(account)
                 estimated_net_value = account.balance + estimated_profit
-                estimated_profits[agent_id] = str(estimated_profit)
                 estimated_net_values[agent_id] = str(estimated_net_value)
 
             # Create span with all the data
@@ -1250,7 +1247,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 "broker.bets_count": len(self._bets),
                 "broker.accounts": accounts_json,
                 "broker.bets": bets_json,
-                "broker.estimated_profits": json.dumps(estimated_profits),
                 "broker.estimated_net_values": json.dumps(estimated_net_values),
             }
 
@@ -1260,14 +1256,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 for agent_id in self._accounts.keys():
                     statistics_dict[agent_id] = await self.get_statistics(agent_id)
 
-                # Use StatisticsList model for type-safe serialization
-                statistics_list_model = StatisticsList(StatisticsList=[statistics_dict])
-                statistics_list_value: List[Dict[str, Statistics]] = (
-                    statistics_list_model.StatisticsList
-                )
-                statistics_adapter = TypeAdapter(List[Dict[str, Statistics]])
+                # Serialize statistics_dict directly as Dict[str, Statistics]
+                statistics_adapter = TypeAdapter(Dict[str, Statistics])
                 tags["broker.statistics"] = statistics_adapter.dump_json(
-                    statistics_list_value
+                    statistics_dict
                 ).decode()
 
             span = create_span_from_event(

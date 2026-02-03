@@ -323,7 +323,11 @@ class Statistics(BaseModel):
 
 
 class StatisticsList(BaseModel):
-    StatisticsList: List[Dict[str, Statistics]] = Field(default_factory=list)
+    """Statistics for all agents, keyed by agent_id."""
+
+    statistics: Dict[str, Statistics] = Field(
+        default_factory=dict, description="Statistics for each agent"
+    )
 
 
 # =============================================================================

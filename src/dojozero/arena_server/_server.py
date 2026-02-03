@@ -990,26 +990,23 @@ async def _compute_leaderboard(
                 for span in spans:
                     typed = deserialize_span(span)
                     if isinstance(typed, StatisticsList):
-                        for agent_stats_dict in typed.StatisticsList:
-                            for agent_id, stats in agent_stats_dict.items():
-                                agent_info = await get_cached_agent(
-                                    trace_reader, agent_id, trial_id
+                        for agent_id, stats in typed.statistics.items():
+                            agent_info = await get_cached_agent(
+                                trace_reader, agent_id, trial_id
+                            )
+                            if agent_info is None:
+                                agent_info = AgentInfo(
+                                    agent_id=agent_id, persona=agent_id
                                 )
-                                if agent_info is None:
-                                    agent_info = AgentInfo(
-                                        agent_id=agent_id, persona=agent_id
-                                    )
 
-                                if agent_id not in agent_stats:
-                                    agent_stats[agent_id] = _AgentStats(
-                                        agent=agent_info
-                                    )
+                            if agent_id not in agent_stats:
+                                agent_stats[agent_id] = _AgentStats(agent=agent_info)
 
-                                acc = agent_stats[agent_id]
-                                acc.winnings += float(stats.net_profit)
-                                acc.wins += stats.wins
-                                acc.total_bets += stats.total_bets
-                                acc.total_wagered += float(stats.total_wagered)
+                            acc = agent_stats[agent_id]
+                            acc.winnings += float(stats.net_profit)
+                            acc.wins += stats.wins
+                            acc.total_bets += stats.total_bets
+                            acc.total_wagered += float(stats.total_wagered)
             else:
                 # Fallback: count from agent.response spans
                 response_spans = await trace_reader.get_spans(
