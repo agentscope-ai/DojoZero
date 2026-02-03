@@ -347,7 +347,7 @@ class AgentResponseMessage(BaseModel):
 
     sequence: int = Field(default=0, description="Event sequence number")
     stream_id: str = Field(default="", description="Stream identifier")
-    name: str = Field(default="", description="Agent name")
+    agent_id: str = Field(default="", description="Agent id")
     content: str = Field(default="", description="Main text response from agent")
     cot_steps: list[CoTStep] = Field(
         default_factory=list, description="Chain of thought process steps"
@@ -381,9 +381,7 @@ class AgentInfo(BaseModel):
 
     agent_id: str = Field(default="", description="Unique ID for the agent")
     name: str = Field(default="", description="degen-qwen3")
-    model: str = Field(
-        default="", description="exactly model name"
-    )
+    model: str = Field(default="", description="exactly model name")
     model_display_name: str = Field(default="", description="Model display name")
     system_prompt: str = Field(default="", description="Agent's system prompt")
     persona: str = Field(

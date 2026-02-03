@@ -765,7 +765,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             response_message = AgentResponseMessage(
                 sequence=self._event_count,
                 stream_id=primary_stream_id,
-                name=self.name,
+                agent_id=self.actor_id,
                 content=text_content,
                 cot_steps=cot_steps,
                 trigger=trigger,
