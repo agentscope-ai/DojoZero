@@ -218,7 +218,9 @@ class NBAExternalAPI(ExternalAPI):
             comp = competitions[0]
             status_data["date"] = comp.get("date", "")
             # Extract game status type (STATUS_SCHEDULED, STATUS_IN_PROGRESS, STATUS_FINAL)
-            status_data["statusType"] = (comp.get("status") or {}).get("type", {}).get("name", "")
+            status_data["statusType"] = (
+                (comp.get("status") or {}).get("type", {}).get("name", "")
+            )
 
         return {
             "boxscore": {
