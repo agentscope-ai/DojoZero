@@ -17,6 +17,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
+# Use China PyPI mirror for faster builds
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_TRUSTED_HOST=mirrors.aliyun.com
+ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+
 # Install uv for fast dependency management
 RUN pip install --no-cache-dir uv
 
