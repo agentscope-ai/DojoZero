@@ -5,6 +5,9 @@
 ARG BASE_IMAGE=python:3.11-slim
 FROM ${BASE_IMAGE}
 
+# Use China apt mirror for faster builds (comment out if building outside China)
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
