@@ -48,29 +48,50 @@ The server automatically discovers games from ESPN and schedules trials. No cron
 
 ## Cloud VM Deployment (ECS/EC2)
 
-### Initial Setup
+### Alibaba Cloud ECS (China)
 
 ```bash
 # SSH into your server
 ssh user@your-server-ip
 
-# Install Docker (Ubuntu/Debian)
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-# Log out and back in for group to take effect
-
-# Enable Docker on boot
-sudo systemctl enable docker
-
 # Clone the repo
 git clone https://github.com/your-org/DojoZero.git
 cd DojoZero
 
+# Run setup script (installs Docker, configures China mirrors)
+chmod +x deploy/setup-ecs.sh
+./deploy/setup-ecs.sh
+
+# Log out and back in for docker group
+exit
+# SSH back in
+
 # Configure environment
-cp deploy/.env.template .env
+cd DojoZero
 nano .env  # Fill in credentials
 
 # Build and run
+docker-compose -f deploy/docker-compose.yml up -d
+```
+
+### AWS EC2 / Other (Outside China)
+
+```bash
+# SSH into your server
+ssh user@your-server-ip
+
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+sudo systemctl enable docker
+# Log out and back in
+
+# Clone and deploy
+git clone https://github.com/your-org/DojoZero.git
+cd DojoZero
+cp deploy/.env.template .env
+nano .env  # Fill in credentials
+
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
