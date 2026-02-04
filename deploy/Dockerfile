@@ -1,7 +1,9 @@
 # DojoZero Docker Image
 # Single container for dashboard server with auto-scheduling via trial sources
 
-FROM python:3.11-slim
+# Use Alibaba Cloud mirror for China, or docker.io for elsewhere
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE}
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

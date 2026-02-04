@@ -71,14 +71,15 @@ if [ "$DOCKER_MODE" = true ]; then
         sudo tee /etc/docker/daemon.json > /dev/null <<EOF
 {
   "registry-mirrors": [
-    "https://registry.cn-hangzhou.aliyuncs.com",
-    "https://mirror.ccs.tencentyun.com"
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://docker.mirrors.sjtug.sjtu.edu.cn",
+    "https://hub-mirror.c.163.com"
   ]
 }
 EOF
         sudo systemctl daemon-reload
         sudo systemctl restart docker
-        echo "Docker configured with China mirrors"
+        echo "Docker configured with China mirrors (USTC, SJTU, 163)"
     else
         echo "Docker Hub reachable, no mirror needed"
     fi
