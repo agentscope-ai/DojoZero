@@ -10,6 +10,7 @@ This broker is sport-agnostic and can be used for NBA, NFL, or any other sports 
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from collections import defaultdict
@@ -57,6 +58,18 @@ from dojozero.data._models import (
 
 # Constants
 SHARES_PRECISION = Decimal("0.01")  # Precision for shares: 2 decimal places
+
+# Type aliases
+BrokerStateChangeType = Literal[
+    "account_created",
+    "deposit",
+    "withdraw",
+    "bet_placed",
+    "bet_executed",
+    "bet_settled",
+    "bet_cancelled",
+    "final_stats",
+]
 
 # Logger for broker operations
 logger = logging.getLogger(__name__)
@@ -991,7 +1004,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         )
 
         # Log final broker state after settlement
-        await self._log_accounts_and_bets_status("broker_result")
+        await self._log_accounts_and_bets_status("final_stats")
 
     async def _settle_bet(
         self, bet: Bet, winner: str, final_score: Dict[str, int]
@@ -1163,7 +1176,60 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # Logging
     # =========================================================================
 
-    async def _log_accounts_and_bets_status(self, change_type: str) -> None:
+    def _calculate_estimated_profit_for_account(self, account: Account) -> Decimal:
+        """Calculate estimated profit for an account based on current winning probabilities.
+
+        Uses probability * shares for each holding:
+        - Bet shares on more likely winning teams get 1/share
+        - Bets on more likely losing teams get 0/share
+        - So estimated value = probability * shares
+
+        Args:
+            account: The account to calculate estimated profit for
+
+        Returns:
+            Estimated profit as Decimal (can be negative if probabilities are low)
+        """
+        if not self._event:
+            return Decimal("0")
+
+        estimated_profit = Decimal("0")
+
+        for holding in account.holdings:
+            # Get the probability for this holding based on bet type and selection
+            probability: Optional[Decimal] = None
+
+            if holding.bet_type == BetType.MONEYLINE:
+                if holding.selection == "home":
+                    probability = self._event.home_probability
+                elif holding.selection == "away":
+                    probability = self._event.away_probability
+            elif holding.bet_type == BetType.SPREAD:
+                if holding.spread_value is not None:
+                    spread_line = self._event.spread_lines.get(holding.spread_value)
+                    if spread_line:
+                        if holding.selection == "home":
+                            probability = spread_line.get("home_probability")
+                        elif holding.selection == "away":
+                            probability = spread_line.get("away_probability")
+            elif holding.bet_type == BetType.TOTAL:
+                if holding.total_value is not None:
+                    total_line = self._event.total_lines.get(holding.total_value)
+                    if total_line:
+                        if holding.selection == "over":
+                            probability = total_line.get("over_probability")
+                        elif holding.selection == "under":
+                            probability = total_line.get("under_probability")
+
+            # If probability is available, calculate: probability * shares
+            if probability is not None:
+                estimated_profit += probability * holding.shares
+
+        return estimated_profit
+
+    async def _log_accounts_and_bets_status(
+        self, change_type: BrokerStateChangeType
+    ) -> None:
         """Emit a log to SLS about each agent's current balance and bet status.
 
         This is called whenever self._accounts or self._bets have changed.
@@ -1182,19 +1248,38 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             accounts_json = accounts_adapter.dump_json(self._accounts).decode()
             bets_json = bets_adapter.dump_json(self._bets).decode()
 
+            # Calculate estimated_profit and estimated_net_value for each account
+            estimated_net_values: Dict[str, str] = {}
+            for agent_id, account in self._accounts.items():
+                estimated_profit = self._calculate_estimated_profit_for_account(account)
+                estimated_net_value = account.balance + estimated_profit
+                estimated_net_values[agent_id] = str(estimated_net_value)
+
             # Create span with all the data
             tags = {
-                "broker.change_type": change_type,
                 "broker.accounts_count": len(self._accounts),
                 "broker.bets_count": len(self._bets),
                 "broker.accounts": accounts_json,
                 "broker.bets": bets_json,
+                "broker.estimated_net_values": json.dumps(estimated_net_values),
             }
+
+            # Include statistics for final_stats log
+            if change_type == "final_stats":
+                statistics_dict: Dict[str, Statistics] = {}
+                for agent_id in self._accounts.keys():
+                    statistics_dict[agent_id] = await self.get_statistics(agent_id)
+
+                # Serialize statistics_dict directly as Dict[str, Statistics]
+                statistics_adapter = TypeAdapter(Dict[str, Statistics])
+                tags["broker.statistics"] = statistics_adapter.dump_json(
+                    statistics_dict
+                ).decode()
 
             span = create_span_from_event(
                 trial_id=self.trial_id,
                 actor_id=self.actor_id,
-                operation_name="broker.state_update",
+                operation_name=f"broker.{change_type}",
                 extra_tags=tags,
             )
             emit_span(span)
