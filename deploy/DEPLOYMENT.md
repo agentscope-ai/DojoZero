@@ -8,41 +8,50 @@ cp deploy/.env.template .env
 nano .env  # Fill in API keys and credentials
 
 # 2. Build and run
-docker compose -f deploy/docker-compose.yml up -d
+docker-compose -f deploy/docker-compose.yml up -d
 
 # 3. Verify
-docker logs dojozero-dashboard --tail 50
-curl http://localhost:8000/health
+docker logs dojozero-nba --tail 50
+docker logs dojozero-nfl --tail 50
+curl http://localhost:8001/health  # NBA
+curl http://localhost:8002/health  # NFL
 ```
 
-The server automatically discovers games from ESPN and schedules trials. No cron needed.
+Two containers run separately for NBA (port 8001) and NFL (port 8002). Each automatically discovers games from ESPN and schedules trials. No cron needed.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    DOCKER CONTAINER                                  │
-│                    (dojozero-dashboard)                              │
-│                                                                      │
-│   dojo0 serve --trial-source nba.yaml --trial-source nfl.yaml       │
-│                                                                      │
-│   ┌─────────────────────────────────────────────────────────────┐   │
-│   │  ScheduleManager (built-in)                                  │   │
-│   │  - Syncs with ESPN API hourly                               │   │
-│   │  - Auto-discovers upcoming games                            │   │
-│   │  - Launches trials before game start                        │   │
-│   │  - Stops trials when games complete                         │   │
-│   └─────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│                              ▼                                       │
-│   ┌───────────────┐  ┌───────────────┐  ┌───────────────┐          │
-│   │  SLS Export   │  │  OSS Backup   │  │  Local JSONL  │          │
-│   │  (traces)     │  │  (on stop)    │  │  (outputs/)   │          │
-│   └───────────────┘  └───────────────┘  └───────────────┘          │
-└─────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────┐    ┌───────────────────────────────┐
+│  dojozero-nba (port 8001)     │    │  dojozero-nfl (port 8002)     │
+│                               │    │                               │
+│  dojo0 serve                  │    │  dojo0 serve                  │
+│    --trial-source nba.yaml    │    │    --trial-source nfl.yaml    │
+│                               │    │                               │
+│  ┌─────────────────────────┐  │    │  ┌─────────────────────────┐  │
+│  │  ScheduleManager        │  │    │  │  ScheduleManager        │  │
+│  │  - ESPN sync (hourly)   │  │    │  │  - ESPN sync (hourly)   │  │
+│  │  - Game discovery       │  │    │  │  - Game discovery       │  │
+│  │  - Trial lifecycle      │  │    │  │  - Trial lifecycle      │  │
+│  └─────────────────────────┘  │    │  └─────────────────────────┘  │
+│             │                 │    │             │                 │
+│             ▼                 │    │             ▼                 │
+│  ┌────────┬────────┬───────┐  │    │  ┌────────┬────────┬───────┐  │
+│  │  SLS   │  OSS   │ JSONL │  │    │  │  SLS   │  OSS   │ JSONL │  │
+│  └────────┴────────┴───────┘  │    │  └────────┴────────┴───────┘  │
+└───────────────────────────────┘    └───────────────────────────────┘
+                │                                │
+                └────────────┬───────────────────┘
+                             ▼
+                     Shared volumes:
+                     - ./outputs/
+                     - ./data/
+                     - .env
 ```
+
+Two separate containers run NBA and NFL independently.
 
 ---
 
@@ -86,13 +95,16 @@ The setup script automatically:
 docker ps
 
 # View logs
-docker logs dojozero-dashboard --tail 100
+docker logs dojozero-nba --tail 100
+docker logs dojozero-nfl --tail 100
 
-# Health check
-curl http://localhost:8000/health
+# Health checks
+curl http://localhost:8001/health  # NBA
+curl http://localhost:8002/health  # NFL
 
 # Check scheduled trials
-curl http://localhost:8000/api/schedules
+curl http://localhost:8001/api/schedules  # NBA
+curl http://localhost:8002/api/schedules  # NFL
 ```
 
 ---
@@ -144,14 +156,16 @@ auto_stop_on_completion: true  # Stop when game ends
 ### View Logs
 
 ```bash
-# Live logs (Docker handles rotation: 5 files x 100MB)
-docker logs dojozero-dashboard -f
+# Live logs (Docker handles rotation: 5 files x 100MB per container)
+docker logs dojozero-nba -f
+docker logs dojozero-nfl -f
 
 # Recent logs
-docker logs dojozero-dashboard --tail 100
+docker logs dojozero-nba --tail 100
+docker logs dojozero-nfl --tail 100
 
 # Logs since timestamp
-docker logs dojozero-dashboard --since 2025-01-20T10:00:00
+docker logs dojozero-nba --since 2025-01-20T10:00:00
 ```
 
 ### Restart / Update
@@ -184,7 +198,7 @@ docker compose -f deploy/docker-compose.yml down -v
 
 ```bash
 # CPU/memory usage
-docker stats dojozero-dashboard
+docker stats dojozero-nba dojozero-nfl
 
 # Disk usage
 docker system df
@@ -235,22 +249,25 @@ cat outputs/2025-01-20/401810490.jsonl | head -10
 
 ```bash
 # Check logs for errors
-docker logs dojozero-dashboard
+docker logs dojozero-nba
+docker logs dojozero-nfl
 
 # Common issues:
 # - Missing .env file or variables
 # - Invalid API keys
-# - Port 8000 already in use
+# - Port 8001/8002 already in use
 ```
 
 ### No trials scheduled
 
 ```bash
 # Check if trial sources loaded
-curl http://localhost:8000/api/trial-sources
+curl http://localhost:8001/api/trial-sources  # NBA
+curl http://localhost:8002/api/trial-sources  # NFL
 
 # Check ESPN sync status
-docker logs dojozero-dashboard | grep -i "sync\|espn\|schedule"
+docker logs dojozero-nba | grep -i "sync\|espn\|schedule"
+docker logs dojozero-nfl | grep -i "sync\|espn\|schedule"
 
 # Verify trial source configs exist
 ls -la trial_sources/
@@ -269,14 +286,15 @@ python tools/validate_alicloud_access.py --verbose
 ### Health check failing
 
 ```bash
-# Check if server is responding
-curl -v http://localhost:8000/health
+# Check if servers are responding
+curl -v http://localhost:8001/health  # NBA
+curl -v http://localhost:8002/health  # NFL
 
-# Check container is running
+# Check containers are running
 docker ps -a | grep dojozero
 
-# Restart container
-docker compose -f deploy/docker-compose.yml restart
+# Restart containers
+docker-compose -f deploy/docker-compose.yml restart
 ```
 
 ---
@@ -285,10 +303,11 @@ docker compose -f deploy/docker-compose.yml restart
 
 | Host Path | Container Path | Purpose |
 |-----------|----------------|---------|
-| `./outputs` | `/app/outputs` | Trial event JSONL files |
-| `./data` | `/app/data` | Local data cache |
+| `./outputs` | `/app/outputs` | Trial event JSONL files (shared) |
+| `./data` | `/app/data` | Local data cache (shared) |
 | `./trial_sources` | `/app/trial_sources` | Trial source configs (read-only) |
-| Named volume | `/app/.dojozero` | Schedule state persistence |
+| `dojozero-nba-schedules` | `/app/.dojozero` | NBA schedule state |
+| `dojozero-nfl-schedules` | `/app/.dojozero` | NFL schedule state |
 
 ---
 

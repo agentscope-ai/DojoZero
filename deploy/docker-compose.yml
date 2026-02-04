@@ -2,36 +2,74 @@
 #
 # Usage:
 #   1. Copy .env.template to .env and fill in credentials
-#   2. docker compose -f deploy/docker-compose.yml up -d
-#   3. docker compose -f deploy/docker-compose.yml logs -f
+#   2. docker-compose -f deploy/docker-compose.yml up -d
+#   3. docker-compose -f deploy/docker-compose.yml logs -f
 #
-# The dashboard server automatically schedules trials for NBA and NFL games
-# using the trial source configs in trial_sources/
+# Runs two separate containers for NBA and NFL trial sources
 
 services:
-  dashboard:
+  nba:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    container_name: dojozero-dashboard
+    container_name: dojozero-nba
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8001:8000"
     env_file:
       - ../.env
     environment:
-      # Ensure Python output is not buffered (for real-time logs)
       - PYTHONUNBUFFERED=1
-      # Timezone for scheduling (default: UTC)
       - TZ=${TZ:-UTC}
     volumes:
-      # Persist outputs and schedules
       - ../outputs:/app/outputs
       - ../data:/app/data
-      # Allow hot-reloading trial source configs (optional)
       - ../trial_sources:/app/trial_sources:ro
-      # Schedule state persistence
-      - dojozero-schedules:/app/.dojozero
+      - dojozero-nba-schedules:/app/.dojozero
+    command: >
+      dojo0 serve
+      --host 0.0.0.0
+      --port 8000
+      --trace-backend sls
+      --oss-backup
+      --trial-source trial_sources/nba.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  nfl:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: dojozero-nfl
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    env_file:
+      - ../.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ../outputs:/app/outputs
+      - ../data:/app/data
+      - ../trial_sources:/app/trial_sources:ro
+      - dojozero-nfl-schedules:/app/.dojozero
+    command: >
+      dojo0 serve
+      --host 0.0.0.0
+      --port 8000
+      --trace-backend sls
+      --oss-backup
+      --trial-source trial_sources/nfl.yaml
     logging:
       driver: json-file
       options:
@@ -45,5 +83,7 @@ services:
       start_period: 10s
 
 volumes:
-  dojozero-schedules:
-    name: dojozero-schedules
+  dojozero-nba-schedules:
+    name: dojozero-nba-schedules
+  dojozero-nfl-schedules:
+    name: dojozero-nfl-schedules

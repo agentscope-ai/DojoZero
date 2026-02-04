@@ -43,12 +43,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Default command: run dashboard server with NBA and NFL trial sources
-# SLS tracing enabled by default, OSS backup enabled
-CMD ["dojo0", "serve", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--trace-backend", "sls", \
-     "--oss-backup", \
-     "--trial-source", "trial_sources/nba.yaml", \
-     "--trial-source", "trial_sources/nfl.yaml"]
+# Default command (override in docker-compose.yml for specific trial source)
+CMD ["dojo0", "serve", "--host", "0.0.0.0", "--port", "8000"]
