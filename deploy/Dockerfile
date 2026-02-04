@@ -1,0 +1,52 @@
+# DojoZero Docker Image
+# Single container for dashboard server with auto-scheduling via trial sources
+
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Install uv for fast dependency management
+RUN pip install --no-cache-dir uv
+
+# Copy dependency files first for better layer caching
+COPY pyproject.toml .
+COPY README.md .
+
+# Install dependencies (no dev dependencies in production)
+RUN uv pip install --system .
+
+# Install additional runtime dependencies
+RUN uv pip install --system python-dotenv tavily-python
+
+# Copy application code
+COPY src/ src/
+COPY agents/ agents/
+COPY trial_sources/ trial_sources/
+COPY trial_params/ trial_params/
+
+# Create output directories
+RUN mkdir -p outputs data
+
+# Expose dashboard server port
+EXPOSE 8000
+
+# Health check - dashboard server health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Default command: run dashboard server with NBA and NFL trial sources
+# SLS tracing enabled by default, OSS backup enabled
+CMD ["dojo0", "serve", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--trace-backend", "sls", \
+     "--oss-backup", \
+     "--trial-source", "trial_sources/nba.yaml", \
+     "--trial-source", "trial_sources/nfl.yaml"]
