@@ -48,7 +48,7 @@ The server automatically discovers games from ESPN and schedules trials. No cron
 
 ## Cloud VM Deployment (ECS/EC2)
 
-### Alibaba Cloud ECS (China)
+### Setup Script
 
 ```bash
 # SSH into your server
@@ -58,11 +58,11 @@ ssh user@your-server-ip
 git clone https://github.com/your-org/DojoZero.git
 cd DojoZero
 
-# Run setup script (installs Docker, configures China mirrors)
-chmod +x deploy/setup-ecs.sh
-./deploy/setup-ecs.sh
+# Run setup script (installs Docker, auto-detects China and configures mirrors)
+chmod +x deploy/setup.sh
+./deploy/setup.sh --docker
 
-# Log out and back in for docker group
+# Log out and back in for docker group (if Docker was just installed)
 exit
 # SSH back in
 
@@ -74,26 +74,10 @@ nano .env  # Fill in credentials
 docker-compose -f deploy/docker-compose.yml up -d
 ```
 
-### AWS EC2 / Other (Outside China)
-
-```bash
-# SSH into your server
-ssh user@your-server-ip
-
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-sudo systemctl enable docker
-# Log out and back in
-
-# Clone and deploy
-git clone https://github.com/your-org/DojoZero.git
-cd DojoZero
-cp deploy/.env.template .env
-nano .env  # Fill in credentials
-
-docker compose -f deploy/docker-compose.yml up -d
-```
+The setup script automatically:
+- Installs Docker and docker-compose if missing
+- Detects if Docker Hub is unreachable (China) and configures mirrors
+- Creates .env from template
 
 ### Verify Deployment
 
@@ -313,11 +297,12 @@ docker compose -f deploy/docker-compose.yml restart
 For development without Docker:
 
 ```bash
-# Setup
-chmod +x deploy/setup.sh && ./deploy/setup.sh
+# Setup (installs Python deps via uv)
+chmod +x deploy/setup.sh
+./deploy/setup.sh
 
 # Configure
-cp deploy/.env.template .env
+cp .env.template .env
 nano .env
 
 # Run single trial

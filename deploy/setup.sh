@@ -1,16 +1,122 @@
 #!/bin/bash
-# Setup script for DojoZero local development
-# For production deployment, use Docker instead (see DEPLOYMENT.md)
+# DojoZero Setup Script
+#
+# Usage:
+#   ./deploy/setup.sh          # Local development (Python + uv)
+#   ./deploy/setup.sh --docker # Production (Docker + mirrors for China)
 
-set -e  # Exit on error
+set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Parse arguments
+DOCKER_MODE=false
+for arg in "$@"; do
+    case $arg in
+        --docker|--production)
+            DOCKER_MODE=true
+            shift
+            ;;
+    esac
+done
+
 echo "=========================================="
-echo "DojoZero - Local Development Setup"
+if [ "$DOCKER_MODE" = true ]; then
+    echo "DojoZero - Production Setup (Docker)"
+else
+    echo "DojoZero - Development Setup (Python)"
+fi
 echo "=========================================="
 echo ""
+
+cd "$PROJECT_ROOT"
+
+# =============================================================================
+# Docker Mode (Production / ECS)
+# =============================================================================
+if [ "$DOCKER_MODE" = true ]; then
+
+    # Install Docker if not present
+    if ! command -v docker &> /dev/null; then
+        echo "Installing Docker..."
+        sudo apt-get update
+        sudo apt-get install -y docker.io
+        sudo systemctl enable docker
+        sudo systemctl start docker
+        sudo usermod -aG docker $USER
+        echo "Docker installed"
+        NEED_RELOGIN=true
+    else
+        echo "Docker already installed"
+    fi
+
+    # Install docker-compose if not present
+    if ! command -v docker-compose &> /dev/null; then
+        echo "Installing docker-compose..."
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        echo "docker-compose installed"
+    else
+        echo "docker-compose already installed"
+    fi
+
+    # Configure Docker mirrors (for China)
+    # Detect if we're in China by checking if registry-1.docker.io is reachable
+    echo ""
+    echo "Checking Docker Hub connectivity..."
+    if ! timeout 5 curl -s https://registry-1.docker.io/v2/ > /dev/null 2>&1; then
+        echo "Docker Hub unreachable, configuring China mirrors..."
+        sudo mkdir -p /etc/docker
+        sudo tee /etc/docker/daemon.json > /dev/null <<EOF
+{
+  "registry-mirrors": [
+    "https://registry.cn-hangzhou.aliyuncs.com",
+    "https://mirror.ccs.tencentyun.com"
+  ]
+}
+EOF
+        sudo systemctl daemon-reload
+        sudo systemctl restart docker
+        echo "Docker configured with China mirrors"
+    else
+        echo "Docker Hub reachable, no mirror needed"
+    fi
+
+    # Create directories
+    mkdir -p outputs data
+
+    # Setup .env
+    if [ ! -f .env ]; then
+        if [ -f deploy/.env.template ]; then
+            cp deploy/.env.template .env
+            echo ""
+            echo "Created .env from template"
+        fi
+    else
+        echo ".env already exists"
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo "Setup complete!"
+    echo "=========================================="
+    echo ""
+    if [ "$NEED_RELOGIN" = true ]; then
+        echo "IMPORTANT: Log out and back in for docker group, then:"
+        echo ""
+    fi
+    echo "Next steps:"
+    echo "  1. Edit credentials: nano .env"
+    echo "  2. Deploy: docker-compose -f deploy/docker-compose.yml up -d"
+    echo "  3. Verify: docker logs dojozero-dashboard --tail 50"
+    echo ""
+    exit 0
+fi
+
+# =============================================================================
+# Development Mode (Python + uv)
+# =============================================================================
 
 # Check Python version
 echo "Checking Python version..."
@@ -48,7 +154,6 @@ echo "uv found: $(uv --version)"
 # Install the package and dependencies
 echo ""
 echo "Installing DojoZero package and dependencies..."
-cd "$PROJECT_ROOT"
 uv pip install .
 uv pip install "python-dotenv" "tavily-python"
 
@@ -57,16 +162,15 @@ echo "Dependencies installed"
 # Create output directories
 echo ""
 echo "Setting up directories..."
-mkdir -p "$PROJECT_ROOT/outputs"
-mkdir -p "$PROJECT_ROOT/data"
+mkdir -p outputs data
 echo "Directories created"
 
 # Check for .env file
 echo ""
-if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    echo "Creating .env.template..."
-    cp "$PROJECT_ROOT/deploy/.env.template" "$PROJECT_ROOT/.env.template" 2>/dev/null || true
-    echo ""
+if [ ! -f .env ]; then
+    if [ -f deploy/.env.template ]; then
+        cp deploy/.env.template .env.template
+    fi
     echo "IMPORTANT: Copy .env.template to .env and fill in your API keys:"
     echo "  cp .env.template .env"
     echo "  nano .env"
@@ -81,9 +185,12 @@ echo "=========================================="
 echo ""
 echo "Next steps:"
 echo ""
-echo "  For local development:"
+echo "  Run single trial:"
 echo "    dojo0 run trial_params/nba-moneyline.yaml"
 echo ""
+echo "  Run server with auto-scheduling:"
+echo "    dojo0 serve --trial-source trial_sources/nba.yaml"
+echo ""
 echo "  For production deployment:"
-echo "    See deploy/DEPLOYMENT.md for Docker instructions"
+echo "    ./deploy/setup.sh --docker"
 echo ""
