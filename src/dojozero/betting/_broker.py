@@ -59,6 +59,18 @@ from dojozero.data._models import (
 # Constants
 SHARES_PRECISION = Decimal("0.01")  # Precision for shares: 2 decimal places
 
+# Type aliases
+BrokerStateChangeType = Literal[
+    "account_created",
+    "deposit",
+    "withdraw",
+    "bet_placed",
+    "bet_executed",
+    "bet_settled",
+    "bet_cancelled",
+    "final_stats",
+]
+
 # Logger for broker operations
 logger = logging.getLogger(__name__)
 
@@ -1215,7 +1227,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         return estimated_profit
 
-    async def _log_accounts_and_bets_status(self, change_type: str) -> None:
+    async def _log_accounts_and_bets_status(
+        self, change_type: BrokerStateChangeType
+    ) -> None:
         """Emit a log to SLS about each agent's current balance and bet status.
 
         This is called whenever self._accounts or self._bets have changed.
