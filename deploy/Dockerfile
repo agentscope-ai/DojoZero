@@ -36,9 +36,6 @@ COPY trial_params/ trial_params/
 # Install dependencies and the package
 RUN uv pip install --system .
 
-# Install additional runtime dependencies
-RUN uv pip install --system python-dotenv tavily-python
-
 # Create output directories
 RUN mkdir -p outputs data
 

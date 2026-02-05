@@ -108,7 +108,8 @@ EOF
     echo "Next steps:"
     echo "  1. Edit credentials: nano .env"
     echo "  2. Deploy: docker-compose -f deploy/docker-compose.yml up -d"
-    echo "  3. Verify: docker logs dojozero-dashboard --tail 50"
+    echo "  3. Verify: docker logs dojozero-nba --tail 50"
+    echo "          docker logs dojozero-nfl --tail 50"
     echo ""
     exit 0
 fi
@@ -154,7 +155,6 @@ echo "uv found: $(uv --version)"
 echo ""
 echo "Installing DojoZero package and dependencies..."
 uv pip install .
-uv pip install "python-dotenv" "tavily-python"
 
 echo "Dependencies installed"
 
@@ -168,11 +168,14 @@ echo "Directories created"
 echo ""
 if [ ! -f .env ]; then
     if [ -f deploy/.env.template ]; then
-        cp deploy/.env.template .env.template
+        cp deploy/.env.template .env
+        echo "Created .env from template"
+        echo ""
+        echo "IMPORTANT: Edit .env and fill in your API keys:"
+        echo "  nano .env"
+    else
+        echo "WARNING: deploy/.env.template not found"
     fi
-    echo "IMPORTANT: Copy .env.template to .env and fill in your API keys:"
-    echo "  cp .env.template .env"
-    echo "  nano .env"
 else
     echo ".env file found"
 fi
@@ -183,11 +186,10 @@ echo "Setup complete!"
 echo "=========================================="
 echo ""
 echo "Next steps:"
+echo "  1. Edit .env with your API keys: nano .env"
+echo "  2. Run single trial: dojo0 run trial_params/nba-moneyline.yaml"
 echo ""
-echo "  Run single trial:"
-echo "    dojo0 run trial_params/nba-moneyline.yaml"
-echo ""
-echo "  Run server with auto-scheduling:"
+echo "  Or run server with auto-scheduling:"
 echo "    dojo0 serve --trial-source trial_sources/nba.yaml"
 echo ""
 echo "  For production deployment:"
