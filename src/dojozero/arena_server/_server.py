@@ -667,6 +667,10 @@ class CacheConfig:
 # Default configuration instance
 DEFAULT_CACHE_CONFIG = CacheConfig()
 
+# Leagues that should be cached separately when filtered
+# Add new leagues here as they become supported
+CACHEABLE_LEAGUES: frozenset[str] = frozenset({"NBA", "NFL"})
+
 
 @dataclass
 class CacheEntry:
@@ -725,7 +729,7 @@ class LandingPageCache:
     # Configuration (all tunable parameters)
     config: CacheConfig = field(default_factory=lambda: DEFAULT_CACHE_CONFIG)
 
-    # Cache storage
+    # Cache storage - global (no filter)
     _trials_list: CacheEntry | None = None
     _trial_info: dict[str, CacheEntry] = field(default_factory=dict)
     _trial_details: dict[str, CacheEntry] = field(default_factory=dict)
@@ -733,6 +737,13 @@ class LandingPageCache:
     _leaderboard: CacheEntry | None = None
     _agent_actions: CacheEntry | None = None
     _games: CacheEntry | None = None
+
+    # Cache storage - per-league (for filtered queries)
+    # Keys are uppercase league names (e.g., "NBA", "NFL")
+    _stats_by_league: dict[str, CacheEntry] = field(default_factory=dict)
+    _games_by_league: dict[str, CacheEntry] = field(default_factory=dict)
+    _leaderboard_by_league: dict[str, CacheEntry] = field(default_factory=dict)
+    _agent_actions_by_league: dict[str, CacheEntry] = field(default_factory=dict)
 
     # Concurrency control
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -998,19 +1009,38 @@ class LandingPageCache:
     async def get_stats(
         self,
         fetcher: Any,
+        league: str | None = None,
     ) -> StatsResponse:
         """Get cached stats or fetch if expired.
 
         Args:
             fetcher: Async callable that returns StatsResponse
+            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
 
         Returns:
             StatsResponse with gamesPlayed, liveNow, wageredToday
         """
+        # Determine which cache to use
+        # league_key is str when use_league_cache is True
+        league_key: str | None = league.upper() if league else None
+        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
+
         async with self._lock:
-            if self._stats is not None and self._stats.is_valid():
-                LOGGER.debug("Cache HIT: stats (age=%.1fs)", self._stats.age_seconds())
-                return self._stats.data
+            if use_league_cache and league_key is not None:
+                entry = self._stats_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: stats[%s] (age=%.1fs)",
+                        league_key,
+                        entry.age_seconds(),
+                    )
+                    return entry.data
+            elif not use_league_cache:
+                if self._stats is not None and self._stats.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: stats (age=%.1fs)", self._stats.age_seconds()
+                    )
+                    return self._stats.data
 
         data: StatsResponse = await fetcher()
 
@@ -1022,16 +1052,34 @@ class LandingPageCache:
             or data.total_agents
         ):
             async with self._lock:
-                self._stats = CacheEntry(
+                entry = CacheEntry(
                     data=data,
                     expires_at=time.time() + self.config.stats_ttl,
                 )
-            LOGGER.debug("Cache MISS: stats (ttl=%.0fs)", self.config.stats_ttl)
+                if use_league_cache and league_key is not None:
+                    self._stats_by_league[league_key] = entry
+                    LOGGER.debug(
+                        "Cache MISS: stats[%s] (ttl=%.0fs)",
+                        league_key,
+                        self.config.stats_ttl,
+                    )
+                else:
+                    self._stats = entry
+                    LOGGER.debug("Cache MISS: stats (ttl=%.0fs)", self.config.stats_ttl)
         else:
             LOGGER.warning("Fetcher returned empty stats, not caching")
             # Stale-while-revalidate
             async with self._lock:
-                if self._stats is not None:
+                if use_league_cache and league_key is not None:
+                    entry = self._stats_by_league.get(league_key)
+                    if entry is not None:
+                        LOGGER.info(
+                            "Using STALE cache: stats[%s] (age=%.1fs)",
+                            league_key,
+                            entry.age_seconds(),
+                        )
+                        return entry.data
+                elif self._stats is not None:
                     LOGGER.info(
                         "Using STALE cache: stats (age=%.1fs)",
                         self._stats.age_seconds(),
@@ -1043,40 +1091,74 @@ class LandingPageCache:
     async def get_leaderboard(
         self,
         fetcher: Any,
+        league: str | None = None,
     ) -> list[LeaderboardEntry]:
         """Get cached leaderboard or fetch if expired.
 
         Args:
             fetcher: Async callable that returns list[LeaderboardEntry]
+            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
 
         Returns:
             List of LeaderboardEntry sorted by winnings
         """
+        league_key: str | None = league.upper() if league else None
+        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
+
         async with self._lock:
-            if self._leaderboard is not None and self._leaderboard.is_valid():
-                LOGGER.debug(
-                    "Cache HIT: leaderboard (age=%.1fs)",
-                    self._leaderboard.age_seconds(),
-                )
-                return self._leaderboard.data
+            if use_league_cache and league_key is not None:
+                entry = self._leaderboard_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: leaderboard[%s] (age=%.1fs)",
+                        league_key,
+                        entry.age_seconds(),
+                    )
+                    return entry.data
+            elif not use_league_cache:
+                if self._leaderboard is not None and self._leaderboard.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: leaderboard (age=%.1fs)",
+                        self._leaderboard.age_seconds(),
+                    )
+                    return self._leaderboard.data
 
         data = await fetcher()
 
         # Only cache non-empty results
         if data:
             async with self._lock:
-                self._leaderboard = CacheEntry(
+                entry = CacheEntry(
                     data=data,
                     expires_at=time.time() + self.config.leaderboard_ttl,
                 )
-            LOGGER.debug(
-                "Cache MISS: leaderboard (ttl=%.0fs)", self.config.leaderboard_ttl
-            )
+                if use_league_cache and league_key is not None:
+                    self._leaderboard_by_league[league_key] = entry
+                    LOGGER.debug(
+                        "Cache MISS: leaderboard[%s] (ttl=%.0fs)",
+                        league_key,
+                        self.config.leaderboard_ttl,
+                    )
+                else:
+                    self._leaderboard = entry
+                    LOGGER.debug(
+                        "Cache MISS: leaderboard (ttl=%.0fs)",
+                        self.config.leaderboard_ttl,
+                    )
         else:
             LOGGER.warning("Fetcher returned empty leaderboard, not caching")
             # Stale-while-revalidate
             async with self._lock:
-                if self._leaderboard is not None:
+                if use_league_cache and league_key is not None:
+                    entry = self._leaderboard_by_league.get(league_key)
+                    if entry is not None:
+                        LOGGER.info(
+                            "Using STALE cache: leaderboard[%s] (age=%.1fs)",
+                            league_key,
+                            entry.age_seconds(),
+                        )
+                        return entry.data
+                elif self._leaderboard is not None:
                     LOGGER.info(
                         "Using STALE cache: leaderboard (age=%.1fs)",
                         self._leaderboard.age_seconds(),
@@ -1088,40 +1170,74 @@ class LandingPageCache:
     async def get_agent_actions(
         self,
         fetcher: Any,
+        league: str | None = None,
     ) -> list[AgentAction]:
         """Get cached agent actions or fetch if expired.
 
         Args:
             fetcher: Async callable that returns list[AgentAction]
+            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
 
         Returns:
             List of recent agent actions for the ticker
         """
+        league_key: str | None = league.upper() if league else None
+        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
+
         async with self._lock:
-            if self._agent_actions is not None and self._agent_actions.is_valid():
-                LOGGER.debug(
-                    "Cache HIT: agent_actions (age=%.1fs)",
-                    self._agent_actions.age_seconds(),
-                )
-                return self._agent_actions.data
+            if use_league_cache and league_key is not None:
+                entry = self._agent_actions_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: agent_actions[%s] (age=%.1fs)",
+                        league_key,
+                        entry.age_seconds(),
+                    )
+                    return entry.data
+            elif not use_league_cache:
+                if self._agent_actions is not None and self._agent_actions.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: agent_actions (age=%.1fs)",
+                        self._agent_actions.age_seconds(),
+                    )
+                    return self._agent_actions.data
 
         data = await fetcher()
 
         # Only cache non-empty results
         if data:
             async with self._lock:
-                self._agent_actions = CacheEntry(
+                entry = CacheEntry(
                     data=data,
                     expires_at=time.time() + self.config.agent_actions_ttl,
                 )
-            LOGGER.debug(
-                "Cache MISS: agent_actions (ttl=%.0fs)", self.config.agent_actions_ttl
-            )
+                if use_league_cache and league_key is not None:
+                    self._agent_actions_by_league[league_key] = entry
+                    LOGGER.debug(
+                        "Cache MISS: agent_actions[%s] (ttl=%.0fs)",
+                        league_key,
+                        self.config.agent_actions_ttl,
+                    )
+                else:
+                    self._agent_actions = entry
+                    LOGGER.debug(
+                        "Cache MISS: agent_actions (ttl=%.0fs)",
+                        self.config.agent_actions_ttl,
+                    )
         else:
             LOGGER.warning("Fetcher returned empty agent actions, not caching")
             # Stale-while-revalidate
             async with self._lock:
-                if self._agent_actions is not None:
+                if use_league_cache and league_key is not None:
+                    entry = self._agent_actions_by_league.get(league_key)
+                    if entry is not None:
+                        LOGGER.info(
+                            "Using STALE cache: agent_actions[%s] (age=%.1fs)",
+                            league_key,
+                            entry.age_seconds(),
+                        )
+                        return entry.data
+                elif self._agent_actions is not None:
                     LOGGER.info(
                         "Using STALE cache: agent_actions (age=%.1fs)",
                         self._agent_actions.age_seconds(),
@@ -1133,19 +1249,36 @@ class LandingPageCache:
     async def get_games(
         self,
         fetcher: Any,
+        league: str | None = None,
     ) -> GamesResponse:
         """Get cached games list or fetch if expired.
 
         Args:
             fetcher: Async callable that returns GamesResponse
+            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
 
         Returns:
             GamesResponse with live_games, upcoming_games, completed_games
         """
+        league_key: str | None = league.upper() if league else None
+        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
+
         async with self._lock:
-            if self._games is not None and self._games.is_valid():
-                LOGGER.debug("Cache HIT: games (age=%.1fs)", self._games.age_seconds())
-                return self._games.data
+            if use_league_cache and league_key is not None:
+                entry = self._games_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: games[%s] (age=%.1fs)",
+                        league_key,
+                        entry.age_seconds(),
+                    )
+                    return entry.data
+            elif not use_league_cache:
+                if self._games is not None and self._games.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: games (age=%.1fs)", self._games.age_seconds()
+                    )
+                    return self._games.data
 
         data: GamesResponse = await fetcher()
 
@@ -1153,16 +1286,34 @@ class LandingPageCache:
         has_data = data.live_games or data.upcoming_games or data.completed_games
         if has_data:
             async with self._lock:
-                self._games = CacheEntry(
+                entry = CacheEntry(
                     data=data,
                     expires_at=time.time() + self.config.games_ttl,
                 )
-            LOGGER.debug("Cache MISS: games (ttl=%.0fs)", self.config.games_ttl)
+                if use_league_cache and league_key is not None:
+                    self._games_by_league[league_key] = entry
+                    LOGGER.debug(
+                        "Cache MISS: games[%s] (ttl=%.0fs)",
+                        league_key,
+                        self.config.games_ttl,
+                    )
+                else:
+                    self._games = entry
+                    LOGGER.debug("Cache MISS: games (ttl=%.0fs)", self.config.games_ttl)
         else:
             LOGGER.warning("Fetcher returned empty games data, not caching")
             # Stale-while-revalidate
             async with self._lock:
-                if self._games is not None:
+                if use_league_cache and league_key is not None:
+                    entry = self._games_by_league.get(league_key)
+                    if entry is not None:
+                        LOGGER.info(
+                            "Using STALE cache: games[%s] (age=%.1fs)",
+                            league_key,
+                            entry.age_seconds(),
+                        )
+                        return entry.data
+                elif self._games is not None:
                     LOGGER.info(
                         "Using STALE cache: games (age=%.1fs)",
                         self._games.age_seconds(),
@@ -1180,6 +1331,9 @@ class LandingPageCache:
         # Also invalidate aggregated data since trial state changed
         self._stats = None
         self._games = None
+        # Invalidate per-league caches as well
+        self._stats_by_league.clear()
+        self._games_by_league.clear()
         LOGGER.debug("Invalidated cache for trial: %s", trial_id)
 
     def invalidate_all(self) -> None:
@@ -1191,6 +1345,11 @@ class LandingPageCache:
         self._leaderboard = None
         self._agent_actions = None
         self._games = None
+        # Clear per-league caches
+        self._stats_by_league.clear()
+        self._games_by_league.clear()
+        self._leaderboard_by_league.clear()
+        self._agent_actions_by_league.clear()
         LOGGER.debug("Invalidated all cache entries")
 
     def get_cache_stats(self) -> dict[str, Any]:
@@ -1209,6 +1368,10 @@ class LandingPageCache:
                 "expires_in": round(entry.expires_at - time.time(), 1),
             }
 
+        def _league_cache_info(cache: dict[str, CacheEntry]) -> dict[str, Any]:
+            """Get info for per-league cache entries."""
+            return {league: _entry_info(entry) for league, entry in cache.items()}
+
         return {
             "config": {
                 "trials_list_ttl": self.config.trials_list_ttl,
@@ -1220,6 +1383,7 @@ class LandingPageCache:
                 "agent_actions_ttl": self.config.agent_actions_ttl,
                 "completed_trial_ttl": self.config.completed_trial_ttl,
                 "agent_actions_max_trials": self.config.agent_actions_max_trials,
+                "cacheable_leagues": list(CACHEABLE_LEAGUES),
             },
             "caches": {
                 "trials_list": _entry_info(self._trials_list),
@@ -1229,6 +1393,12 @@ class LandingPageCache:
                 "agent_actions": _entry_info(self._agent_actions),
                 "trial_info_count": len(self._trial_info),
                 "trial_details_count": len(self._trial_details),
+            },
+            "caches_by_league": {
+                "stats": _league_cache_info(self._stats_by_league),
+                "games": _league_cache_info(self._games_by_league),
+                "leaderboard": _league_cache_info(self._leaderboard_by_league),
+                "agent_actions": _league_cache_info(self._agent_actions_by_league),
             },
         }
 
@@ -1511,7 +1681,6 @@ async def _extract_trial_info_from_traces(
                         "away_team_tricode": typed.away_team_tricode,
                         "home_team_name": typed.home_team_name,
                         "away_team_name": typed.away_team_name,
-                        "league": typed.league,
                         "game_date": typed.game_date,
                         "sport_type": typed.sport_type,
                         "espn_game_id": typed.espn_game_id,
@@ -1561,6 +1730,108 @@ async def _extract_trial_info_from_traces(
         phase = "unknown"
 
     return {"phase": phase, "metadata": metadata, "game_init": game_init}
+
+
+async def _filter_trials_by_league(
+    trace_reader: TraceReader,
+    trial_ids: list[str],
+    league: str | None,
+    cache: "LandingPageCache | None" = None,
+) -> list[str]:
+    """Filter trial IDs by league/sport type.
+
+    This is a pure filtering function that takes an existing list of trial IDs
+    and returns only those matching the specified league.
+
+    Args:
+        trace_reader: TraceReader for fetching trial info
+        trial_ids: List of trial IDs to filter
+        league: League to filter by (e.g., 'NBA', 'NFL'). None means return all.
+        cache: Optional cache for trial info (recommended for performance)
+
+    Returns:
+        Filtered list of trial IDs matching the specified league
+    """
+    if league is None:
+        return trial_ids
+
+    league_upper = league.upper()
+    filtered: list[str] = []
+
+    for trial_id in trial_ids:
+        try:
+            if cache is not None:
+                trial_info = await cache.get_trial_info(
+                    trial_id,
+                    lambda tid=trial_id: _extract_trial_info_from_traces(
+                        trace_reader, tid
+                    ),
+                )
+            else:
+                trial_info = await _extract_trial_info_from_traces(
+                    trace_reader, trial_id
+                )
+
+            metadata = trial_info.get("metadata", {})
+            print(metadata)
+            # Note: BettingTrialMetadata has no `league` field.
+            # `sport_type` is used instead and is treated as the league.
+            trial_league = metadata.get("sport_type", "")
+
+            if trial_league.upper() == league_upper:
+                filtered.append(trial_id)
+
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to get info for trial '%s' during filtering: %s",
+                trial_id,
+                e,
+            )
+            continue
+
+    LOGGER.debug(
+        "Filtered trials by league '%s': %d/%d matched",
+        league,
+        len(filtered),
+        len(trial_ids),
+    )
+    return filtered
+
+
+async def _get_filtered_trial_ids(
+    state: "ArenaServerState",
+    days: int,
+    league: str | None,
+    limit: int = 100,
+) -> list[str]:
+    """Get trial IDs with optional league filtering.
+
+    This is a convenience wrapper that combines:
+    1. Fetching trial IDs from trace store (with caching)
+    2. Filtering by league if specified
+
+    Args:
+        state: ArenaServerState with trace_reader and cache
+        days: Number of days to look back
+        league: League to filter by (e.g., 'NBA', 'NFL'). None means all.
+        limit: Maximum number of trials to fetch from trace store
+
+    Returns:
+        List of trial IDs, optionally filtered by league
+    """
+
+    async def fetch_trials() -> list[str]:
+        start_dt = datetime.now(timezone.utc) - timedelta(days=days)
+        return await state.trace_reader.list_trials(start_time=start_dt, limit=limit)
+
+    trial_ids = await state.cache.get_trials_list(fetch_trials)
+
+    if league:
+        trial_ids = await _filter_trials_by_league(
+            state.trace_reader, trial_ids, league, state.cache
+        )
+
+    return trial_ids
 
 
 def _resolve_team_identity(
@@ -2279,36 +2550,38 @@ def create_arena_app(
             ge=1,
             le=30,
         ),
+        league: str | None = Query(
+            default=None,
+            description="Filter by league: 'NBA', 'NFL', etc. Returns all if not specified.",
+        ),
     ) -> JSONResponse:
         """Get aggregated landing page data.
 
         Returns games, stats, and recent agent actions in a single call.
         Data is cached to reduce load on the trace store.
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
-        # Fetch trial IDs (cached)
-        async def fetch_trials() -> list[str]:
-            start_dt = datetime.now(timezone.utc) - timedelta(days=days)
-            return await state.trace_reader.list_trials(start_time=start_dt, limit=100)
+        # Get trial IDs with optional league filtering
+        trial_ids = await _get_filtered_trial_ids(state, days, league)
 
-        trial_ids = await state.cache.get_trials_list(fetch_trials)
-
-        # Fetch stats (cached)
+        # Fetch stats (cached, with per-league support)
         async def fetch_stats() -> StatsResponse:
             return await _compute_stats(state.trace_reader, trial_ids, state.cache)
 
-        stats = await state.cache.get_stats(fetch_stats)
+        stats = await state.cache.get_stats(fetch_stats, league=league)
 
-        # Fetch games (cached)
+        # Fetch games (cached, with per-league support)
         async def fetch_games() -> GamesResponse:
             return await _extract_games_from_trials(
                 state.trace_reader, trial_ids, state.cache
             )
 
-        games = await state.cache.get_games(fetch_games)
+        games = await state.cache.get_games(fetch_games, league=league)
 
-        # Fetch agent actions (cached)
+        # Fetch agent actions (cached, with per-league support)
         async def fetch_actions() -> list[AgentAction]:
             return await _extract_agent_actions(
                 state.trace_reader,
@@ -2317,7 +2590,9 @@ def create_arena_app(
                 max_trials=state.cache.config.agent_actions_max_trials,
             )
 
-        agent_actions = await state.cache.get_agent_actions(fetch_actions)
+        agent_actions = await state.cache.get_agent_actions(
+            fetch_actions, league=league
+        )
 
         all_games = games.live_games + games.upcoming_games + games.completed_games
         response = LandingResponse(
@@ -2336,6 +2611,10 @@ def create_arena_app(
             ge=1,
             le=30,
         ),
+        league: str | None = Query(
+            default=None,
+            description="Filter by league: 'NBA', 'NFL', etc. Returns all if not specified.",
+        ),
     ) -> JSONResponse:
         """Get real-time stats for the hero section.
 
@@ -2343,19 +2622,18 @@ def create_arena_app(
             gamesPlayed: Total completed games
             liveNow: Currently running games
             wageredToday: Total amount wagered (if available)
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
-        async def fetch_trials() -> list[str]:
-            start_dt = datetime.now(timezone.utc) - timedelta(days=days)
-            return await state.trace_reader.list_trials(start_time=start_dt, limit=100)
-
-        trial_ids = await state.cache.get_trials_list(fetch_trials)
+        trial_ids = await _get_filtered_trial_ids(state, days, league)
 
         async def fetch_stats() -> StatsResponse:
             return await _compute_stats(state.trace_reader, trial_ids, state.cache)
 
-        stats = await state.cache.get_stats(fetch_stats)
+        stats = await state.cache.get_stats(fetch_stats, league=league)
+
         return JSONResponse(content=stats.model_dump(by_alias=True))
 
     @app.get("/api/games")
@@ -2384,25 +2662,23 @@ def create_arena_app(
         """Get games list with optional filters.
 
         Returns games grouped by status or filtered by query params.
+        League filtering is done at trial level for efficiency.
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
-        async def fetch_trials() -> list[str]:
-            start_dt = datetime.now(timezone.utc) - timedelta(days=days)
-            return await state.trace_reader.list_trials(
-                start_time=start_dt, limit=limit
-            )
-
-        trial_ids = await state.cache.get_trials_list(fetch_trials)
+        # Filter trials by league at trial level (more efficient than post-filtering)
+        trial_ids = await _get_filtered_trial_ids(state, days, league, limit=limit)
 
         async def fetch_games() -> GamesResponse:
             return await _extract_games_from_trials(
                 state.trace_reader, trial_ids, state.cache
             )
 
-        games_data = await state.cache.get_games(fetch_games)
+        games_data = await state.cache.get_games(fetch_games, league=league)
 
-        # Apply filters
+        # Apply status filter (league already filtered at trial level)
         all_games: list[GameCardData] = (
             games_data.live_games
             + games_data.upcoming_games
@@ -2417,9 +2693,6 @@ def create_arena_app(
             }
             target_status = status_map.get(status, status)
             all_games = [g for g in all_games if g.status == target_status]
-
-        if league:
-            all_games = [g for g in all_games if g.league.upper() == league.upper()]
 
         filtered = all_games[:limit]
         return JSONResponse(
@@ -2451,22 +2724,21 @@ def create_arena_app(
         """Get agent leaderboard ranked by winnings.
 
         Returns agents sorted by total winnings with win rate and ROI.
+        League filtering is applied at trial level.
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
-        async def fetch_trials() -> list[str]:
-            start_dt = datetime.now(timezone.utc) - timedelta(days=days)
-            return await state.trace_reader.list_trials(start_time=start_dt, limit=500)
-
-        trial_ids = await state.cache.get_trials_list(fetch_trials)
+        # Filter trials by league at trial level
+        trial_ids = await _get_filtered_trial_ids(state, days, league, limit=500)
 
         async def fetch_leaderboard() -> list[LeaderboardEntry]:
             return await _compute_leaderboard(state.trace_reader, trial_ids, limit)
 
-        leaderboard = await state.cache.get_leaderboard(fetch_leaderboard)
-
-        # Filter by league if specified (would need to track in agent stats)
-        # For now, return all agents
+        leaderboard = await state.cache.get_leaderboard(
+            fetch_leaderboard, league=league
+        )
 
         response = LeaderboardResponse(leaderboard=leaderboard)
         return JSONResponse(
@@ -2481,18 +2753,31 @@ def create_arena_app(
             ge=1,
             le=100,
         ),
+        league: str | None = Query(
+            default=None,
+            description="Filter by league: 'NBA', 'NFL', etc. Returns all if not specified.",
+        ),
     ) -> JSONResponse:
         """Get recent agent actions for the live ticker.
 
         Returns the most recent agent actions sorted by time.
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
+        # Agent actions uses hours (not days) for freshness
         async def fetch_trials() -> list[str]:
             start_dt = datetime.now(timezone.utc) - timedelta(hours=1)
             return await state.trace_reader.list_trials(start_time=start_dt, limit=20)
 
         trial_ids = await state.cache.get_trials_list(fetch_trials)
+
+        # Apply league filter if specified
+        if league:
+            trial_ids = await _filter_trials_by_league(
+                state.trace_reader, trial_ids, league, state.cache
+            )
 
         async def fetch_actions() -> list[AgentAction]:
             return await _extract_agent_actions(
@@ -2502,7 +2787,7 @@ def create_arena_app(
                 max_trials=state.cache.config.agent_actions_max_trials,
             )
 
-        actions = await state.cache.get_agent_actions(fetch_actions)
+        actions = await state.cache.get_agent_actions(fetch_actions, league=league)
 
         response = AgentActionsResponse(actions=actions)
         return JSONResponse(

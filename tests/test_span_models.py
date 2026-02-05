@@ -60,7 +60,6 @@ class TestTrialLifecycleSpan:
                 "trial.away_team_tricode": "TOR",
                 "trial.home_team_name": "Boston Celtics",
                 "trial.away_team_name": "Toronto Raptors",
-                "trial.league": "NBA",
                 "trial.game_date": "2025-03-15",
                 "trial.sport_type": "nba",
                 "trial.espn_game_id": "401584700",
@@ -76,7 +75,7 @@ class TestTrialLifecycleSpan:
         assert result.home_team_tricode == "BOS"
         assert result.away_team_tricode == "TOR"
         assert result.home_team_name == "Boston Celtics"
-        assert result.league == "NBA"
+        assert result.sport_type == "nba"
         assert result.espn_game_id == "401584700"
         assert result.extra_metadata == {"custom_field": "custom_value"}
 
