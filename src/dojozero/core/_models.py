@@ -188,7 +188,7 @@ def _get_span_models() -> dict[str, type[SpanModel]]:
     return {
         # Broker spans
         "broker.bet": BetExecutedPayload,
-        "broker.state_update": BrokerStateUpdate,
+        "broker.bet_executed": BrokerStateUpdate,
         "broker.final_stats": StatisticsList,
         # Agent spans
         "agent.response": AgentResponseMessage,
