@@ -161,9 +161,9 @@ class TestBrokerSpanDispatch:
     def test_broker_state_update_span(self):
         """broker.state_update dispatches to BrokerStateUpdate."""
         span = _make_span(
-            "broker.state_update",
+            "broker.bet_executed",
             tags={
-                "broker.change_type": "bet_placed",
+                "broker.change_type": "bet_executed",
                 "broker.accounts_count": 2,
                 "broker.bets_count": 5,
                 "broker.accounts": json.dumps({}),
@@ -173,7 +173,7 @@ class TestBrokerSpanDispatch:
         result = deserialize_span(span)
         assert result is not None
         assert isinstance(result, BrokerStateUpdate)
-        assert result.change_type == "bet_placed"
+        assert result.change_type == "bet_executed"
         assert result.accounts_count == 2
         assert result.bets_count == 5
 
