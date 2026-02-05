@@ -166,7 +166,9 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
     game_init: dict[str, Any] | None = None
     game_start: dict[str, Any] | None = None
     game_result: dict[str, Any] | None = None
-    game_update: dict[str, Any] | None = None
+    game_update_template: dict[str, Any] | None = (
+        None  # Use as template for generated updates
+    )
     pregame_events: list[dict[str, Any]] = []
     drives: list[dict[str, Any]] = []
     plays: list[dict[str, Any]] = []
@@ -186,7 +188,7 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
             elif etype == "event.game_result":
                 game_result = event
             elif etype == "event.nfl_game_update":
-                game_update = event
+                game_update_template = event  # Keep as template
             elif etype == "event.nfl_drive":
                 drives.append(event)
             elif etype == "event.nfl_play":
@@ -288,13 +290,69 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
             dt = datetime.fromisoformat(nearest_ts) + timedelta(seconds=1)
             drive["game_timestamp"] = dt.isoformat()
 
-    # ── Step 4: Interleave drives and plays ──────────────────────────────
+    # ── Step 4: Generate game_update events after scoring plays ──────────
+    #
+    # For backtesting, we emit an NFLGameUpdateEvent after each scoring play
+    # so agents receive periodic game state snapshots throughout the game.
+
+    game_updates: list[dict[str, Any]] = []
+    for play in plays:
+        if not play.get("is_scoring_play"):
+            continue
+
+        play_ts = play.get("game_timestamp", "")
+        if not play_ts:
+            continue
+
+        home_score = int(play.get("home_score", 0) or 0)
+        away_score = int(play.get("away_score", 0) or 0)
+        period = int(play.get("period", 0) or 0)
+        clock = play.get("clock", "")
+
+        # Create game_update event based on template or minimal structure
+        update_event: dict[str, Any] = {
+            "event_type": "event.nfl_game_update",
+            "game_id": game_id,
+            "sport": sport,
+            "period": period,
+            "game_clock": clock,
+            "home_score": home_score,
+            "away_score": away_score,
+            "possession": play.get("team_tricode", ""),
+            "down": 0,
+            "distance": 0,
+            "yard_line": "",
+            "home_team_stats": {},
+            "away_team_stats": {},
+            "home_line_scores": [],
+            "away_line_scores": [],
+        }
+
+        # Copy additional fields from template if available
+        if game_update_template:
+            for key in ("home_team_stats", "away_team_stats"):
+                if key in game_update_template:
+                    update_event[key] = game_update_template[key]
+
+        # Set timestamp slightly after the scoring play (0.5 second)
+        dt = datetime.fromisoformat(play_ts) + timedelta(seconds=0.5)
+        update_event["timestamp"] = dt.isoformat()
+        update_event["game_timestamp"] = dt.isoformat()
+
+        game_updates.append(update_event)
+
+    logger.info(
+        "Generated %d game_update events after scoring plays", len(game_updates)
+    )
+
+    # ── Step 5: Interleave drives, plays, and game_updates ─────────────────
 
     in_game_events: list[dict[str, Any]] = []
     in_game_events.extend(plays)
     in_game_events.extend(drives)
+    in_game_events.extend(game_updates)
 
-    # ── Step 5: Fix lifecycle event timestamps ───────────────────────────
+    # ── Step 6: Fix lifecycle event timestamps ───────────────────────────
 
     game_time_iso = game_time.isoformat()
 
@@ -321,17 +379,14 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
         game_start["timestamp"] = first_play_ts
         game_start["game_timestamp"] = first_play_ts
 
-    # game_update
-    if game_update:
-        game_update["timestamp"] = last_play_ts
-        game_update["game_timestamp"] = last_play_ts
+    # game_updates are already generated and timestamped in Step 4
 
     # game_result
     if game_result:
         game_result["timestamp"] = last_play_ts
         game_result["game_timestamp"] = last_play_ts
 
-    # ── Step 6: Simulate moneyline odds (every 5 seconds) ───────────────
+    # ── Step 7: Simulate moneyline odds (every 5 seconds) ───────────────
 
     odds_events: list[dict[str, Any]] = []
     ODDS_INTERVAL_SECONDS = 5  # Match real Polymarket in-game polling
@@ -439,7 +494,7 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
     # Add odds to in-game events
     in_game_events.extend(odds_events)
 
-    # ── Step 7: Sort in-game events and set timestamp = game_timestamp ───
+    # ── Step 8: Sort in-game events and set timestamp = game_timestamp ───
 
     def sort_key(e: dict[str, Any]) -> str:
         gt = e.get("game_timestamp") or e.get("timestamp") or ""
@@ -483,14 +538,10 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
     if game_start:
         output_events.append(game_start)
 
-    # 5. In-game events (plays, drives, odds interleaved)
+    # 5. In-game events (plays, drives, game_updates, odds interleaved)
     output_events.extend(in_game_events)
 
-    # 6. game_update
-    if game_update:
-        output_events.append(game_update)
-
-    # 7. game_result
+    # 6. game_result (game_updates are now interspersed with plays)
     if game_result:
         output_events.append(game_result)
 
