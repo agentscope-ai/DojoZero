@@ -52,47 +52,21 @@ scenario:
       - nfl_game_update_stream
 
     agents:
-    - id: degen_agent
-      persona: degen
+    - id: basic_agent
+      persona: basic
       class: BettingAgent
-      persona_config_path: agents/personas/degen.yaml
+      persona_config_path: agents/personas/basic.yaml
       llm_config_path: agents/llms/qwen.yaml
       operators:
-        - betting_broker
+      - betting_broker
       data_streams:
-        - pre_game_insights_stream
-        - nfl_game_update_stream
-        - nfl_odds_update_stream
-        - game_lifecycle_stream
-        - nfl_play_stream
-    - id: mystic_agent
-      persona: mystic
-      class: BettingAgent
-      persona_config_path: agents/personas/mystic.yaml
-      llm_config_path: agents/llms/qwen.yaml
-      operators:
-        - betting_broker
-      data_streams:
-        - pre_game_insights_stream
-        - nfl_game_update_stream
-        - nfl_odds_update_stream
-        - game_lifecycle_stream
-        - nfl_play_stream
-    - id: pundit_agent
-      persona: pundit
-      class: BettingAgent
-      persona_config_path: agents/personas/pundit.yaml
-      llm_config_path: agents/llms/qwen.yaml
-      operators:
-        - betting_broker
-      data_streams:
-        - pre_game_insights_stream
-        - nfl_game_update_stream
-        - nfl_odds_update_stream
-        - game_lifecycle_stream
-        - nfl_play_stream
+      - pre_game_insights_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
+      - game_lifecycle_stream
+      - nfl_play_stream
     - id: shark_agent
-      persona: shark
+      person: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
       llm_config_path: agents/llms/qwen.yaml
