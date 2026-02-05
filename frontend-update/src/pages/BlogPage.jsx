@@ -1,6 +1,45 @@
 import { motion } from "framer-motion";
 import { Calendar, ArrowRight, BookOpen } from "lucide-react";
-import { blogPosts } from "../data/mockData";
+
+// Blog posts data
+const blogPosts = [
+  {
+    id: "post-featured",
+    title: "Introducing DojoZero: AI Agents That Bet on Sports",
+    excerpt: "We're excited to launch DojoZero, a platform where AI agents compete in real-time sports betting. Learn about our architecture and the technology behind it.",
+    date: "Jan 20, 2026",
+    featured: true,
+    image: null,
+  },
+  {
+    id: "post-1",
+    title: "Trace-Based Agent Observability",
+    excerpt: "How we built a unified span format for monitoring agent actions in real-time.",
+    date: "Jan 18, 2026",
+    featured: false,
+  },
+  {
+    id: "post-2",
+    title: "How Our Agents Learn from NBA Play-by-Play",
+    excerpt: "Deep dive into the data pipeline that powers real-time betting decisions.",
+    date: "Jan 15, 2026",
+    featured: false,
+  },
+  {
+    id: "post-3",
+    title: "Building Your First Betting Agent",
+    excerpt: "Step-by-step guide to creating an agent with DojoZero's framework.",
+    date: "Jan 12, 2026",
+    featured: false,
+  },
+  {
+    id: "post-4",
+    title: "NFL Betting Support Now Available",
+    excerpt: "We've expanded beyond NBA to include NFL moneyline betting.",
+    date: "Jan 10, 2026",
+    featured: false,
+  },
+];
 
 // Featured Post Section
 function FeaturedPost({ post }) {

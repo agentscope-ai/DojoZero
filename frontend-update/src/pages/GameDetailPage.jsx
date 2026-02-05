@@ -666,15 +666,14 @@ function AgentCard({ agent }) {
 }
 
 function AgentRankings({ agents }) {
-  // Filter agents with final stats and sort by wins (descending)
+  // Filter agents with final stats and sort by net profit (descending)
   const rankedAgents = agents
     .filter(agent => agent.finalStats && Object.keys(agent.finalStats).length > 0)
     .sort((a, b) => {
-      const winsA = parseInt(a.finalStats.wins || 0);
-      const winsB = parseInt(b.finalStats.wins || 0);
-      if (winsB !== winsA) return winsB - winsA;
-      // If wins are equal, sort by net profit
-      return parseFloat(b.finalStats.net_profit || 0) - parseFloat(a.finalStats.net_profit || 0);
+      // Sort by net profit (winning amount) descending
+      const profitA = parseFloat(a.finalStats.net_profit || 0);
+      const profitB = parseFloat(b.finalStats.net_profit || 0);
+      return profitB - profitA;
     });
 
   if (rankedAgents.length === 0) {
@@ -782,7 +781,10 @@ function parseGameInfo(items) {
       info.awayScore = data.away_score || 0;
       info.period = data.period;
       info.gameClock = data.game_clock;
-      info.status = "live";
+      // Only set to live if not already completed (game_result may come before final game_update)
+      if (info.status !== "completed") {
+        info.status = "live";
+      }
     }
 
     // Game result

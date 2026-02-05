@@ -1,6 +1,13 @@
 import { motion } from "framer-motion";
 import { Github, FileText, MessageCircle, Twitter, ExternalLink } from "lucide-react";
-import { teamMembers } from "../data/mockData";
+
+// Team member names for the About page
+const teamMembers = [
+  "Alice Chen",
+  "Bob Smith",
+  "Carol Zhang",
+  "David Lee",
+];
 
 // Mission Section
 function MissionSection() {
