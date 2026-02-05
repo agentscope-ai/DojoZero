@@ -367,12 +367,23 @@ def _get_team_identity(tricode: str, league: str = "NBA") -> TeamIdentity:
     """Get team identity by tricode.
 
     Returns TeamIdentity from static lookup. Falls back to a minimal identity
-    with the tricode as the name if not found.
+    with the tricode as the name if not found, but still generates a logo URL
+    using the ESPN CDN pattern.
     """
     teams = _NBA_TEAMS if league == "NBA" else _NFL_TEAMS
     if tricode in teams:
         return teams[tricode]
-    return TeamIdentity(name=tricode, tricode=tricode, color=_DEFAULT_TEAM_COLOR)
+
+    # Generate logo URL dynamically for teams not in static lookup
+    league_lower = league.lower()
+    logo_url = f"https://a.espncdn.com/i/teamlogos/{league_lower}/500/{tricode.lower()}.png"
+
+    return TeamIdentity(
+        name=tricode,
+        tricode=tricode,
+        color=_DEFAULT_TEAM_COLOR,
+        logo_url=logo_url,
+    )
 
 
 # ============================================================================
@@ -1990,7 +2001,7 @@ async def _extract_games_from_trials(
 
         phase = trial_info["phase"]
         metadata = trial_info["metadata"]
-        league = metadata.get("league", "NBA")
+        league = metadata.get("sport_type", "NBA")
 
         home_tricode = metadata.get("home_team_tricode", "TBD")
         away_tricode = metadata.get("away_team_tricode", "TBD")
