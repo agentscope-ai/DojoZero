@@ -1,16 +1,130 @@
 #!/bin/bash
-# Setup script for deploying DojoZero Trial Runner to a Unix machine
-# This script sets up the Python environment, installs dependencies, and prepares the system
+# DojoZero Setup Script
+#
+# Usage:
+#   ./deploy/setup.sh                 # Local development (Python + uv)
+#   ./deploy/setup.sh --docker        # Production (Docker, international)
+#   ./deploy/setup.sh --docker --china # Production (Docker, China mirrors)
 
-set -e  # Exit on error
+set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Parse arguments
+DOCKER_MODE=false
+CHINA_MIRRORS=false
+for arg in "$@"; do
+    case $arg in
+        --docker|--production)
+            DOCKER_MODE=true
+            ;;
+        --china)
+            CHINA_MIRRORS=true
+            ;;
+    esac
+done
+
 echo "=========================================="
-echo "DojoZero Trial Runner - Setup"
+if [ "$DOCKER_MODE" = true ]; then
+    if [ "$CHINA_MIRRORS" = true ]; then
+        echo "DojoZero - Production Setup (Docker + China mirrors)"
+    else
+        echo "DojoZero - Production Setup (Docker)"
+    fi
+else
+    echo "DojoZero - Development Setup (Python)"
+fi
 echo "=========================================="
 echo ""
+
+cd "$PROJECT_ROOT"
+
+# =============================================================================
+# Docker Mode (Production / ECS)
+# =============================================================================
+if [ "$DOCKER_MODE" = true ]; then
+
+    # Install Docker if not present
+    if ! command -v docker &> /dev/null; then
+        echo "Installing Docker..."
+        sudo apt-get update
+        sudo apt-get install -y docker.io
+        sudo systemctl enable docker
+        sudo systemctl start docker
+        sudo usermod -aG docker $USER
+        echo "Docker installed"
+        NEED_RELOGIN=true
+    else
+        echo "Docker already installed"
+    fi
+
+    # Install docker-compose if not present
+    if ! command -v docker-compose &> /dev/null; then
+        echo "Installing docker-compose..."
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        echo "docker-compose installed"
+    else
+        echo "docker-compose already installed"
+    fi
+
+    # Configure Docker daemon mirrors for China if --china flag is set
+    if [ "$CHINA_MIRRORS" = true ]; then
+        echo ""
+        echo "Configuring Docker daemon with China mirrors..."
+        sudo mkdir -p /etc/docker
+        sudo tee /etc/docker/daemon.json > /dev/null <<EOF
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io"
+  ]
+}
+EOF
+        sudo systemctl daemon-reload
+        sudo systemctl restart docker
+        echo "Docker configured with DaoCloud mirror"
+    fi
+
+    # Create directories
+    mkdir -p outputs data
+
+    # Setup .env
+    if [ ! -f .env ]; then
+        if [ -f deploy/.env.template ]; then
+            cp deploy/.env.template .env
+            echo ""
+            echo "Created .env from template"
+        fi
+    else
+        echo ".env already exists"
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo "Setup complete!"
+    echo "=========================================="
+    echo ""
+    if [ "$NEED_RELOGIN" = true ]; then
+        echo "IMPORTANT: Log out and back in for docker group, then:"
+        echo ""
+    fi
+    echo "Next steps:"
+    echo "  1. Edit credentials: nano .env"
+    if [ "$CHINA_MIRRORS" = true ]; then
+        echo "  2. Deploy: CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build"
+    else
+        echo "  2. Deploy: docker-compose -f deploy/docker-compose.yml up -d --build"
+    fi
+    echo "  3. Verify: docker logs dojozero-nba --tail 50"
+    echo "             docker logs dojozero-nfl --tail 50"
+    echo ""
+    exit 0
+fi
+
+# =============================================================================
+# Development Mode (Python + uv)
+# =============================================================================
 
 # Check Python version
 echo "Checking Python version..."
@@ -28,7 +142,7 @@ if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" 
     exit 1
 fi
 
-echo "✓ Python $PYTHON_VERSION found"
+echo "Python $PYTHON_VERSION found"
 
 # Check/install uv
 echo ""
@@ -43,169 +157,35 @@ if ! command -v uv &> /dev/null; then
     fi
 fi
 
-echo "✓ uv found: $(uv --version)"
-
-# Create virtual environment (optional, but recommended)
-echo ""
-echo "Setting up Python environment..."
-cd "$PROJECT_ROOT"
+echo "uv found: $(uv --version)"
 
 # Install the package and dependencies
+echo ""
 echo "Installing DojoZero package and dependencies..."
 uv pip install .
 
-# Install additional dependencies for trial runner
-echo "Installing additional dependencies for trial runner..."
-uv pip install "python-dotenv" "tavily-python" "dashscope" "py-clob-client"
+echo "Dependencies installed"
 
-echo "✓ Dependencies installed"
-
-# Create data directory if it doesn't exist
+# Create output directories
 echo ""
-echo "Setting up data directory..."
-DATA_DIR="${DATA_DIR:-$PROJECT_ROOT/data/nba-betting}"
-mkdir -p "$DATA_DIR"
-echo "✓ Data directory: $DATA_DIR"
+echo "Setting up directories..."
+mkdir -p outputs data
+echo "Directories created"
 
 # Check for .env file
 echo ""
-if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    echo "WARNING: .env file not found. Creating template..."
-    cat > "$PROJECT_ROOT/.env.template" << 'EOF'
-# DojoZero Environment Variables
-# Copy this file to .env and fill in your API keys
-
-# Tavily API key for web search
-DOJOZERO_TAVILY_API_KEY=your_tavily_api_key_here
-
-# Dashscope API key for LLM calls
-DOJOZERO_DASHSCOPE_API_KEY=your_dashscope_api_key_here
-
-# Proxy URL for NBA API requests
-DOJOZERO_PROXY_URL=http://proxy.example.com:8080
-
-# Polymarket private key for CLOB authentication
-DOJOZERO_POLY_PRIVATE_KEY=0x...
-
-# Alibaba Cloud credentials - handled by alibabacloud-credentials SDK
-# Option 1: Environment variables
-ALIBABA_CLOUD_ACCESS_KEY_ID=
-ALIBABA_CLOUD_ACCESS_KEY_SECRET=
-# Option 2: Use ~/.alibabacloud/credentials file (recommended)
-
-# OSS (Alibaba Cloud Object Storage) - for uploading trial data
-DOJOZERO_OSS_ENDPOINT=oss-cn-wulanchabu.aliyuncs.com
-DOJOZERO_OSS_BUCKET=dojozero-store
-DOJOZERO_OSS_PREFIX=data/
-
-# SLS (Simple Log Service) - for trace storage
-DOJOZERO_SLS_ENDPOINT=cn-wulanchabu.log.aliyuncs.com
-DOJOZERO_SLS_PROJECT=log-service-1228139055781573-cn-wulanchabu
-DOJOZERO_SLS_LOGSTORE=dojozero-traces
-EOF
-    echo "✓ Created .env.template - please copy to .env and fill in your API keys"
-else
-    echo "✓ .env file found"
-fi
-
-# Make scripts executable
-echo ""
-echo "Making scripts executable..."
-chmod +x "$PROJECT_ROOT/deploy/run_daily_trials.py"
-chmod +x "$PROJECT_ROOT/tools/nba_trial_runner.py"
-chmod +x "$PROJECT_ROOT/tools/nfl_trial_runner.py"
-echo "✓ Scripts are executable"
-
-# Cron job setup (interactive)
-echo ""
-echo "=========================================="
-echo "Cron Job Setup (Optional)"
-echo "=========================================="
-echo ""
-read -p "Would you like to set up a daily cron job? [y/N] " SETUP_CRON
-
-if [[ "$SETUP_CRON" =~ ^[Yy]$ ]]; then
-    # Get cron time
-    echo ""
-    echo "What time should the trials run daily?"
-    echo "  - NBA games typically start between 7 PM - 10 PM ET"
-    echo "  - NFL games typically on Sundays, with some Thursday/Monday games"
-    echo "  - Recommended: Run early morning to catch all games for the day"
-    read -p "Enter hour (0-23) [default: 6]: " CRON_HOUR
-    CRON_HOUR="${CRON_HOUR:-6}"
-    read -p "Enter minute (0-59) [default: 0]: " CRON_MINUTE
-    CRON_MINUTE="${CRON_MINUTE:-0}"
-
-    # Ask about OSS upload
-    echo ""
-    read -p "Enable OSS upload for trial data? [y/N] " ENABLE_OSS
-    if [[ "$ENABLE_OSS" =~ ^[Yy]$ ]]; then
-        OSS_ENV="OSS_UPLOAD=true "
-        echo "  OSS upload will be enabled. Make sure OSS credentials are configured in .env"
-    else
-        OSS_ENV=""
-    fi
-
-    # Ask which trial type
-    echo ""
-    echo "Which trial type would you like to run?"
-    echo "  1) NBA (nba-moneyline)"
-    echo "  2) NFL (nfl-moneyline)"
-    read -p "Enter choice [1]: " TRIAL_CHOICE
-    TRIAL_CHOICE="${TRIAL_CHOICE:-1}"
-
-    if [ "$TRIAL_CHOICE" = "2" ]; then
-        TRIAL_CONFIG_PATH="trial_params/nfl-moneyline.yaml"
-    else
-        TRIAL_CONFIG_PATH="trial_params/nba-moneyline.yaml"
-    fi
-
-    # Build OSS flag
-    OSS_FLAG=""
-    if [ -n "$OSS_ENV" ]; then
-        OSS_FLAG="--oss-upload"
-    fi
-
-    # Build cron entry
-    LOG_FILE="$PROJECT_ROOT/cron.log"
-    CRON_ENTRY="$CRON_MINUTE $CRON_HOUR * * * cd $PROJECT_ROOT && python3 deploy/run_daily_trials.py $TRIAL_CONFIG_PATH $OSS_FLAG >> $LOG_FILE 2>&1"
-
-    echo ""
-    echo "The following cron entry will be added:"
-    echo "  $CRON_ENTRY"
-    echo ""
-    read -p "Proceed with adding this cron job? [y/N] " CONFIRM_CRON
-
-    if [[ "$CONFIRM_CRON" =~ ^[Yy]$ ]]; then
-        # Check if entry already exists
-        EXISTING_CRON=$(crontab -l 2>/dev/null || true)
-        if echo "$EXISTING_CRON" | grep -q "run_daily_trials.py"; then
-            echo ""
-            echo "WARNING: A cron entry for run_daily_trials.py already exists:"
-            echo "$EXISTING_CRON" | grep "run_daily_trials.py"
-            echo ""
-            read -p "Replace existing entry? [y/N] " REPLACE_CRON
-            if [[ "$REPLACE_CRON" =~ ^[Yy]$ ]]; then
-                # Remove existing entry and add new one
-                (echo "$EXISTING_CRON" | grep -v "run_daily_trials.py"; echo "$CRON_ENTRY") | crontab -
-                echo "✓ Cron job updated"
-            else
-                echo "Skipping cron setup (existing entry preserved)"
-            fi
-        else
-            # Add new entry
-            (crontab -l 2>/dev/null || true; echo "$CRON_ENTRY") | crontab -
-            echo "✓ Cron job added"
-        fi
-
+if [ ! -f .env ]; then
+    if [ -f deploy/.env.template ]; then
+        cp deploy/.env.template .env
+        echo "Created .env from template"
         echo ""
-        echo "Current crontab:"
-        crontab -l | grep "run_daily_trials.py" || echo "  (no matching entries)"
+        echo "IMPORTANT: Edit .env and fill in your API keys:"
+        echo "  nano .env"
     else
-        echo "Skipping cron setup"
+        echo "WARNING: deploy/.env.template not found"
     fi
 else
-    echo "Skipping cron setup. You can set it up later - see deploy/DEPLOYMENT.md"
+    echo ".env file found"
 fi
 
 echo ""
@@ -214,17 +194,12 @@ echo "Setup complete!"
 echo "=========================================="
 echo ""
 echo "Next steps:"
-if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    echo "1. Copy .env.template to .env and fill in your API keys:"
-    echo "   cp $PROJECT_ROOT/.env.template $PROJECT_ROOT/.env"
-    echo "   # Edit .env with your API keys"
-    echo ""
-    echo "2. Test the trial runner manually:"
-    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml"
-else
-    echo "1. Test the trial runner manually:"
-    echo "   cd $PROJECT_ROOT && python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml"
-fi
+echo "  1. Edit .env with your API keys: nano .env"
+echo "  2. Run single trial: dojo0 run trial_params/nba-moneyline.yaml"
 echo ""
-echo "For more options, see deploy/DEPLOYMENT.md"
+echo "  Or run server with auto-scheduling:"
+echo "    dojo0 serve --trial-source trial_sources/nba.yaml"
+echo ""
+echo "  For production deployment:"
+echo "    ./deploy/setup.sh --docker"
 echo ""
