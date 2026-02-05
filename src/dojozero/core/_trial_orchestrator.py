@@ -1488,9 +1488,10 @@ class TrialOrchestrator:
                 model=llm_config.get("model_name", ""),
                 model_display_name=config.get(
                     "model_display_name", llm_config.get("model_display_name", "")
-                ),
+                )
+                or "",
                 system_prompt=config.get("sys_prompt", ""),
-                cdn_url=config.get("cdn_url", llm_config.get("cdn_url", "")),
+                cdn_url=config.get("cdn_url", llm_config.get("cdn_url", "")) or "",
             )
             agent_infos.append(agent_info)
 

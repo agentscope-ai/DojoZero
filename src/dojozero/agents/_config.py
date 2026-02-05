@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 import yaml
+from pydantic import BaseModel
 from agentscope.formatter import (
     FormatterBase,
     OpenAIChatFormatter,
@@ -12,6 +13,7 @@ from agentscope.formatter import (
     AnthropicChatFormatter,
     GeminiChatFormatter,
 )
+from agentscope.message import Msg
 from agentscope.model import (
     ChatModelBase,
     OpenAIChatModel,
@@ -20,20 +22,50 @@ from agentscope.model import (
     GeminiChatModel,
 )
 
-ModelType = Literal["openai", "dashscope", "anthropic", "gemini"]
+ModelType = Literal["openai", "dashscope", "anthropic", "gemini", "grok"]
 
 
+class GrokChatFormatter(OpenAIChatFormatter):
+    """Grok-specific formatter that only includes 'name' field for user messages.
+
+    Grok's API (via xAI) only supports the 'name' field on messages with role='user'.
+    This formatter extends OpenAIChatFormatter but removes the 'name' field from
+    non-user messages to avoid API errors.
+    """
+
+    async def _format(self, msgs: list[Msg]) -> list[dict[str, Any]]:
+        """Format messages, removing 'name' from non-user messages."""
+        formatted = await super()._format(msgs)
+
+        for msg in formatted:
+            if msg.get("role") != "user" and "name" in msg:
+                del msg["name"]
+
+        return formatted
+
+
+# Pydantic model for YAML parsing/validation only
+class _LLMConfigModel(BaseModel):
+    """Internal Pydantic model for parsing LLM config from YAML."""
+
+    model_type: ModelType = "openai"
+    model_name: str
+    api_key_env: str
+    base_url_env: str | None = None
+    model_display_name: str | None = None
+    cdn_url: str | None = None
+
+
+# TypedDict for use throughout the codebase
 class LLMConfig(TypedDict, total=False):
     """LLM configuration."""
 
     model_type: ModelType  # "openai", "dashscope", "anthropic", or "gemini"
     model_name: str
     api_key_env: str
-    base_url_env: str
-    max_tokens: int  # Max tokens for response generation (default: 16384)
-    # Display fields for agent registration
-    model_display_name: str  # Human-readable model name (e.g., "qwen", "claude")
-    cdn_url: str  # Avatar image URL for the model
+    base_url_env: str | None
+    model_display_name: str | None  # Human-readable model name (e.g., "qwen", "claude")
+    cdn_url: str | None  # Avatar image URL for the model
 
 
 class PersonaConfig(TypedDict):
@@ -70,24 +102,11 @@ class SingleModelAgentConfig(TypedDict):
     llm: LLMConfig  # Single model config
 
 
-def _parse_llm_config(llm_data: dict[str, Any]) -> LLMConfig:
-    """Parse a single LLM config dict into LLMConfig."""
-    llm_config: LLMConfig = {
-        "model_type": llm_data.get("model_type", "openai"),
-        "model_name": llm_data.get("model_name", "qwen3-max"),
-    }
-    if "api_key_env" in llm_data:
-        llm_config["api_key_env"] = llm_data["api_key_env"]
-    if "base_url_env" in llm_data:
-        llm_config["base_url_env"] = llm_data["base_url_env"]
-    if "max_tokens" in llm_data:
-        llm_config["max_tokens"] = llm_data["max_tokens"]
-    # Parse display fields for agent registration
-    if "model_display_name" in llm_data:
-        llm_config["model_display_name"] = llm_data["model_display_name"]
-    if "cdn_url" in llm_data:
-        llm_config["cdn_url"] = llm_data["cdn_url"]
-    return llm_config
+def _parse_llm_config(data: dict[str, Any]) -> LLMConfig:
+    """Parse and validate LLM config using Pydantic, return as TypedDict."""
+    validated = _LLMConfigModel.model_validate(data)
+    # Convert to TypedDict (dict) - exclude_none to keep it clean
+    return LLMConfig(**validated.model_dump(exclude_none=True))
 
 
 def load_persona_config(config_path: str | Path) -> PersonaConfig:
@@ -156,7 +175,7 @@ def load_agent_config(
     # Validate unique model names when multiple models are specified
     llm_configs = llm_file_config["llm"]
     if len(llm_configs) > 1:
-        model_names = [c.get("model_name", "qwen3-max") for c in llm_configs]
+        model_names = [c.get("model_name", "") for c in llm_configs]
         if len(model_names) != len(set(model_names)):
             raise ValueError(
                 f"Duplicate model names found in LLM config '{llm_config_path}'. "
@@ -171,18 +190,31 @@ def load_agent_config(
     )
 
 
-def get_api_key(llm_config: LLMConfig | dict[str, Any]) -> str:
-    """Get API key from environment variable."""
-    env_var = llm_config.get("api_key_env", "DOJOZERO_OPENAI_API_KEY")
-    return os.environ.get(env_var, "")
-
-
 def create_model(llm_config: LLMConfig) -> ChatModelBase:
-    """Create model from LLM config dict."""
+    """Create model from LLM config."""
     model_type = llm_config.get("model_type", "openai")
-    model_name = llm_config.get("model_name", "qwen3-max")
-    api_key = get_api_key(llm_config)
-    if model_type == "openai":
+    model_name = llm_config.get("model_name", "")
+    api_key_env = llm_config.get("api_key_env", "")
+    if not api_key_env:
+        raise ValueError("Missing 'api_key_env' in LLM config")
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        raise ValueError(f"API key environment variable '{api_key_env}' is not set.")
+    base_url_env = llm_config.get("base_url_env")
+    if base_url_env:
+        base_url = os.environ.get(base_url_env)
+        if not base_url:
+            raise ValueError(
+                f"Base URL environment variable '{base_url_env}' is not set."
+            )
+    else:
+        base_url = None
+    if model_type in "grok":
+        client_kwargs: dict[str, Any] = {"base_url": "https://api.x.ai/v1"}
+        return OpenAIChatModel(
+            model_name=model_name, api_key=api_key, client_kwargs=client_kwargs
+        )
+    elif model_type == "openai":
         return OpenAIChatModel(model_name=model_name, api_key=api_key)
     elif model_type == "dashscope":
         return DashScopeChatModel(model_name=model_name, api_key=api_key)
@@ -198,6 +230,8 @@ def create_formatter(model_type: str) -> FormatterBase:
     """Create formatter matching model type."""
     if model_type == "openai":
         return OpenAIChatFormatter()
+    elif model_type == "grok":
+        return GrokChatFormatter()
     elif model_type == "dashscope":
         return DashScopeChatFormatter()
     elif model_type == "anthropic":

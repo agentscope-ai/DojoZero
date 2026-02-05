@@ -153,6 +153,7 @@ class TestLLMConfigLoading:
                 "dashscope",
                 "anthropic",
                 "gemini",
+                "grok",
             ), (
                 f"LLM config {llm_path} LLM[{i}] has unknown model_type: {llm_config['model_type']}"
             )
@@ -194,7 +195,7 @@ class TestAgentConfigLoading:
             assert "sys_prompt" in single_config
             assert "llm" in single_config
             assert isinstance(single_config["llm"], dict), (
-                "Expanded config 'llm' should be a single dict"
+                "Expanded config 'llm' should be a dict"
             )
 
 
@@ -212,16 +213,18 @@ class TestModelCreation:
     )
     def test_model_can_be_created(self, config_name: str, llm_config: LLMConfig):
         """Test that each model can be instantiated without errors."""
-        # Override env vars for testing
-        llm_config = llm_config.copy()
-        llm_config["api_key_env"] = TEST_API_KEY_ENV
-        llm_config["base_url_env"] = TEST_BASE_URL_ENV
+        # Override env vars for testing - only set base_url_env if the env var exists
+        test_config: LLMConfig = {**llm_config, "api_key_env": TEST_API_KEY_ENV}
+        if os.environ.get(TEST_BASE_URL_ENV):
+            test_config["base_url_env"] = TEST_BASE_URL_ENV
+        else:
+            test_config["base_url_env"] = None
 
-        model = create_model(llm_config)
+        model = create_model(test_config)
 
         assert model is not None
         assert hasattr(model, "model_name")
-        assert model.model_name == llm_config.get("model_name")
+        assert model.model_name == test_config.get("model_name")
 
 
 # =============================================================================
@@ -231,18 +234,21 @@ class TestModelCreation:
 
 def _create_test_agent(llm_config: LLMConfig, config_name: str) -> BettingAgent:
     """Create a BettingAgent for testing with the given LLM config."""
-    llm_config = llm_config.copy()
-    llm_config["api_key_env"] = TEST_API_KEY_ENV
-    llm_config["base_url_env"] = TEST_BASE_URL_ENV
-    model_type = llm_config.get("model_type", "openai")
-    model_name = llm_config.get("model_name", "unknown")
+    # Override env vars for testing - only set base_url_env if the env var exists
+    test_config: LLMConfig = {**llm_config, "api_key_env": TEST_API_KEY_ENV}
+    if os.environ.get(TEST_BASE_URL_ENV):
+        test_config["base_url_env"] = TEST_BASE_URL_ENV
+    else:
+        test_config["base_url_env"] = None
+    model_type = test_config.get("model_type", "openai")
+    model_name = test_config.get("model_name", "unknown")
 
     return BettingAgent(
         actor_id=f"test-{config_name}-{model_name}",
         trial_id="test-trial",
         name=f"test-{config_name}-{model_name}",
         sys_prompt="You are a test agent. Reply with 'OK' to any message.",
-        model=create_model(llm_config),
+        model=create_model(test_config),
         formatter=create_formatter(model_type),
     )
 
@@ -336,9 +342,15 @@ class TestAllConfigsEndToEnd:
                 expanded = expand_agent_config(config)
 
                 for single_config in expanded:
-                    llm_config = single_config["llm"].copy()
-                    llm_config["api_key_env"] = TEST_API_KEY_ENV
-                    llm_config["base_url_env"] = TEST_BASE_URL_ENV
+                    # Override env vars for testing - only set base_url_env if the env var exists
+                    llm_config: LLMConfig = {
+                        **single_config["llm"],
+                        "api_key_env": TEST_API_KEY_ENV,
+                    }
+                    if os.environ.get(TEST_BASE_URL_ENV):
+                        llm_config["base_url_env"] = TEST_BASE_URL_ENV
+                    else:
+                        llm_config["base_url_env"] = None
 
                     model_name = llm_config.get("model_name", "unknown")
                     test_id = f"{persona_path.stem}/{llm_path.stem}/{model_name}"
