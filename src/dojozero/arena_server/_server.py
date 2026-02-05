@@ -376,7 +376,9 @@ def _get_team_identity(tricode: str, league: str = "NBA") -> TeamIdentity:
 
     # Generate logo URL dynamically for teams not in static lookup
     league_lower = league.lower()
-    logo_url = f"https://a.espncdn.com/i/teamlogos/{league_lower}/500/{tricode.lower()}.png"
+    logo_url = (
+        f"https://a.espncdn.com/i/teamlogos/{league_lower}/500/{tricode.lower()}.png"
+    )
 
     return TeamIdentity(
         name=tricode,
