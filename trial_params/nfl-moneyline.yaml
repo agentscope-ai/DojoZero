@@ -92,7 +92,7 @@ scenario:
         - game_lifecycle_stream
         - nfl_play_stream
     - id: shark_agent
-      person: shark
+      persona: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
       llm_config_path: agents/llms/all.yaml
