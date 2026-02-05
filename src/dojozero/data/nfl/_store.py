@@ -497,7 +497,44 @@ class NFLStore(DataStore):
                 possession_team = situation.get("possession", "")
                 down = int(situation.get("down", 0) or 0)
                 distance = int(situation.get("distance", 0) or 0)
-                yard_line = situation.get("yardLine", "")
+                yard_line_raw = situation.get("yardLine", "")
+
+                # Convert yard_line to 0-100 int
+                # API may return integer (26) or string "KC 25" format
+                # 0 = home goal line, 100 = away goal line
+                yard_line = 0
+                if isinstance(yard_line_raw, int):
+                    # Already an integer (PBP-style format)
+                    yard_line = yard_line_raw
+                elif yard_line_raw:
+                    yard_line_str = str(yard_line_raw)
+                    if " " in yard_line_str:
+                        # "KC 25" format - parse team and yards
+                        try:
+                            parts = yard_line_str.split()
+                            yl_team = parts[0]
+                            yl_yards = int(parts[1])
+                            # Get home team abbreviation
+                            home_abbrev = ""
+                            for team in teams:
+                                if team and team.get("homeAway") == "home":
+                                    team_info = team.get("team", {}) or {}
+                                    home_abbrev = team_info.get("abbreviation", "")
+                                    break
+                            # If yard_line team is home team, it's in home territory (0-50)
+                            # If yard_line team is away team, it's in away territory (50-100)
+                            if yl_team == home_abbrev:
+                                yard_line = yl_yards
+                            else:
+                                yard_line = 100 - yl_yards
+                        except (ValueError, IndexError):
+                            yard_line = 0
+                    else:
+                        # Plain numeric string
+                        try:
+                            yard_line = int(yard_line_str)
+                        except ValueError:
+                            yard_line = 0
 
                 # Get line scores from header competitors
                 home_line_scores: list[int] = []
@@ -853,9 +890,9 @@ class NFLStore(DataStore):
                         home_score=home_score,
                         away_score=away_score,
                         possession=team_abbrev,
-                        down=0,
-                        distance=0,
-                        yard_line="",
+                        down=down,
+                        distance=distance,
+                        yard_line=yard_line,
                         home_team_stats=NFLTeamGameStats(),
                         away_team_stats=NFLTeamGameStats(),
                         home_line_scores=[],

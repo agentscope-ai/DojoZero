@@ -324,7 +324,7 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
             "possession": play.get("team_tricode", ""),
             "down": down,
             "distance": distance,
-            "yard_line": str(yard_line) if yard_line else "",
+            "yard_line": yard_line,
             "home_team_stats": {},
             "away_team_stats": {},
             "home_line_scores": [],
