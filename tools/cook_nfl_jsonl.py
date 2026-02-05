@@ -308,6 +308,9 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
         away_score = int(play.get("away_score", 0) or 0)
         period = int(play.get("period", 0) or 0)
         clock = play.get("clock", "")
+        down = int(play.get("down", 0) or 0)
+        distance = int(play.get("distance", 0) or 0)
+        yard_line = play.get("yard_line", 0)
 
         # Create game_update event based on template or minimal structure
         update_event: dict[str, Any] = {
@@ -319,9 +322,9 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
             "home_score": home_score,
             "away_score": away_score,
             "possession": play.get("team_tricode", ""),
-            "down": 0,
-            "distance": 0,
-            "yard_line": "",
+            "down": down,
+            "distance": distance,
+            "yard_line": str(yard_line) if yard_line else "",
             "home_team_stats": {},
             "away_team_stats": {},
             "home_line_scores": [],
@@ -332,7 +335,14 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
         if game_update_template:
             for key in ("home_team_stats", "away_team_stats"):
                 if key in game_update_template:
-                    update_event[key] = game_update_template[key]
+                    # Deep copy to avoid mutating template
+                    update_event[key] = dict(game_update_template[key])
+
+        # Override nested score fields with correct score at this moment
+        if update_event["home_team_stats"]:
+            update_event["home_team_stats"]["score"] = home_score
+        if update_event["away_team_stats"]:
+            update_event["away_team_stats"]["score"] = away_score
 
         # Set timestamp slightly after the scoring play (0.5 second)
         dt = datetime.fromisoformat(play_ts) + timedelta(seconds=0.5)
