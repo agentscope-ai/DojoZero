@@ -336,7 +336,7 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
             for key in ("home_team_stats", "away_team_stats"):
                 if key in game_update_template:
                     # Deep copy to avoid mutating template
-                    update_event[key] = dict(game_update_template[key])
+                    update_event[key] = copy.deepcopy(game_update_template[key])
 
         # Override nested score fields with correct score at this moment
         if update_event["home_team_stats"]:
