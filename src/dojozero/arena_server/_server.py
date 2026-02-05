@@ -12,12 +12,14 @@ It does not communicate with the Dashboard Server directly.
 Endpoints:
 - GET  /api/trials                    - List trials with phase/metadata
 - GET  /api/trials/{trial_id}         - Get trial info and spans
+- POST /api/trials/{trial_id}/replay  - Get all replay data for a completed trial
 - GET  /api/landing                   - Landing page data (games, stats, actions)
 - GET  /api/stats                     - Real-time stats (games, wagered, etc.)
 - GET  /api/games                     - All games (live, upcoming, completed)
 - GET  /api/leaderboard               - Agent rankings by winnings
 - GET  /api/agent-actions             - Recent agent actions
-- WS   /ws/trials/{trial_id}/stream   - Real-time span streaming
+- WS   /ws/trials/{trial_id}/stream   - Real-time span streaming (supports pause/resume)
+- WS   /ws/trials/{trial_id}/replay   - Replay completed trial (supports pause/resume/speed)
 
 Configuration:
     dojo0 arena --trace-backend sls
@@ -26,6 +28,7 @@ Configuration:
 """
 
 import asyncio
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -47,12 +50,16 @@ from dojozero.arena_server._models import (
     GamesResponse,
     LandingResponse,
     LeaderboardResponse,
+    ReplayResponse,
     StatsResponse,
     TrialDetailResponse,
     TrialListItem,
     WSHeartbeatMessage,
+    WSReplayStatusMessage,
+    WSReplayUnavailableMessage,
     WSSnapshotMessage,
     WSSpanMessage,
+    WSStreamStatusMessage,
     WSTrialEndedMessage,
 )
 from dojozero.arena_server._replay import (
@@ -1221,6 +1228,201 @@ class LandingPageCache:
         }
 
 
+# =============================================================================
+# Replay Cache
+# =============================================================================
+
+
+@dataclass
+class ReplayCacheEntry:
+    """Cache entry for replay data."""
+
+    items: list[dict[str, Any]]  # Serialized spans for WS
+    created_at: float = field(default_factory=time.time)
+    ttl: float = 3600.0  # 1 hour default
+
+    def is_valid(self) -> bool:
+        return time.time() < (self.created_at + self.ttl)
+
+
+@dataclass
+class ReplayCache:
+    """Cache for completed trial replay data.
+
+    Only stores data for trials that have ended (trial.stopped/terminated).
+    Reduces SLS queries for frequently replayed trials.
+    """
+
+    _cache: dict[str, ReplayCacheEntry] = field(default_factory=dict)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    ttl: float = 3600.0  # 1 hour
+    max_entries: int = 100  # Max trials to cache
+
+    async def get(self, trial_id: str) -> list[dict[str, Any]] | None:
+        """Get cached replay data, or None if not cached/expired."""
+        async with self._lock:
+            entry = self._cache.get(trial_id)
+            if entry and entry.is_valid():
+                LOGGER.debug(
+                    "ReplayCache HIT: %s (%d items)", trial_id, len(entry.items)
+                )
+                return entry.items
+            elif entry:
+                # Expired, remove it
+                del self._cache[trial_id]
+                LOGGER.debug("ReplayCache EXPIRED: %s", trial_id)
+            return None
+
+    async def set(self, trial_id: str, items: list[dict[str, Any]]) -> None:
+        """Cache replay data for a completed trial."""
+        async with self._lock:
+            # Evict oldest if at capacity
+            if len(self._cache) >= self.max_entries:
+                oldest = min(self._cache.items(), key=lambda x: x[1].created_at)
+                del self._cache[oldest[0]]
+                LOGGER.debug("ReplayCache evicted: %s", oldest[0])
+
+            self._cache[trial_id] = ReplayCacheEntry(
+                items=items,
+                ttl=self.ttl,
+            )
+            LOGGER.info("ReplayCache SET: %s (%d items)", trial_id, len(items))
+
+    def invalidate(self, trial_id: str) -> None:
+        """Remove a trial from cache."""
+        if trial_id in self._cache:
+            del self._cache[trial_id]
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get cache statistics."""
+        valid_count = sum(1 for e in self._cache.values() if e.is_valid())
+        return {
+            "total_entries": len(self._cache),
+            "valid_entries": valid_count,
+            "max_entries": self.max_entries,
+            "ttl": self.ttl,
+        }
+
+
+# =============================================================================
+# Stream and Replay Controllers
+# =============================================================================
+
+
+@dataclass
+class StreamController:
+    """Per-connection stream state controller for live streams.
+
+    Manages pause/resume state and buffers spans during pause for catch-up.
+    """
+
+    is_paused: bool = False
+    # Buffer for spans received during pause (for catch-up mode)
+    pause_buffer: list[SpanData] = field(default_factory=list)
+    # Max buffer size to prevent memory issues
+    max_buffer_size: int = 1000
+
+    def pause(self) -> None:
+        self.is_paused = True
+
+    def resume(self) -> None:
+        self.is_paused = False
+
+    def buffer_span(self, span: SpanData) -> None:
+        """Buffer a span during pause (for catch-up on resume)."""
+        if len(self.pause_buffer) < self.max_buffer_size:
+            self.pause_buffer.append(span)
+
+    def drain_buffer(self) -> list[SpanData]:
+        """Get and clear buffered spans."""
+        spans = self.pause_buffer
+        self.pause_buffer = []
+        return spans
+
+
+@dataclass
+class TrialReplayController:
+    """Controls replay of a completed trial's historical data.
+
+    Unlike the mock ReplayController, this loads from real trace data.
+    Supports 1x, 2x, 4x playback speeds.
+    """
+
+    trial_id: str
+    items: list[dict[str, Any]] = field(default_factory=list)
+    current_index: int = 0
+    speed: float = 1.0  # 1x, 2x, 4x
+    is_paused: bool = False
+    base_interval: float = 2.0  # 2 seconds per event at 1x speed
+
+    # Initial snapshot size (first N items sent immediately)
+    snapshot_size: int = 20
+
+    def set_speed(self, speed: float) -> None:
+        """Set playback speed (1x, 2x, 4x only)."""
+        allowed = [1.0, 2.0, 4.0]
+        if speed in allowed:
+            self.speed = speed
+        else:
+            # Snap to nearest allowed
+            self.speed = min(allowed, key=lambda x: abs(x - speed))
+        LOGGER.debug(
+            "Replay speed set to %.1fx for trial %s", self.speed, self.trial_id
+        )
+
+    def pause(self) -> None:
+        self.is_paused = True
+        LOGGER.debug(
+            "Replay paused at index %d for trial %s", self.current_index, self.trial_id
+        )
+
+    def resume(self) -> None:
+        self.is_paused = False
+        LOGGER.debug(
+            "Replay resumed from index %d for trial %s",
+            self.current_index,
+            self.trial_id,
+        )
+
+    def reset(self) -> None:
+        self.current_index = 0
+        self.is_paused = False
+
+    def get_snapshot_items(self) -> list[dict[str, Any]]:
+        """Get initial snapshot items to send on connection."""
+        count = min(self.snapshot_size, len(self.items))
+        self.current_index = count
+        return self.items[:count]
+
+    def get_next_item(self) -> dict[str, Any] | None:
+        """Get the next item to send, or None if complete."""
+        if self.current_index >= len(self.items):
+            return None
+        item = self.items[self.current_index]
+        self.current_index += 1
+        return item
+
+    def get_effective_interval(self) -> float:
+        """Get actual interval based on speed."""
+        return self.base_interval / self.speed
+
+    def is_complete(self) -> bool:
+        return self.current_index >= len(self.items)
+
+    def get_status(self) -> WSReplayStatusMessage:
+        """Get current replay status."""
+        total = len(self.items)
+        progress = (self.current_index / total * 100) if total > 0 else 0
+        return WSReplayStatusMessage(
+            current_index=self.current_index,
+            total_items=total,
+            is_paused=self.is_paused,
+            speed=self.speed,
+            progress_percent=round(progress, 1),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+
 @dataclass
 class ArenaServerState:
     """Shared state for the Arena Server."""
@@ -1228,6 +1430,7 @@ class ArenaServerState:
     trace_reader: TraceReader
     broadcaster: SpanBroadcaster = field(default_factory=SpanBroadcaster)
     cache: LandingPageCache = field(default_factory=LandingPageCache)
+    replay_cache: ReplayCache = field(default_factory=ReplayCache)
     static_dir: Path | None = None
     poll_interval: float = 1.0  # Seconds between trace polls
     trace_backend: str = "jaeger"
@@ -1830,6 +2033,68 @@ async def _compute_leaderboard(
     return ranked
 
 
+async def _load_replay_data(
+    trace_reader: TraceReader,
+    replay_cache: ReplayCache,
+    trial_id: str,
+) -> tuple[list[dict[str, Any]] | None, str]:
+    """Load replay data for a trial.
+
+    Returns:
+        Tuple of (items, error_reason)
+        - If successful: (items, "")
+        - If failed: (None, reason)
+
+    Reasons:
+        - "trial_not_found": No spans found for trial
+        - "trial_still_running": Trial hasn't ended yet
+        - "no_data": Trial exists but no spans to replay
+    """
+    # 1. Check cache first
+    cached = await replay_cache.get(trial_id)
+    if cached:
+        return cached, ""
+
+    # 2. Fetch from trace store
+    try:
+        spans = await trace_reader.get_spans(trial_id)
+    except Exception as e:
+        LOGGER.error("Failed to fetch spans for replay: %s", e)
+        return None, "trial_not_found"
+
+    if not spans:
+        return None, "trial_not_found"
+
+    # 3. Check if trial has ended
+    has_ended = False
+    items: list[dict[str, Any]] = []
+
+    for span in spans:
+        typed = deserialize_span(span)
+        if typed is None:
+            continue
+
+        # Serialize for WS
+        items.append(serialize_span_for_ws(typed))
+
+        # Check for end marker
+        if isinstance(typed, TrialLifecycleSpan):
+            if typed.phase in ("stopped", "terminated"):
+                has_ended = True
+
+    if not has_ended:
+        LOGGER.info("Trial %s has not ended yet, replay unavailable", trial_id)
+        return None, "trial_still_running"
+
+    if not items:
+        return None, "no_data"
+
+    # 4. Cache the result (only for completed trials)
+    await replay_cache.set(trial_id, items)
+
+    return items, ""
+
+
 def create_arena_app(
     trace_backend: str,
     trace_query_endpoint: str | None = None,
@@ -2263,17 +2528,26 @@ def create_arena_app(
 
     @app.websocket("/ws/trials/{trial_id}/stream")
     async def trial_stream(websocket: WebSocket, trial_id: str):
-        """WebSocket endpoint for real-time span streaming.
+        """WebSocket endpoint for real-time span streaming with pause/resume.
 
         Protocol:
         - Server sends 'snapshot' immediately upon connection
         - Server pushes 'span' messages as new spans are detected
         - Server sends 'trial_ended' when trial completes
         - Server sends 'heartbeat' periodically
+        - Server sends 'stream_status' in response to control commands
+
+        Control commands (send as JSON):
+            {"command": "pause"}   - Pause streaming (buffers spans)
+            {"command": "resume"}  - Resume streaming (sends buffered spans)
+            {"command": "status"}  - Get current stream status
         """
         state = get_server_state()
         await websocket.accept()
         LOGGER.info("WebSocket connection accepted for trial '%s'", trial_id)
+
+        # Per-connection stream controller
+        controller = StreamController()
 
         try:
             await state.broadcaster.subscribe(trial_id, websocket)
@@ -2295,11 +2569,52 @@ def create_arena_app(
             # Poll for new spans and broadcast
             while True:
                 try:
-                    # Wait for either a client message or timeout
-                    await asyncio.wait_for(
+                    # Wait for client message or timeout
+                    msg_text = await asyncio.wait_for(
                         websocket.receive_text(),
                         timeout=state.poll_interval,
                     )
+
+                    # Handle control commands
+                    try:
+                        command_data = json.loads(msg_text)
+                        command = command_data.get("command", "")
+
+                        if command == "pause":
+                            controller.pause()
+                            status_msg = WSStreamStatusMessage(
+                                is_paused=True,
+                                buffer_size=len(controller.pause_buffer),
+                                timestamp=datetime.now(timezone.utc).isoformat(),
+                            )
+                            await websocket.send_text(status_msg.model_dump_json())
+
+                        elif command == "resume":
+                            controller.resume()
+                            # Send buffered spans as snapshot (catch-up mode)
+                            buffered = controller.drain_buffer()
+                            if buffered:
+                                await state.broadcaster.send_snapshot(
+                                    trial_id, websocket, buffered
+                                )
+                            status_msg = WSStreamStatusMessage(
+                                is_paused=False,
+                                buffered_count=len(buffered),
+                                timestamp=datetime.now(timezone.utc).isoformat(),
+                            )
+                            await websocket.send_text(status_msg.model_dump_json())
+
+                        elif command == "status":
+                            status_msg = WSStreamStatusMessage(
+                                is_paused=controller.is_paused,
+                                buffer_size=len(controller.pause_buffer),
+                                timestamp=datetime.now(timezone.utc).isoformat(),
+                            )
+                            await websocket.send_text(status_msg.model_dump_json())
+
+                    except json.JSONDecodeError:
+                        LOGGER.warning("Invalid JSON command: %s", msg_text)
+
                 except asyncio.TimeoutError:
                     # Poll for new spans (start_time for incremental updates)
                     new_spans = await state.trace_reader.get_spans(
@@ -2311,23 +2626,29 @@ def create_arena_app(
                         s for s in new_spans if s.span_id not in seen_span_ids
                     ]
 
-                    # Broadcast only new spans
                     for span in truly_new_spans:
-                        await state.broadcaster.broadcast_span(trial_id, span)
                         seen_span_ids.add(span.span_id)
+
+                        if controller.is_paused:
+                            # Buffer during pause
+                            controller.buffer_span(span)
+                        else:
+                            # Broadcast immediately
+                            await state.broadcaster.broadcast_span(trial_id, span)
 
                     if truly_new_spans:
                         last_us = max(s.start_time for s in truly_new_spans)
                         last_time = datetime.fromtimestamp(
                             last_us / 1_000_000, tz=timezone.utc
                         )
-                        LOGGER.debug(
-                            "Sent %d new spans for trial '%s'",
-                            len(truly_new_spans),
-                            trial_id,
-                        )
+                        if not controller.is_paused:
+                            LOGGER.debug(
+                                "Sent %d new spans for trial '%s'",
+                                len(truly_new_spans),
+                                trial_id,
+                            )
 
-                    # Send heartbeat
+                    # Send heartbeat (even when paused, to keep connection alive)
                     heartbeat = WSHeartbeatMessage(
                         timestamp=datetime.now(timezone.utc).isoformat(),
                     )
@@ -2339,6 +2660,212 @@ def create_arena_app(
             LOGGER.error("WebSocket error for trial '%s': %s", trial_id, e)
         finally:
             await state.broadcaster.unsubscribe(trial_id, websocket)
+
+    @app.websocket("/ws/trials/{trial_id}/replay")
+    async def trial_replay(websocket: WebSocket, trial_id: str):
+        """WebSocket endpoint for replaying completed trials.
+
+        Only works for trials that have ended (trial.stopped/terminated).
+        Replays at uniform speed with support for pause/resume and speed control.
+
+        Control commands (send as JSON):
+            {"command": "pause"}              - Pause replay
+            {"command": "resume"}             - Resume replay
+            {"command": "speed", "value": 2}  - Set speed (1, 2, or 4)
+            {"command": "reset"}              - Restart from beginning
+            {"command": "status"}             - Get current status
+
+        Server messages:
+            {"type": "snapshot", ...}           - Initial batch of events
+            {"type": "span", ...}               - Single event during playback
+            {"type": "replay_status", ...}      - Playback status update
+            {"type": "replay_unavailable", ...} - Replay not available
+            {"type": "trial_ended", ...}        - End of replay
+            {"type": "heartbeat", ...}          - Keepalive
+        """
+        state = get_server_state()
+        await websocket.accept()
+        LOGGER.info("Replay WebSocket connection accepted for trial '%s'", trial_id)
+
+        # Load replay data
+        items, error_reason = await _load_replay_data(
+            state.trace_reader,
+            state.replay_cache,
+            trial_id,
+        )
+
+        if items is None:
+            # Send unavailable message and close
+            unavailable_msg = WSReplayUnavailableMessage(
+                trial_id=trial_id,
+                reason=error_reason,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+            await websocket.send_text(unavailable_msg.model_dump_json())
+            await websocket.close()
+            LOGGER.info("Replay unavailable for trial '%s': %s", trial_id, error_reason)
+            return
+
+        # Create controller
+        controller = TrialReplayController(
+            trial_id=trial_id,
+            items=items,
+        )
+
+        try:
+            # Send initial snapshot
+            snapshot_items = controller.get_snapshot_items()
+            snapshot_msg = WSSnapshotMessage(
+                trial_id=trial_id,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                data={"items": snapshot_items},
+            )
+            await websocket.send_text(snapshot_msg.model_dump_json())
+            LOGGER.info(
+                "Replay: Sent snapshot with %d items for trial '%s'",
+                len(snapshot_items),
+                trial_id,
+            )
+
+            # Send initial status
+            await websocket.send_text(controller.get_status().model_dump_json())
+
+            # Main replay loop
+            while True:
+                try:
+                    # Wait for command or timeout
+                    msg_text = await asyncio.wait_for(
+                        websocket.receive_text(),
+                        timeout=controller.get_effective_interval(),
+                    )
+
+                    # Handle command
+                    try:
+                        command_data = json.loads(msg_text)
+                        command = command_data.get("command", "")
+                        value = command_data.get("value")
+
+                        if command == "pause":
+                            controller.pause()
+                        elif command == "resume":
+                            controller.resume()
+                        elif command == "speed" and value is not None:
+                            controller.set_speed(float(value))
+                        elif command == "reset":
+                            controller.reset()
+                            # Re-send snapshot
+                            snapshot_items = controller.get_snapshot_items()
+                            snapshot_msg = WSSnapshotMessage(
+                                trial_id=trial_id,
+                                timestamp=datetime.now(timezone.utc).isoformat(),
+                                data={"items": snapshot_items},
+                            )
+                            await websocket.send_text(snapshot_msg.model_dump_json())
+                        elif command == "status":
+                            pass  # Just send status below
+                        else:
+                            LOGGER.warning("Unknown replay command: %s", command)
+                            continue
+
+                        # Send status after any command
+                        await websocket.send_text(
+                            controller.get_status().model_dump_json()
+                        )
+
+                    except json.JSONDecodeError:
+                        LOGGER.warning("Invalid JSON command: %s", msg_text)
+
+                except asyncio.TimeoutError:
+                    # No command, continue playback if not paused
+                    if controller.is_paused:
+                        # Send heartbeat while paused
+                        heartbeat = WSHeartbeatMessage(
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                        )
+                        await websocket.send_text(heartbeat.model_dump_json())
+                        continue
+
+                    if controller.is_complete():
+                        # Send trial ended
+                        ended_msg = WSTrialEndedMessage(
+                            trial_id=trial_id,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                        )
+                        await websocket.send_text(ended_msg.model_dump_json())
+                        LOGGER.info("Replay completed for trial '%s'", trial_id)
+
+                        # Pause at end, allow reset
+                        controller.pause()
+                        await websocket.send_text(
+                            controller.get_status().model_dump_json()
+                        )
+                        continue
+
+                    # Send next item
+                    item = controller.get_next_item()
+                    if item:
+                        span_msg = WSSpanMessage(
+                            trial_id=trial_id,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            category=item.get("category", ""),
+                            data=item.get("data", {}),
+                        )
+                        await websocket.send_text(span_msg.model_dump_json())
+
+                        # Send status every 20 items
+                        if controller.current_index % 20 == 0:
+                            await websocket.send_text(
+                                controller.get_status().model_dump_json()
+                            )
+
+        except WebSocketDisconnect:
+            LOGGER.info("Replay WebSocket disconnected for trial '%s'", trial_id)
+        except Exception as e:
+            LOGGER.error("Replay WebSocket error for trial '%s': %s", trial_id, e)
+
+    @app.post("/api/trials/{trial_id}/replay")
+    async def get_trial_replay_data(trial_id: str) -> JSONResponse:
+        """Get all replay data for a completed trial at once.
+
+        This endpoint returns all spans for a completed trial in a single response,
+        allowing the frontend to implement its own playback logic.
+
+        Only works for trials that have ended (trial.stopped/terminated).
+
+        Returns:
+            ReplayResponse with:
+                - available: True if replay data is available
+                - reason: Error reason if not available
+                - items: List of serialized spans
+                - totalItems: Total number of items
+        """
+        state = get_server_state()
+
+        items, error_reason = await _load_replay_data(
+            state.trace_reader,
+            state.replay_cache,
+            trial_id,
+        )
+
+        if items is None:
+            response = ReplayResponse(
+                trial_id=trial_id,
+                available=False,
+                reason=error_reason,
+                items=[],
+                total_items=0,
+            )
+            # Return 200 with available=false rather than 404
+            # This allows frontend to handle gracefully
+            return JSONResponse(content=response.model_dump(by_alias=True))
+
+        response = ReplayResponse(
+            trial_id=trial_id,
+            available=True,
+            items=items,
+            total_items=len(items),
+        )
+        return JSONResponse(content=response.model_dump(by_alias=True))
 
     # -------------------------------------------------------------------------
     # Health Check
@@ -2513,7 +3040,11 @@ __all__ = [
     "CacheEntry",
     "DEFAULT_CACHE_CONFIG",
     "LandingPageCache",
+    "ReplayCache",
+    "ReplayCacheEntry",
     "SpanBroadcaster",
+    "StreamController",
+    "TrialReplayController",
     "WSMessageType",
     "create_arena_app",
     "create_trace_reader",
