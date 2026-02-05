@@ -2,6 +2,7 @@ import { useState, createContext, useContext } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import TopBar from "./components/TopBar";
 import GamesPage from "./pages/GamesPage";
+import GameDetailPage from "./pages/GameDetailPage";
 import LeaderboardPage from "./pages/LeaderboardPage";
 import BlogPage from "./pages/BlogPage";
 import AboutPage from "./pages/AboutPage";
@@ -40,6 +41,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<GamesPage />} />
                 <Route path="/games" element={<GamesPage />} />
+                <Route path="/games/:trialId" element={<GameDetailPage />} />
                 <Route path="/leaderboard" element={<LeaderboardPage />} />
                 <Route path="/blog" element={<BlogPage />} />
                 <Route path="/about" element={<AboutPage />} />

@@ -38,7 +38,7 @@ function PodiumSection({ leaderboardData }) {
 
           return (
             <motion.div
-              key={entry.agent.id}
+              key={entry.agent.agent_id}
               style={styles.podiumItem}
               initial={{ opacity: 0, y: 50 }}
               animate={{ opacity: 1, y: 0 }}
@@ -55,7 +55,7 @@ function PodiumSection({ leaderboardData }) {
 
               {/* Agent Info */}
               <div style={styles.podiumInfo}>
-                <span style={styles.podiumName}>{entry.agent.name}</span>
+                <span style={styles.podiumName}>{entry.agent.persona || entry.agent.agent_id}</span>
                 <span style={styles.podiumWinnings}>
                   +${entry.winnings.toLocaleString()}
                 </span>
@@ -166,14 +166,14 @@ function RankingTable({ selectedAgent, setSelectedAgent, leaderboardData }) {
         <tbody>
           {data.map((entry, index) => (
             <motion.tr
-              key={entry.agent.id}
+              key={entry.agent.agent_id}
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.2, delay: index * 0.05 }}
               onClick={() => setSelectedAgent(entry)}
               style={{
                 cursor: "pointer",
-                background: selectedAgent?.agent.id === entry.agent.id
+                background: selectedAgent?.agent.id === entry.agent.agent_id
                   ? "rgba(59, 130, 246, 0.1)"
                   : "transparent",
               }}
@@ -195,7 +195,7 @@ function RankingTable({ selectedAgent, setSelectedAgent, leaderboardData }) {
                     {entry.agent.avatar}
                   </span>
                   <div>
-                    <span style={styles.agentName}>{entry.agent.name}</span>
+                    <span style={styles.agentName}>{entry.agent.persona || entry.agent.agent_id}</span>
                     <span style={styles.agentModel}>{entry.agent.model}</span>
                   </div>
                 </div>
@@ -254,7 +254,7 @@ function AgentDetailPanel({ agent }) {
             {agent.agent.avatar}
           </span>
           <div>
-            <h3 style={styles.detailName}>{agent.agent.name}</h3>
+            <h3 style={styles.detailName}>{agent.agent.persona || agent.agent.agent_id}</h3>
             <span style={styles.detailModel}>Model: {agent.agent.model}</span>
           </div>
         </div>

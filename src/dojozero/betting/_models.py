@@ -414,6 +414,30 @@ class AgentInfo(BaseModel):
     system_prompt: str = Field(default="", description="Agent's system prompt")
     cdn_url: str = Field(default="", description="Avatar image URL")
 
+    @computed_field  # type: ignore[misc]
+    @property
+    def avatar(self) -> str:
+        """Computed avatar: first character of persona, uppercased."""
+        return self.persona[0].upper() if self.persona else "?"
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def color(self) -> str:
+        """Computed color: deterministic color based on agent_id."""
+        colors = [
+            "#3B82F6",  # blue
+            "#8B5CF6",  # purple
+            "#10B981",  # green
+            "#F59E0B",  # amber
+            "#EF4444",  # red
+            "#EC4899",  # pink
+            "#14B8A6",  # teal
+            "#6366F1",  # indigo
+        ]
+        # Hash agent_id to index
+        hash_val = sum(ord(c) for c in self.agent_id)
+        return colors[hash_val % len(colors)]
+
 
 class AgentList(BaseModel):
     """Batch agent registration payload for initializing multiple agents at once."""

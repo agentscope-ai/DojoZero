@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dojozero.betting._models import AgentInfo
 from dojozero.core._models import AgentAction, LeaderboardEntry
 from dojozero.data._models import TeamIdentity
 
@@ -51,7 +52,7 @@ class GameCardData(BaseModel):
     # Live-only fields
     quarter: str = ""
     clock: str = ""
-    bets: list[dict[str, Any]] = Field(default_factory=list)
+    bets: list["BetSummary"] = Field(default_factory=list)
     # Completed-only fields
     winner: str | None = None
     win_amount: float = Field(default=0, serialization_alias="winAmount")
@@ -117,6 +118,17 @@ class LeaderboardResponse(BaseModel):
     leaderboard: list[LeaderboardEntry] = Field(default_factory=list)
 
 
+class BetSummary(BaseModel):
+    """Summary of a single bet for game card display."""
+
+    model_config = ConfigDict(frozen=True)
+
+    agent: "AgentInfo"  # From betting/_models.py
+    team: str  # Team tricode (e.g., "LAL")
+    amount: float
+    type: str  # "moneyline", "spread", "total", etc.
+
+
 class AgentActionsResponse(BaseModel):
     """Response for /api/agent-actions."""
 
@@ -175,6 +187,7 @@ class WSHeartbeatMessage(BaseModel):
 __all__ = [
     # API Response Models
     "AgentActionsResponse",
+    "BetSummary",
     "GameCardData",
     "GamesResponse",
     "LandingResponse",

@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { Sun, Moon, Database, Cloud } from "lucide-react";
+import { Sun, Moon, Cloud } from "lucide-react";
 import { useTheme } from "../App";
 import { useDataSource } from "../hooks/useDataSource.jsx";
 
@@ -12,7 +12,7 @@ const navItems = [
 
 export default function TopBar() {
   const { theme, toggleTheme } = useTheme();
-  const { useMockData, isLoading, error } = useDataSource();
+  const { isLoading, error } = useDataSource();
 
   return (
     <header style={styles.header}>
@@ -42,30 +42,23 @@ export default function TopBar() {
 
         {/* Right side controls */}
         <div style={styles.controls}>
-          {/* Data source indicator (read-only, controlled via CLI) */}
+          {/* API status indicator */}
           <div
             style={{
               ...styles.dataIndicator,
-              borderColor: useMockData ? "var(--accent-warning)" : "var(--accent-success)",
+              borderColor: error ? "var(--accent-error)" : "var(--accent-success)",
             }}
-            title={useMockData ? "Using mock data (use npm run dev:live for API)" : "Using live API"}
+            title={error ? `API Error: ${error}` : "Connected to Arena API"}
           >
-            {useMockData ? (
-              <Database size={14} style={{ color: "var(--accent-warning)" }} />
-            ) : (
-              <Cloud size={14} style={{ color: "var(--accent-success)" }} />
-            )}
+            <Cloud size={14} style={{ color: error ? "var(--accent-error)" : "var(--accent-success)" }} />
             <span style={{
               ...styles.dataIndicatorLabel,
-              color: useMockData ? "var(--accent-warning)" : "var(--accent-success)",
+              color: error ? "var(--accent-error)" : "var(--accent-success)",
             }}>
-              {useMockData ? "MOCK" : "LIVE"}
+              {error ? "ERROR" : "LIVE"}
             </span>
             {isLoading && (
               <span style={styles.loadingDot} />
-            )}
-            {error && !useMockData && (
-              <span style={styles.errorDot} title={error} />
             )}
           </div>
 

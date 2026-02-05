@@ -42,6 +42,7 @@ from pydantic import BaseModel
 
 from dojozero.arena_server._models import (
     AgentActionsResponse,
+    BetSummary,
     GameCardData,
     GamesResponse,
     LandingResponse,
@@ -70,118 +71,274 @@ from dojozero.core._tracing import (
     TraceReader,
     create_trace_reader,
 )
-from dojozero.data._models import GameInitializeEvent, TeamIdentity
+from dojozero.data._models import BaseGameUpdateEvent, GameInitializeEvent, TeamIdentity
+
+# Rebuild Pydantic models to resolve forward references
+# This must happen after imports to avoid circular import issues
+AgentAction.model_rebuild()
+LeaderboardEntry.model_rebuild()
+BetSummary.model_rebuild()
 
 # NBA team data lookup: tricode -> TeamIdentity
 # Used to fill in team details when not available in trial metadata
+# Logo URLs use ESPN CDN: https://a.espncdn.com/i/teamlogos/nba/500/{tricode}.png
 _NBA_TEAMS: dict[str, TeamIdentity] = {
     "ATL": TeamIdentity(
-        name="Hawks", tricode="ATL", location="Atlanta", color="#E03A3E"
+        name="Hawks",
+        tricode="ATL",
+        location="Atlanta",
+        color="#E03A3E",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/atl.png",
     ),
     "BOS": TeamIdentity(
-        name="Celtics", tricode="BOS", location="Boston", color="#007A33"
+        name="Celtics",
+        tricode="BOS",
+        location="Boston",
+        color="#007A33",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/bos.png",
     ),
     "BKN": TeamIdentity(
-        name="Nets", tricode="BKN", location="Brooklyn", color="#000000"
+        name="Nets",
+        tricode="BKN",
+        location="Brooklyn",
+        color="#000000",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/bkn.png",
     ),
     "CHA": TeamIdentity(
-        name="Hornets", tricode="CHA", location="Charlotte", color="#1D1160"
+        name="Hornets",
+        tricode="CHA",
+        location="Charlotte",
+        color="#1D1160",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/cha.png",
     ),
     "CHI": TeamIdentity(
-        name="Bulls", tricode="CHI", location="Chicago", color="#CE1141"
+        name="Bulls",
+        tricode="CHI",
+        location="Chicago",
+        color="#CE1141",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/chi.png",
     ),
     "CLE": TeamIdentity(
-        name="Cavaliers", tricode="CLE", location="Cleveland", color="#860038"
+        name="Cavaliers",
+        tricode="CLE",
+        location="Cleveland",
+        color="#860038",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/cle.png",
     ),
     "DAL": TeamIdentity(
-        name="Mavericks", tricode="DAL", location="Dallas", color="#00538C"
+        name="Mavericks",
+        tricode="DAL",
+        location="Dallas",
+        color="#00538C",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/dal.png",
     ),
     "DEN": TeamIdentity(
-        name="Nuggets", tricode="DEN", location="Denver", color="#0E2240"
+        name="Nuggets",
+        tricode="DEN",
+        location="Denver",
+        color="#0E2240",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/den.png",
     ),
     "DET": TeamIdentity(
-        name="Pistons", tricode="DET", location="Detroit", color="#C8102E"
+        name="Pistons",
+        tricode="DET",
+        location="Detroit",
+        color="#C8102E",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/det.png",
     ),
     "GSW": TeamIdentity(
-        name="Warriors", tricode="GSW", location="Golden State", color="#1D428A"
+        name="Warriors",
+        tricode="GSW",
+        location="Golden State",
+        color="#1D428A",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/gs.png",
     ),
     "HOU": TeamIdentity(
-        name="Rockets", tricode="HOU", location="Houston", color="#CE1141"
+        name="Rockets",
+        tricode="HOU",
+        location="Houston",
+        color="#CE1141",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/hou.png",
     ),
     "IND": TeamIdentity(
-        name="Pacers", tricode="IND", location="Indiana", color="#002D62"
+        name="Pacers",
+        tricode="IND",
+        location="Indiana",
+        color="#002D62",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/ind.png",
     ),
     "LAC": TeamIdentity(
-        name="Clippers", tricode="LAC", location="Los Angeles", color="#C8102E"
+        name="Clippers",
+        tricode="LAC",
+        location="Los Angeles",
+        color="#C8102E",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/lac.png",
     ),
     "LAL": TeamIdentity(
-        name="Lakers", tricode="LAL", location="Los Angeles", color="#552583"
+        name="Lakers",
+        tricode="LAL",
+        location="Los Angeles",
+        color="#552583",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/lal.png",
     ),
     "MEM": TeamIdentity(
-        name="Grizzlies", tricode="MEM", location="Memphis", color="#5D76A9"
+        name="Grizzlies",
+        tricode="MEM",
+        location="Memphis",
+        color="#5D76A9",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/mem.png",
     ),
-    "MIA": TeamIdentity(name="Heat", tricode="MIA", location="Miami", color="#98002E"),
+    "MIA": TeamIdentity(
+        name="Heat",
+        tricode="MIA",
+        location="Miami",
+        color="#98002E",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/mia.png",
+    ),
     "MIL": TeamIdentity(
-        name="Bucks", tricode="MIL", location="Milwaukee", color="#00471B"
+        name="Bucks",
+        tricode="MIL",
+        location="Milwaukee",
+        color="#00471B",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/mil.png",
     ),
     "MIN": TeamIdentity(
-        name="Timberwolves", tricode="MIN", location="Minnesota", color="#0C2340"
+        name="Timberwolves",
+        tricode="MIN",
+        location="Minnesota",
+        color="#0C2340",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/min.png",
     ),
     "NOP": TeamIdentity(
-        name="Pelicans", tricode="NOP", location="New Orleans", color="#0C2340"
+        name="Pelicans",
+        tricode="NOP",
+        location="New Orleans",
+        color="#0C2340",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/no.png",
     ),
     "NYK": TeamIdentity(
-        name="Knicks", tricode="NYK", location="New York", color="#F58426"
+        name="Knicks",
+        tricode="NYK",
+        location="New York",
+        color="#F58426",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/ny.png",
     ),
     "OKC": TeamIdentity(
-        name="Thunder", tricode="OKC", location="Oklahoma City", color="#007AC1"
+        name="Thunder",
+        tricode="OKC",
+        location="Oklahoma City",
+        color="#007AC1",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/okc.png",
     ),
     "ORL": TeamIdentity(
-        name="Magic", tricode="ORL", location="Orlando", color="#0077C0"
+        name="Magic",
+        tricode="ORL",
+        location="Orlando",
+        color="#0077C0",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/orl.png",
     ),
     "PHI": TeamIdentity(
-        name="76ers", tricode="PHI", location="Philadelphia", color="#006BB6"
+        name="76ers",
+        tricode="PHI",
+        location="Philadelphia",
+        color="#006BB6",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/phi.png",
     ),
     "PHX": TeamIdentity(
-        name="Suns", tricode="PHX", location="Phoenix", color="#1D1160"
+        name="Suns",
+        tricode="PHX",
+        location="Phoenix",
+        color="#1D1160",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/phx.png",
     ),
     "POR": TeamIdentity(
-        name="Trail Blazers", tricode="POR", location="Portland", color="#E03A3E"
+        name="Trail Blazers",
+        tricode="POR",
+        location="Portland",
+        color="#E03A3E",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/por.png",
     ),
     "SAC": TeamIdentity(
-        name="Kings", tricode="SAC", location="Sacramento", color="#5A2D81"
+        name="Kings",
+        tricode="SAC",
+        location="Sacramento",
+        color="#5A2D81",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/sac.png",
     ),
     "SAS": TeamIdentity(
-        name="Spurs", tricode="SAS", location="San Antonio", color="#C4CED4"
+        name="Spurs",
+        tricode="SAS",
+        location="San Antonio",
+        color="#C4CED4",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/sa.png",
     ),
     "TOR": TeamIdentity(
-        name="Raptors", tricode="TOR", location="Toronto", color="#CE1141"
+        name="Raptors",
+        tricode="TOR",
+        location="Toronto",
+        color="#CE1141",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/tor.png",
     ),
-    "UTA": TeamIdentity(name="Jazz", tricode="UTA", location="Utah", color="#002B5C"),
+    "UTA": TeamIdentity(
+        name="Jazz",
+        tricode="UTA",
+        location="Utah",
+        color="#002B5C",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/utah.png",
+    ),
     "WAS": TeamIdentity(
-        name="Wizards", tricode="WAS", location="Washington", color="#002B5C"
+        name="Wizards",
+        tricode="WAS",
+        location="Washington",
+        color="#002B5C",
+        logo_url="https://a.espncdn.com/i/teamlogos/nba/500/wsh.png",
     ),
 }
 
 # NFL team data lookup
+# Logo URLs use ESPN CDN: https://a.espncdn.com/i/teamlogos/nfl/500/{tricode}.png
 _NFL_TEAMS: dict[str, TeamIdentity] = {
     "KC": TeamIdentity(
-        name="Chiefs", tricode="KC", location="Kansas City", color="#E31837"
+        name="Chiefs",
+        tricode="KC",
+        location="Kansas City",
+        color="#E31837",
+        logo_url="https://a.espncdn.com/i/teamlogos/nfl/500/kc.png",
     ),
     "SF": TeamIdentity(
-        name="49ers", tricode="SF", location="San Francisco", color="#AA0000"
+        name="49ers",
+        tricode="SF",
+        location="San Francisco",
+        color="#AA0000",
+        logo_url="https://a.espncdn.com/i/teamlogos/nfl/500/sf.png",
     ),
     "BUF": TeamIdentity(
-        name="Bills", tricode="BUF", location="Buffalo", color="#00338D"
+        name="Bills",
+        tricode="BUF",
+        location="Buffalo",
+        color="#00338D",
+        logo_url="https://a.espncdn.com/i/teamlogos/nfl/500/buf.png",
     ),
     "PHI": TeamIdentity(
-        name="Eagles", tricode="PHI", location="Philadelphia", color="#004C54"
+        name="Eagles",
+        tricode="PHI",
+        location="Philadelphia",
+        color="#004C54",
+        logo_url="https://a.espncdn.com/i/teamlogos/nfl/500/phi.png",
     ),
     "DAL": TeamIdentity(
-        name="Cowboys", tricode="DAL", location="Dallas", color="#003594"
+        name="Cowboys",
+        tricode="DAL",
+        location="Dallas",
+        color="#003594",
+        logo_url="https://a.espncdn.com/i/teamlogos/nfl/500/dal.png",
     ),
     "GB": TeamIdentity(
-        name="Packers", tricode="GB", location="Green Bay", color="#203731"
+        name="Packers",
+        tricode="GB",
+        location="Green Bay",
+        color="#203731",
+        logo_url="https://a.espncdn.com/i/teamlogos/nfl/500/gb.png",
     ),
 }
 
@@ -421,57 +578,179 @@ class SpanBroadcaster:
             LOGGER.warning("Failed to send message to client: %s", e)
 
 
+# =============================================================================
+# Cache Configuration
+# =============================================================================
+#
+# All cache TTL (Time-To-Live) values are centralized here for easy tuning.
+# The goal is to balance data freshness with SLS query reduction.
+#
+# TUNING GUIDE:
+# - Increase TTLs to reduce SLS load (at cost of data freshness)
+# - Decrease TTLs for more real-time data (at cost of more SLS queries)
+# - COMPLETED_TRIAL_TTL should be high since completed trials don't change
+#
+# FRONTEND POLLING INTERVALS (for reference):
+# - Stats: every 10 seconds
+# - Landing data: every 60 seconds
+# - Agent actions: every 30 seconds (only when live games exist)
+# - Leaderboard: on-demand (no polling)
+#
+
+
+@dataclass(frozen=True)
+class CacheConfig:
+    """Configuration for all cache TTL values (in seconds).
+
+    This is a frozen dataclass to ensure immutability after creation.
+    All values can be overridden when creating the cache.
+    """
+
+    # -------------------------------------------------------------------------
+    # Global/Aggregated Data TTLs
+    # -------------------------------------------------------------------------
+
+    # List of trial IDs - changes infrequently
+    trials_list_ttl: float = 60.0
+
+    # Aggregated statistics (gamesPlayed, liveNow, wageredToday)
+    # Frontend polls every 10s, but we cache longer to reduce load
+    stats_ttl: float = 30.0
+
+    # Games list (live, upcoming, completed)
+    games_ttl: float = 30.0
+
+    # Agent leaderboard - only changes when games complete
+    leaderboard_ttl: float = 3600.0  # 1 hour
+
+    # Live agent actions ticker
+    # Should match frontend polling interval for agent actions
+    agent_actions_ttl: float = 30.0
+
+    # -------------------------------------------------------------------------
+    # Per-Trial Data TTLs
+    # -------------------------------------------------------------------------
+
+    # Trial info (phase, metadata) for live/running trials
+    trial_info_ttl: float = 30.0
+
+    # Trial details (full span list) for live/running trials
+    # Used for incremental span fetching
+    trial_details_ttl: float = 60.0
+
+    # -------------------------------------------------------------------------
+    # Special TTLs
+    # -------------------------------------------------------------------------
+
+    # TTL for completed/stopped trials (they don't change)
+    # Applied to trial_info and trial_details when trial is completed
+    completed_trial_ttl: float = 3600.0  # 1 hour
+
+    # -------------------------------------------------------------------------
+    # Query Limits (not TTLs, but related tunable parameters)
+    # -------------------------------------------------------------------------
+
+    # Max trials to query for agent actions (reduces SLS queries)
+    agent_actions_max_trials: int = 5
+
+    # Max actions to return from ticker
+    agent_actions_limit: int = 20
+
+
+# Default configuration instance
+DEFAULT_CACHE_CONFIG = CacheConfig()
+
+
 @dataclass
 class CacheEntry:
-    """A cache entry with data and TTL."""
+    """A cache entry with data and expiration time."""
 
     data: Any
-    expires_at: float  # Unix timestamp
+    expires_at: float  # Unix timestamp when this entry expires
+    created_at: float = field(default_factory=time.time)
 
     def is_valid(self) -> bool:
-        """Check if the cache entry is still valid."""
+        """Check if the cache entry is still valid (not expired)."""
         return time.time() < self.expires_at
+
+    def age_seconds(self) -> float:
+        """Return how old this cache entry is in seconds."""
+        return time.time() - self.created_at
 
 
 @dataclass
 class LandingPageCache:
-    """Cache for landing page data to reduce trace store queries.
+    """Cache for landing page data to reduce trace store (SLS/Jaeger) queries.
 
-    Maintains separate caches for different data types with different TTLs:
-    - trials_list: List of all trials (30s TTL)
-    - trial_info: Per-trial info with phase/metadata (10s TTL)
-    - stats: Aggregated stats (5s TTL)
-    - leaderboard: Agent rankings (30s TTL)
-    - agent_actions: Recent actions (2s TTL for freshness)
+    This cache implements several strategies to minimize backend load:
+
+    1. **TTL-based caching**: Each data type has a configurable TTL.
+       See CacheConfig for all tunable parameters.
+
+    2. **Stale-while-revalidate**: On fetch failure, returns stale cached
+       data rather than failing completely.
+
+    3. **Completed trial optimization**: Completed trials use a much longer
+       TTL (1 hour) since their data never changes.
+
+    4. **Incremental span fetching**: For trial details, only fetches new
+       spans since the last fetch, reducing data transfer.
+
+    Cache Types:
+    ┌─────────────────┬──────────────┬────────────────────────────────────────┐
+    │ Cache           │ Default TTL  │ Description                            │
+    ├─────────────────┼──────────────┼────────────────────────────────────────┤
+    │ trials_list     │ 60s          │ List of all trial IDs                  │
+    │ trial_info      │ 30s (1h*)    │ Per-trial phase and metadata           │
+    │ trial_details   │ 60s (1h*)    │ Full span list for a trial             │
+    │ stats           │ 30s          │ Aggregated statistics                  │
+    │ games           │ 30s          │ Games list (live/upcoming/completed)   │
+    │ leaderboard     │ 1h           │ Agent rankings                         │
+    │ agent_actions   │ 30s          │ Recent agent actions for ticker        │
+    └─────────────────┴──────────────┴────────────────────────────────────────┘
+    * = 1 hour TTL for completed trials
+
+    Usage:
+        config = CacheConfig(stats_ttl=60.0)  # Override defaults
+        cache = LandingPageCache(config=config)
     """
 
-    # TTL values in seconds
-    TRIALS_LIST_TTL: float = 30.0
-    TRIAL_INFO_TTL: float = 10.0
-    STATS_TTL: float = 5.0
-    LEADERBOARD_TTL: float = 30.0
-    AGENT_ACTIONS_TTL: float = 2.0
-    GAMES_TTL: float = 10.0
+    # Configuration (all tunable parameters)
+    config: CacheConfig = field(default_factory=lambda: DEFAULT_CACHE_CONFIG)
 
+    # Cache storage
     _trials_list: CacheEntry | None = None
     _trial_info: dict[str, CacheEntry] = field(default_factory=dict)
+    _trial_details: dict[str, CacheEntry] = field(default_factory=dict)
     _stats: CacheEntry | None = None
     _leaderboard: CacheEntry | None = None
     _agent_actions: CacheEntry | None = None
     _games: CacheEntry | None = None
+
+    # Concurrency control
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def get_trials_list(
         self,
         fetcher: Any,  # Callable that returns list of trial IDs
     ) -> list[str]:
-        """Get cached trials list or fetch if expired."""
+        """Get cached trials list or fetch if expired.
+
+        Args:
+            fetcher: Async callable that returns list[str] of trial IDs
+
+        Returns:
+            List of trial IDs (from cache or freshly fetched)
+        """
         async with self._lock:
             if self._trials_list is not None and self._trials_list.is_valid():
-                LOGGER.debug("Cache hit: trials_list")
+                LOGGER.debug(
+                    "Cache HIT: trials_list (age=%.1fs)",
+                    self._trials_list.age_seconds(),
+                )
                 return self._trials_list.data
 
-        # Fetch outside lock to avoid blocking
+        # Fetch outside lock to avoid blocking other requests
         data = await fetcher()
 
         # Only cache non-empty results to avoid caching transient errors
@@ -479,15 +758,22 @@ class LandingPageCache:
             async with self._lock:
                 self._trials_list = CacheEntry(
                     data=data,
-                    expires_at=time.time() + self.TRIALS_LIST_TTL,
+                    expires_at=time.time() + self.config.trials_list_ttl,
                 )
-            LOGGER.debug("Cache miss: trials_list, fetched %d trials", len(data))
+            LOGGER.debug(
+                "Cache MISS: trials_list, fetched %d trials (ttl=%.0fs)",
+                len(data),
+                self.config.trials_list_ttl,
+            )
         else:
             LOGGER.warning("Fetcher returned empty trials list, not caching")
-            # Use stale cache if available (stale-while-revalidate pattern)
+            # Stale-while-revalidate: return stale data on fetch failure
             async with self._lock:
                 if self._trials_list is not None:
-                    LOGGER.info("Using stale cache data due to empty fetch result")
+                    LOGGER.info(
+                        "Using STALE cache: trials_list (age=%.1fs)",
+                        self._trials_list.age_seconds(),
+                    )
                     return self._trials_list.data
 
         return data
@@ -497,32 +783,226 @@ class LandingPageCache:
         trial_id: str,
         fetcher: Any,  # Callable that returns trial info dict
     ) -> dict[str, Any]:
-        """Get cached trial info or fetch if expired."""
+        """Get cached trial info or fetch if expired.
+
+        Uses longer TTL for completed trials since they don't change.
+
+        Args:
+            trial_id: The trial ID to get info for
+            fetcher: Async callable that returns dict with phase/metadata
+
+        Returns:
+            Trial info dict with "phase", "metadata", and optional "game_init"
+        """
         async with self._lock:
             entry = self._trial_info.get(trial_id)
             if entry is not None and entry.is_valid():
-                LOGGER.debug("Cache hit: trial_info[%s]", trial_id)
+                LOGGER.debug(
+                    "Cache HIT: trial_info[%s] (age=%.1fs)",
+                    trial_id,
+                    entry.age_seconds(),
+                )
                 return entry.data
 
         # Fetch outside lock
         data = await fetcher()
 
+        # Use longer TTL for completed trials (they don't change)
+        phase = data.get("phase", "unknown")
+        is_completed = phase in ("completed", "stopped")
+        ttl = (
+            self.config.completed_trial_ttl
+            if is_completed
+            else self.config.trial_info_ttl
+        )
+
         async with self._lock:
             self._trial_info[trial_id] = CacheEntry(
                 data=data,
-                expires_at=time.time() + self.TRIAL_INFO_TTL,
+                expires_at=time.time() + ttl,
             )
-        LOGGER.debug("Cache miss: trial_info[%s]", trial_id)
+        LOGGER.debug(
+            "Cache MISS: trial_info[%s] (completed=%s, ttl=%.0fs)",
+            trial_id,
+            is_completed,
+            ttl,
+        )
         return data
+
+    async def get_trial_details(
+        self,
+        trial_id: str,
+        trace_reader: "TraceReader",
+    ) -> list[dict[str, Any]]:
+        """Get cached trial details with incremental span fetching.
+
+        This method implements an incremental caching strategy:
+        1. On cache miss: Fetch all spans, serialize, and cache
+        2. On cache hit for live trial: Fetch only new spans (since max_timestamp),
+           merge with cached data
+        3. On cache hit for completed trial: Return cached data immediately
+           (no SLS query since completed trials don't change)
+
+        Args:
+            trial_id: The trial ID to get details for
+            trace_reader: TraceReader for fetching spans from SLS/Jaeger
+
+        Returns:
+            List of serialized spans (items) ready for API response
+        """
+        from datetime import datetime, timezone
+
+        # Initialize variables that will be used outside the lock
+        entry: CacheEntry | None = None
+        items: list[dict[str, Any]] = []
+        max_timestamp: int = 0
+        is_completed: bool = False
+        start_time: datetime | None = None
+
+        async with self._lock:
+            entry = self._trial_details.get(trial_id)
+            if entry is not None and entry.is_valid():
+                # Cache hit
+                cached_data = entry.data
+                items = cached_data.get("items", [])
+                max_timestamp = cached_data.get("max_timestamp", 0)
+                is_completed = cached_data.get("is_completed", False)
+
+                # If trial is completed, return cached data immediately (no new spans)
+                if is_completed:
+                    LOGGER.debug(
+                        "Cache HIT: trial_details[%s] (completed, skipping SLS query)",
+                        trial_id,
+                    )
+                    return items
+
+                LOGGER.debug(
+                    "Cache HIT: trial_details[%s] (live), incremental fetch since %d",
+                    trial_id,
+                    max_timestamp,
+                )
+
+                # Fetch new spans outside lock
+                start_time = datetime.fromtimestamp(
+                    max_timestamp / 1_000_000, tz=timezone.utc
+                )
+
+        # Fetch new spans (outside lock to avoid blocking)
+        if entry is not None and entry.is_valid():
+            new_spans = await trace_reader.get_spans(trial_id, start_time=start_time)
+
+            # Serialize new spans
+            new_items = []
+            new_max_timestamp = max_timestamp
+            is_now_completed = False
+            for span in new_spans:
+                typed = deserialize_span(span)
+                if typed is not None:
+                    new_items.append(serialize_span_for_ws(typed))
+                    new_max_timestamp = max(new_max_timestamp, span.start_time)
+                    # Check if trial just completed
+                    if isinstance(typed, TrialLifecycleSpan) and typed.phase in (
+                        "completed",
+                        "stopped",
+                    ):
+                        is_now_completed = True
+
+            if new_items:
+                LOGGER.debug(
+                    "Incremental fetch: %d new spans for trial %s",
+                    len(new_items),
+                    trial_id,
+                )
+                # Merge with cached items
+                merged_items = items + new_items
+
+                # Use longer TTL if trial just completed
+                ttl = (
+                    self.config.completed_trial_ttl
+                    if is_now_completed
+                    else self.config.trial_details_ttl
+                )
+
+                # Update cache with merged data
+                async with self._lock:
+                    self._trial_details[trial_id] = CacheEntry(
+                        data={
+                            "items": merged_items,
+                            "max_timestamp": new_max_timestamp,
+                            "is_completed": is_now_completed,
+                        },
+                        expires_at=time.time() + ttl,
+                    )
+
+                return merged_items
+            else:
+                LOGGER.debug(
+                    "No new spans for trial %s, returning cached data", trial_id
+                )
+                return items
+
+        # Cache miss - fetch all spans
+        LOGGER.debug("Cache MISS: trial_details[%s], fetching all spans", trial_id)
+        all_spans = await trace_reader.get_spans(trial_id)
+
+        # Serialize all spans
+        items = []
+        max_timestamp = 0
+        is_completed = False
+        for span in all_spans:
+            typed = deserialize_span(span)
+            if typed is not None:
+                items.append(serialize_span_for_ws(typed))
+                max_timestamp = max(max_timestamp, span.start_time)
+                # Check if trial is completed
+                if isinstance(typed, TrialLifecycleSpan) and typed.phase in (
+                    "completed",
+                    "stopped",
+                ):
+                    is_completed = True
+
+        # Use longer TTL for completed trials since they don't change
+        ttl = (
+            self.config.completed_trial_ttl
+            if is_completed
+            else self.config.trial_details_ttl
+        )
+
+        # Cache the result
+        async with self._lock:
+            self._trial_details[trial_id] = CacheEntry(
+                data={
+                    "items": items,
+                    "max_timestamp": max_timestamp,
+                    "is_completed": is_completed,
+                },
+                expires_at=time.time() + ttl,
+            )
+
+        LOGGER.debug(
+            "Cached %d spans for trial %s (completed=%s, ttl=%.0fs)",
+            len(items),
+            trial_id,
+            is_completed,
+            ttl,
+        )
+        return items
 
     async def get_stats(
         self,
         fetcher: Any,
     ) -> StatsResponse:
-        """Get cached stats or fetch if expired."""
+        """Get cached stats or fetch if expired.
+
+        Args:
+            fetcher: Async callable that returns StatsResponse
+
+        Returns:
+            StatsResponse with gamesPlayed, liveNow, wageredToday
+        """
         async with self._lock:
             if self._stats is not None and self._stats.is_valid():
-                LOGGER.debug("Cache hit: stats")
+                LOGGER.debug("Cache HIT: stats (age=%.1fs)", self._stats.age_seconds())
                 return self._stats.data
 
         data: StatsResponse = await fetcher()
@@ -532,15 +1012,18 @@ class LandingPageCache:
             async with self._lock:
                 self._stats = CacheEntry(
                     data=data,
-                    expires_at=time.time() + self.STATS_TTL,
+                    expires_at=time.time() + self.config.stats_ttl,
                 )
-            LOGGER.debug("Cache miss: stats")
+            LOGGER.debug("Cache MISS: stats (ttl=%.0fs)", self.config.stats_ttl)
         else:
             LOGGER.warning("Fetcher returned empty stats, not caching")
-            # Use stale cache if available
+            # Stale-while-revalidate
             async with self._lock:
                 if self._stats is not None:
-                    LOGGER.info("Using stale stats cache due to empty fetch result")
+                    LOGGER.info(
+                        "Using STALE cache: stats (age=%.1fs)",
+                        self._stats.age_seconds(),
+                    )
                     return self._stats.data
 
         return data
@@ -549,10 +1032,20 @@ class LandingPageCache:
         self,
         fetcher: Any,
     ) -> list[LeaderboardEntry]:
-        """Get cached leaderboard or fetch if expired."""
+        """Get cached leaderboard or fetch if expired.
+
+        Args:
+            fetcher: Async callable that returns list[LeaderboardEntry]
+
+        Returns:
+            List of LeaderboardEntry sorted by winnings
+        """
         async with self._lock:
             if self._leaderboard is not None and self._leaderboard.is_valid():
-                LOGGER.debug("Cache hit: leaderboard")
+                LOGGER.debug(
+                    "Cache HIT: leaderboard (age=%.1fs)",
+                    self._leaderboard.age_seconds(),
+                )
                 return self._leaderboard.data
 
         data = await fetcher()
@@ -562,16 +1055,19 @@ class LandingPageCache:
             async with self._lock:
                 self._leaderboard = CacheEntry(
                     data=data,
-                    expires_at=time.time() + self.LEADERBOARD_TTL,
+                    expires_at=time.time() + self.config.leaderboard_ttl,
                 )
-            LOGGER.debug("Cache miss: leaderboard")
+            LOGGER.debug(
+                "Cache MISS: leaderboard (ttl=%.0fs)", self.config.leaderboard_ttl
+            )
         else:
             LOGGER.warning("Fetcher returned empty leaderboard, not caching")
-            # Use stale cache if available
+            # Stale-while-revalidate
             async with self._lock:
                 if self._leaderboard is not None:
                     LOGGER.info(
-                        "Using stale leaderboard cache due to empty fetch result"
+                        "Using STALE cache: leaderboard (age=%.1fs)",
+                        self._leaderboard.age_seconds(),
                     )
                     return self._leaderboard.data
 
@@ -581,10 +1077,20 @@ class LandingPageCache:
         self,
         fetcher: Any,
     ) -> list[AgentAction]:
-        """Get cached agent actions or fetch if expired."""
+        """Get cached agent actions or fetch if expired.
+
+        Args:
+            fetcher: Async callable that returns list[AgentAction]
+
+        Returns:
+            List of recent agent actions for the ticker
+        """
         async with self._lock:
             if self._agent_actions is not None and self._agent_actions.is_valid():
-                LOGGER.debug("Cache hit: agent_actions")
+                LOGGER.debug(
+                    "Cache HIT: agent_actions (age=%.1fs)",
+                    self._agent_actions.age_seconds(),
+                )
                 return self._agent_actions.data
 
         data = await fetcher()
@@ -594,16 +1100,19 @@ class LandingPageCache:
             async with self._lock:
                 self._agent_actions = CacheEntry(
                     data=data,
-                    expires_at=time.time() + self.AGENT_ACTIONS_TTL,
+                    expires_at=time.time() + self.config.agent_actions_ttl,
                 )
-            LOGGER.debug("Cache miss: agent_actions")
+            LOGGER.debug(
+                "Cache MISS: agent_actions (ttl=%.0fs)", self.config.agent_actions_ttl
+            )
         else:
             LOGGER.warning("Fetcher returned empty agent actions, not caching")
-            # Use stale cache if available
+            # Stale-while-revalidate
             async with self._lock:
                 if self._agent_actions is not None:
                     LOGGER.info(
-                        "Using stale agent_actions cache due to empty fetch result"
+                        "Using STALE cache: agent_actions (age=%.1fs)",
+                        self._agent_actions.age_seconds(),
                     )
                     return self._agent_actions.data
 
@@ -613,10 +1122,17 @@ class LandingPageCache:
         self,
         fetcher: Any,
     ) -> GamesResponse:
-        """Get cached games list or fetch if expired."""
+        """Get cached games list or fetch if expired.
+
+        Args:
+            fetcher: Async callable that returns GamesResponse
+
+        Returns:
+            GamesResponse with live_games, upcoming_games, completed_games
+        """
         async with self._lock:
             if self._games is not None and self._games.is_valid():
-                LOGGER.debug("Cache hit: games")
+                LOGGER.debug("Cache HIT: games (age=%.1fs)", self._games.age_seconds())
                 return self._games.data
 
         data: GamesResponse = await fetcher()
@@ -627,15 +1143,18 @@ class LandingPageCache:
             async with self._lock:
                 self._games = CacheEntry(
                     data=data,
-                    expires_at=time.time() + self.GAMES_TTL,
+                    expires_at=time.time() + self.config.games_ttl,
                 )
-            LOGGER.debug("Cache miss: games")
+            LOGGER.debug("Cache MISS: games (ttl=%.0fs)", self.config.games_ttl)
         else:
             LOGGER.warning("Fetcher returned empty games data, not caching")
-            # Use stale cache if available
+            # Stale-while-revalidate
             async with self._lock:
                 if self._games is not None:
-                    LOGGER.info("Using stale games cache due to empty fetch result")
+                    LOGGER.info(
+                        "Using STALE cache: games (age=%.1fs)",
+                        self._games.age_seconds(),
+                    )
                     return self._games.data
 
         return data
@@ -644,6 +1163,8 @@ class LandingPageCache:
         """Invalidate cache for a specific trial."""
         if trial_id in self._trial_info:
             del self._trial_info[trial_id]
+        if trial_id in self._trial_details:
+            del self._trial_details[trial_id]
         # Also invalidate aggregated data since trial state changed
         self._stats = None
         self._games = None
@@ -653,11 +1174,51 @@ class LandingPageCache:
         """Invalidate all cached data."""
         self._trials_list = None
         self._trial_info.clear()
+        self._trial_details.clear()
         self._stats = None
         self._leaderboard = None
         self._agent_actions = None
         self._games = None
         LOGGER.debug("Invalidated all cache entries")
+
+    def get_cache_stats(self) -> dict[str, Any]:
+        """Get cache statistics for debugging/monitoring.
+
+        Returns:
+            Dict with cache status for each cache type
+        """
+
+        def _entry_info(entry: CacheEntry | None) -> dict[str, Any]:
+            if entry is None:
+                return {"status": "empty"}
+            return {
+                "status": "valid" if entry.is_valid() else "expired",
+                "age_seconds": round(entry.age_seconds(), 1),
+                "expires_in": round(entry.expires_at - time.time(), 1),
+            }
+
+        return {
+            "config": {
+                "trials_list_ttl": self.config.trials_list_ttl,
+                "trial_info_ttl": self.config.trial_info_ttl,
+                "trial_details_ttl": self.config.trial_details_ttl,
+                "stats_ttl": self.config.stats_ttl,
+                "games_ttl": self.config.games_ttl,
+                "leaderboard_ttl": self.config.leaderboard_ttl,
+                "agent_actions_ttl": self.config.agent_actions_ttl,
+                "completed_trial_ttl": self.config.completed_trial_ttl,
+                "agent_actions_max_trials": self.config.agent_actions_max_trials,
+            },
+            "caches": {
+                "trials_list": _entry_info(self._trials_list),
+                "stats": _entry_info(self._stats),
+                "games": _entry_info(self._games),
+                "leaderboard": _entry_info(self._leaderboard),
+                "agent_actions": _entry_info(self._agent_actions),
+                "trial_info_count": len(self._trial_info),
+                "trial_details_count": len(self._trial_details),
+            },
+        }
 
 
 @dataclass
@@ -692,7 +1253,7 @@ async def _extract_trial_info_from_traces(
     """Extract trial phase and metadata from trace spans.
 
     Uses filtered queries to only fetch relevant spans (trial lifecycle,
-    game_initialize, game_result) instead of all spans.
+    game_initialize, game_result, game_update) instead of all spans.
 
     Returns:
         dict with "phase", "metadata", and optional "game_init" extracted from spans
@@ -707,6 +1268,8 @@ async def _extract_trial_info_from_traces(
                 "trial.terminated",
                 "event.game_initialize",
                 "event.game_result",
+                "event.nba_game_update",
+                "event.nfl_game_update",
             ],
         )
     except Exception as e:
@@ -722,6 +1285,8 @@ async def _extract_trial_info_from_traces(
     # Metadata to extract from spans
     metadata: dict[str, Any] = {}
     game_init: GameInitializeEvent | None = None
+    latest_game_update: BaseGameUpdateEvent | None = None
+    latest_game_update_time = 0
 
     for span in spans:
         typed = deserialize_span(span)
@@ -753,9 +1318,24 @@ async def _extract_trial_info_from_traces(
         elif isinstance(typed, GameInitializeEvent):
             game_init = typed
 
+        # Track latest game update event for live scores
+        elif isinstance(typed, BaseGameUpdateEvent):
+            # Use span timestamp to find the latest update
+            span_time = span.start_time
+            if span_time > latest_game_update_time:
+                latest_game_update_time = span_time
+                latest_game_update = typed
+
         # Check for game completion spans (NBA/NFL game results)
         elif "game_result" in span.operation_name:
             has_game_result = True
+
+    # Add live scores to metadata if we have a game update
+    if latest_game_update is not None:
+        metadata["home_score"] = latest_game_update.home_score
+        metadata["away_score"] = latest_game_update.away_score
+        metadata["period"] = latest_game_update.period
+        metadata["game_clock"] = latest_game_update.game_clock
 
     # Determine phase
     if has_stopped and latest_stop_time >= latest_start_time:
@@ -794,17 +1374,126 @@ def _resolve_team_identity(
     return identity
 
 
+def _parse_bet_selection(selection: str) -> tuple[str, str]:
+    """Parse bet selection string to extract team and type.
+
+    Args:
+        selection: Selection string from BetExecutedPayload
+
+    Returns:
+        Tuple of (team, bet_type)
+
+    Examples:
+        "LAL_ML" -> ("LAL", "moneyline")
+        "LAL_SPREAD_-3.5" -> ("LAL", "spread")
+        "OVER_220.5" -> ("OVER", "total")
+    """
+    parts = selection.split("_")
+    if len(parts) == 2 and parts[1] == "ML":
+        return parts[0], "moneyline"
+    elif len(parts) >= 2 and parts[1] == "SPREAD":
+        return parts[0], "spread"
+    elif parts[0] in ("OVER", "UNDER"):
+        return parts[0], "total"
+    else:
+        # Default fallback
+        return parts[0] if parts else selection, "moneyline"
+
+
+async def _extract_bets_for_trial(
+    trace_reader: TraceReader,
+    trial_id: str,
+    limit: int = 10,
+) -> list["BetSummary"]:
+    """Extract recent bets from broker.bet spans for a specific trial.
+
+    Args:
+        trace_reader: TraceReader for querying SLS
+        trial_id: Trial ID to query
+        limit: Maximum number of bets to return
+
+    Returns:
+        List of recent bets formatted as BetSummary
+    """
+    from dojozero.arena_server._models import BetSummary
+    from dojozero.betting import BetExecutedPayload
+
+    try:
+        # Query broker.bet spans
+        spans = await trace_reader.get_spans(
+            trial_id,
+            operation_names=["broker.bet"],
+        )
+    except Exception as e:
+        LOGGER.warning("Failed to get broker.bet spans for trial '%s': %s", trial_id, e)
+        return []
+
+    bets: list[BetSummary] = []
+    for span in spans:
+        typed = deserialize_span(span)
+        if not isinstance(typed, BetExecutedPayload):
+            continue
+
+        # Get agent info from cache
+        agent_info = await get_cached_agent(trace_reader, typed.agent_id, trial_id)
+        if agent_info is None:
+            # Fallback: create minimal AgentInfo
+            from dojozero.betting import AgentInfo
+
+            LOGGER.warning(
+                "AgentInfo for agent_id '%s' not found in cache. Using fallback.",
+                typed.agent_id,
+            )
+            agent_info = AgentInfo(agent_id=typed.agent_id, persona=typed.agent_id)
+
+        # Parse selection to extract team and type
+        team, bet_type = _parse_bet_selection(typed.selection)
+
+        try:
+            amount = float(typed.amount)
+        except (ValueError, TypeError):
+            amount = 0.0
+
+        bets.append(
+            BetSummary(
+                agent=agent_info,
+                team=team,
+                amount=amount,
+                type=bet_type,
+            )
+        )
+
+    # Return most recent bets (limited)
+    return bets[-limit:] if bets else []
+
+
 async def _extract_games_from_trials(
     trace_reader: TraceReader,
     trial_ids: list[str],
+    cache: "LandingPageCache | None" = None,
 ) -> GamesResponse:
-    """Extract games list from trials for landing page."""
+    """Extract games list from trials for landing page.
+
+    Args:
+        trace_reader: Trace reader for fetching spans
+        trial_ids: List of trial IDs to process
+        cache: Optional cache for trial info (recommended for performance)
+    """
     live_games: list[GameCardData] = []
     completed_games: list[GameCardData] = []
 
     for trial_id in trial_ids:
         try:
-            trial_info = await _extract_trial_info_from_traces(trace_reader, trial_id)
+            # Use cache if available, otherwise fetch directly
+            if cache is not None:
+                trial_info = await cache.get_trial_info(
+                    trial_id,
+                    lambda: _extract_trial_info_from_traces(trace_reader, trial_id),
+                )
+            else:
+                trial_info = await _extract_trial_info_from_traces(
+                    trace_reader, trial_id
+                )
         except Exception as e:
             LOGGER.warning("Failed to get info for trial '%s': %s", trial_id, e)
             continue
@@ -833,6 +1522,23 @@ async def _extract_games_from_trials(
                 "", away_tricode, metadata.get("away_team_name", ""), league
             )
 
+        # Fetch bets for live games only (performance optimization)
+        bets = []
+        if phase == "running":
+            try:
+                bets = await _extract_bets_for_trial(trace_reader, trial_id, limit=10)
+            except Exception as e:
+                LOGGER.warning("Failed to get bets for trial '%s': %s", trial_id, e)
+
+        # Map phase to frontend status
+        status = (
+            "live"
+            if phase == "running"
+            else "completed"
+            if phase in ("completed", "stopped")
+            else phase
+        )
+
         game_card = GameCardData(
             id=trial_id,
             league=league,
@@ -840,17 +1546,22 @@ async def _extract_games_from_trials(
             away_team=away_team,
             home_score=metadata.get("home_score", 0),
             away_score=metadata.get("away_score", 0),
-            status=phase,
+            status=status,
             date=metadata.get("game_date", ""),
             quarter=metadata.get("quarter", "") if phase == "running" else "",
             clock=metadata.get("clock", "") if phase == "running" else "",
-            winner=metadata.get("winner_agent") if phase == "completed" else None,
-            win_amount=metadata.get("win_amount", 0) if phase == "completed" else 0,
+            bets=bets,
+            winner=metadata.get("winner_agent")
+            if phase in ("completed", "stopped")
+            else None,
+            win_amount=metadata.get("win_amount", 0)
+            if phase in ("completed", "stopped")
+            else 0,
         )
 
         if phase == "running":
             live_games.append(game_card)
-        elif phase == "completed":
+        elif phase in ("completed", "stopped"):
             completed_games.append(game_card)
 
     return GamesResponse(
@@ -863,26 +1574,42 @@ async def _extract_agent_actions(
     trace_reader: TraceReader,
     trial_ids: list[str],
     limit: int = 20,
+    max_trials: int = 5,
 ) -> list[AgentAction]:
     """Extract recent agent actions from trial spans.
 
-    Queries agent.response spans and returns full AgentResponseMessage objects.
+    Queries agent.response spans from recent games (both live and completed) and returns
+    AgentAction objects with agent info, response message, and timestamp.
+
+    Args:
+        trace_reader: TraceReader for querying SLS/Jaeger
+        trial_ids: List of trial IDs to check for actions
+        limit: Maximum number of actions to return
+        max_trials: Maximum number of trials to query (reduces SLS load)
 
     Returns:
-        List of recent agent actions sorted by time (newest first)
+        List of agent actions sorted by time (newest first)
     """
     all_actions: list[AgentAction] = []
 
-    # Limit to checking the 10 most recent trials for live actions to improve performance.
-    RECENT_TRIALS_LIMIT = 10
-    for trial_id in trial_ids[:RECENT_TRIALS_LIMIT]:
+    # Check recent trials for agent actions (both live and completed games)
+    LOGGER.debug(
+        "Extracting agent actions from %d trials (limit=%d, max_trials=%d)",
+        min(len(trial_ids), max_trials),
+        limit,
+        max_trials,
+    )
+
+    for trial_id in trial_ids[:max_trials]:
         try:
-            # Get recent agent.response spans only
-            start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+            # Get agent.response spans from the entire trial
+            # No time filter - we want recent actions from any games (live or completed)
             spans = await trace_reader.get_spans(
                 trial_id,
-                start_time=start_time,
                 operation_names=["agent.response"],
+            )
+            LOGGER.debug(
+                "Trial %s: fetched %d agent.response spans", trial_id, len(spans)
             )
         except Exception as e:
             LOGGER.warning("Failed to get spans for trial '%s': %s", trial_id, e)
@@ -911,23 +1638,52 @@ async def _extract_agent_actions(
                 )
             )
 
+        # Early exit if we have enough actions (optimization)
+        if len(all_actions) >= limit * 2:
+            LOGGER.debug("Early exit: collected %d actions", len(all_actions))
+            break
+
     # Sort by timestamp (newest first) and limit
     all_actions.sort(key=lambda x: x.timestamp, reverse=True)
-    return all_actions[:limit]
+    result = all_actions[:limit]
+    LOGGER.debug(
+        "Returning %d actions (from %d total)",
+        len(result),
+        len(all_actions),
+    )
+    return result
 
 
 async def _compute_stats(
     trace_reader: TraceReader,
     trial_ids: list[str],
+    cache: "LandingPageCache | None" = None,
 ) -> StatsResponse:
-    """Compute aggregate stats for landing page."""
+    """Compute aggregate stats for landing page.
+
+    Args:
+        trace_reader: Trace reader for fetching spans
+        trial_ids: List of trial IDs to process
+        cache: Optional cache for trial info (recommended for performance)
+    """
     games_played = 0
     live_now = 0
     wagered_today = 0.0
 
     for trial_id in trial_ids:
         try:
-            trial_info = await _extract_trial_info_from_traces(trace_reader, trial_id)
+            # Use cache if available, otherwise fetch directly
+            if cache is not None:
+                trial_info = await cache.get_trial_info(
+                    trial_id,
+                    lambda tid=trial_id: _extract_trial_info_from_traces(
+                        trace_reader, tid
+                    ),
+                )
+            else:
+                trial_info = await _extract_trial_info_from_traces(
+                    trace_reader, trial_id
+                )
         except Exception:
             continue
 
@@ -1203,15 +1959,32 @@ def create_arena_app(
                 )
             )
 
-        return JSONResponse(content=[item.model_dump() for item in result])
+        return JSONResponse(content=[item.model_dump(by_alias=True) for item in result])
 
     @app.get("/api/trials/{trial_id}")
     async def get_trial(trial_id: str) -> JSONResponse:
-        """Get trial info and spans."""
-        state = get_server_state()
-        spans = await state.trace_reader.get_spans(trial_id)
+        """Get trial info and spans with incremental caching.
 
-        if not spans:
+        Uses a 60-second cache with incremental span fetching to reduce SLS load.
+        On cache hit, only new spans (since last fetch) are retrieved and merged.
+        """
+        state = get_server_state()
+
+        start_time = time.time()
+        LOGGER.info("Fetching trial details for: %s", trial_id)
+
+        # Use cached trial details with incremental fetching
+        items = await state.cache.get_trial_details(trial_id, state.trace_reader)
+
+        elapsed = time.time() - start_time
+        LOGGER.info(
+            "Trial %s: Returned %d items in %.2fs",
+            trial_id,
+            len(items) if items else 0,
+            elapsed,
+        )
+
+        if not items:
             # Check if trial exists (may have no spans yet)
             trial_ids = await state.trace_reader.list_trials()
             if trial_id not in trial_ids:
@@ -1220,14 +1993,8 @@ def create_arena_app(
                     status_code=404,
                 )
 
-        items = []
-        for span in spans:
-            typed = deserialize_span(span)
-            if typed is not None:
-                items.append(serialize_span_for_ws(typed))
-
         response = TrialDetailResponse(trial_id=trial_id, items=items)
-        return JSONResponse(content=response.model_dump())
+        return JSONResponse(content=response.model_dump(by_alias=True))
 
     # -------------------------------------------------------------------------
     # Landing Page Endpoints (with caching)
@@ -1258,19 +2025,26 @@ def create_arena_app(
 
         # Fetch stats (cached)
         async def fetch_stats() -> StatsResponse:
-            return await _compute_stats(state.trace_reader, trial_ids)
+            return await _compute_stats(state.trace_reader, trial_ids, state.cache)
 
         stats = await state.cache.get_stats(fetch_stats)
 
         # Fetch games (cached)
         async def fetch_games() -> GamesResponse:
-            return await _extract_games_from_trials(state.trace_reader, trial_ids)
+            return await _extract_games_from_trials(
+                state.trace_reader, trial_ids, state.cache
+            )
 
         games = await state.cache.get_games(fetch_games)
 
-        # Fetch agent actions (cached, short TTL)
+        # Fetch agent actions (cached)
         async def fetch_actions() -> list[AgentAction]:
-            return await _extract_agent_actions(state.trace_reader, trial_ids, limit=12)
+            return await _extract_agent_actions(
+                state.trace_reader,
+                trial_ids,
+                limit=state.cache.config.agent_actions_limit,
+                max_trials=state.cache.config.agent_actions_max_trials,
+            )
 
         agent_actions = await state.cache.get_agent_actions(fetch_actions)
 
@@ -1281,7 +2055,7 @@ def create_arena_app(
             all_games=all_games,
             live_agent_actions=agent_actions,
         )
-        return JSONResponse(content=response.model_dump())
+        return JSONResponse(content=response.model_dump(by_alias=True))
 
     @app.get("/api/stats")
     async def get_stats(
@@ -1308,10 +2082,10 @@ def create_arena_app(
         trial_ids = await state.cache.get_trials_list(fetch_trials)
 
         async def fetch_stats() -> StatsResponse:
-            return await _compute_stats(state.trace_reader, trial_ids)
+            return await _compute_stats(state.trace_reader, trial_ids, state.cache)
 
         stats = await state.cache.get_stats(fetch_stats)
-        return JSONResponse(content=stats.model_dump())
+        return JSONResponse(content=stats.model_dump(by_alias=True))
 
     @app.get("/api/games")
     async def get_games(
@@ -1351,7 +2125,9 @@ def create_arena_app(
         trial_ids = await state.cache.get_trials_list(fetch_trials)
 
         async def fetch_games() -> GamesResponse:
-            return await _extract_games_from_trials(state.trace_reader, trial_ids)
+            return await _extract_games_from_trials(
+                state.trace_reader, trial_ids, state.cache
+            )
 
         games_data = await state.cache.get_games(fetch_games)
 
@@ -1377,7 +2153,7 @@ def create_arena_app(
         filtered = all_games[:limit]
         return JSONResponse(
             content={
-                "games": [g.model_dump() for g in filtered],
+                "games": [g.model_dump(by_alias=True) for g in filtered],
                 "total": len(all_games),
             }
         )
@@ -1423,7 +2199,7 @@ def create_arena_app(
 
         response = LeaderboardResponse(leaderboard=leaderboard)
         return JSONResponse(
-            content=response.model_dump(),
+            content=response.model_dump(by_alias=True),
         )
 
     @app.get("/api/agent-actions")
@@ -1448,13 +2224,18 @@ def create_arena_app(
         trial_ids = await state.cache.get_trials_list(fetch_trials)
 
         async def fetch_actions() -> list[AgentAction]:
-            return await _extract_agent_actions(state.trace_reader, trial_ids, limit)
+            return await _extract_agent_actions(
+                state.trace_reader,
+                trial_ids,
+                limit=limit,
+                max_trials=state.cache.config.agent_actions_max_trials,
+            )
 
         actions = await state.cache.get_agent_actions(fetch_actions)
 
         response = AgentActionsResponse(actions=actions)
         return JSONResponse(
-            content=response.model_dump(),
+            content=response.model_dump(by_alias=True),
         )
 
     # -------------------------------------------------------------------------
@@ -1571,6 +2352,16 @@ def create_arena_app(
             "status": "ok",
             "static_dir": str(state.static_dir) if state.static_dir else None,
         }
+
+    @app.get("/api/cache-stats")
+    async def get_cache_stats() -> JSONResponse:
+        """Get cache statistics for debugging and monitoring.
+
+        Returns current cache configuration and status of all cache entries.
+        Useful for diagnosing caching issues and tuning TTL values.
+        """
+        state = get_server_state()
+        return JSONResponse(content=state.cache.get_cache_stats())
 
     # -------------------------------------------------------------------------
     # Test/Replay Endpoints
@@ -1718,7 +2509,9 @@ async def run_arena_server(
 
 __all__ = [
     "ArenaServerState",
+    "CacheConfig",
     "CacheEntry",
+    "DEFAULT_CACHE_CONFIG",
     "LandingPageCache",
     "SpanBroadcaster",
     "WSMessageType",
