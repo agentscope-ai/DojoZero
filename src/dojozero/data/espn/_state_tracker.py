@@ -53,6 +53,9 @@ class BaseGameStateTracker:
         self._current_away_score: dict[str, int] = {}
         self._seen_play_ids: set[str] = set()
         self._game_started: set[str] = set()
+        # Track last emitted scores for score-change detection
+        self._last_emitted_home_score: dict[str, int] = {}
+        self._last_emitted_away_score: dict[str, int] = {}
 
     # -- Status tracking -----------------------------------------------------
 
@@ -109,6 +112,39 @@ class BaseGameStateTracker:
         self._current_period[event_id] = period
         self._current_home_score[event_id] = home_score
         self._current_away_score[event_id] = away_score
+
+    # -- Score change detection -----------------------------------------------
+
+    def score_changed(self, event_id: str, home_score: int, away_score: int) -> bool:
+        """Check if score has changed since last emission.
+
+        Args:
+            event_id: Game/event ID
+            home_score: Current home score
+            away_score: Current away score
+
+        Returns:
+            True if either score has changed since last emission.
+        """
+        last_home = self._last_emitted_home_score.get(event_id)
+        last_away = self._last_emitted_away_score.get(event_id)
+
+        # First time seeing this game - not a change, just initialization
+        if last_home is None or last_away is None:
+            return False
+
+        return home_score != last_home or away_score != last_away
+
+    def mark_scores_emitted(
+        self, event_id: str, home_score: int, away_score: int
+    ) -> None:
+        """Mark that a game update was emitted with these scores.
+
+        Call this after emitting a game update event so subsequent
+        score_changed() calls can detect new scoring plays.
+        """
+        self._last_emitted_home_score[event_id] = home_score
+        self._last_emitted_away_score[event_id] = away_score
 
     # -- Poll profile ---------------------------------------------------------
 

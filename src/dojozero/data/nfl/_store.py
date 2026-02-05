@@ -601,6 +601,10 @@ class NFLStore(DataStore):
                                 away_line_scores=away_line_scores,
                             )
                         )
+                        # Track emitted scores for score-change detection in PBP
+                        self._state.mark_scores_emitted(
+                            event_id, home_score, away_score
+                        )
                         # Mark final update as emitted if game is concluded
                         if game_concluded:
                             self._state.mark_final_update_emitted(event_id)
@@ -690,6 +694,7 @@ class NFLStore(DataStore):
 
         Emits:
         - NFLPlayEvent for each new play
+        - NFLGameUpdateEvent immediately after scoring plays (score-change detection)
         - GameStartEvent when first play is detected
         """
         events: list[DataEvent] = []
@@ -797,6 +802,9 @@ class NFLStore(DataStore):
                 int(start.get("yardLine", 0) or 0) if isinstance(start, dict) else 0
             )
 
+            home_score = int(play.get("homeScore", 0) or 0)
+            away_score = int(play.get("awayScore", 0) or 0)
+
             events.append(
                 NFLPlayEvent(
                     timestamp=timestamp,
@@ -815,14 +823,46 @@ class NFLStore(DataStore):
                     yards_gained=int(play.get("statYardage", 0) or 0),
                     is_scoring_play=is_scoring,
                     score_value=score_value,
-                    home_score=int(play.get("homeScore", 0) or 0),
-                    away_score=int(play.get("awayScore", 0) or 0),
+                    home_score=home_score,
+                    away_score=away_score,
                     team_id=team_id,
                     team_tricode=team_abbrev,
                     team_abbreviation=team_abbrev,
                     is_turnover=bool(play.get("isTurnover", False)),
                 )
             )
+
+            # Emit immediate game update after scoring plays for real-time score tracking
+            if is_scoring and self._state.score_changed(
+                event_id, home_score, away_score
+            ):
+                logger.info(
+                    "Score change detected for game %s: %d-%d (scoring play)",
+                    event_id,
+                    home_score,
+                    away_score,
+                )
+                events.append(
+                    NFLGameUpdateEvent(
+                        timestamp=timestamp,
+                        game_timestamp=play_game_timestamp,
+                        game_id=event_id,
+                        sport="nfl",
+                        period=quarter,
+                        game_clock=game_clock,
+                        home_score=home_score,
+                        away_score=away_score,
+                        possession=team_abbrev,
+                        down=0,
+                        distance=0,
+                        yard_line="",
+                        home_team_stats=NFLTeamGameStats(),
+                        away_team_stats=NFLTeamGameStats(),
+                        home_line_scores=[],
+                        away_line_scores=[],
+                    )
+                )
+                self._state.mark_scores_emitted(event_id, home_score, away_score)
 
         return events
 
