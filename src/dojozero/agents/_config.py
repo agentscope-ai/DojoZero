@@ -209,11 +209,13 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
             )
     else:
         base_url = None
-    if model_type in ("openai", "grok"):
-        client_kwargs: dict[str, Any] = {"base_url": base_url} if base_url else {}
+    if model_type in "grok":
+        client_kwargs: dict[str, Any] = {"base_url": "https://api.x.ai/v1"}
         return OpenAIChatModel(
             model_name=model_name, api_key=api_key, client_kwargs=client_kwargs
         )
+    elif model_type == "openai":
+        return OpenAIChatModel(model_name=model_name, api_key=api_key)
     elif model_type == "dashscope":
         return DashScopeChatModel(model_name=model_name, api_key=api_key)
     elif model_type == "anthropic":
