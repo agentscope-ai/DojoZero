@@ -55,7 +55,7 @@ function PodiumSection({ leaderboardData }) {
 
               {/* Agent Info */}
               <div style={styles.podiumInfo}>
-                <span style={styles.podiumName}>{entry.agent.name}</span>
+                <span style={styles.podiumName}>{entry.agent.id}</span>
                 <span style={styles.podiumWinnings}>
                   +${entry.winnings.toLocaleString()}
                 </span>
@@ -195,7 +195,7 @@ function RankingTable({ selectedAgent, setSelectedAgent, leaderboardData }) {
                     {entry.agent.avatar}
                   </span>
                   <div>
-                    <span style={styles.agentName}>{entry.agent.name}</span>
+                    <span style={styles.agentName}>{entry.agent.id}</span>
                     <span style={styles.agentModel}>{entry.agent.model}</span>
                   </div>
                 </div>
@@ -254,7 +254,7 @@ function AgentDetailPanel({ agent }) {
             {agent.agent.avatar}
           </span>
           <div>
-            <h3 style={styles.detailName}>{agent.agent.name}</h3>
+            <h3 style={styles.detailName}>{agent.agent.id}</h3>
             <span style={styles.detailModel}>Model: {agent.agent.model}</span>
           </div>
         </div>

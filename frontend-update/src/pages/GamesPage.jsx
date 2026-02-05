@@ -1,60 +1,21 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ChevronLeft,
   ChevronRight,
   Users,
-  Trophy,
-  TrendingUp,
   Clock,
-  Filter
 } from "lucide-react";
 import { useDataSource } from "../hooks/useDataSource.jsx";
-import { agents } from "../data/mockData";
 
 // Hero Section with newspaper-style live stats
-function HeroSection({ stats, useMockData }) {
-  // Live updating stats - initialize from props
-  const [gamesPlayed, setGamesPlayed] = useState(stats.gamesPlayed);
-  const [liveNow, setLiveNow] = useState(stats.liveNow);
-  const [wageredToday, setWageredToday] = useState(stats.wageredToday);
-  const [betsPlaced, setBetsPlaced] = useState(342);
-  const [flashStat, setFlashStat] = useState(null);
-
-  // Update from props when they change (for live API data)
-  useEffect(() => {
-    setGamesPlayed(stats.gamesPlayed);
-    setLiveNow(stats.liveNow);
-    setWageredToday(stats.wageredToday);
-  }, [stats]);
-
-  // Simulate real-time updates (only when using mock data)
-  useEffect(() => {
-    if (!useMockData) return; // Don't simulate when using live API
-    
-    const interval = setInterval(() => {
-      const rand = Math.random();
-      if (rand < 0.3) {
-        // Wagered amount increases
-        const increase = Math.floor(Math.random() * 500 + 100);
-        setWageredToday((prev) => prev + increase);
-        setFlashStat("wagered");
-        setTimeout(() => setFlashStat(null), 600);
-      } else if (rand < 0.5) {
-        // Bets placed increases
-        setBetsPlaced((prev) => prev + 1);
-        setFlashStat("bets");
-        setTimeout(() => setFlashStat(null), 600);
-      } else if (rand < 0.6) {
-        // Games played occasionally increases
-        setGamesPlayed((prev) => prev + 1);
-        setFlashStat("games");
-        setTimeout(() => setFlashStat(null), 600);
-      }
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [useMockData]);
+function HeroSection({ stats }) {
+  // Stats from API
+  const gamesPlayed = stats.gamesPlayed;
+  const liveNow = stats.liveNow;
+  const wageredToday = stats.wageredToday;
+  const betsPlaced = stats.betsPlaced || 0;
 
   return (
     <section style={styles.hero}>
@@ -84,42 +45,30 @@ function HeroSection({ stats, useMockData }) {
         >
           <div style={styles.tickerItem}>
             <span style={styles.tickerLabel}>Live Now</span>
-            <span style={{
-              ...styles.tickerValueLive,
-              ...(flashStat === "live" ? styles.tickerValueFlash : {}),
-            }}>
+            <span style={styles.tickerValueLive}>
               <span className="status-dot live" style={{ marginRight: 6 }} />
-              <AnimatedNumber value={liveNow} />
+              {liveNow}
             </span>
           </div>
           <div style={styles.tickerDivider}>|</div>
           <div style={styles.tickerItem}>
             <span style={styles.tickerLabel}>Total Games</span>
-            <span style={{
-              ...styles.tickerValue,
-              ...(flashStat === "games" ? styles.tickerValueFlash : {}),
-            }}>
-              <AnimatedNumber value={gamesPlayed} />
+            <span style={styles.tickerValue}>
+              {gamesPlayed}
             </span>
           </div>
           <div style={styles.tickerDivider}>|</div>
           <div style={styles.tickerItem}>
             <span style={styles.tickerLabel}>Bets Today</span>
-            <span style={{
-              ...styles.tickerValue,
-              ...(flashStat === "bets" ? styles.tickerValueFlash : {}),
-            }}>
-              <AnimatedNumber value={betsPlaced} />
+            <span style={styles.tickerValue}>
+              {betsPlaced}
             </span>
           </div>
           <div style={styles.tickerDivider}>|</div>
           <div style={styles.tickerItem}>
             <span style={styles.tickerLabel}>Wagered</span>
-            <span style={{
-              ...styles.tickerValueMoney,
-              ...(flashStat === "wagered" ? styles.tickerValueFlash : {}),
-            }}>
-              $<AnimatedNumber value={wageredToday} format="money" />
+            <span style={styles.tickerValueMoney}>
+              ${wageredToday >= 1000000 ? `${(wageredToday / 1000000).toFixed(2)}M` : wageredToday >= 1000 ? `${(wageredToday / 1000).toFixed(1)}K` : wageredToday.toLocaleString()}
             </span>
           </div>
         </motion.div>
@@ -134,61 +83,8 @@ function HeroSection({ stats, useMockData }) {
   );
 }
 
-// Animated number component with counting effect
-function AnimatedNumber({ value, flash, format }) {
-  const [displayValue, setDisplayValue] = useState(value);
-  const [isAnimating, setIsAnimating] = useState(false);
-
-  useEffect(() => {
-    if (value !== displayValue) {
-      setIsAnimating(true);
-      const diff = value - displayValue;
-      const steps = 10;
-      const stepValue = diff / steps;
-      let current = displayValue;
-      let step = 0;
-
-      const animate = setInterval(() => {
-        step++;
-        current += stepValue;
-        if (step >= steps) {
-          setDisplayValue(value);
-          setIsAnimating(false);
-          clearInterval(animate);
-        } else {
-          setDisplayValue(Math.round(current));
-        }
-      }, 30);
-
-      return () => clearInterval(animate);
-    }
-  }, [value, displayValue]);
-
-  const formatValue = (val) => {
-    if (format === "money") {
-      if (val >= 1000000) {
-        return `${(val / 1000000).toFixed(2)}M`;
-      } else if (val >= 1000) {
-        return `${(val / 1000).toFixed(1)}K`;
-      }
-      return val.toLocaleString();
-    }
-    return val.toLocaleString();
-  };
-
-  return (
-    <span style={{
-      ...(isAnimating ? { color: "#10B981" } : {}),
-      transition: "color 0.3s ease",
-    }}>
-      {formatValue(displayValue)}
-    </span>
-  );
-}
-
 // Live Games Carousel
 function LiveGamesSection({ liveGames, agentActions }) {
-  const [scrollPosition, setScrollPosition] = useState(0);
   const [leagueFilter, setLeagueFilter] = useState("all");
 
   const scroll = (direction) => {
@@ -274,15 +170,7 @@ function LiveGamesSection({ liveGames, agentActions }) {
 // Rolling Live Agent Actions Ticker
 function LiveActionsTicker({ agentActions }) {
   const liveAgentActions = agentActions || [];
-  const [visibleActions, setVisibleActions] = useState(liveAgentActions.slice(0, 4));
   const [currentIndex, setCurrentIndex] = useState(0);
-
-  // Create an extended list of actions for continuous rolling effect
-  const extendedActions = [
-    ...liveAgentActions,
-    ...liveAgentActions,
-    ...liveAgentActions,
-  ];
 
   useEffect(() => {
     if (liveAgentActions.length === 0) return;
@@ -356,81 +244,7 @@ function LiveActionsTicker({ agentActions }) {
 }
 
 function LiveGameCard({ game, index }) {
-  // Simulate live score changes
-  const [homeScore, setHomeScore] = useState(game.homeScore);
-  const [awayScore, setAwayScore] = useState(game.awayScore);
-  const [clock, setClock] = useState(game.clock);
-  const [bets, setBets] = useState(game.bets);
-  const [scoreFlash, setScoreFlash] = useState(null); // 'home' | 'away' | null
-  const [newBetFlash, setNewBetFlash] = useState(null);
-
-  // Simulate clock countdown
-  useEffect(() => {
-    const clockInterval = setInterval(() => {
-      setClock((prev) => {
-        const [mins, secs] = prev.split(":").map(Number);
-        if (secs > 0) {
-          return `${mins}:${String(secs - 1).padStart(2, "0")}`;
-        } else if (mins > 0) {
-          return `${mins - 1}:59`;
-        }
-        return prev;
-      });
-    }, 1000);
-
-    return () => clearInterval(clockInterval);
-  }, []);
-
-  // Simulate random score changes (exaggerated for demo)
-  useEffect(() => {
-    const scoreInterval = setInterval(() => {
-      const rand = Math.random();
-      if (rand < 0.3) {
-        // Home team scores
-        const points = Math.random() < 0.4 ? 3 : 2;
-        setHomeScore((prev) => prev + points);
-        setScoreFlash("home");
-        setTimeout(() => setScoreFlash(null), 800);
-      } else if (rand < 0.6) {
-        // Away team scores
-        const points = Math.random() < 0.4 ? 3 : 2;
-        setAwayScore((prev) => prev + points);
-        setScoreFlash("away");
-        setTimeout(() => setScoreFlash(null), 800);
-      }
-    }, 3000 + Math.random() * 2000); // Every 3-5 seconds
-
-    return () => clearInterval(scoreInterval);
-  }, []);
-
-  // Simulate new bets being placed
-  useEffect(() => {
-    const betInterval = setInterval(() => {
-      if (Math.random() < 0.4) {
-        const randomAgent = agents[Math.floor(Math.random() * agents.length)];
-        const randomTeam = Math.random() < 0.5 ? game.homeTeam.abbrev : game.awayTeam.abbrev;
-        const randomAmount = Math.floor(Math.random() * 80 + 20);
-
-        const newBet = {
-          agent: randomAgent,
-          team: randomTeam,
-          amount: randomAmount,
-          type: "moneyline",
-          isNew: true,
-        };
-
-        setBets((prev) => {
-          const updated = [newBet, ...prev.slice(0, 2)];
-          return updated;
-        });
-        setNewBetFlash(randomAgent.id);
-        setTimeout(() => setNewBetFlash(null), 1000);
-      }
-    }, 4000 + Math.random() * 3000); // Every 4-7 seconds
-
-    return () => clearInterval(betInterval);
-  }, [game.homeTeam.abbrev, game.awayTeam.abbrev]);
-
+  const navigate = useNavigate();
   const leagueColor = game.league === "NBA" ? "#C9082A" : "#013369";
 
   return (
@@ -440,6 +254,7 @@ function LiveGameCard({ game, index }) {
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.3, delay: index * 0.1 }}
       className="hover-lift"
+      onClick={() => navigate(`/games/${game.id}`)}
     >
       {/* Top badges row */}
       <div style={styles.cardBadges}>
@@ -459,12 +274,12 @@ function LiveGameCard({ game, index }) {
 
       {/* Teams */}
       <div style={styles.teamsContainer}>
-        <TeamDisplay team={game.homeTeam} score={homeScore} flash={scoreFlash === "home"} />
+        <TeamDisplay team={game.homeTeam} score={game.homeScore} />
         <div style={styles.vsContainer}>
           <span style={styles.vsText}>VS</span>
-          <span style={styles.gameTime}>{game.quarter} {clock}</span>
+          <span style={styles.gameTime}>{game.quarter} {game.clock}</span>
         </div>
-        <TeamDisplay team={game.awayTeam} score={awayScore} flash={scoreFlash === "away"} />
+        <TeamDisplay team={game.awayTeam} score={game.awayScore} />
       </div>
 
       {/* Agent Bets */}
@@ -475,89 +290,49 @@ function LiveGameCard({ game, index }) {
             <span className="status-dot live" style={{ width: 6, height: 6 }} />
           </span>
         </div>
-        <AnimatePresence mode="popLayout">
-          {bets.slice(0, 3).map((bet, i) => (
-            <motion.div
-              key={`${bet.agent.id}-${bet.team}-${i}`}
-              style={{
-                ...styles.betRow,
-                ...(newBetFlash === bet.agent.id ? styles.betRowNew : {}),
-              }}
-              initial={bet.isNew ? { opacity: 0, x: -20, scale: 0.9 } : false}
-              animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, x: 20 }}
-              transition={{ duration: 0.3 }}
-              layout
-            >
-              <span style={{
-                ...styles.agentAvatarSmall,
-                background: bet.agent.color,
-              }}>
-                {bet.agent.avatar}
-              </span>
-              <span style={styles.betTeam}>{bet.team}</span>
-              <motion.span
-                style={styles.betAmount}
-                initial={bet.isNew ? { scale: 1.3 } : false}
-                animate={{ scale: 1 }}
-              >
-                ${bet.amount}
-              </motion.span>
-              {bet.isNew && (
-                <motion.span
-                  style={styles.newBetBadge}
-                  initial={{ opacity: 1 }}
-                  animate={{ opacity: 0 }}
-                  transition={{ duration: 2 }}
-                >
-                  NEW
-                </motion.span>
-              )}
-            </motion.div>
-          ))}
-        </AnimatePresence>
+        {game.bets && game.bets.slice(0, 3).map((bet, i) => (
+          <div
+            key={`${bet.agent.id}-${bet.team}-${i}`}
+            style={styles.betRow}
+          >
+            <span style={{
+              ...styles.agentAvatarSmall,
+              background: bet.agent.color,
+            }}>
+              {bet.agent.avatar}
+            </span>
+            <span style={styles.betTeam}>{bet.team}</span>
+            <span style={styles.betAmount}>
+              ${bet.amount}
+            </span>
+          </div>
+        ))}
       </div>
     </motion.div>
   );
 }
 
-function TeamDisplay({ team, score, flash }) {
+function TeamDisplay({ team, score }) {
   return (
     <div style={styles.teamDisplay}>
       <div style={{
         ...styles.teamLogo,
-        background: team.color,
+        background: `linear-gradient(135deg, ${team.color}88 0%, ${team.color}44 100%)`,
       }}>
-        {team.abbrev}
+        {team.logoUrl ? (
+          <img src={team.logoUrl} alt={team.name} style={styles.teamLogoImg} />
+        ) : (
+          <span style={styles.teamLogoText}>{team.abbrev}</span>
+        )}
       </div>
       <div style={styles.teamInfo}>
         <span style={styles.teamCity}>{team.city}</span>
         <span style={styles.teamName}>{team.name}</span>
       </div>
       {score !== undefined && (
-        <motion.div
-          style={{
-            ...styles.teamScore,
-            ...(flash ? styles.teamScoreFlash : {}),
-          }}
-          animate={flash ? {
-            scale: [1, 1.3, 1],
-            color: ["var(--text-primary)", "#10B981", "var(--text-primary)"],
-          } : {}}
-          transition={{ duration: 0.5 }}
-        >
+        <div style={styles.teamScore}>
           {score}
-          {flash && (
-            <motion.span
-              style={styles.scoreIncrement}
-              initial={{ opacity: 1, y: 0 }}
-              animate={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.8 }}
-            >
-              +2
-            </motion.span>
-          )}
-        </motion.div>
+        </div>
       )}
     </div>
   );
@@ -658,6 +433,8 @@ function AllGamesSection({ allGames }) {
 }
 
 function GameRow({ game, index }) {
+  const navigate = useNavigate();
+
   const getStatusBadge = () => {
     switch (game.status) {
       case "live":
@@ -690,6 +467,7 @@ function GameRow({ game, index }) {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, delay: index * 0.05 }}
+      onClick={() => navigate(`/games/${game.id}`)}
     >
       <div style={styles.gameRowStatus}>
         {getStatusBadge()}
@@ -699,9 +477,13 @@ function GameRow({ game, index }) {
         <div style={styles.gameRowTeam}>
           <span style={{
             ...styles.teamLogSmall,
-            background: game.homeTeam.color,
+            background: `linear-gradient(135deg, ${game.homeTeam.color}88 0%, ${game.homeTeam.color}44 100%)`,
           }}>
-            {game.homeTeam.abbrev}
+            {game.homeTeam.logoUrl ? (
+              <img src={game.homeTeam.logoUrl} alt={game.homeTeam.name} style={styles.teamLogSmallImg} />
+            ) : (
+              game.homeTeam.abbrev
+            )}
           </span>
           <span>{game.homeTeam.name}</span>
         </div>
@@ -709,9 +491,13 @@ function GameRow({ game, index }) {
         <div style={styles.gameRowTeam}>
           <span style={{
             ...styles.teamLogSmall,
-            background: game.awayTeam.color,
+            background: `linear-gradient(135deg, ${game.awayTeam.color}88 0%, ${game.awayTeam.color}44 100%)`,
           }}>
-            {game.awayTeam.abbrev}
+            {game.awayTeam.logoUrl ? (
+              <img src={game.awayTeam.logoUrl} alt={game.awayTeam.name} style={styles.teamLogSmallImg} />
+            ) : (
+              game.awayTeam.abbrev
+            )}
           </span>
           <span>{game.awayTeam.name}</span>
         </div>
@@ -760,12 +546,12 @@ function GameRow({ game, index }) {
 }
 
 export default function GamesPage() {
-  const { stats, liveGames, allGames, agentActions, useMockData } = useDataSource();
-  
+  const { stats, liveGames, allGames, agentActions } = useDataSource();
+
   return (
     <div style={styles.page}>
       <div className="container">
-        <HeroSection stats={stats} useMockData={useMockData} />
+        <HeroSection stats={stats} />
         <LiveGamesSection liveGames={liveGames} agentActions={agentActions} />
         <AllGamesSection allGames={allGames} />
       </div>
@@ -969,6 +755,7 @@ const styles = {
     borderRadius: 16,
     padding: 20,
     position: "relative",
+    cursor: "pointer",
   },
   cardBadges: {
     display: "flex",
@@ -1016,6 +803,17 @@ const styles = {
     color: "white",
     fontWeight: 700,
     fontSize: 14,
+    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.2)",
+  },
+  teamLogoImg: {
+    width: "75%",
+    height: "75%",
+    objectFit: "contain",
+  },
+  teamLogoText: {
+    fontSize: 14,
+    fontWeight: 700,
+    color: "white",
   },
   teamInfo: {
     textAlign: "center",
@@ -1285,6 +1083,7 @@ const styles = {
     border: "1px solid var(--border-subtle)",
     borderRadius: 12,
     transition: "all 0.2s ease",
+    cursor: "pointer",
   },
   gameRowStatus: {},
   gameRowTeams: {
@@ -1307,6 +1106,12 @@ const styles = {
     color: "white",
     fontSize: 11,
     fontWeight: 700,
+    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)",
+  },
+  teamLogSmallImg: {
+    width: "75%",
+    height: "75%",
+    objectFit: "contain",
   },
   gameRowVs: {
     color: "var(--text-muted)",

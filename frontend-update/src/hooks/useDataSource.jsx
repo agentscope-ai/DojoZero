@@ -1,26 +1,13 @@
 /**
- * Data source hook for switching between mock data and Arena API.
+ * Data source hook for fetching data from Arena API.
  *
  * Usage:
- *   npm run dev          # Uses mock data (default)
- *   npm run dev:live     # Uses Arena API at http://localhost:3001
- *
- * Or set environment variable:
- *   VITE_USE_MOCK_DATA=false npm run dev
  *   VITE_API_URL=http://localhost:3001 npm run dev
  */
 
 import { useState, useEffect, useCallback, createContext, useContext } from "react";
-import {
-  liveGames as mockLiveGames,
-  allGames as mockAllGames,
-  liveAgentActions as mockAgentActions,
-  leaderboardData as mockLeaderboard,
-  stats as mockStats,
-} from "../data/mockData";
 
-// Check environment variables set by Vite
-const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA !== "false";
+// API URL from environment variable
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 // Data source context
@@ -35,21 +22,19 @@ export function useDataSource() {
 }
 
 /**
- * Provider component that manages data source (controlled via CLI env vars).
+ * Provider component that manages data fetching from Arena API.
  */
 export function DataSourceProvider({ children }) {
-  // Data source is fixed at build/start time via environment variables
-  const useMockData = USE_MOCK_DATA;
   const apiUrl = API_URL;
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Landing page data state
-  const [stats, setStats] = useState(mockStats);
-  const [liveGames, setLiveGames] = useState(mockLiveGames);
-  const [allGames, setAllGames] = useState(mockAllGames);
-  const [agentActions, setAgentActions] = useState(mockAgentActions);
-  const [leaderboard, setLeaderboard] = useState(mockLeaderboard);
+  // Landing page data state - all initialized with empty data
+  const [stats, setStats] = useState({ gamesPlayed: 0, liveNow: 0, wageredToday: 0 });
+  const [liveGames, setLiveGames] = useState([]);
+  const [allGames, setAllGames] = useState([]);
+  const [agentActions, setAgentActions] = useState([]);
+  const [leaderboard, setLeaderboard] = useState([]);
 
   // Fetch data from API
   const fetchFromApi = useCallback(
@@ -65,44 +50,30 @@ export function DataSourceProvider({ children }) {
 
   // Fetch landing page data
   const fetchLandingData = useCallback(async () => {
-    if (useMockData) {
-      // Use mock data directly
-      setStats(mockStats);
-      setLiveGames(mockLiveGames);
-      setAllGames(mockAllGames);
-      setAgentActions(mockAgentActions);
-      return;
-    }
-
     setIsLoading(true);
     setError(null);
 
     try {
       const data = await fetchFromApi("/api/landing");
-      setStats(data.stats || mockStats);
+      setStats(data.stats || { gamesPlayed: 0, liveNow: 0, wageredToday: 0 });
       setLiveGames(data.liveGames || []);
       setAllGames(data.allGames || []);
       setAgentActions(data.liveAgentActions || []);
     } catch (err) {
       console.error("Failed to fetch landing data:", err);
       setError(err.message);
-      // Fallback to mock data on error
-      setStats(mockStats);
-      setLiveGames(mockLiveGames);
-      setAllGames(mockAllGames);
-      setAgentActions(mockAgentActions);
+      // Keep empty state on error
+      setStats({ gamesPlayed: 0, liveNow: 0, wageredToday: 0 });
+      setLiveGames([]);
+      setAllGames([]);
+      setAgentActions([]);
     } finally {
       setIsLoading(false);
     }
-  }, [useMockData, fetchFromApi]);
+  }, [fetchFromApi]);
 
   // Fetch leaderboard data
   const fetchLeaderboard = useCallback(async () => {
-    if (useMockData) {
-      setLeaderboard(mockLeaderboard);
-      return;
-    }
-
     setIsLoading(true);
     setError(null);
 
@@ -112,63 +83,64 @@ export function DataSourceProvider({ children }) {
     } catch (err) {
       console.error("Failed to fetch leaderboard:", err);
       setError(err.message);
-      setLeaderboard(mockLeaderboard);
+      setLeaderboard([]);
     } finally {
       setIsLoading(false);
     }
-  }, [useMockData, fetchFromApi]);
+  }, [fetchFromApi]);
 
   // Fetch stats only (for real-time updates)
   const fetchStats = useCallback(async () => {
-    if (useMockData) return;
-
     try {
       const data = await fetchFromApi("/api/stats");
       setStats(data);
     } catch (err) {
       console.error("Failed to fetch stats:", err);
     }
-  }, [useMockData, fetchFromApi]);
+  }, [fetchFromApi]);
 
   // Fetch agent actions only (for live ticker)
   const fetchAgentActions = useCallback(async () => {
-    if (useMockData) return;
-
     try {
       const data = await fetchFromApi("/api/agent-actions");
       setAgentActions(data.actions || []);
     } catch (err) {
       console.error("Failed to fetch agent actions:", err);
     }
-  }, [useMockData, fetchFromApi]);
+  }, [fetchFromApi]);
 
   // Initial data fetch on mount
   useEffect(() => {
     fetchLandingData();
     fetchLeaderboard();
-  }, [useMockData, fetchLandingData, fetchLeaderboard]);
+  }, [fetchLandingData, fetchLeaderboard]);
 
-  // Periodic refresh for live data (only when using API)
+  // Periodic refresh for live data
+  // Intervals aligned with server-side cache TTLs to reduce load
   useEffect(() => {
-    if (useMockData) return;
+    // Refresh stats every 10 seconds (matches server cache TTL)
+    const statsInterval = setInterval(fetchStats, 10000);
+    // Refresh all data every 60 seconds (matches server cache TTL)
+    const fullRefresh = setInterval(fetchLandingData, 60000);
 
-    // Refresh stats every 5 seconds
-    const statsInterval = setInterval(fetchStats, 5000);
-    // Refresh agent actions every 2 seconds
-    const actionsInterval = setInterval(fetchAgentActions, 2000);
-    // Refresh all data every 30 seconds
-    const fullRefresh = setInterval(fetchLandingData, 30000);
+    // Only refresh agent actions if there are live games
+    // Use 30-second interval since actions now include completed games
+    let actionsInterval = null;
+    if (liveGames.length > 0) {
+      actionsInterval = setInterval(fetchAgentActions, 30000);
+    }
 
     return () => {
       clearInterval(statsInterval);
-      clearInterval(actionsInterval);
       clearInterval(fullRefresh);
+      if (actionsInterval) {
+        clearInterval(actionsInterval);
+      }
     };
-  }, [useMockData, fetchStats, fetchAgentActions, fetchLandingData]);
+  }, [fetchStats, fetchAgentActions, fetchLandingData, liveGames]);
 
   const value = {
-    // Data source state (read-only, controlled via CLI env vars)
-    useMockData,
+    // API configuration
     apiUrl,
     isLoading,
     error,
@@ -182,8 +154,7 @@ export function DataSourceProvider({ children }) {
 
     // Actions
     refresh: fetchLandingData,
-    // UI helper: show error message if not in mock mode
-    errorMessage: error && !useMockData ? `Error loading data: ${error}` : null,
+    errorMessage: error ? `Error loading data: ${error}` : null,
   };
 
   return (
