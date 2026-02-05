@@ -25,21 +25,19 @@ ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 # Install uv for fast dependency management
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files first for better layer caching
+# Copy all source files needed for build
 COPY pyproject.toml .
 COPY README.md .
-
-# Install dependencies (no dev dependencies in production)
-RUN uv pip install --system .
-
-# Install additional runtime dependencies
-RUN uv pip install --system python-dotenv tavily-python
-
-# Copy application code
 COPY src/ src/
 COPY agents/ agents/
 COPY trial_sources/ trial_sources/
 COPY trial_params/ trial_params/
+
+# Install dependencies and the package
+RUN uv pip install --system .
+
+# Install additional runtime dependencies
+RUN uv pip install --system python-dotenv tavily-python
 
 # Create output directories
 RUN mkdir -p outputs data
