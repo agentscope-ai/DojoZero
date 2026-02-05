@@ -28,6 +28,7 @@ class StatsResponse(BaseModel):
     games_played: int = Field(default=0, serialization_alias="gamesPlayed")
     live_now: int = Field(default=0, serialization_alias="liveNow")
     wagered_today: int = Field(default=0, serialization_alias="wageredToday")
+    total_agents: int = Field(default=0, serialization_alias="totalAgents")
 
 
 class GameCardData(BaseModel):

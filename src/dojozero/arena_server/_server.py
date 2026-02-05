@@ -1015,7 +1015,12 @@ class LandingPageCache:
         data: StatsResponse = await fetcher()
 
         # Only cache non-empty results
-        if data.games_played or data.live_now or data.wagered_today:
+        if (
+            data.games_played
+            or data.live_now
+            or data.wagered_today
+            or data.total_agents
+        ):
             async with self._lock:
                 self._stats = CacheEntry(
                     data=data,
@@ -1907,6 +1912,7 @@ async def _compute_stats(
         games_played=games_played,
         live_now=live_now,
         wagered_today=int(wagered_today),
+        total_agents=len(_AGENT_CACHE),
     )
 
 
