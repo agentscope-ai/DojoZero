@@ -8,7 +8,11 @@ cp deploy/.env.template .env
 nano .env  # Fill in API keys and credentials
 
 # 2. Build and run
-docker-compose -f deploy/docker-compose.yml up -d
+# International (default):
+docker-compose -f deploy/docker-compose.yml up -d --build
+
+# China (use mirrors for faster builds):
+CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build
 
 # 3. Verify
 docker logs dojozero-nba --tail 50
@@ -67,9 +71,14 @@ ssh user@your-server-ip
 git clone https://github.com/your-org/DojoZero.git
 cd DojoZero
 
-# Run setup script (installs Docker, auto-detects China and configures mirrors)
+# Run setup script
 chmod +x deploy/setup.sh
+
+# International:
 ./deploy/setup.sh --docker
+
+# China (configures Docker daemon and build mirrors):
+./deploy/setup.sh --docker --china
 
 # Log out and back in for docker group (if Docker was just installed)
 exit
@@ -80,12 +89,16 @@ cd DojoZero
 nano .env  # Fill in credentials
 
 # Build and run
-docker-compose -f deploy/docker-compose.yml up -d
+# International:
+docker-compose -f deploy/docker-compose.yml up -d --build
+
+# China:
+CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build
 ```
 
-The setup script automatically:
+The setup script:
 - Installs Docker and docker-compose if missing
-- Detects if Docker Hub is unreachable (China) and configures mirrors
+- With `--china`: Configures Docker daemon with DaoCloud mirror
 - Creates .env from template
 
 ### Verify Deployment

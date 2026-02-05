@@ -1,9 +1,11 @@
 # DojoZero Docker Compose Configuration
 #
 # Usage:
-#   1. Copy .env.template to .env and fill in credentials
-#   2. docker-compose -f deploy/docker-compose.yml up -d
-#   3. docker-compose -f deploy/docker-compose.yml logs -f
+#   # International (default)
+#   docker-compose -f deploy/docker-compose.yml up -d --build
+#
+#   # China (use mirrors)
+#   CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build
 #
 # Runs two separate containers for NBA and NFL trial sources
 
@@ -12,6 +14,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        CHINA_MIRRORS: ${CHINA_MIRRORS:-false}
     container_name: dojozero-nba
     restart: unless-stopped
     ports:
@@ -48,6 +52,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        CHINA_MIRRORS: ${CHINA_MIRRORS:-false}
     container_name: dojozero-nfl
     restart: unless-stopped
     ports:

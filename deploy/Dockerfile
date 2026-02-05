@@ -1,29 +1,34 @@
 # DojoZero Docker Image
 # Single container for dashboard server with auto-scheduling via trial sources
 
-# Use Alibaba Cloud mirror for China, or docker.io for elsewhere
+# Build args
 ARG BASE_IMAGE=python:3.11-slim
+ARG CHINA_MIRRORS=false
+
 FROM ${BASE_IMAGE}
 
-# Use China apt mirror for faster builds (comment out if building outside China)
-RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
+# Re-declare ARG after FROM (required for multi-stage)
+ARG CHINA_MIRRORS
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
+# Configure apt mirrors and install system dependencies
+RUN if [ "$CHINA_MIRRORS" = "true" ]; then \
+        echo "Configuring China apt mirrors..." && \
+        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Use China PyPI mirror for faster builds
-ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ENV PIP_TRUSTED_HOST=mirrors.aliyun.com
-ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-
-# Install uv for fast dependency management
-RUN pip install --no-cache-dir uv
+# Install uv (with China mirror if needed)
+RUN if [ "$CHINA_MIRRORS" = "true" ]; then \
+        pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com uv; \
+    else \
+        pip install --no-cache-dir uv; \
+    fi
 
 # Copy all source files needed for build
 COPY pyproject.toml .
@@ -33,8 +38,12 @@ COPY agents/ agents/
 COPY trial_sources/ trial_sources/
 COPY trial_params/ trial_params/
 
-# Install dependencies and the package
-RUN uv pip install --system .
+# Install dependencies and the package (with China mirror if needed)
+RUN if [ "$CHINA_MIRRORS" = "true" ]; then \
+        UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ uv pip install --system .; \
+    else \
+        uv pip install --system .; \
+    fi
 
 # Create output directories
 RUN mkdir -p outputs data

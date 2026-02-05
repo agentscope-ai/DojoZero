@@ -2,8 +2,9 @@
 # DojoZero Setup Script
 #
 # Usage:
-#   ./deploy/setup.sh          # Local development (Python + uv)
-#   ./deploy/setup.sh --docker # Production (Docker + mirrors for China)
+#   ./deploy/setup.sh                 # Local development (Python + uv)
+#   ./deploy/setup.sh --docker        # Production (Docker, international)
+#   ./deploy/setup.sh --docker --china # Production (Docker, China mirrors)
 
 set -e
 
@@ -12,18 +13,25 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Parse arguments
 DOCKER_MODE=false
+CHINA_MIRRORS=false
 for arg in "$@"; do
     case $arg in
         --docker|--production)
             DOCKER_MODE=true
-            shift
+            ;;
+        --china)
+            CHINA_MIRRORS=true
             ;;
     esac
 done
 
 echo "=========================================="
 if [ "$DOCKER_MODE" = true ]; then
-    echo "DojoZero - Production Setup (Docker)"
+    if [ "$CHINA_MIRRORS" = true ]; then
+        echo "DojoZero - Production Setup (Docker + China mirrors)"
+    else
+        echo "DojoZero - Production Setup (Docker)"
+    fi
 else
     echo "DojoZero - Development Setup (Python)"
 fi
@@ -61,12 +69,10 @@ if [ "$DOCKER_MODE" = true ]; then
         echo "docker-compose already installed"
     fi
 
-    # Configure Docker mirrors (for China)
-    # Detect if we're in China by checking if registry-1.docker.io is reachable
-    echo ""
-    echo "Checking Docker Hub connectivity..."
-    if ! timeout 5 curl -s https://registry-1.docker.io/v2/ > /dev/null 2>&1; then
-        echo "Docker Hub unreachable, configuring China mirrors..."
+    # Configure Docker daemon mirrors for China if --china flag is set
+    if [ "$CHINA_MIRRORS" = true ]; then
+        echo ""
+        echo "Configuring Docker daemon with China mirrors..."
         sudo mkdir -p /etc/docker
         sudo tee /etc/docker/daemon.json > /dev/null <<EOF
 {
@@ -78,8 +84,6 @@ EOF
         sudo systemctl daemon-reload
         sudo systemctl restart docker
         echo "Docker configured with DaoCloud mirror"
-    else
-        echo "Docker Hub reachable, no mirror needed"
     fi
 
     # Create directories
@@ -107,9 +111,13 @@ EOF
     fi
     echo "Next steps:"
     echo "  1. Edit credentials: nano .env"
-    echo "  2. Deploy: docker-compose -f deploy/docker-compose.yml up -d"
+    if [ "$CHINA_MIRRORS" = true ]; then
+        echo "  2. Deploy: CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build"
+    else
+        echo "  2. Deploy: docker-compose -f deploy/docker-compose.yml up -d --build"
+    fi
     echo "  3. Verify: docker logs dojozero-nba --tail 50"
-    echo "          docker logs dojozero-nfl --tail 50"
+    echo "             docker logs dojozero-nfl --tail 50"
     echo ""
     exit 0
 fi
