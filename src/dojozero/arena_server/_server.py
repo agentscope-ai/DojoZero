@@ -21,6 +21,17 @@ Endpoints:
 - WS   /ws/trials/{trial_id}/stream   - Real-time span streaming (supports pause/resume)
 - WS   /ws/trials/{trial_id}/replay   - Replay completed trial (supports pause/resume/speed)
 
+Filtering:
+    Most endpoints support optional `league` query parameter for filtering by sport:
+    - ?league=NBA  - Filter to NBA games only
+    - ?league=NFL  - Filter to NFL games only
+    - (omit)       - Return all leagues
+
+    Supported endpoints: /api/landing, /api/stats, /api/games, /api/leaderboard, /api/agent-actions
+
+    Per-league results are cached separately for leagues in CACHEABLE_LEAGUES (NBA, NFL).
+    To add a new league, update CACHEABLE_LEAGUES in the code.
+
 Configuration:
     dojo0 arena --trace-backend sls
     dojo0 arena --trace-backend jaeger --trace-query-endpoint http://localhost:16686
