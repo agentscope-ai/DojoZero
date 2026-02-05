@@ -30,7 +30,6 @@ export default function GameDetailPage() {
         }
 
         const data = await response.json();
-        console.log("Trial data received:", data);
         setTrialData(data);
       } catch (err) {
         console.error("Failed to fetch game detail:", err);
@@ -173,7 +172,12 @@ export default function GameDetailPage() {
               </div>
               <div style={styles.feedList}>
                 {events.slice().reverse().map((event, index) => (
-                  <FeedItem key={index} event={event} index={index} />
+                  <FeedItem
+                    key={`${event.type}-${event.data.timestamp || event.data.start_time || index}`}
+                    event={event}
+                    index={index}
+                    gameInfo={gameInfo}
+                  />
                 ))}
               </div>
             </div>
@@ -187,8 +191,8 @@ export default function GameDetailPage() {
                 <span>AI AGENTS</span>
               </div>
               <div style={styles.agentsList}>
-                {gameInfo.agents.map((agent, index) => (
-                  <AgentCard key={index} agent={agent} />
+                {gameInfo.agents.map((agent) => (
+                  <AgentCard key={agent.id} agent={agent} />
                 ))}
                 {gameInfo.agents.length === 0 && (
                   <div style={styles.noAgents}>No agents participating</div>
@@ -225,7 +229,7 @@ function TeamLogo({ team, size = "large" }) {
   );
 }
 
-function FeedItem({ event }) {
+function FeedItem({ event, gameInfo }) {
   const [showDetails, setShowDetails] = useState(false);
 
   // Categorize event types
@@ -350,7 +354,7 @@ function FeedItem({ event }) {
             {agents.length > 0 && (
               <div style={{ marginTop: 8 }}>
                 {agents.map((agent, idx) => (
-                  <div key={idx} style={{ ...styles.infoDetail, marginTop: idx > 0 ? 6 : 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div key={agent.agent_id} style={{ ...styles.infoDetail, marginTop: idx > 0 ? 6 : 0, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div style={{
                       width: 24,
                       height: 24,
@@ -455,11 +459,16 @@ function FeedItem({ event }) {
 
     // Find rankings for game teams (extract from first source)
     let teamRankings = [];
-    if (sources.length > 0) {
+    if (sources.length > 0 && gameInfo) {
       const firstSource = rankings[sources[0]];
+      const gameTeamNames = [gameInfo.homeTeam?.name, gameInfo.awayTeam?.name].filter(Boolean);
+      const gameTeamCities = [gameInfo.homeTeam?.city, gameInfo.awayTeam?.city].filter(Boolean);
+      const gameTeamAbbrevs = [gameInfo.homeTeam?.abbrev, gameInfo.awayTeam?.abbrev].filter(Boolean);
+
       teamRankings = firstSource.filter(r =>
-        r.team.includes("Cavaliers") || r.team.includes("Clippers") ||
-        r.team.includes("Cleveland") || r.team.includes("LA ")
+        gameTeamNames.some(name => r.team.includes(name)) ||
+        gameTeamCities.some(city => r.team.includes(city)) ||
+        gameTeamAbbrevs.some(abbrev => r.team.includes(abbrev))
       );
     }
 
@@ -747,8 +756,6 @@ function parseGameInfo(items) {
 
   if (!items || items.length === 0) return null;
 
-  console.log("Parsing game info from", items.length, "items");
-
   const agentsMap = new Map();
 
   for (const item of items) {
@@ -757,7 +764,6 @@ function parseGameInfo(items) {
 
     // Game initialization
     if (category === "game_initialize") {
-      console.log("Found game_initialize:", data);
       // Determine league from the sport field
       if (data.sport) {
         info.league = data.sport.toUpperCase();
@@ -772,7 +778,6 @@ function parseGameInfo(items) {
 
     // Game updates
     if (category === "game_update") {
-      console.log("Found game_update:", data);
       info.homeScore = data.home_score || 0;
       info.awayScore = data.away_score || 0;
       info.period = data.period;
@@ -782,7 +787,6 @@ function parseGameInfo(items) {
 
     // Game result
     if (category === "game_result") {
-      console.log("Found game_result");
       info.status = "completed";
     }
 
@@ -811,7 +815,6 @@ function parseGameInfo(items) {
 
     // Extract broker final statistics
     if (category.includes("final_stats") && data.statistics) {
-      console.log("Found final_stats:", data.statistics);
       // data.statistics is a JSON string of Dict[str, Statistics]
       try {
         const statistics = typeof data.statistics === 'string' ? JSON.parse(data.statistics) : data.statistics;
@@ -838,7 +841,6 @@ function parseGameInfo(items) {
   }
 
   info.agents = Array.from(agentsMap.values());
-  console.log("Parsed game info:", info);
   return info;
 }
 

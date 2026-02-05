@@ -1206,6 +1206,10 @@ async def _extract_bets_for_trial(
             # Fallback: create minimal AgentInfo
             from dojozero.betting import AgentInfo
 
+            LOGGER.warning(
+                "AgentInfo for agent_id '%s' not found in cache. Using fallback.",
+                typed.agent_id,
+            )
             agent_info = AgentInfo(agent_id=typed.agent_id, persona=typed.agent_id)
 
         # Parse selection to extract team and type

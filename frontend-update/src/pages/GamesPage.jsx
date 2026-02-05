@@ -247,6 +247,14 @@ function LiveGameCard({ game, index }) {
   const navigate = useNavigate();
   const leagueColor = game.league === "NBA" ? "#C9082A" : "#013369";
 
+  const handleClick = () => navigate(`/games/${game.id}`);
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleClick();
+    }
+  };
+
   return (
     <motion.div
       style={styles.liveGameCard}
@@ -254,7 +262,11 @@ function LiveGameCard({ game, index }) {
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.3, delay: index * 0.1 }}
       className="hover-lift"
-      onClick={() => navigate(`/games/${game.id}`)}
+      role="button"
+      tabIndex={0}
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      aria-label={`View game details for ${game.homeTeam.name} vs ${game.awayTeam.name}`}
     >
       {/* Top badges row */}
       <div style={styles.cardBadges}>
@@ -461,13 +473,25 @@ function GameRow({ game, index }) {
     }
   };
 
+  const handleClick = () => navigate(`/games/${game.id}`);
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleClick();
+    }
+  };
+
   return (
     <motion.div
       style={styles.gameRow}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, delay: index * 0.05 }}
-      onClick={() => navigate(`/games/${game.id}`)}
+      role="button"
+      tabIndex={0}
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      aria-label={`View game details for ${game.homeTeam.name} vs ${game.awayTeam.name}`}
     >
       <div style={styles.gameRowStatus}>
         {getStatusBadge()}

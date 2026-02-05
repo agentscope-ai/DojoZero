@@ -115,29 +115,34 @@ export function DataSourceProvider({ children }) {
     fetchLeaderboard();
   }, [fetchLandingData, fetchLeaderboard]);
 
-  // Periodic refresh for live data
-  // Intervals aligned with server-side cache TTLs to reduce load
+  // Periodic refresh for core data
   useEffect(() => {
     // Refresh stats every 10 seconds (matches server cache TTL)
     const statsInterval = setInterval(fetchStats, 10000);
     // Refresh all data every 60 seconds (matches server cache TTL)
     const fullRefresh = setInterval(fetchLandingData, 60000);
 
+    return () => {
+      clearInterval(statsInterval);
+      clearInterval(fullRefresh);
+    };
+  }, [fetchStats, fetchLandingData]);
+
+  // Conditional refresh for agent actions
+  useEffect(() => {
     // Only refresh agent actions if there are live games
-    // Use 30-second interval since actions now include completed games
     let actionsInterval = null;
     if (liveGames.length > 0) {
+      // Use 30-second interval since actions now include completed games
       actionsInterval = setInterval(fetchAgentActions, 30000);
     }
 
     return () => {
-      clearInterval(statsInterval);
-      clearInterval(fullRefresh);
       if (actionsInterval) {
         clearInterval(actionsInterval);
       }
     };
-  }, [fetchStats, fetchAgentActions, fetchLandingData, liveGames]);
+  }, [liveGames.length, fetchAgentActions]);
 
   const value = {
     // API configuration
