@@ -167,6 +167,30 @@ function LiveGamesSection({ liveGames, agentActions }) {
   );
 }
 
+// Helper: Format timestamp (microseconds) as relative time string
+function formatRelativeTime(timestampUs) {
+  if (!timestampUs) return "";
+  const nowUs = Date.now() * 1000;
+  const diffUs = nowUs - timestampUs;
+  const diffS = diffUs / 1_000_000;
+
+  if (diffS < 60) return `${Math.floor(diffS)}s ago`;
+  if (diffS < 3600) return `${Math.floor(diffS / 60)}m ago`;
+  return `${Math.floor(diffS / 3600)}h ago`;
+}
+
+// Helper: Format AgentResponseMessage as human-readable action string
+function formatActionString(response) {
+  if (!response) return "analyzing...";
+  if (response.content) return `"${response.content}"`;
+  if (response.bet_amount && response.bet_amount > 0) {
+    const betType = response.bet_type?.toLowerCase() || "bet";
+    const selection = response.bet_selection || "unknown";
+    return `placed $${Math.floor(response.bet_amount)} on ${selection} ${betType}`;
+  }
+  return "analyzing...";
+}
+
 // Rolling Live Agent Actions Ticker
 function LiveActionsTicker({ agentActions }) {
   const liveAgentActions = agentActions || [];
@@ -174,7 +198,7 @@ function LiveActionsTicker({ agentActions }) {
 
   useEffect(() => {
     if (liveAgentActions.length === 0) return;
-    
+
     const interval = setInterval(() => {
       setCurrentIndex((prev) => {
         const next = prev + 1;
@@ -190,12 +214,24 @@ function LiveActionsTicker({ agentActions }) {
   }, [liveAgentActions.length]);
 
   // Get the 4 visible actions based on current index
+  // Transform AgentAction format to display format
   const getVisibleActions = () => {
     if (liveAgentActions.length === 0) return [];
     const actions = [];
     for (let i = 0; i < 4; i++) {
       const idx = (currentIndex + i) % liveAgentActions.length;
-      actions.push({ ...liveAgentActions[idx], displayKey: `${currentIndex}-${i}` });
+      const raw = liveAgentActions[idx];
+      // Transform AgentAction to display format
+      actions.push({
+        displayKey: `${currentIndex}-${i}`,
+        agent: {
+          name: raw.agent?.persona || raw.agent?.agent_id || "Agent",
+          avatar: raw.agent?.avatar || raw.agent?.persona?.[0]?.toUpperCase() || "?",
+          color: raw.agent?.color || "#6B7280",
+        },
+        action: formatActionString(raw.response),
+        time: formatRelativeTime(raw.timestamp),
+      });
     }
     return actions;
   };

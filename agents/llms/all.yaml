@@ -10,7 +10,8 @@ llm:
     api_key_env: DOJOZERO_DASHSCOPE_API_KEY
     cdn_url: https://img.alicdn.com/imgextra/i4/O1CN01wat3rK1Q9MiURXMTb_!!6000000001933-55-tps-24-24.svg
   - model_type: anthropic
-    model_name: claude-opus-4-5-20251101
+    # model_name: claude-opus-4-5-20251101
+    model_name: claude-haiku-4-5-20251001
     api_key_env: DOJOZERO_ANTHROPIC_API_KEY
     model_display_name: claude
     cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01kiSypx1Oxcwxq1bPV_!!6000000001772-55-tps-24-24.svg
@@ -20,7 +21,8 @@ llm:
   #   model_display_name: gemini
   #   cdn_url: https://img.alicdn.com/imgextra/i4/O1CN017FCueZ1iF0gKs1l3G_!!6000000004382-55-tps-24-24.svg
   - model_type: openai
-    model_name: gpt-5.2-2025-12-11
+    # model_name: gpt-5.2-2025-12-11
+    model_name: gpt-5-mini-2025-08-07
     api_key_env: DOJOZERO_OPENAI_API_KEY
     model_display_name: openai
     cdn_url: https://img.alicdn.com/imgextra/i1/O1CN01ESEMwe1ZfGqicfO7r_!!6000000003221-55-tps-24-24.svg

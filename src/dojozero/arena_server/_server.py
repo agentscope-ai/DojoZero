@@ -41,7 +41,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from dojozero.arena_server._models import (
-    AgentActionResponse,
     AgentActionsResponse,
     BetSummary,
     GameCardData,
@@ -78,7 +77,6 @@ from dojozero.data._models import BaseGameUpdateEvent, GameInitializeEvent, Team
 # This must happen after imports to avoid circular import issues
 AgentAction.model_rebuild()
 LeaderboardEntry.model_rebuild()
-AgentActionResponse.model_rebuild()
 BetSummary.model_rebuild()
 
 # NBA team data lookup: tricode -> TeamIdentity
@@ -1078,11 +1076,11 @@ class LandingPageCache:
     async def get_agent_actions(
         self,
         fetcher: Any,
-    ) -> list["AgentActionResponse"]:
+    ) -> list[AgentAction]:
         """Get cached agent actions or fetch if expired.
 
         Args:
-            fetcher: Async callable that returns list[AgentActionResponse]
+            fetcher: Async callable that returns list[AgentAction]
 
         Returns:
             List of recent agent actions for the ticker
@@ -1572,82 +1570,16 @@ async def _extract_games_from_trials(
     )
 
 
-def _format_relative_time(timestamp_us: int) -> str:
-    """Format timestamp (microseconds) as relative time string.
-
-    Args:
-        timestamp_us: Timestamp in microseconds since epoch
-
-    Returns:
-        Relative time string like "2s ago", "5m ago", "1h ago"
-    """
-    now_us = time.time() * 1_000_000
-    diff_us = now_us - timestamp_us
-    diff_s = diff_us / 1_000_000
-
-    if diff_s < 60:
-        return f"{int(diff_s)}s ago"
-    elif diff_s < 3600:
-        return f"{int(diff_s / 60)}m ago"
-    else:
-        return f"{int(diff_s / 3600)}h ago"
-
-
-def _format_agent_action_string(response: AgentResponseMessage) -> str:
-    """Format AgentResponseMessage as human-readable action string.
-
-    Args:
-        response: The agent response message
-
-    Returns:
-        Formatted action string like:
-        - '"BOS defense looking strong Q2"' (for content)
-        - "placed $50 on LAL moneyline" (for bet)
-        - "analyzing..." (fallback)
-    """
-    if response.content:
-        # Quote the message
-        return f'"{response.content}"'
-    elif response.bet_amount and response.bet_amount > 0:
-        # Format bet action
-        bet_type = response.bet_type.lower() if response.bet_type else "bet"
-
-        # Get selection (home/away/over/under)
-        selection = response.bet_selection or "unknown"
-
-        return f"placed ${int(response.bet_amount)} on {selection} {bet_type}"
-    else:
-        return "analyzing..."
-
-
-def _format_agent_action(action: AgentAction) -> "AgentActionResponse":
-    """Format AgentAction to AgentActionResponse for API response.
-
-    Args:
-        action: Raw AgentAction with response and timestamp
-
-    Returns:
-        AgentActionResponse with formatted action string and relative time
-    """
-    from dojozero.arena_server._models import AgentActionResponse
-
-    return AgentActionResponse(
-        agent=action.agent,
-        action=_format_agent_action_string(action.response),
-        time=_format_relative_time(action.timestamp),
-    )
-
-
 async def _extract_agent_actions(
     trace_reader: TraceReader,
     trial_ids: list[str],
     limit: int = 20,
     max_trials: int = 5,
-) -> list["AgentActionResponse"]:
+) -> list[AgentAction]:
     """Extract recent agent actions from trial spans.
 
     Queries agent.response spans from recent games (both live and completed) and returns
-    formatted AgentActionResponse objects with human-readable action strings and relative timestamps.
+    AgentAction objects with agent info, response message, and timestamp.
 
     Args:
         trace_reader: TraceReader for querying SLS/Jaeger
@@ -1656,7 +1588,7 @@ async def _extract_agent_actions(
         max_trials: Maximum number of trials to query (reduces SLS load)
 
     Returns:
-        List of formatted agent actions sorted by time (newest first)
+        List of agent actions sorted by time (newest first)
     """
     all_actions: list[AgentAction] = []
 
@@ -1711,15 +1643,15 @@ async def _extract_agent_actions(
             LOGGER.debug("Early exit: collected %d actions", len(all_actions))
             break
 
-    # Sort by timestamp (newest first), limit, and format
+    # Sort by timestamp (newest first) and limit
     all_actions.sort(key=lambda x: x.timestamp, reverse=True)
-    formatted_actions = [_format_agent_action(action) for action in all_actions[:limit]]
+    result = all_actions[:limit]
     LOGGER.debug(
-        "Returning %d formatted actions (from %d total)",
-        len(formatted_actions),
+        "Returning %d actions (from %d total)",
+        len(result),
         len(all_actions),
     )
-    return formatted_actions
+    return result
 
 
 async def _compute_stats(
@@ -2106,7 +2038,7 @@ def create_arena_app(
         games = await state.cache.get_games(fetch_games)
 
         # Fetch agent actions (cached)
-        async def fetch_actions() -> list["AgentActionResponse"]:
+        async def fetch_actions() -> list[AgentAction]:
             return await _extract_agent_actions(
                 state.trace_reader,
                 trial_ids,
@@ -2291,7 +2223,7 @@ def create_arena_app(
 
         trial_ids = await state.cache.get_trials_list(fetch_trials)
 
-        async def fetch_actions() -> list["AgentActionResponse"]:
+        async def fetch_actions() -> list[AgentAction]:
             return await _extract_agent_actions(
                 state.trace_reader,
                 trial_ids,

@@ -399,13 +399,9 @@ class AgentResponseMessage(BaseModel):
 class AgentInfo(BaseModel):
     """Agent registration payload for tracing (agent.agent_initialize span)."""
 
-    agent_id: str = Field(
-        default="", serialization_alias="id", description="Unique ID for the agent"
-    )
+    agent_id: str = Field(default="", description="Unique ID for the agent")
     persona: str = Field(
-        default="",
-        serialization_alias="name",
-        description="Agent persona tag (e.g., 'degen', 'whale', 'shark')",
+        default="", description="Agent persona tag (e.g., 'degen', 'whale', 'shark')"
     )
     model: str = Field(default="", description="Exact model name (e.g., qwen3-max)")
     model_display_name: str = Field(

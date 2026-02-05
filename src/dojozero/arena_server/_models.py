@@ -12,7 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from dojozero.betting._models import AgentInfo
-from dojozero.core._models import LeaderboardEntry
+from dojozero.core._models import AgentAction, LeaderboardEntry
 from dojozero.data._models import TeamIdentity
 
 # ============================================================================
@@ -105,7 +105,7 @@ class LandingResponse(BaseModel):
     all_games: list[GameCardData] = Field(
         default_factory=list, serialization_alias="allGames"
     )
-    live_agent_actions: list["AgentActionResponse"] = Field(
+    live_agent_actions: list[AgentAction] = Field(
         default_factory=list, serialization_alias="liveAgentActions"
     )
 
@@ -129,22 +129,12 @@ class BetSummary(BaseModel):
     type: str  # "moneyline", "spread", "total", etc.
 
 
-class AgentActionResponse(BaseModel):
-    """Formatted agent action for API response."""
-
-    model_config = ConfigDict(frozen=True)
-
-    agent: "AgentInfo"  # From betting/_models.py
-    action: str  # Human-readable action string
-    time: str  # Relative time ("2s ago")
-
-
 class AgentActionsResponse(BaseModel):
     """Response for /api/agent-actions."""
 
     model_config = ConfigDict(frozen=True)
 
-    actions: list[AgentActionResponse] = Field(default_factory=list)
+    actions: list[AgentAction] = Field(default_factory=list)
 
 
 # ============================================================================
@@ -196,7 +186,6 @@ class WSHeartbeatMessage(BaseModel):
 
 __all__ = [
     # API Response Models
-    "AgentActionResponse",
     "AgentActionsResponse",
     "BetSummary",
     "GameCardData",
