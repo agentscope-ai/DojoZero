@@ -238,7 +238,7 @@ class NFLGameUpdateEvent(BaseGameUpdateEvent):
     possession: str = ""  # Team abbreviation with possession
     down: int = 0  # 1-4
     distance: int = 0  # Yards to first down
-    yard_line: str = ""  # e.g., "KC 25"
+    yard_line: int = 0  # Absolute yard line (0-100), 0 = home goal, 100 = away goal
     home_team_stats: NFLTeamGameStats = Field(default_factory=NFLTeamGameStats)
     away_team_stats: NFLTeamGameStats = Field(default_factory=NFLTeamGameStats)
     event_type: Literal["event.nfl_game_update"] = "event.nfl_game_update"

@@ -135,10 +135,19 @@ def _format_nfl_play(event: NFLPlayEvent) -> str:
     away_score = event.away_score
     is_scoring_play = event.is_scoring_play
     is_turnover = event.is_turnover
+    down = event.down
+    distance = event.distance
+    yard_line = event.yard_line
 
     quarter_name = f"Q{quarter}" if quarter <= 4 else f"OT{quarter - 4}"
     team_str = f" ({team_abbreviation})" if team_abbreviation else ""
     yards_str = f" | {yards_gained:+d} yards" if yards_gained != 0 else ""
+
+    # Format down & distance (only for scrimmage plays where down > 0)
+    if down > 0:
+        down_str = f" | {down}&{distance} at {yard_line}"
+    else:
+        down_str = ""
 
     # Add special markers
     markers = []
@@ -148,7 +157,7 @@ def _format_nfl_play(event: NFLPlayEvent) -> str:
         markers.append("TURNOVER")
     marker_str = f" [{', '.join(markers)}]" if markers else ""
 
-    return f"[NFL Play] {quarter_name} {game_clock} | {play_type.upper()}{team_str}: {description}{yards_str}{marker_str} [Score: {away_score}-{home_score}]"
+    return f"[NFL Play] {quarter_name} {game_clock}{down_str} | {play_type.upper()}{team_str}: {description}{yards_str}{marker_str} [Score: {away_score}-{home_score}]"
 
 
 def _format_nfl_drive(event: NFLDriveEvent) -> str:

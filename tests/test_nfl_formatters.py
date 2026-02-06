@@ -167,7 +167,7 @@ class TestFormatNFLGameUpdate:
             possession="KC",
             down=2,
             distance=7,
-            yard_line="SF 35",
+            yard_line=65,  # SF 35 territory (100 - 35 = 65 from home goal)
             home_team_stats=NFLTeamGameStats(
                 team_name="Chiefs", team_abbreviation="KC", score=21
             ),
@@ -176,7 +176,7 @@ class TestFormatNFLGameUpdate:
             ),
         )
         result = format_event(event)
-        assert "[NFL Game Update] Q3 | 8:45 | Ball: KC | 2 & 7 at SF 35" in result
+        assert "[NFL Game Update] Q3 | 8:45 | Ball: KC | 2 & 7 at 65" in result
         assert "49ers (SF): 14" in result
         assert "Chiefs (KC): 21" in result
 

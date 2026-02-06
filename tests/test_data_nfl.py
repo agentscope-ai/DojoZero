@@ -481,6 +481,305 @@ class TestNFLStoreParsePlayByPlay:
 # =============================================================================
 
 
+class TestYardLineConversion:
+    """Tests for yard_line conversion from 'KC 25' format to 0-100 int."""
+
+    def test_yard_line_home_territory(self, nfl_store):
+        """Test yard_line in home team territory (e.g., 'KC 25' when KC is home)."""
+        summary_data = {
+            "summary": {
+                "eventId": "401671827",
+                "header": {
+                    "id": "401671827",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {"homeAway": "home", "score": "7"},
+                                {"homeAway": "away", "score": "3"},
+                            ],
+                            "status": {
+                                "type": {"name": "STATUS_IN_PROGRESS"},
+                                "period": 1,
+                                "displayClock": "10:00",
+                            },
+                        }
+                    ],
+                },
+                "boxscore": {
+                    "teams": [
+                        {
+                            "homeAway": "home",
+                            "team": {
+                                "abbreviation": "KC",
+                                "displayName": "Kansas City Chiefs",
+                            },
+                        },
+                        {
+                            "homeAway": "away",
+                            "team": {
+                                "abbreviation": "SF",
+                                "displayName": "San Francisco 49ers",
+                            },
+                        },
+                    ],
+                },
+                "situation": {
+                    "possession": "KC",
+                    "down": 2,
+                    "distance": 7,
+                    "yardLine": "KC 25",  # Home territory
+                },
+            }
+        }
+
+        # Mark game as initialized to emit updates
+        nfl_store._state.mark_game_initialized("401671827")
+
+        from dojozero.data.nfl._events import NFLGameUpdateEvent
+
+        events = nfl_store._parse_api_response(summary_data)
+        update_events = [e for e in events if isinstance(e, NFLGameUpdateEvent)]
+
+        assert len(update_events) == 1
+        # KC is home, "KC 25" means 25 yards from home goal = 25
+        assert update_events[0].yard_line == 25
+
+    def test_yard_line_away_territory(self, nfl_store):
+        """Test yard_line in away team territory (e.g., 'SF 25' when KC is home)."""
+        summary_data = {
+            "summary": {
+                "eventId": "401671828",
+                "header": {
+                    "id": "401671828",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {"homeAway": "home", "score": "14"},
+                                {"homeAway": "away", "score": "10"},
+                            ],
+                            "status": {
+                                "type": {"name": "STATUS_IN_PROGRESS"},
+                                "period": 2,
+                                "displayClock": "5:00",
+                            },
+                        }
+                    ],
+                },
+                "boxscore": {
+                    "teams": [
+                        {
+                            "homeAway": "home",
+                            "team": {
+                                "abbreviation": "KC",
+                                "displayName": "Kansas City Chiefs",
+                            },
+                        },
+                        {
+                            "homeAway": "away",
+                            "team": {
+                                "abbreviation": "SF",
+                                "displayName": "San Francisco 49ers",
+                            },
+                        },
+                    ],
+                },
+                "situation": {
+                    "possession": "KC",
+                    "down": 1,
+                    "distance": 10,
+                    "yardLine": "SF 25",  # Away territory
+                },
+            }
+        }
+
+        nfl_store._state.mark_game_initialized("401671828")
+
+        from dojozero.data.nfl._events import NFLGameUpdateEvent
+
+        events = nfl_store._parse_api_response(summary_data)
+        update_events = [e for e in events if isinstance(e, NFLGameUpdateEvent)]
+
+        assert len(update_events) == 1
+        # KC is home, "SF 25" means 25 yards from away goal = 100 - 25 = 75
+        assert update_events[0].yard_line == 75
+
+    def test_yard_line_midfield(self, nfl_store):
+        """Test yard_line at midfield (50 yard line)."""
+        summary_data = {
+            "summary": {
+                "eventId": "401671829",
+                "header": {
+                    "id": "401671829",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {"homeAway": "home", "score": "0"},
+                                {"homeAway": "away", "score": "0"},
+                            ],
+                            "status": {
+                                "type": {"name": "STATUS_IN_PROGRESS"},
+                                "period": 1,
+                                "displayClock": "12:00",
+                            },
+                        }
+                    ],
+                },
+                "boxscore": {
+                    "teams": [
+                        {
+                            "homeAway": "home",
+                            "team": {
+                                "abbreviation": "KC",
+                                "displayName": "Kansas City Chiefs",
+                            },
+                        },
+                        {
+                            "homeAway": "away",
+                            "team": {
+                                "abbreviation": "SF",
+                                "displayName": "San Francisco 49ers",
+                            },
+                        },
+                    ],
+                },
+                "situation": {
+                    "possession": "SF",
+                    "down": 3,
+                    "distance": 5,
+                    "yardLine": "KC 50",  # Midfield (home's 50)
+                },
+            }
+        }
+
+        nfl_store._state.mark_game_initialized("401671829")
+
+        from dojozero.data.nfl._events import NFLGameUpdateEvent
+
+        events = nfl_store._parse_api_response(summary_data)
+        update_events = [e for e in events if isinstance(e, NFLGameUpdateEvent)]
+
+        assert len(update_events) == 1
+        # "KC 50" = 50 yards from home goal = midfield
+        assert update_events[0].yard_line == 50
+
+    def test_yard_line_empty_string(self, nfl_store):
+        """Test yard_line with empty string defaults to 0."""
+        summary_data = {
+            "summary": {
+                "eventId": "401671830",
+                "header": {
+                    "id": "401671830",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {"homeAway": "home", "score": "0"},
+                                {"homeAway": "away", "score": "0"},
+                            ],
+                            "status": {
+                                "type": {"name": "STATUS_IN_PROGRESS"},
+                                "period": 1,
+                                "displayClock": "15:00",
+                            },
+                        }
+                    ],
+                },
+                "boxscore": {
+                    "teams": [
+                        {
+                            "homeAway": "home",
+                            "team": {
+                                "abbreviation": "KC",
+                                "displayName": "Kansas City Chiefs",
+                            },
+                        },
+                        {
+                            "homeAway": "away",
+                            "team": {
+                                "abbreviation": "SF",
+                                "displayName": "San Francisco 49ers",
+                            },
+                        },
+                    ],
+                },
+                "situation": {
+                    "possession": "",
+                    "down": 0,
+                    "distance": 0,
+                    "yardLine": "",  # Empty
+                },
+            }
+        }
+
+        nfl_store._state.mark_game_initialized("401671830")
+
+        from dojozero.data.nfl._events import NFLGameUpdateEvent
+
+        events = nfl_store._parse_api_response(summary_data)
+        update_events = [e for e in events if isinstance(e, NFLGameUpdateEvent)]
+
+        assert len(update_events) == 1
+        assert update_events[0].yard_line == 0
+
+    def test_yard_line_integer_format(self, nfl_store):
+        """Test yard_line when API returns integer instead of 'KC 25' format."""
+        summary_data = {
+            "summary": {
+                "eventId": "401671831",
+                "header": {
+                    "id": "401671831",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {"homeAway": "home", "score": "7"},
+                                {"homeAway": "away", "score": "3"},
+                            ],
+                            "status": {
+                                "type": {"name": "STATUS_IN_PROGRESS"},
+                                "period": 2,
+                                "displayClock": "8:00",
+                            },
+                        }
+                    ],
+                },
+                "boxscore": {
+                    "teams": [
+                        {
+                            "homeAway": "home",
+                            "team": {
+                                "abbreviation": "KC",
+                                "displayName": "Kansas City Chiefs",
+                            },
+                        },
+                        {
+                            "homeAway": "away",
+                            "team": {
+                                "abbreviation": "SF",
+                                "displayName": "San Francisco 49ers",
+                            },
+                        },
+                    ],
+                },
+                "situation": {
+                    "possession": "KC",
+                    "down": 2,
+                    "distance": 5,
+                    "yardLine": 35,  # Integer format (like PBP API)
+                },
+            }
+        }
+
+        nfl_store._state.mark_game_initialized("401671831")
+
+        from dojozero.data.nfl._events import NFLGameUpdateEvent
+
+        events = nfl_store._parse_api_response(summary_data)
+        update_events = [e for e in events if isinstance(e, NFLGameUpdateEvent)]
+
+        assert len(update_events) == 1
+        # Integer format is used directly
+        assert update_events[0].yard_line == 35
+
+
 class TestNFLUtils:
     """Tests for NFL utility functions."""
 

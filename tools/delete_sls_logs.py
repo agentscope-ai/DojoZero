@@ -2,7 +2,7 @@
 """Delete logs from an SLS logstore.
 
 This script deletes logs from a specified SLS logstore. By default, it deletes
-all logs, but you can specify a time range.
+all logs, but you can specify a time range or filter by trace ID.
 
 IMPORTANT: This operation is destructive and cannot be undone.
 
@@ -12,6 +12,9 @@ Usage:
 
     # Delete logs from a specific time range
     uv run python tools/delete_sls_logs.py --from "2024-01-01 00:00:00" --to "2024-01-31 23:59:59"
+
+    # Delete logs by trace ID (e.g., a specific trial)
+    uv run python tools/delete_sls_logs.py --trace-id abc123-def456
 
     # Skip confirmation (use with caution)
     uv run python tools/delete_sls_logs.py --force
@@ -90,6 +93,7 @@ def delete_logs(
     ak_id: str,
     ak_secret: str,
     security_token: str | None = None,
+    query: str = "*",
 ) -> bool:
     """Delete logs from SLS logstore.
 
@@ -102,6 +106,7 @@ def delete_logs(
         ak_id: Alibaba Cloud Access Key ID
         ak_secret: Alibaba Cloud Access Key Secret
         security_token: Optional STS security token
+        query: SLS query to filter logs (default: "*" for all logs)
 
     Returns:
         True if successful, False otherwise
@@ -129,6 +134,7 @@ def delete_logs(
             datetime.fromtimestamp(from_time).isoformat(),
             datetime.fromtimestamp(to_time).isoformat(),
         )
+        logger.info("Query: %s", query)
 
         # Create delete request
         request = DeleteLogsRequest(
@@ -137,7 +143,7 @@ def delete_logs(
             fromTime=from_time,
             toTime=to_time,
             topic="",  # Empty string means all topics
-            query="*",  # Match all logs
+            query=query,
         )
         client.delete_logs(request)
 
@@ -161,6 +167,7 @@ def get_log_count(
     ak_id: str,
     ak_secret: str,
     security_token: str | None = None,
+    query: str = "*",
 ) -> int | None:
     """Get approximate log count in the time range."""
     try:
@@ -174,13 +181,14 @@ def get_log_count(
         else:
             client = LogClient(endpoint, ak_id, ak_secret)
 
-        # Use count query
+        # Use count query with optional filter
+        count_query = f"{query} | select count(1) as cnt"
         request = GetLogsRequest(
             project=project,
             logstore=logstore,
             fromTime=from_time,
             toTime=to_time,
-            query="* | select count(1) as cnt",
+            query=count_query,
         )
         response = client.get_logs(request)
 
@@ -233,6 +241,10 @@ def main() -> int:
         "--all",
         action="store_true",
         help="Delete all logs (extends time range to cover all possible logs)",
+    )
+    parser.add_argument(
+        "--trace-id",
+        help="Delete logs for a specific trace ID (e.g., a trial ID)",
     )
     parser.add_argument(
         "-v",
@@ -307,6 +319,12 @@ def main() -> int:
         logger.error("--from time must be before --to time")
         return 1
 
+    # Build query
+    if args.trace_id:
+        query = f'_trace_id: "{args.trace_id}"'
+    else:
+        query = "*"
+
     # Display what will be deleted
     print()
     print("=" * 60)
@@ -317,11 +335,14 @@ def main() -> int:
     print(f"  Logstore:  {logstore}")
     print(f"  From:      {datetime.fromtimestamp(from_time).isoformat()}")
     print(f"  To:        {datetime.fromtimestamp(to_time).isoformat()}")
+    if args.trace_id:
+        print(f"  Trace ID:  {args.trace_id}")
+    print(f"  Query:     {query}")
     print()
 
     # Try to get log count
     count = get_log_count(
-        endpoint, project, logstore, from_time, to_time, ak_id, ak_secret
+        endpoint, project, logstore, from_time, to_time, ak_id, ak_secret, query=query
     )
     if count is not None:
         print(f"  Estimated logs to delete: {count:,}")
@@ -344,7 +365,9 @@ def main() -> int:
     print()
 
     # Perform deletion
-    if delete_logs(endpoint, project, logstore, from_time, to_time, ak_id, ak_secret):
+    if delete_logs(
+        endpoint, project, logstore, from_time, to_time, ak_id, ak_secret, query=query
+    ):
         print()
         print("Log deletion request submitted successfully.")
         print(
