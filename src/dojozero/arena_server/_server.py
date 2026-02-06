@@ -1483,7 +1483,7 @@ class ReplayCache:
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     ttl: float = 3600.0  # 1 hour
     max_entries: int = 100  # Max trials to cache
-    core_categories: list[str] = field(default_factory=lambda: ["play","game_update"])
+    core_categories: list[str] = field(default_factory=lambda: ["play", "game_update"])
 
     async def get(self, trial_id: str) -> ReplayCacheEntry | None:
         """Get cached replay entry, or None if not cached/expired."""
