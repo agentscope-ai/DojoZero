@@ -194,6 +194,7 @@ class CategoryFilter:
         )
         return cls(categories=frozenset(categories), mode=filter_mode)
 
+
 # NBA team data lookup: tricode -> TeamIdentity
 # Used to fill in team details when not available in trial metadata
 # Logo URLs use ESPN CDN: https://a.espncdn.com/i/teamlogos/nba/500/{tricode}.png
