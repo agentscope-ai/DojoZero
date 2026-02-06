@@ -98,6 +98,102 @@ BetSummary.model_rebuild()
 # Type alias for replay error reasons
 ReplayErrorReason = Literal["trial_not_found", "trial_still_running", "no_data"]
 
+
+# ============================================================================
+# Category Filter
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class CategoryFilter:
+    """Filter items by category.
+
+    Generic filter that can be used for:
+    - Replay filtering (REST and WebSocket)
+    - Real-time stream filtering
+    - Frontend query parameters
+
+    Examples:
+        # Include only play and game_update categories
+        filter = CategoryFilter.from_query("play,game_update")
+
+        # Exclude heartbeat and status categories
+        filter = CategoryFilter.from_query("heartbeat,status", mode="exclude")
+
+        # From JSON command (WebSocket)
+        filter = CategoryFilter.from_list(["play", "game_update"])
+    """
+
+    categories: frozenset[str]  # Categories to filter
+    mode: Literal["include", "exclude"] = "include"
+
+    def matches(self, category: str) -> bool:
+        """Check if a category matches the filter.
+
+        Returns True if the category should be included in output.
+        """
+        if not self.categories:
+            return True  # Empty filter = include all
+
+        if self.mode == "include":
+            return category in self.categories
+        else:  # exclude
+            return category not in self.categories
+
+    def filter_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Filter a list of serialized items by category."""
+        if not self.categories:
+            return items
+        return [item for item in items if self.matches(item.get("category", ""))]
+
+    def filter_item(self, item: dict[str, Any]) -> bool:
+        """Check if a single item should be included."""
+        return self.matches(item.get("category", ""))
+
+    @classmethod
+    def from_query(
+        cls,
+        categories: str | None,
+        mode: str = "include",
+    ) -> "CategoryFilter":
+        """Create filter from query parameter string.
+
+        Args:
+            categories: Comma-separated list of categories (e.g., "play,game_update")
+            mode: "include" or "exclude"
+
+        Returns:
+            CategoryFilter instance
+        """
+        if not categories:
+            return cls(categories=frozenset())
+
+        cat_set = frozenset(c.strip() for c in categories.split(",") if c.strip())
+        filter_mode: Literal["include", "exclude"] = (
+            "exclude" if mode == "exclude" else "include"
+        )
+        return cls(categories=cat_set, mode=filter_mode)
+
+    @classmethod
+    def from_list(
+        cls,
+        categories: list[str] | None,
+        mode: str = "include",
+    ) -> "CategoryFilter":
+        """Create filter from list (e.g., from JSON command).
+
+        Args:
+            categories: List of categories
+            mode: "include" or "exclude"
+        """
+        if not categories:
+            return cls(categories=frozenset())
+
+        filter_mode: Literal["include", "exclude"] = (
+            "exclude" if mode == "exclude" else "include"
+        )
+        return cls(categories=frozenset(categories), mode=filter_mode)
+
 # NBA team data lookup: tricode -> TeamIdentity
 # Used to fill in team details when not available in trial metadata
 # Logo URLs use ESPN CDN: https://a.espncdn.com/i/teamlogos/nba/500/{tricode}.png
@@ -1880,7 +1976,6 @@ async def _filter_trials_by_league(
                 )
 
             metadata = trial_info.get("metadata", {})
-            print(metadata)
             # Note: BettingTrialMetadata has no `league` field.
             # `sport_type` is used instead and is treated as the league.
             trial_league = metadata.get("sport_type", "")
@@ -2977,8 +3072,20 @@ def create_arena_app(
     # -------------------------------------------------------------------------
 
     @app.websocket("/ws/trials/{trial_id}/stream")
-    async def trial_stream(websocket: WebSocket, trial_id: str):
-        """WebSocket endpoint for real-time span streaming with pause/resume.
+    async def trial_stream(
+        websocket: WebSocket,
+        trial_id: str,
+        categories: str | None = Query(
+            default=None,
+            description="Comma-separated categories to filter (e.g., 'play,game_update'). "
+            "If not specified, all categories are included.",
+        ),
+        filter_mode: str = Query(
+            default="include",
+            description="Filter mode: 'include' or 'exclude'.",
+        ),
+    ):
+        """WebSocket endpoint for real-time span streaming with pause/resume and filtering.
 
         Protocol:
         - Server sends 'snapshot' immediately upon connection
@@ -2987,10 +3094,16 @@ def create_arena_app(
         - Server sends 'heartbeat' periodically
         - Server sends 'stream_status' in response to control commands
 
+        Query Parameters:
+            categories: Comma-separated categories to filter (e.g., 'play,game_update')
+            filter_mode: 'include' or 'exclude' (default: 'include')
+
         Control commands (send as JSON):
             {"command": "pause"}   - Pause streaming (buffers spans)
             {"command": "resume"}  - Resume streaming (sends buffered spans)
             {"command": "status"}  - Get current stream status
+            {"command": "filter", "categories": [...], "mode": "include"}
+                                   - Update category filter dynamically
         """
         state = get_server_state()
         await websocket.accept()
@@ -2999,12 +3112,36 @@ def create_arena_app(
         # Per-connection stream controller
         controller = StreamController()
 
+        # Initialize category filter from query params
+        cat_filter = CategoryFilter.from_query(categories, filter_mode)
+
         try:
             await state.broadcaster.subscribe(trial_id, websocket)
 
-            # Send initial snapshot
+            # Send initial snapshot (with filtering)
             spans = await state.trace_reader.get_spans(trial_id)
-            await state.broadcaster.send_snapshot(trial_id, websocket, spans)
+
+            # Filter spans for snapshot: serialize, filter, then send
+            snapshot_items = []
+            for span in spans:
+                typed = deserialize_span(span)
+                if typed is not None:
+                    ws_payload = serialize_span_for_ws(typed)
+                    if cat_filter.filter_item(ws_payload):
+                        snapshot_items.append(ws_payload)
+
+            snapshot_msg = WSSnapshotMessage(
+                trial_id=trial_id,
+                timestamp=datetime.now(timezone.utc),
+                data={"items": snapshot_items},
+            )
+            await websocket.send_text(snapshot_msg.model_dump_json())
+            LOGGER.info(
+                "Stream: Sent snapshot with %d items (filtered from %d spans) for trial '%s'",
+                len(snapshot_items),
+                len(spans),
+                trial_id,
+            )
 
             # Track seen span IDs to avoid duplicates
             seen_span_ids: set[str] = {s.span_id for s in spans}
@@ -3041,15 +3178,49 @@ def create_arena_app(
 
                         elif command == "resume":
                             controller.resume()
-                            # Send buffered spans as snapshot (catch-up mode)
+                            # Send buffered spans as snapshot (catch-up mode, with filtering)
                             buffered = controller.drain_buffer()
                             if buffered:
-                                await state.broadcaster.send_snapshot(
-                                    trial_id, websocket, buffered
-                                )
+                                # Filter buffered spans before sending
+                                filtered_items = []
+                                for span in buffered:
+                                    typed = deserialize_span(span)
+                                    if typed is not None:
+                                        ws_payload = serialize_span_for_ws(typed)
+                                        if cat_filter.filter_item(ws_payload):
+                                            filtered_items.append(ws_payload)
+                                if filtered_items:
+                                    snapshot_msg = WSSnapshotMessage(
+                                        trial_id=trial_id,
+                                        timestamp=datetime.now(timezone.utc),
+                                        data={"items": filtered_items},
+                                    )
+                                    await websocket.send_text(
+                                        snapshot_msg.model_dump_json()
+                                    )
                             status_msg = WSStreamStatusMessage(
                                 is_paused=False,
                                 buffered_count=len(buffered),
+                                timestamp=datetime.now(timezone.utc),
+                            )
+                            await websocket.send_text(status_msg.model_dump_json())
+
+                        elif command == "filter":
+                            # Update category filter dynamically
+                            filter_categories = command_data.get("categories", [])
+                            filter_mode_cmd = command_data.get("mode", "include")
+                            cat_filter = CategoryFilter.from_list(
+                                filter_categories, filter_mode_cmd
+                            )
+                            LOGGER.debug(
+                                "Stream: Updated filter for trial '%s': categories=%s, mode=%s",
+                                trial_id,
+                                filter_categories,
+                                filter_mode_cmd,
+                            )
+                            status_msg = WSStreamStatusMessage(
+                                is_paused=controller.is_paused,
+                                buffer_size=len(controller.pause_buffer),
                                 timestamp=datetime.now(timezone.utc),
                             )
                             await websocket.send_text(status_msg.model_dump_json())
@@ -3083,8 +3254,23 @@ def create_arena_app(
                             # Buffer during pause
                             controller.buffer_span(span)
                         else:
-                            # Broadcast immediately
-                            await state.broadcaster.broadcast_span(trial_id, span)
+                            # Broadcast immediately (with category filter)
+                            typed = deserialize_span(span)
+                            if typed is None:
+                                continue
+                            ws_payload = serialize_span_for_ws(typed)
+
+                            # Apply category filter
+                            if not cat_filter.filter_item(ws_payload):
+                                continue
+
+                            message = WSSpanMessage(
+                                trial_id=trial_id,
+                                timestamp=datetime.now(timezone.utc),
+                                category=ws_payload.get("category", ""),
+                                data=ws_payload.get("data", {}),
+                            )
+                            await websocket.send_text(message.model_dump_json())
 
                     if truly_new_spans:
                         last_us = max(s.start_time for s in truly_new_spans)
@@ -3125,15 +3311,27 @@ def create_arena_app(
             ge=1,
             le=200,
         ),
+        categories: str | None = Query(
+            default=None,
+            description="Comma-separated categories to filter (e.g., 'play,game_update'). "
+            "If not specified, all categories are included.",
+        ),
+        filter_mode: str = Query(
+            default="include",
+            description="Filter mode: 'include' or 'exclude'.",
+        ),
     ):
         """WebSocket endpoint for replaying completed trials.
 
         Only works for trials that have ended (trial.stopped/terminated).
-        Replays at uniform speed with support for pause/resume, speed control, and seeking.
+        Replays at uniform speed with support for pause/resume, speed control, seeking,
+        and category filtering.
 
         Query Parameters:
             autostart: If false, only sends meta_info; waits for resume to start (default: true)
             snapshot_size: Number of items in snapshot (default: 20)
+            categories: Comma-separated categories to filter (e.g., 'play,game_update')
+            filter_mode: 'include' or 'exclude' (default: 'include')
 
         Control commands (send as JSON):
             {"command": "pause"}                     - Pause replay
@@ -3142,6 +3340,8 @@ def create_arena_app(
             {"command": "reset"}                     - Restart from beginning
             {"command": "seek", "play_index": N}     - Seek to play index N (0-based)
             {"command": "status"}                    - Get current status
+            {"command": "filter", "categories": [...], "mode": "include"}
+                                                     - Update category filter dynamically
 
         Server messages:
             {"type": "replay_meta_info", ...}       - Metadata (sent first, always)
@@ -3188,6 +3388,9 @@ def create_arena_app(
             snapshot_size=snapshot_size,
         )
 
+        # Initialize category filter from query params
+        cat_filter = CategoryFilter.from_query(categories, filter_mode)
+
         try:
             # 1. Always send meta info first
             meta_msg = WSReplayMetaInfoMessage(
@@ -3215,14 +3418,17 @@ def create_arena_app(
             # 2. If autostart, send initial snapshot; otherwise pause and wait
             if autostart:
                 snapshot_items = controller.get_snapshot_items()
+                # Apply category filter to snapshot
+                filtered_snapshot = cat_filter.filter_items(snapshot_items)
                 snapshot_msg = WSSnapshotMessage(
                     trial_id=trial_id,
                     timestamp=datetime.now(timezone.utc),
-                    data={"items": snapshot_items},
+                    data={"items": filtered_snapshot},
                 )
                 await websocket.send_text(snapshot_msg.model_dump_json())
                 LOGGER.info(
-                    "Replay: Sent snapshot with %d items for trial '%s'",
+                    "Replay: Sent snapshot with %d items (filtered from %d) for trial '%s'",
+                    len(filtered_snapshot),
                     len(snapshot_items),
                     trial_id,
                 )
@@ -3271,10 +3477,13 @@ def create_arena_app(
                             # If first resume after autostart=false, send snapshot
                             if not autostart and controller.current_index == 0:
                                 snapshot_items = controller.get_snapshot_items()
+                                filtered_snapshot = cat_filter.filter_items(
+                                    snapshot_items
+                                )
                                 snapshot_msg = WSSnapshotMessage(
                                     trial_id=trial_id,
                                     timestamp=datetime.now(timezone.utc),
-                                    data={"items": snapshot_items},
+                                    data={"items": filtered_snapshot},
                                 )
                                 await websocket.send_text(
                                     snapshot_msg.model_dump_json()
@@ -3286,25 +3495,40 @@ def create_arena_app(
                             controller.reset()
                             # Re-send snapshot
                             snapshot_items = controller.get_snapshot_items()
+                            filtered_snapshot = cat_filter.filter_items(snapshot_items)
                             snapshot_msg = WSSnapshotMessage(
                                 trial_id=trial_id,
                                 timestamp=datetime.now(timezone.utc),
-                                data={"items": snapshot_items},
+                                data={"items": filtered_snapshot},
                             )
                             await websocket.send_text(snapshot_msg.model_dump_json())
                         elif command == "seek":
                             play_index = command_data.get("play_index", 0)
                             seek_items = controller.seek_to_play_index(int(play_index))
+                            filtered_seek = cat_filter.filter_items(seek_items)
                             snapshot_msg = WSSnapshotMessage(
                                 trial_id=trial_id,
                                 timestamp=datetime.now(timezone.utc),
-                                data={"items": seek_items},
+                                data={"items": filtered_seek},
                             )
                             await websocket.send_text(snapshot_msg.model_dump_json())
                             LOGGER.debug(
                                 "Replay: Seeked to play_index %d for trial '%s'",
                                 play_index,
                                 trial_id,
+                            )
+                        elif command == "filter":
+                            # Update category filter dynamically
+                            filter_categories = command_data.get("categories", [])
+                            filter_mode_cmd = command_data.get("mode", "include")
+                            cat_filter = CategoryFilter.from_list(
+                                filter_categories, filter_mode_cmd
+                            )
+                            LOGGER.debug(
+                                "Replay: Updated filter for trial '%s': categories=%s, mode=%s",
+                                trial_id,
+                                filter_categories,
+                                filter_mode_cmd,
                             )
                         elif command == "status":
                             pass  # Just send status below
@@ -3352,9 +3576,13 @@ def create_arena_app(
                         )
                         continue
 
-                    # Send next item
+                    # Send next item (apply category filter)
                     item = controller.get_next_item()
                     if item:
+                        # Skip items that don't match the filter
+                        if not cat_filter.filter_item(item):
+                            continue
+
                         span_msg = WSSpanMessage(
                             trial_id=trial_id,
                             timestamp=datetime.now(timezone.utc),
@@ -3375,7 +3603,19 @@ def create_arena_app(
             LOGGER.error("Replay WebSocket error for trial '%s': %s", trial_id, e)
 
     @app.post("/api/trials/{trial_id}/replay")
-    async def get_trial_replay_data(trial_id: str) -> JSONResponse:
+    async def get_trial_replay_data(
+        trial_id: str,
+        categories: str | None = Query(
+            default=None,
+            description="Comma-separated categories to filter (e.g., 'play,game_update'). "
+            "If not specified, all categories are included.",
+        ),
+        filter_mode: str = Query(
+            default="include",
+            description="Filter mode: 'include' (only specified categories) or "
+            "'exclude' (all except specified categories).",
+        ),
+    ) -> JSONResponse:
         """Get all replay data for a completed trial at once.
 
         This endpoint returns all spans for a completed trial in a single response,
@@ -3383,12 +3623,16 @@ def create_arena_app(
 
         Only works for trials that have ended (trial.stopped/terminated).
 
+        Query Parameters:
+            categories: Comma-separated list of categories to filter
+            filter_mode: 'include' or 'exclude'
+
         Returns:
             ReplayResponse with:
                 - available: True if replay data is available
                 - reason: Error reason if not available
-                - items: List of serialized spans
-                - totalItems: Total number of items
+                - items: List of serialized spans (filtered by category if specified)
+                - totalItems: Total number of items after filtering
         """
         state = get_server_state()
 
@@ -3410,12 +3654,16 @@ def create_arena_app(
             # This allows frontend to handle gracefully
             return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
 
+        # Apply category filter
+        cat_filter = CategoryFilter.from_query(categories, filter_mode)
+        filtered_items = cat_filter.filter_items(cache_entry.items)
+
         response = ReplayResponse(
             trial_id=trial_id,
             available=True,
-            items=cache_entry.items,
+            items=filtered_items,
             reason=None,
-            total_items=len(cache_entry.items),
+            total_items=len(filtered_items),
         )
         return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
 
@@ -3521,6 +3769,7 @@ __all__ = [
     "ArenaServerState",
     "CacheConfig",
     "CacheEntry",
+    "CategoryFilter",
     "DEFAULT_CACHE_CONFIG",
     "LandingPageCache",
     "PeriodInfo",
