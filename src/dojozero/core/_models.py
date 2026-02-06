@@ -107,7 +107,6 @@ class TrialLifecycleSpan(BaseModel):
     away_team_tricode: str = ""
     home_team_name: str = ""
     away_team_name: str = ""
-    league: str = ""
     game_date: str = ""
     sport_type: str = ""
     espn_game_id: str = ""

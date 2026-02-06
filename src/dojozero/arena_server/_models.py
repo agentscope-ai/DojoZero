@@ -7,6 +7,7 @@ deserialized spans, static lookups, and computed aggregations.  They are
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +29,7 @@ class StatsResponse(BaseModel):
     games_played: int = Field(default=0, serialization_alias="gamesPlayed")
     live_now: int = Field(default=0, serialization_alias="liveNow")
     wagered_today: int = Field(default=0, serialization_alias="wageredToday")
+    total_agents: int = Field(default=0, serialization_alias="totalAgents")
 
 
 class GameCardData(BaseModel):
@@ -149,7 +151,7 @@ class WSSpanMessage(BaseModel):
 
     type: Literal["span"] = "span"
     trial_id: str
-    timestamp: str
+    timestamp: datetime
     category: str = ""
     data: dict[str, Any] = Field(default_factory=dict)
 
@@ -161,7 +163,7 @@ class WSTrialEndedMessage(BaseModel):
 
     type: Literal["trial_ended"] = "trial_ended"
     trial_id: str
-    timestamp: str
+    timestamp: datetime
 
 
 class WSSnapshotMessage(BaseModel):
@@ -171,7 +173,7 @@ class WSSnapshotMessage(BaseModel):
 
     type: Literal["snapshot"] = "snapshot"
     trial_id: str
-    timestamp: str
+    timestamp: datetime
     data: dict[str, list[dict[str, Any]]]
 
 
@@ -181,7 +183,56 @@ class WSHeartbeatMessage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["heartbeat"] = "heartbeat"
-    timestamp: str
+    timestamp: datetime
+
+
+class WSStreamStatusMessage(BaseModel):
+    """Stream status message for pause/resume feedback on live streams."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    type: Literal["stream_status"] = "stream_status"
+    is_paused: bool = Field(serialization_alias="isPaused")
+    buffer_size: int = Field(default=0, serialization_alias="bufferSize")
+    buffered_count: int = Field(default=0, serialization_alias="bufferedCount")
+    timestamp: datetime
+
+
+class WSReplayStatusMessage(BaseModel):
+    """Replay-specific status message with playback progress."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    type: Literal["replay_status"] = "replay_status"
+    current_index: int = Field(serialization_alias="currentIndex")
+    total_items: int = Field(serialization_alias="totalItems")
+    is_paused: bool = Field(serialization_alias="isPaused")
+    speed: float  # 1.0, 2.0, 4.0
+    progress_percent: float = Field(serialization_alias="progressPercent")
+    timestamp: datetime
+
+
+class WSReplayUnavailableMessage(BaseModel):
+    """Sent when replay is not available for a trial."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["replay_unavailable"] = "replay_unavailable"
+    trial_id: str
+    reason: Literal["trial_not_found", "trial_still_running", "no_data"]
+    timestamp: datetime
+
+
+class ReplayResponse(BaseModel):
+    """Response for POST /api/trials/{trial_id}/replay."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    trial_id: str = Field(serialization_alias="trialId")
+    available: bool
+    reason: None | Literal["trial_not_found", "trial_still_running", "no_data"]
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    total_items: int = Field(default=0, serialization_alias="totalItems")
 
 
 __all__ = [
@@ -192,12 +243,16 @@ __all__ = [
     "GamesResponse",
     "LandingResponse",
     "LeaderboardResponse",
+    "ReplayResponse",
     "StatsResponse",
     "TrialDetailResponse",
     "TrialListItem",
     # WebSocket Models
     "WSHeartbeatMessage",
+    "WSReplayStatusMessage",
+    "WSReplayUnavailableMessage",
     "WSSnapshotMessage",
     "WSSpanMessage",
+    "WSStreamStatusMessage",
     "WSTrialEndedMessage",
 ]

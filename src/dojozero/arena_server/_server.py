@@ -12,12 +12,25 @@ It does not communicate with the Dashboard Server directly.
 Endpoints:
 - GET  /api/trials                    - List trials with phase/metadata
 - GET  /api/trials/{trial_id}         - Get trial info and spans
+- POST /api/trials/{trial_id}/replay  - Get all replay data for a completed trial
 - GET  /api/landing                   - Landing page data (games, stats, actions)
 - GET  /api/stats                     - Real-time stats (games, wagered, etc.)
 - GET  /api/games                     - All games (live, upcoming, completed)
 - GET  /api/leaderboard               - Agent rankings by winnings
 - GET  /api/agent-actions             - Recent agent actions
-- WS   /ws/trials/{trial_id}/stream   - Real-time span streaming
+- WS   /ws/trials/{trial_id}/stream   - Real-time span streaming (supports pause/resume)
+- WS   /ws/trials/{trial_id}/replay   - Replay completed trial (supports pause/resume/speed)
+
+Filtering:
+    Most endpoints support optional `league` query parameter for filtering by sport:
+    - ?league=NBA  - Filter to NBA games only
+    - ?league=NFL  - Filter to NFL games only
+    - (omit)       - Return all leagues
+
+    Supported endpoints: /api/landing, /api/stats, /api/games, /api/leaderboard, /api/agent-actions
+
+    Per-league results are cached separately for leagues in CACHEABLE_LEAGUES (NBA, NFL).
+    To add a new league, update CACHEABLE_LEAGUES in the code.
 
 Configuration:
     dojo0 arena --trace-backend sls
@@ -26,13 +39,14 @@ Configuration:
 """
 
 import asyncio
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,12 +61,16 @@ from dojozero.arena_server._models import (
     GamesResponse,
     LandingResponse,
     LeaderboardResponse,
+    ReplayResponse,
     StatsResponse,
     TrialDetailResponse,
     TrialListItem,
     WSHeartbeatMessage,
+    WSReplayStatusMessage,
+    WSReplayUnavailableMessage,
     WSSnapshotMessage,
     WSSpanMessage,
+    WSStreamStatusMessage,
     WSTrialEndedMessage,
 )
 from dojozero.arena_server._replay import (
@@ -78,6 +96,9 @@ from dojozero.data._models import BaseGameUpdateEvent, GameInitializeEvent, Team
 AgentAction.model_rebuild()
 LeaderboardEntry.model_rebuild()
 BetSummary.model_rebuild()
+
+# Type alias for replay error reasons
+ReplayErrorReason = Literal["trial_not_found", "trial_still_running", "no_data"]
 
 # NBA team data lookup: tricode -> TeamIdentity
 # Used to fill in team details when not available in trial metadata
@@ -349,12 +370,25 @@ def _get_team_identity(tricode: str, league: str = "NBA") -> TeamIdentity:
     """Get team identity by tricode.
 
     Returns TeamIdentity from static lookup. Falls back to a minimal identity
-    with the tricode as the name if not found.
+    with the tricode as the name if not found, but still generates a logo URL
+    using the ESPN CDN pattern.
     """
     teams = _NBA_TEAMS if league == "NBA" else _NFL_TEAMS
     if tricode in teams:
         return teams[tricode]
-    return TeamIdentity(name=tricode, tricode=tricode, color=_DEFAULT_TEAM_COLOR)
+
+    # Generate logo URL dynamically for teams not in static lookup
+    league_lower = league.lower()
+    logo_url = (
+        f"https://a.espncdn.com/i/teamlogos/{league_lower}/500/{tricode.lower()}.png"
+    )
+
+    return TeamIdentity(
+        name=tricode,
+        tricode=tricode,
+        color=_DEFAULT_TEAM_COLOR,
+        logo_url=logo_url,
+    )
 
 
 # ============================================================================
@@ -483,7 +517,7 @@ class SpanBroadcaster:
         ws_payload = serialize_span_for_ws(typed)
         message = WSSpanMessage(
             trial_id=trial_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc),
             category=ws_payload.get("category", ""),
             data=ws_payload.get("data", {}),
         )
@@ -493,7 +527,7 @@ class SpanBroadcaster:
         """Notify all clients that a trial has ended."""
         message = WSTrialEndedMessage(
             trial_id=trial_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc),
         )
         await self._send_to_trial(trial_id, message)
 
@@ -540,7 +574,7 @@ class SpanBroadcaster:
         )
         message = WSSnapshotMessage(
             trial_id=trial_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc),
             data={"items": items},
         )
         await self._send_to_client(websocket, message)
@@ -660,6 +694,10 @@ class CacheConfig:
 # Default configuration instance
 DEFAULT_CACHE_CONFIG = CacheConfig()
 
+# Leagues that should be cached separately when filtered
+# Add new leagues here as they become supported
+CACHEABLE_LEAGUES: frozenset[str] = frozenset({"NBA", "NFL"})
+
 
 @dataclass
 class CacheEntry:
@@ -718,7 +756,7 @@ class LandingPageCache:
     # Configuration (all tunable parameters)
     config: CacheConfig = field(default_factory=lambda: DEFAULT_CACHE_CONFIG)
 
-    # Cache storage
+    # Cache storage - global (no filter)
     _trials_list: CacheEntry | None = None
     _trial_info: dict[str, CacheEntry] = field(default_factory=dict)
     _trial_details: dict[str, CacheEntry] = field(default_factory=dict)
@@ -726,6 +764,13 @@ class LandingPageCache:
     _leaderboard: CacheEntry | None = None
     _agent_actions: CacheEntry | None = None
     _games: CacheEntry | None = None
+
+    # Cache storage - per-league (for filtered queries)
+    # Keys are uppercase league names (e.g., "NBA", "NFL")
+    _stats_by_league: dict[str, CacheEntry] = field(default_factory=dict)
+    _games_by_league: dict[str, CacheEntry] = field(default_factory=dict)
+    _leaderboard_by_league: dict[str, CacheEntry] = field(default_factory=dict)
+    _agent_actions_by_league: dict[str, CacheEntry] = field(default_factory=dict)
 
     # Concurrency control
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -991,35 +1036,77 @@ class LandingPageCache:
     async def get_stats(
         self,
         fetcher: Any,
+        league: str | None = None,
     ) -> StatsResponse:
         """Get cached stats or fetch if expired.
 
         Args:
             fetcher: Async callable that returns StatsResponse
+            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
 
         Returns:
             StatsResponse with gamesPlayed, liveNow, wageredToday
         """
+        # Determine which cache to use
+        # league_key is str when use_league_cache is True
+        league_key: str | None = league.upper() if league else None
+        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
+
         async with self._lock:
-            if self._stats is not None and self._stats.is_valid():
-                LOGGER.debug("Cache HIT: stats (age=%.1fs)", self._stats.age_seconds())
-                return self._stats.data
+            if use_league_cache and league_key is not None:
+                entry = self._stats_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: stats[%s] (age=%.1fs)",
+                        league_key,
+                        entry.age_seconds(),
+                    )
+                    return entry.data
+            elif not use_league_cache:
+                if self._stats is not None and self._stats.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: stats (age=%.1fs)", self._stats.age_seconds()
+                    )
+                    return self._stats.data
 
         data: StatsResponse = await fetcher()
 
         # Only cache non-empty results
-        if data.games_played or data.live_now or data.wagered_today:
+        if (
+            data.games_played
+            or data.live_now
+            or data.wagered_today
+            or data.total_agents
+        ):
             async with self._lock:
-                self._stats = CacheEntry(
+                entry = CacheEntry(
                     data=data,
                     expires_at=time.time() + self.config.stats_ttl,
                 )
-            LOGGER.debug("Cache MISS: stats (ttl=%.0fs)", self.config.stats_ttl)
+                if use_league_cache and league_key is not None:
+                    self._stats_by_league[league_key] = entry
+                    LOGGER.debug(
+                        "Cache MISS: stats[%s] (ttl=%.0fs)",
+                        league_key,
+                        self.config.stats_ttl,
+                    )
+                else:
+                    self._stats = entry
+                    LOGGER.debug("Cache MISS: stats (ttl=%.0fs)", self.config.stats_ttl)
         else:
             LOGGER.warning("Fetcher returned empty stats, not caching")
             # Stale-while-revalidate
             async with self._lock:
-                if self._stats is not None:
+                if use_league_cache and league_key is not None:
+                    entry = self._stats_by_league.get(league_key)
+                    if entry is not None:
+                        LOGGER.info(
+                            "Using STALE cache: stats[%s] (age=%.1fs)",
+                            league_key,
+                            entry.age_seconds(),
+                        )
+                        return entry.data
+                elif self._stats is not None:
                     LOGGER.info(
                         "Using STALE cache: stats (age=%.1fs)",
                         self._stats.age_seconds(),
@@ -1031,40 +1118,74 @@ class LandingPageCache:
     async def get_leaderboard(
         self,
         fetcher: Any,
+        league: str | None = None,
     ) -> list[LeaderboardEntry]:
         """Get cached leaderboard or fetch if expired.
 
         Args:
             fetcher: Async callable that returns list[LeaderboardEntry]
+            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
 
         Returns:
             List of LeaderboardEntry sorted by winnings
         """
+        league_key: str | None = league.upper() if league else None
+        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
+
         async with self._lock:
-            if self._leaderboard is not None and self._leaderboard.is_valid():
-                LOGGER.debug(
-                    "Cache HIT: leaderboard (age=%.1fs)",
-                    self._leaderboard.age_seconds(),
-                )
-                return self._leaderboard.data
+            if use_league_cache and league_key is not None:
+                entry = self._leaderboard_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: leaderboard[%s] (age=%.1fs)",
+                        league_key,
+                        entry.age_seconds(),
+                    )
+                    return entry.data
+            elif not use_league_cache:
+                if self._leaderboard is not None and self._leaderboard.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: leaderboard (age=%.1fs)",
+                        self._leaderboard.age_seconds(),
+                    )
+                    return self._leaderboard.data
 
         data = await fetcher()
 
         # Only cache non-empty results
         if data:
             async with self._lock:
-                self._leaderboard = CacheEntry(
+                entry = CacheEntry(
                     data=data,
                     expires_at=time.time() + self.config.leaderboard_ttl,
                 )
-            LOGGER.debug(
-                "Cache MISS: leaderboard (ttl=%.0fs)", self.config.leaderboard_ttl
-            )
+                if use_league_cache and league_key is not None:
+                    self._leaderboard_by_league[league_key] = entry
+                    LOGGER.debug(
+                        "Cache MISS: leaderboard[%s] (ttl=%.0fs)",
+                        league_key,
+                        self.config.leaderboard_ttl,
+                    )
+                else:
+                    self._leaderboard = entry
+                    LOGGER.debug(
+                        "Cache MISS: leaderboard (ttl=%.0fs)",
+                        self.config.leaderboard_ttl,
+                    )
         else:
             LOGGER.warning("Fetcher returned empty leaderboard, not caching")
             # Stale-while-revalidate
             async with self._lock:
-                if self._leaderboard is not None:
+                if use_league_cache and league_key is not None:
+                    entry = self._leaderboard_by_league.get(league_key)
+                    if entry is not None:
+                        LOGGER.info(
+                            "Using STALE cache: leaderboard[%s] (age=%.1fs)",
+                            league_key,
+                            entry.age_seconds(),
+                        )
+                        return entry.data
+                elif self._leaderboard is not None:
                     LOGGER.info(
                         "Using STALE cache: leaderboard (age=%.1fs)",
                         self._leaderboard.age_seconds(),
@@ -1076,40 +1197,74 @@ class LandingPageCache:
     async def get_agent_actions(
         self,
         fetcher: Any,
+        league: str | None = None,
     ) -> list[AgentAction]:
         """Get cached agent actions or fetch if expired.
 
         Args:
             fetcher: Async callable that returns list[AgentAction]
+            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
 
         Returns:
             List of recent agent actions for the ticker
         """
+        league_key: str | None = league.upper() if league else None
+        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
+
         async with self._lock:
-            if self._agent_actions is not None and self._agent_actions.is_valid():
-                LOGGER.debug(
-                    "Cache HIT: agent_actions (age=%.1fs)",
-                    self._agent_actions.age_seconds(),
-                )
-                return self._agent_actions.data
+            if use_league_cache and league_key is not None:
+                entry = self._agent_actions_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: agent_actions[%s] (age=%.1fs)",
+                        league_key,
+                        entry.age_seconds(),
+                    )
+                    return entry.data
+            elif not use_league_cache:
+                if self._agent_actions is not None and self._agent_actions.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: agent_actions (age=%.1fs)",
+                        self._agent_actions.age_seconds(),
+                    )
+                    return self._agent_actions.data
 
         data = await fetcher()
 
         # Only cache non-empty results
         if data:
             async with self._lock:
-                self._agent_actions = CacheEntry(
+                entry = CacheEntry(
                     data=data,
                     expires_at=time.time() + self.config.agent_actions_ttl,
                 )
-            LOGGER.debug(
-                "Cache MISS: agent_actions (ttl=%.0fs)", self.config.agent_actions_ttl
-            )
+                if use_league_cache and league_key is not None:
+                    self._agent_actions_by_league[league_key] = entry
+                    LOGGER.debug(
+                        "Cache MISS: agent_actions[%s] (ttl=%.0fs)",
+                        league_key,
+                        self.config.agent_actions_ttl,
+                    )
+                else:
+                    self._agent_actions = entry
+                    LOGGER.debug(
+                        "Cache MISS: agent_actions (ttl=%.0fs)",
+                        self.config.agent_actions_ttl,
+                    )
         else:
             LOGGER.warning("Fetcher returned empty agent actions, not caching")
             # Stale-while-revalidate
             async with self._lock:
-                if self._agent_actions is not None:
+                if use_league_cache and league_key is not None:
+                    entry = self._agent_actions_by_league.get(league_key)
+                    if entry is not None:
+                        LOGGER.info(
+                            "Using STALE cache: agent_actions[%s] (age=%.1fs)",
+                            league_key,
+                            entry.age_seconds(),
+                        )
+                        return entry.data
+                elif self._agent_actions is not None:
                     LOGGER.info(
                         "Using STALE cache: agent_actions (age=%.1fs)",
                         self._agent_actions.age_seconds(),
@@ -1121,19 +1276,36 @@ class LandingPageCache:
     async def get_games(
         self,
         fetcher: Any,
+        league: str | None = None,
     ) -> GamesResponse:
         """Get cached games list or fetch if expired.
 
         Args:
             fetcher: Async callable that returns GamesResponse
+            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
 
         Returns:
             GamesResponse with live_games, upcoming_games, completed_games
         """
+        league_key: str | None = league.upper() if league else None
+        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
+
         async with self._lock:
-            if self._games is not None and self._games.is_valid():
-                LOGGER.debug("Cache HIT: games (age=%.1fs)", self._games.age_seconds())
-                return self._games.data
+            if use_league_cache and league_key is not None:
+                entry = self._games_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: games[%s] (age=%.1fs)",
+                        league_key,
+                        entry.age_seconds(),
+                    )
+                    return entry.data
+            elif not use_league_cache:
+                if self._games is not None and self._games.is_valid():
+                    LOGGER.debug(
+                        "Cache HIT: games (age=%.1fs)", self._games.age_seconds()
+                    )
+                    return self._games.data
 
         data: GamesResponse = await fetcher()
 
@@ -1141,16 +1313,34 @@ class LandingPageCache:
         has_data = data.live_games or data.upcoming_games or data.completed_games
         if has_data:
             async with self._lock:
-                self._games = CacheEntry(
+                entry = CacheEntry(
                     data=data,
                     expires_at=time.time() + self.config.games_ttl,
                 )
-            LOGGER.debug("Cache MISS: games (ttl=%.0fs)", self.config.games_ttl)
+                if use_league_cache and league_key is not None:
+                    self._games_by_league[league_key] = entry
+                    LOGGER.debug(
+                        "Cache MISS: games[%s] (ttl=%.0fs)",
+                        league_key,
+                        self.config.games_ttl,
+                    )
+                else:
+                    self._games = entry
+                    LOGGER.debug("Cache MISS: games (ttl=%.0fs)", self.config.games_ttl)
         else:
             LOGGER.warning("Fetcher returned empty games data, not caching")
             # Stale-while-revalidate
             async with self._lock:
-                if self._games is not None:
+                if use_league_cache and league_key is not None:
+                    entry = self._games_by_league.get(league_key)
+                    if entry is not None:
+                        LOGGER.info(
+                            "Using STALE cache: games[%s] (age=%.1fs)",
+                            league_key,
+                            entry.age_seconds(),
+                        )
+                        return entry.data
+                elif self._games is not None:
                     LOGGER.info(
                         "Using STALE cache: games (age=%.1fs)",
                         self._games.age_seconds(),
@@ -1168,6 +1358,9 @@ class LandingPageCache:
         # Also invalidate aggregated data since trial state changed
         self._stats = None
         self._games = None
+        # Invalidate per-league caches as well
+        self._stats_by_league.clear()
+        self._games_by_league.clear()
         LOGGER.debug("Invalidated cache for trial: %s", trial_id)
 
     def invalidate_all(self) -> None:
@@ -1179,6 +1372,11 @@ class LandingPageCache:
         self._leaderboard = None
         self._agent_actions = None
         self._games = None
+        # Clear per-league caches
+        self._stats_by_league.clear()
+        self._games_by_league.clear()
+        self._leaderboard_by_league.clear()
+        self._agent_actions_by_league.clear()
         LOGGER.debug("Invalidated all cache entries")
 
     def get_cache_stats(self) -> dict[str, Any]:
@@ -1197,6 +1395,10 @@ class LandingPageCache:
                 "expires_in": round(entry.expires_at - time.time(), 1),
             }
 
+        def _league_cache_info(cache: dict[str, CacheEntry]) -> dict[str, Any]:
+            """Get info for per-league cache entries."""
+            return {league: _entry_info(entry) for league, entry in cache.items()}
+
         return {
             "config": {
                 "trials_list_ttl": self.config.trials_list_ttl,
@@ -1208,6 +1410,7 @@ class LandingPageCache:
                 "agent_actions_ttl": self.config.agent_actions_ttl,
                 "completed_trial_ttl": self.config.completed_trial_ttl,
                 "agent_actions_max_trials": self.config.agent_actions_max_trials,
+                "cacheable_leagues": list(CACHEABLE_LEAGUES),
             },
             "caches": {
                 "trials_list": _entry_info(self._trials_list),
@@ -1218,7 +1421,208 @@ class LandingPageCache:
                 "trial_info_count": len(self._trial_info),
                 "trial_details_count": len(self._trial_details),
             },
+            "caches_by_league": {
+                "stats": _league_cache_info(self._stats_by_league),
+                "games": _league_cache_info(self._games_by_league),
+                "leaderboard": _league_cache_info(self._leaderboard_by_league),
+                "agent_actions": _league_cache_info(self._agent_actions_by_league),
+            },
         }
+
+
+# =============================================================================
+# Replay Cache
+# =============================================================================
+
+
+@dataclass
+class ReplayCacheEntry:
+    """Cache entry for replay data."""
+
+    items: list[dict[str, Any]]  # Serialized spans for WS
+    created_at: float = field(default_factory=time.time)
+    ttl: float = 3600.0  # 1 hour default
+
+    def is_valid(self) -> bool:
+        return time.time() < (self.created_at + self.ttl)
+
+
+@dataclass
+class ReplayCache:
+    """Cache for completed trial replay data.
+
+    Only stores data for trials that have ended (trial.stopped/terminated).
+    Reduces SLS queries for frequently replayed trials.
+    """
+
+    _cache: dict[str, ReplayCacheEntry] = field(default_factory=dict)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    ttl: float = 3600.0  # 1 hour
+    max_entries: int = 100  # Max trials to cache
+
+    async def get(self, trial_id: str) -> list[dict[str, Any]] | None:
+        """Get cached replay data, or None if not cached/expired."""
+        async with self._lock:
+            entry = self._cache.get(trial_id)
+            if entry and entry.is_valid():
+                LOGGER.debug(
+                    "ReplayCache HIT: %s (%d items)", trial_id, len(entry.items)
+                )
+                return entry.items
+            elif entry:
+                # Expired, remove it
+                del self._cache[trial_id]
+                LOGGER.debug("ReplayCache EXPIRED: %s", trial_id)
+            return None
+
+    async def set(self, trial_id: str, items: list[dict[str, Any]]) -> None:
+        """Cache replay data for a completed trial."""
+        async with self._lock:
+            # Evict oldest if at capacity
+            if len(self._cache) >= self.max_entries:
+                oldest = min(self._cache.items(), key=lambda x: x[1].created_at)
+                del self._cache[oldest[0]]
+                LOGGER.debug("ReplayCache evicted: %s", oldest[0])
+
+            self._cache[trial_id] = ReplayCacheEntry(
+                items=items,
+                ttl=self.ttl,
+            )
+            LOGGER.info("ReplayCache SET: %s (%d items)", trial_id, len(items))
+
+    def invalidate(self, trial_id: str) -> None:
+        """Remove a trial from cache."""
+        if trial_id in self._cache:
+            del self._cache[trial_id]
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get cache statistics."""
+        valid_count = sum(1 for e in self._cache.values() if e.is_valid())
+        return {
+            "total_entries": len(self._cache),
+            "valid_entries": valid_count,
+            "max_entries": self.max_entries,
+            "ttl": self.ttl,
+        }
+
+
+# =============================================================================
+# Stream and Replay Controllers
+# =============================================================================
+
+
+@dataclass
+class StreamController:
+    """Per-connection stream state controller for live streams.
+
+    Manages pause/resume state and buffers spans during pause for catch-up.
+    """
+
+    is_paused: bool = False
+    # Buffer for spans received during pause (for catch-up mode)
+    pause_buffer: list[SpanData] = field(default_factory=list)
+    # Max buffer size to prevent memory issues
+    max_buffer_size: int = 1000
+
+    def pause(self) -> None:
+        self.is_paused = True
+
+    def resume(self) -> None:
+        self.is_paused = False
+
+    def buffer_span(self, span: SpanData) -> None:
+        """Buffer a span during pause (for catch-up on resume)."""
+        if len(self.pause_buffer) < self.max_buffer_size:
+            self.pause_buffer.append(span)
+
+    def drain_buffer(self) -> list[SpanData]:
+        """Get and clear buffered spans."""
+        spans = self.pause_buffer
+        self.pause_buffer = []
+        return spans
+
+
+@dataclass
+class TrialReplayController:
+    """Controls replay of a completed trial's historical data.
+
+    Unlike the mock ReplayController, this loads from real trace data.
+    Supports 1x, 2x, 4x playback speeds.
+    """
+
+    trial_id: str
+    items: list[dict[str, Any]] = field(default_factory=list)
+    current_index: int = 0
+    speed: float = 1.0  # 1x, 2x, 4x
+    is_paused: bool = False
+    base_interval: float = 2.0  # 2 seconds per event at 1x speed
+
+    # Initial snapshot size (first N items sent immediately)
+    snapshot_size: int = 20
+
+    def set_speed(self, speed: float) -> None:
+        """Set playback speed (1x, 2x, 4x only)."""
+        allowed = [1.0, 2.0, 4.0]
+        if speed in allowed:
+            self.speed = speed
+        else:
+            # Snap to nearest allowed
+            self.speed = min(allowed, key=lambda x: abs(x - speed))
+        LOGGER.debug(
+            "Replay speed set to %.1fx for trial %s", self.speed, self.trial_id
+        )
+
+    def pause(self) -> None:
+        self.is_paused = True
+        LOGGER.debug(
+            "Replay paused at index %d for trial %s", self.current_index, self.trial_id
+        )
+
+    def resume(self) -> None:
+        self.is_paused = False
+        LOGGER.debug(
+            "Replay resumed from index %d for trial %s",
+            self.current_index,
+            self.trial_id,
+        )
+
+    def reset(self) -> None:
+        self.current_index = 0
+        self.is_paused = False
+
+    def get_snapshot_items(self) -> list[dict[str, Any]]:
+        """Get initial snapshot items to send on connection."""
+        count = min(self.snapshot_size, len(self.items))
+        self.current_index = count
+        return self.items[:count]
+
+    def get_next_item(self) -> dict[str, Any] | None:
+        """Get the next item to send, or None if complete."""
+        if self.current_index >= len(self.items):
+            return None
+        item = self.items[self.current_index]
+        self.current_index += 1
+        return item
+
+    def get_effective_interval(self) -> float:
+        """Get actual interval based on speed."""
+        return self.base_interval / self.speed
+
+    def is_complete(self) -> bool:
+        return self.current_index >= len(self.items)
+
+    def get_status(self) -> WSReplayStatusMessage:
+        """Get current replay status."""
+        total = len(self.items)
+        progress = (self.current_index / total * 100) if total > 0 else 0
+        return WSReplayStatusMessage(
+            current_index=self.current_index,
+            total_items=total,
+            is_paused=self.is_paused,
+            speed=self.speed,
+            progress_percent=round(progress, 1),
+            timestamp=datetime.now(timezone.utc),
+        )
 
 
 @dataclass
@@ -1228,6 +1632,7 @@ class ArenaServerState:
     trace_reader: TraceReader
     broadcaster: SpanBroadcaster = field(default_factory=SpanBroadcaster)
     cache: LandingPageCache = field(default_factory=LandingPageCache)
+    replay_cache: ReplayCache = field(default_factory=ReplayCache)
     static_dir: Path | None = None
     poll_interval: float = 1.0  # Seconds between trace polls
     trace_backend: str = "jaeger"
@@ -1303,7 +1708,6 @@ async def _extract_trial_info_from_traces(
                         "away_team_tricode": typed.away_team_tricode,
                         "home_team_name": typed.home_team_name,
                         "away_team_name": typed.away_team_name,
-                        "league": typed.league,
                         "game_date": typed.game_date,
                         "sport_type": typed.sport_type,
                         "espn_game_id": typed.espn_game_id,
@@ -1353,6 +1757,108 @@ async def _extract_trial_info_from_traces(
         phase = "unknown"
 
     return {"phase": phase, "metadata": metadata, "game_init": game_init}
+
+
+async def _filter_trials_by_league(
+    trace_reader: TraceReader,
+    trial_ids: list[str],
+    league: str | None,
+    cache: "LandingPageCache | None" = None,
+) -> list[str]:
+    """Filter trial IDs by league/sport type.
+
+    This is a pure filtering function that takes an existing list of trial IDs
+    and returns only those matching the specified league.
+
+    Args:
+        trace_reader: TraceReader for fetching trial info
+        trial_ids: List of trial IDs to filter
+        league: League to filter by (e.g., 'NBA', 'NFL'). None means return all.
+        cache: Optional cache for trial info (recommended for performance)
+
+    Returns:
+        Filtered list of trial IDs matching the specified league
+    """
+    if league is None:
+        return trial_ids
+
+    league_upper = league.upper()
+    filtered: list[str] = []
+
+    for trial_id in trial_ids:
+        try:
+            if cache is not None:
+                trial_info = await cache.get_trial_info(
+                    trial_id,
+                    lambda tid=trial_id: _extract_trial_info_from_traces(
+                        trace_reader, tid
+                    ),
+                )
+            else:
+                trial_info = await _extract_trial_info_from_traces(
+                    trace_reader, trial_id
+                )
+
+            metadata = trial_info.get("metadata", {})
+            print(metadata)
+            # Note: BettingTrialMetadata has no `league` field.
+            # `sport_type` is used instead and is treated as the league.
+            trial_league = metadata.get("sport_type", "")
+
+            if trial_league.upper() == league_upper:
+                filtered.append(trial_id)
+
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to get info for trial '%s' during filtering: %s",
+                trial_id,
+                e,
+            )
+            continue
+
+    LOGGER.debug(
+        "Filtered trials by league '%s': %d/%d matched",
+        league,
+        len(filtered),
+        len(trial_ids),
+    )
+    return filtered
+
+
+async def _get_filtered_trial_ids(
+    state: "ArenaServerState",
+    days: int,
+    league: str | None,
+    limit: int = 100,
+) -> list[str]:
+    """Get trial IDs with optional league filtering.
+
+    This is a convenience wrapper that combines:
+    1. Fetching trial IDs from trace store (with caching)
+    2. Filtering by league if specified
+
+    Args:
+        state: ArenaServerState with trace_reader and cache
+        days: Number of days to look back
+        league: League to filter by (e.g., 'NBA', 'NFL'). None means all.
+        limit: Maximum number of trials to fetch from trace store
+
+    Returns:
+        List of trial IDs, optionally filtered by league
+    """
+
+    async def fetch_trials() -> list[str]:
+        start_dt = datetime.now(timezone.utc) - timedelta(days=days)
+        return await state.trace_reader.list_trials(start_time=start_dt, limit=limit)
+
+    trial_ids = await state.cache.get_trials_list(fetch_trials)
+
+    if league:
+        trial_ids = await _filter_trials_by_league(
+            state.trace_reader, trial_ids, league, state.cache
+        )
+
+    return trial_ids
 
 
 def _resolve_team_identity(
@@ -1500,7 +2006,7 @@ async def _extract_games_from_trials(
 
         phase = trial_info["phase"]
         metadata = trial_info["metadata"]
-        league = metadata.get("league", "NBA")
+        league = metadata.get("sport_type", "NBA")
 
         home_tricode = metadata.get("home_team_tricode", "TBD")
         away_tricode = metadata.get("away_team_tricode", "TBD")
@@ -1704,6 +2210,7 @@ async def _compute_stats(
         games_played=games_played,
         live_now=live_now,
         wagered_today=int(wagered_today),
+        total_agents=len(_AGENT_CACHE),
     )
 
 
@@ -1828,6 +2335,68 @@ async def _compute_leaderboard(
     ]
 
     return ranked
+
+
+async def _load_replay_data(
+    trace_reader: TraceReader,
+    replay_cache: ReplayCache,
+    trial_id: str,
+) -> tuple[list[dict[str, Any]] | None, ReplayErrorReason | Literal[""]]:
+    """Load replay data for a trial.
+
+    Returns:
+        Tuple of (items, error_reason)
+        - If successful: (items, "")
+        - If failed: (None, reason)
+
+    Reasons:
+        - "trial_not_found": No spans found for trial
+        - "trial_still_running": Trial hasn't ended yet
+        - "no_data": Trial exists but no spans to replay
+    """
+    # 1. Check cache first
+    cached = await replay_cache.get(trial_id)
+    if cached:
+        return cached, ""
+
+    # 2. Fetch from trace store
+    try:
+        spans = await trace_reader.get_spans(trial_id)
+    except Exception as e:
+        LOGGER.error("Failed to fetch spans for replay: %s", e)
+        return None, "trial_not_found"
+
+    if not spans:
+        return None, "trial_not_found"
+
+    # 3. Check if trial has ended
+    has_ended = False
+    items: list[dict[str, Any]] = []
+
+    for span in spans:
+        typed = deserialize_span(span)
+        if typed is None:
+            continue
+
+        # Serialize for WS
+        items.append(serialize_span_for_ws(typed))
+
+        # Check for end marker
+        if isinstance(typed, TrialLifecycleSpan):
+            if typed.phase in ("stopped", "terminated"):
+                has_ended = True
+
+    if not has_ended:
+        LOGGER.info("Trial %s has not ended yet, replay unavailable", trial_id)
+        return None, "trial_still_running"
+
+    if not items:
+        return None, "no_data"
+
+    # 4. Cache the result (only for completed trials)
+    await replay_cache.set(trial_id, items)
+
+    return items, ""
 
 
 def create_arena_app(
@@ -2008,36 +2577,38 @@ def create_arena_app(
             ge=1,
             le=30,
         ),
+        league: str | None = Query(
+            default=None,
+            description="Filter by league: 'NBA', 'NFL', etc. Returns all if not specified.",
+        ),
     ) -> JSONResponse:
         """Get aggregated landing page data.
 
         Returns games, stats, and recent agent actions in a single call.
         Data is cached to reduce load on the trace store.
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
-        # Fetch trial IDs (cached)
-        async def fetch_trials() -> list[str]:
-            start_dt = datetime.now(timezone.utc) - timedelta(days=days)
-            return await state.trace_reader.list_trials(start_time=start_dt, limit=100)
+        # Get trial IDs with optional league filtering
+        trial_ids = await _get_filtered_trial_ids(state, days, league)
 
-        trial_ids = await state.cache.get_trials_list(fetch_trials)
-
-        # Fetch stats (cached)
+        # Fetch stats (cached, with per-league support)
         async def fetch_stats() -> StatsResponse:
             return await _compute_stats(state.trace_reader, trial_ids, state.cache)
 
-        stats = await state.cache.get_stats(fetch_stats)
+        stats = await state.cache.get_stats(fetch_stats, league=league)
 
-        # Fetch games (cached)
+        # Fetch games (cached, with per-league support)
         async def fetch_games() -> GamesResponse:
             return await _extract_games_from_trials(
                 state.trace_reader, trial_ids, state.cache
             )
 
-        games = await state.cache.get_games(fetch_games)
+        games = await state.cache.get_games(fetch_games, league=league)
 
-        # Fetch agent actions (cached)
+        # Fetch agent actions (cached, with per-league support)
         async def fetch_actions() -> list[AgentAction]:
             return await _extract_agent_actions(
                 state.trace_reader,
@@ -2046,7 +2617,9 @@ def create_arena_app(
                 max_trials=state.cache.config.agent_actions_max_trials,
             )
 
-        agent_actions = await state.cache.get_agent_actions(fetch_actions)
+        agent_actions = await state.cache.get_agent_actions(
+            fetch_actions, league=league
+        )
 
         all_games = games.live_games + games.upcoming_games + games.completed_games
         response = LandingResponse(
@@ -2065,6 +2638,10 @@ def create_arena_app(
             ge=1,
             le=30,
         ),
+        league: str | None = Query(
+            default=None,
+            description="Filter by league: 'NBA', 'NFL', etc. Returns all if not specified.",
+        ),
     ) -> JSONResponse:
         """Get real-time stats for the hero section.
 
@@ -2072,19 +2649,18 @@ def create_arena_app(
             gamesPlayed: Total completed games
             liveNow: Currently running games
             wageredToday: Total amount wagered (if available)
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
-        async def fetch_trials() -> list[str]:
-            start_dt = datetime.now(timezone.utc) - timedelta(days=days)
-            return await state.trace_reader.list_trials(start_time=start_dt, limit=100)
-
-        trial_ids = await state.cache.get_trials_list(fetch_trials)
+        trial_ids = await _get_filtered_trial_ids(state, days, league)
 
         async def fetch_stats() -> StatsResponse:
             return await _compute_stats(state.trace_reader, trial_ids, state.cache)
 
-        stats = await state.cache.get_stats(fetch_stats)
+        stats = await state.cache.get_stats(fetch_stats, league=league)
+
         return JSONResponse(content=stats.model_dump(by_alias=True))
 
     @app.get("/api/games")
@@ -2113,25 +2689,23 @@ def create_arena_app(
         """Get games list with optional filters.
 
         Returns games grouped by status or filtered by query params.
+        League filtering is done at trial level for efficiency.
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
-        async def fetch_trials() -> list[str]:
-            start_dt = datetime.now(timezone.utc) - timedelta(days=days)
-            return await state.trace_reader.list_trials(
-                start_time=start_dt, limit=limit
-            )
-
-        trial_ids = await state.cache.get_trials_list(fetch_trials)
+        # Filter trials by league at trial level (more efficient than post-filtering)
+        trial_ids = await _get_filtered_trial_ids(state, days, league, limit=limit)
 
         async def fetch_games() -> GamesResponse:
             return await _extract_games_from_trials(
                 state.trace_reader, trial_ids, state.cache
             )
 
-        games_data = await state.cache.get_games(fetch_games)
+        games_data = await state.cache.get_games(fetch_games, league=league)
 
-        # Apply filters
+        # Apply status filter (league already filtered at trial level)
         all_games: list[GameCardData] = (
             games_data.live_games
             + games_data.upcoming_games
@@ -2146,9 +2720,6 @@ def create_arena_app(
             }
             target_status = status_map.get(status, status)
             all_games = [g for g in all_games if g.status == target_status]
-
-        if league:
-            all_games = [g for g in all_games if g.league.upper() == league.upper()]
 
         filtered = all_games[:limit]
         return JSONResponse(
@@ -2180,22 +2751,21 @@ def create_arena_app(
         """Get agent leaderboard ranked by winnings.
 
         Returns agents sorted by total winnings with win rate and ROI.
+        League filtering is applied at trial level.
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
-        async def fetch_trials() -> list[str]:
-            start_dt = datetime.now(timezone.utc) - timedelta(days=days)
-            return await state.trace_reader.list_trials(start_time=start_dt, limit=500)
-
-        trial_ids = await state.cache.get_trials_list(fetch_trials)
+        # Filter trials by league at trial level
+        trial_ids = await _get_filtered_trial_ids(state, days, league, limit=500)
 
         async def fetch_leaderboard() -> list[LeaderboardEntry]:
             return await _compute_leaderboard(state.trace_reader, trial_ids, limit)
 
-        leaderboard = await state.cache.get_leaderboard(fetch_leaderboard)
-
-        # Filter by league if specified (would need to track in agent stats)
-        # For now, return all agents
+        leaderboard = await state.cache.get_leaderboard(
+            fetch_leaderboard, league=league
+        )
 
         response = LeaderboardResponse(leaderboard=leaderboard)
         return JSONResponse(
@@ -2210,18 +2780,31 @@ def create_arena_app(
             ge=1,
             le=100,
         ),
+        league: str | None = Query(
+            default=None,
+            description="Filter by league: 'NBA', 'NFL', etc. Returns all if not specified.",
+        ),
     ) -> JSONResponse:
         """Get recent agent actions for the live ticker.
 
         Returns the most recent agent actions sorted by time.
+
+        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
         """
         state = get_server_state()
 
+        # Agent actions uses hours (not days) for freshness
         async def fetch_trials() -> list[str]:
             start_dt = datetime.now(timezone.utc) - timedelta(hours=1)
             return await state.trace_reader.list_trials(start_time=start_dt, limit=20)
 
         trial_ids = await state.cache.get_trials_list(fetch_trials)
+
+        # Apply league filter if specified
+        if league:
+            trial_ids = await _filter_trials_by_league(
+                state.trace_reader, trial_ids, league, state.cache
+            )
 
         async def fetch_actions() -> list[AgentAction]:
             return await _extract_agent_actions(
@@ -2231,7 +2814,7 @@ def create_arena_app(
                 max_trials=state.cache.config.agent_actions_max_trials,
             )
 
-        actions = await state.cache.get_agent_actions(fetch_actions)
+        actions = await state.cache.get_agent_actions(fetch_actions, league=league)
 
         response = AgentActionsResponse(actions=actions)
         return JSONResponse(
@@ -2263,17 +2846,26 @@ def create_arena_app(
 
     @app.websocket("/ws/trials/{trial_id}/stream")
     async def trial_stream(websocket: WebSocket, trial_id: str):
-        """WebSocket endpoint for real-time span streaming.
+        """WebSocket endpoint for real-time span streaming with pause/resume.
 
         Protocol:
         - Server sends 'snapshot' immediately upon connection
         - Server pushes 'span' messages as new spans are detected
         - Server sends 'trial_ended' when trial completes
         - Server sends 'heartbeat' periodically
+        - Server sends 'stream_status' in response to control commands
+
+        Control commands (send as JSON):
+            {"command": "pause"}   - Pause streaming (buffers spans)
+            {"command": "resume"}  - Resume streaming (sends buffered spans)
+            {"command": "status"}  - Get current stream status
         """
         state = get_server_state()
         await websocket.accept()
         LOGGER.info("WebSocket connection accepted for trial '%s'", trial_id)
+
+        # Per-connection stream controller
+        controller = StreamController()
 
         try:
             await state.broadcaster.subscribe(trial_id, websocket)
@@ -2295,11 +2887,52 @@ def create_arena_app(
             # Poll for new spans and broadcast
             while True:
                 try:
-                    # Wait for either a client message or timeout
-                    await asyncio.wait_for(
+                    # Wait for client message or timeout
+                    msg_text = await asyncio.wait_for(
                         websocket.receive_text(),
                         timeout=state.poll_interval,
                     )
+
+                    # Handle control commands
+                    try:
+                        command_data = json.loads(msg_text)
+                        command = command_data.get("command", "")
+
+                        if command == "pause":
+                            controller.pause()
+                            status_msg = WSStreamStatusMessage(
+                                is_paused=True,
+                                buffer_size=len(controller.pause_buffer),
+                                timestamp=datetime.now(timezone.utc),
+                            )
+                            await websocket.send_text(status_msg.model_dump_json())
+
+                        elif command == "resume":
+                            controller.resume()
+                            # Send buffered spans as snapshot (catch-up mode)
+                            buffered = controller.drain_buffer()
+                            if buffered:
+                                await state.broadcaster.send_snapshot(
+                                    trial_id, websocket, buffered
+                                )
+                            status_msg = WSStreamStatusMessage(
+                                is_paused=False,
+                                buffered_count=len(buffered),
+                                timestamp=datetime.now(timezone.utc),
+                            )
+                            await websocket.send_text(status_msg.model_dump_json())
+
+                        elif command == "status":
+                            status_msg = WSStreamStatusMessage(
+                                is_paused=controller.is_paused,
+                                buffer_size=len(controller.pause_buffer),
+                                timestamp=datetime.now(timezone.utc),
+                            )
+                            await websocket.send_text(status_msg.model_dump_json())
+
+                    except json.JSONDecodeError:
+                        LOGGER.warning("Invalid JSON command: %s", msg_text)
+
                 except asyncio.TimeoutError:
                     # Poll for new spans (start_time for incremental updates)
                     new_spans = await state.trace_reader.get_spans(
@@ -2311,25 +2944,31 @@ def create_arena_app(
                         s for s in new_spans if s.span_id not in seen_span_ids
                     ]
 
-                    # Broadcast only new spans
                     for span in truly_new_spans:
-                        await state.broadcaster.broadcast_span(trial_id, span)
                         seen_span_ids.add(span.span_id)
+
+                        if controller.is_paused:
+                            # Buffer during pause
+                            controller.buffer_span(span)
+                        else:
+                            # Broadcast immediately
+                            await state.broadcaster.broadcast_span(trial_id, span)
 
                     if truly_new_spans:
                         last_us = max(s.start_time for s in truly_new_spans)
                         last_time = datetime.fromtimestamp(
                             last_us / 1_000_000, tz=timezone.utc
                         )
-                        LOGGER.debug(
-                            "Sent %d new spans for trial '%s'",
-                            len(truly_new_spans),
-                            trial_id,
-                        )
+                        if not controller.is_paused:
+                            LOGGER.debug(
+                                "Sent %d new spans for trial '%s'",
+                                len(truly_new_spans),
+                                trial_id,
+                            )
 
-                    # Send heartbeat
+                    # Send heartbeat (even when paused, to keep connection alive)
                     heartbeat = WSHeartbeatMessage(
-                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        timestamp=datetime.now(timezone.utc),
                     )
                     await websocket.send_text(heartbeat.model_dump_json())
 
@@ -2339,6 +2978,213 @@ def create_arena_app(
             LOGGER.error("WebSocket error for trial '%s': %s", trial_id, e)
         finally:
             await state.broadcaster.unsubscribe(trial_id, websocket)
+
+    @app.websocket("/ws/trials/{trial_id}/replay")
+    async def trial_replay(websocket: WebSocket, trial_id: str):
+        """WebSocket endpoint for replaying completed trials.
+
+        Only works for trials that have ended (trial.stopped/terminated).
+        Replays at uniform speed with support for pause/resume and speed control.
+
+        Control commands (send as JSON):
+            {"command": "pause"}              - Pause replay
+            {"command": "resume"}             - Resume replay
+            {"command": "speed", "value": 2}  - Set speed (1, 2, or 4)
+            {"command": "reset"}              - Restart from beginning
+            {"command": "status"}             - Get current status
+
+        Server messages:
+            {"type": "snapshot", ...}           - Initial batch of events
+            {"type": "span", ...}               - Single event during playback
+            {"type": "replay_status", ...}      - Playback status update
+            {"type": "replay_unavailable", ...} - Replay not available
+            {"type": "trial_ended", ...}        - End of replay
+            {"type": "heartbeat", ...}          - Keepalive
+        """
+        state = get_server_state()
+        await websocket.accept()
+        LOGGER.info("Replay WebSocket connection accepted for trial '%s'", trial_id)
+
+        # Load replay data
+        items, error_reason = await _load_replay_data(
+            state.trace_reader,
+            state.replay_cache,
+            trial_id,
+        )
+
+        if items is None:
+            # Send unavailable message and close
+            unavailable_msg = WSReplayUnavailableMessage(
+                trial_id=trial_id,
+                reason=cast(ReplayErrorReason, error_reason),
+                timestamp=datetime.now(timezone.utc),
+            )
+            await websocket.send_text(unavailable_msg.model_dump_json())
+            await websocket.close()
+            LOGGER.info("Replay unavailable for trial '%s': %s", trial_id, error_reason)
+            return
+
+        # Create controller
+        controller = TrialReplayController(
+            trial_id=trial_id,
+            items=items,
+        )
+
+        try:
+            # Send initial snapshot
+            snapshot_items = controller.get_snapshot_items()
+            snapshot_msg = WSSnapshotMessage(
+                trial_id=trial_id,
+                timestamp=datetime.now(timezone.utc),
+                data={"items": snapshot_items},
+            )
+            await websocket.send_text(snapshot_msg.model_dump_json())
+            LOGGER.info(
+                "Replay: Sent snapshot with %d items for trial '%s'",
+                len(snapshot_items),
+                trial_id,
+            )
+
+            # Send initial status
+            await websocket.send_text(controller.get_status().model_dump_json())
+
+            # Main replay loop
+            while True:
+                try:
+                    # Wait for command or timeout
+                    msg_text = await asyncio.wait_for(
+                        websocket.receive_text(),
+                        timeout=controller.get_effective_interval(),
+                    )
+
+                    # Handle command
+                    try:
+                        command_data = json.loads(msg_text)
+                        command = command_data.get("command", "")
+                        value = command_data.get("value")
+
+                        if command == "pause":
+                            controller.pause()
+                        elif command == "resume":
+                            controller.resume()
+                        elif command == "speed" and value is not None:
+                            controller.set_speed(float(value))
+                        elif command == "reset":
+                            controller.reset()
+                            # Re-send snapshot
+                            snapshot_items = controller.get_snapshot_items()
+                            snapshot_msg = WSSnapshotMessage(
+                                trial_id=trial_id,
+                                timestamp=datetime.now(timezone.utc),
+                                data={"items": snapshot_items},
+                            )
+                            await websocket.send_text(snapshot_msg.model_dump_json())
+                        elif command == "status":
+                            pass  # Just send status below
+                        else:
+                            LOGGER.warning("Unknown replay command: %s", command)
+                            continue
+
+                        # Send status after any command
+                        await websocket.send_text(
+                            controller.get_status().model_dump_json()
+                        )
+
+                    except json.JSONDecodeError:
+                        LOGGER.warning("Invalid JSON command: %s", msg_text)
+
+                except asyncio.TimeoutError:
+                    # No command, continue playback if not paused
+                    if controller.is_paused:
+                        # Send heartbeat while paused
+                        heartbeat = WSHeartbeatMessage(
+                            timestamp=datetime.now(timezone.utc),
+                        )
+                        await websocket.send_text(heartbeat.model_dump_json())
+                        continue
+
+                    if controller.is_complete():
+                        # Send trial ended
+                        ended_msg = WSTrialEndedMessage(
+                            trial_id=trial_id,
+                            timestamp=datetime.now(timezone.utc),
+                        )
+                        await websocket.send_text(ended_msg.model_dump_json())
+                        LOGGER.info("Replay completed for trial '%s'", trial_id)
+
+                        # Pause at end, allow reset
+                        controller.pause()
+                        await websocket.send_text(
+                            controller.get_status().model_dump_json()
+                        )
+                        continue
+
+                    # Send next item
+                    item = controller.get_next_item()
+                    if item:
+                        span_msg = WSSpanMessage(
+                            trial_id=trial_id,
+                            timestamp=datetime.now(timezone.utc),
+                            category=item.get("category", ""),
+                            data=item.get("data", {}),
+                        )
+                        await websocket.send_text(span_msg.model_dump_json())
+
+                        # Send status every 20 items
+                        if controller.current_index % 20 == 0:
+                            await websocket.send_text(
+                                controller.get_status().model_dump_json()
+                            )
+
+        except WebSocketDisconnect:
+            LOGGER.info("Replay WebSocket disconnected for trial '%s'", trial_id)
+        except Exception as e:
+            LOGGER.error("Replay WebSocket error for trial '%s': %s", trial_id, e)
+
+    @app.post("/api/trials/{trial_id}/replay")
+    async def get_trial_replay_data(trial_id: str) -> JSONResponse:
+        """Get all replay data for a completed trial at once.
+
+        This endpoint returns all spans for a completed trial in a single response,
+        allowing the frontend to implement its own playback logic.
+
+        Only works for trials that have ended (trial.stopped/terminated).
+
+        Returns:
+            ReplayResponse with:
+                - available: True if replay data is available
+                - reason: Error reason if not available
+                - items: List of serialized spans
+                - totalItems: Total number of items
+        """
+        state = get_server_state()
+
+        items, error_reason = await _load_replay_data(
+            state.trace_reader,
+            state.replay_cache,
+            trial_id,
+        )
+
+        if items is None:
+            response = ReplayResponse(
+                trial_id=trial_id,
+                available=False,
+                reason=cast(ReplayErrorReason, error_reason),
+                items=[],
+                total_items=0,
+            )
+            # Return 200 with available=false rather than 404
+            # This allows frontend to handle gracefully
+            return JSONResponse(content=response.model_dump(by_alias=True))
+
+        response = ReplayResponse(
+            trial_id=trial_id,
+            available=True,
+            items=items,
+            reason=None,
+            total_items=len(items),
+        )
+        return JSONResponse(content=response.model_dump(by_alias=True))
 
     # -------------------------------------------------------------------------
     # Health Check
@@ -2513,7 +3359,11 @@ __all__ = [
     "CacheEntry",
     "DEFAULT_CACHE_CONFIG",
     "LandingPageCache",
+    "ReplayCache",
+    "ReplayCacheEntry",
     "SpanBroadcaster",
+    "StreamController",
+    "TrialReplayController",
     "WSMessageType",
     "create_arena_app",
     "create_trace_reader",

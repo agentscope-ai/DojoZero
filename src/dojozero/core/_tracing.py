@@ -538,7 +538,7 @@ class SLSTraceReader:
         # Pagination: SLS GetLogs API limits to 100 rows per request in search mode
         # We paginate using offset parameter to get all data
         page_size = 100  # SLS max per request in search mode
-        max_total = 10000  # Safety limit to prevent infinite loops
+        max_total = 100000  # Safety limit to prevent infinite loops
         all_rows: list[dict[str, Any]] = []
         offset = 0
 
