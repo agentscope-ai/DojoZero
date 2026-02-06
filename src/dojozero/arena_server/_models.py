@@ -7,6 +7,7 @@ deserialized spans, static lookups, and computed aggregations.  They are
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -150,7 +151,7 @@ class WSSpanMessage(BaseModel):
 
     type: Literal["span"] = "span"
     trial_id: str
-    timestamp: str
+    timestamp: datetime
     category: str = ""
     data: dict[str, Any] = Field(default_factory=dict)
 
@@ -162,7 +163,7 @@ class WSTrialEndedMessage(BaseModel):
 
     type: Literal["trial_ended"] = "trial_ended"
     trial_id: str
-    timestamp: str
+    timestamp: datetime
 
 
 class WSSnapshotMessage(BaseModel):
@@ -172,7 +173,7 @@ class WSSnapshotMessage(BaseModel):
 
     type: Literal["snapshot"] = "snapshot"
     trial_id: str
-    timestamp: str
+    timestamp: datetime
     data: dict[str, list[dict[str, Any]]]
 
 
@@ -182,7 +183,7 @@ class WSHeartbeatMessage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["heartbeat"] = "heartbeat"
-    timestamp: str
+    timestamp: datetime
 
 
 class WSStreamStatusMessage(BaseModel):
@@ -194,7 +195,7 @@ class WSStreamStatusMessage(BaseModel):
     is_paused: bool = Field(serialization_alias="isPaused")
     buffer_size: int = Field(default=0, serialization_alias="bufferSize")
     buffered_count: int = Field(default=0, serialization_alias="bufferedCount")
-    timestamp: str
+    timestamp: datetime
 
 
 class WSReplayStatusMessage(BaseModel):
@@ -208,7 +209,7 @@ class WSReplayStatusMessage(BaseModel):
     is_paused: bool = Field(serialization_alias="isPaused")
     speed: float  # 1.0, 2.0, 4.0
     progress_percent: float = Field(serialization_alias="progressPercent")
-    timestamp: str
+    timestamp: datetime
 
 
 class WSReplayUnavailableMessage(BaseModel):
@@ -218,8 +219,8 @@ class WSReplayUnavailableMessage(BaseModel):
 
     type: Literal["replay_unavailable"] = "replay_unavailable"
     trial_id: str
-    reason: str  # "trial_not_found", "trial_still_running", "no_data"
-    timestamp: str
+    reason: Literal["trial_not_found", "trial_still_running", "no_data"]
+    timestamp: datetime
 
 
 class ReplayResponse(BaseModel):
@@ -229,7 +230,7 @@ class ReplayResponse(BaseModel):
 
     trial_id: str = Field(serialization_alias="trialId")
     available: bool
-    reason: str = ""  # Error reason if not available
+    reason: Literal["trial_not_found", "trial_still_running", "no_data"]
     items: list[dict[str, Any]] = Field(default_factory=list)
     total_items: int = Field(default=0, serialization_alias="totalItems")
 
