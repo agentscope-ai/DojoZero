@@ -1595,7 +1595,9 @@ class TrialReplayController:
     speed: float = 1.0  # 1x, 2x, 4x, 10x, 20x
     is_paused: bool = False
     base_interval: float = 2.0  # 2 seconds per event at 1x speed
-    heartbeat_interval: float = 5.0  # Fixed interval for heartbeat (not affected by speed)
+    heartbeat_interval: float = (
+        5.0  # Fixed interval for heartbeat (not affected by speed)
+    )
     snapshot_size: int = 20  # Number of items to send in snapshot
 
     def set_speed(self, speed: float) -> None:
@@ -2673,7 +2675,9 @@ def create_arena_app(
                 )
             )
 
-        return JSONResponse(content=[item.model_dump(by_alias=state.by_alias) for item in result])
+        return JSONResponse(
+            content=[item.model_dump(by_alias=state.by_alias) for item in result]
+        )
 
     @app.get("/api/trials/{trial_id}")
     async def get_trial(trial_id: str) -> JSONResponse:
@@ -3270,7 +3274,9 @@ def create_arena_app(
                                     timestamp=datetime.now(timezone.utc),
                                     data={"items": snapshot_items},
                                 )
-                                await websocket.send_text(snapshot_msg.model_dump_json())
+                                await websocket.send_text(
+                                    snapshot_msg.model_dump_json()
+                                )
                             controller.resume()
                         elif command == "speed" and value is not None:
                             controller.set_speed(float(value))
@@ -3314,7 +3320,10 @@ def create_arena_app(
 
                 except asyncio.TimeoutError:
                     # Check if we need to send heartbeat (fixed interval)
-                    if time.time() - last_heartbeat_time >= controller.heartbeat_interval:
+                    if (
+                        time.time() - last_heartbeat_time
+                        >= controller.heartbeat_interval
+                    ):
                         heartbeat = WSHeartbeatMessage(
                             timestamp=datetime.now(timezone.utc),
                         )
