@@ -711,72 +711,71 @@ class SpanBroadcaster:
 # Cache Configuration
 # =============================================================================
 #
-# All cache TTL (Time-To-Live) values are centralized here for easy tuning.
-# The goal is to balance data freshness with SLS query reduction.
+# Background Refresh Architecture:
+# - Background tasks proactively refresh all caches at configured intervals
+# - User requests ONLY read from cache (never trigger fetches directly)
+# - On cache miss (new data not yet in cache), trigger refresh and wait
+# - Server blocks on initial cache population at startup
 #
-# TUNING GUIDE:
-# - Increase TTLs to reduce SLS load (at cost of data freshness)
-# - Decrease TTLs for more real-time data (at cost of more SLS queries)
-# - COMPLETED_TRIAL_TTL should be high since completed trials don't change
-#
-# FRONTEND POLLING INTERVALS (for reference):
-# - Stats: every 10 seconds
-# - Landing data: every 60 seconds
-# - Agent actions: every 30 seconds (only when live games exist)
-# - Leaderboard: on-demand (no polling)
+# This eliminates:
+# - Cache stampede (concurrent requests hitting SLS on TTL expiry)
+# - User-visible latency (first request after expiration)
+# - Cold start penalty (initial cache population happens at startup)
 #
 
 
 @dataclass(frozen=True)
 class CacheConfig:
-    """Configuration for all cache TTL values (in seconds).
+    """Configuration for cache refresh intervals and TTLs.
 
-    This is a frozen dataclass to ensure immutability after creation.
-    All values can be overridden when creating the cache.
+    Background Refresh Model:
+    - refresh_interval: How often background task refreshes the cache
+    - max_ttl: Maximum time to keep data (very long, e.g., 1 month)
+
+    The refresh_interval controls freshness; max_ttl is just a safety limit.
     """
 
     # -------------------------------------------------------------------------
-    # Global/Aggregated Data TTLs
+    # Background Refresh Intervals (how often to refresh each cache type)
     # -------------------------------------------------------------------------
 
-    # List of trial IDs - changes infrequently
-    trials_list_ttl: float = 60.0
+    # List of trial IDs - foundation for other caches
+    trials_list_refresh_interval: float = 60.0
 
     # Aggregated statistics (gamesPlayed, liveNow, wageredToday)
-    # Frontend polls every 10s, but we cache longer to reduce load
-    stats_ttl: float = 30.0
+    stats_refresh_interval: float = 30.0
 
     # Games list (live, upcoming, completed)
-    games_ttl: float = 30.0
+    games_refresh_interval: float = 30.0
 
     # Agent leaderboard - only changes when games complete
-    leaderboard_ttl: float = 3600.0  # 1 hour
+    leaderboard_refresh_interval: float = 60.0
 
-    # Live agent actions ticker
-    # Should match frontend polling interval for agent actions
-    agent_actions_ttl: float = 30.0
+    # Live agent actions ticker - needs frequent updates
+    agent_actions_refresh_interval: float = 10.0
 
-    # -------------------------------------------------------------------------
-    # Per-Trial Data TTLs
-    # -------------------------------------------------------------------------
-
-    # Trial info (phase, metadata) for live/running trials
-    trial_info_ttl: float = 30.0
-
-    # Trial details (full span list) for live/running trials
-    # Used for incremental span fetching
-    trial_details_ttl: float = 60.0
+    # Live trial details (for streaming) - very frequent for live trials
+    live_trial_details_refresh_interval: float = 5.0
 
     # -------------------------------------------------------------------------
-    # Special TTLs
+    # Maximum Cache TTL (safety limit, not freshness control)
     # -------------------------------------------------------------------------
 
-    # TTL for completed/stopped trials (they don't change)
-    # Applied to trial_info and trial_details when trial is completed
-    completed_trial_ttl: float = 3600.0  # 1 hour
+    # Default max TTL for all caches (1 month)
+    max_cache_ttl: float = 30 * 24 * 3600.0  # 30 days
+
+    # TTL for completed/stopped trials (they never change)
+    completed_trial_ttl: float = 30 * 24 * 3600.0  # 30 days
 
     # -------------------------------------------------------------------------
-    # Query Limits (not TTLs, but related tunable parameters)
+    # Startup Configuration
+    # -------------------------------------------------------------------------
+
+    # Max wait time for initial cache population at startup
+    startup_timeout: float = 30.0
+
+    # -------------------------------------------------------------------------
+    # Query Limits
     # -------------------------------------------------------------------------
 
     # Max trials to query for agent actions (reduces SLS queries)
@@ -784,6 +783,9 @@ class CacheConfig:
 
     # Max actions to return from ticker
     agent_actions_limit: int = 20
+
+    # Days to look back for trials
+    trials_lookback_days: int = 7
 
 
 # Default configuration instance
@@ -813,42 +815,27 @@ class CacheEntry:
 
 @dataclass
 class LandingPageCache:
-    """Cache for landing page data to reduce trace store (SLS/Jaeger) queries.
+    """Cache for landing page data with background refresh support.
 
-    This cache implements several strategies to minimize backend load:
-
-    1. **TTL-based caching**: Each data type has a configurable TTL.
-       See CacheConfig for all tunable parameters.
-
-    2. **Stale-while-revalidate**: On fetch failure, returns stale cached
-       data rather than failing completely.
-
-    3. **Completed trial optimization**: Completed trials use a much longer
-       TTL (1 hour) since their data never changes.
-
-    4. **Incremental span fetching**: For trial details, only fetches new
-       spans since the last fetch, reducing data transfer.
+    Background Refresh Architecture:
+    - Background tasks proactively refresh all caches at configured intervals
+    - User requests ONLY read from cache via get_* methods
+    - set_* methods are used by BackgroundRefresher to update caches
+    - Each refresh OVERWRITES previous cache (no append, prevents memory bloat)
 
     Cache Types:
-    ┌─────────────────┬──────────────┬────────────────────────────────────────┐
-    │ Cache           │ Default TTL  │ Description                            │
-    ├─────────────────┼──────────────┼────────────────────────────────────────┤
-    │ trials_list     │ 60s          │ List of all trial IDs                  │
-    │ trial_info      │ 30s (1h*)    │ Per-trial phase and metadata           │
-    │ trial_details   │ 60s (1h*)    │ Full span list for a trial             │
-    │ stats           │ 30s          │ Aggregated statistics                  │
-    │ games           │ 30s          │ Games list (live/upcoming/completed)   │
-    │ leaderboard     │ 1h           │ Agent rankings                         │
-    │ agent_actions   │ 30s          │ Recent agent actions for ticker        │
-    └─────────────────┴──────────────┴────────────────────────────────────────┘
-    * = 1 hour TTL for completed trials
+    - trials_list: List of all trial IDs (global)
+    - trial_info: Per-trial phase and metadata (per-trial)
+    - trial_details: Full span list for live trials (per-trial, dropped on completion)
+    - stats: Aggregated statistics (global + per-league)
+    - games: Games list (global + per-league)
+    - leaderboard: Agent rankings (global + per-league)
+    - agent_actions: Recent agent actions (global + per-league)
 
-    Usage:
-        config = CacheConfig(stats_ttl=60.0)  # Override defaults
-        cache = LandingPageCache(config=config)
+    Per-league caches are maintained for CACHEABLE_LEAGUES (NBA, NFL).
     """
 
-    # Configuration (all tunable parameters)
+    # Configuration
     config: CacheConfig = field(default_factory=lambda: DEFAULT_CACHE_CONFIG)
 
     # Cache storage - global (no filter)
@@ -870,579 +857,230 @@ class LandingPageCache:
     # Concurrency control
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    async def get_trials_list(
-        self,
-        fetcher: Any,  # Callable that returns list of trial IDs
-    ) -> list[str]:
-        """Get cached trials list or fetch if expired.
+    # -------------------------------------------------------------------------
+    # GET Methods - Read from cache only, return None if not cached
+    # -------------------------------------------------------------------------
 
-        Args:
-            fetcher: Async callable that returns list[str] of trial IDs
+    def get_trials_list(self) -> list[str] | None:
+        """Get cached trials list. Returns None if not cached."""
+        if self._trials_list is not None and self._trials_list.is_valid():
+            return self._trials_list.data
+        return None
 
-        Returns:
-            List of trial IDs (from cache or freshly fetched)
-        """
-        async with self._lock:
-            if self._trials_list is not None and self._trials_list.is_valid():
-                LOGGER.debug(
-                    "Cache HIT: trials_list (age=%.1fs)",
-                    self._trials_list.age_seconds(),
-                )
-                return self._trials_list.data
-
-        # Fetch outside lock to avoid blocking other requests
-        data = await fetcher()
-
-        # Only cache non-empty results to avoid caching transient errors
-        if data:
-            async with self._lock:
-                self._trials_list = CacheEntry(
-                    data=data,
-                    expires_at=time.time() + self.config.trials_list_ttl,
-                )
-            LOGGER.debug(
-                "Cache MISS: trials_list, fetched %d trials (ttl=%.0fs)",
-                len(data),
-                self.config.trials_list_ttl,
-            )
-        else:
-            LOGGER.warning("Fetcher returned empty trials list, not caching")
-            # Stale-while-revalidate: return stale data on fetch failure
-            async with self._lock:
-                if self._trials_list is not None:
-                    LOGGER.info(
-                        "Using STALE cache: trials_list (age=%.1fs)",
-                        self._trials_list.age_seconds(),
-                    )
-                    return self._trials_list.data
-
-        return data
-
-    async def get_trial_info(
-        self,
-        trial_id: str,
-        fetcher: Any,  # Callable that returns trial info dict
-    ) -> dict[str, Any]:
-        """Get cached trial info or fetch if expired.
-
-        Uses longer TTL for completed trials since they don't change.
-
-        Args:
-            trial_id: The trial ID to get info for
-            fetcher: Async callable that returns dict with phase/metadata
-
-        Returns:
-            Trial info dict with "phase", "metadata", and optional "game_init"
-        """
-        async with self._lock:
-            entry = self._trial_info.get(trial_id)
-            if entry is not None and entry.is_valid():
-                LOGGER.debug(
-                    "Cache HIT: trial_info[%s] (age=%.1fs)",
-                    trial_id,
-                    entry.age_seconds(),
-                )
-                return entry.data
-
-        # Fetch outside lock
-        data = await fetcher()
-
-        # Use longer TTL for completed trials (they don't change)
-        phase = data.get("phase", "unknown")
-        is_completed = phase in ("completed", "stopped")
-        ttl = (
-            self.config.completed_trial_ttl
-            if is_completed
-            else self.config.trial_info_ttl
-        )
-
-        async with self._lock:
-            self._trial_info[trial_id] = CacheEntry(
-                data=data,
-                expires_at=time.time() + ttl,
-            )
-        LOGGER.debug(
-            "Cache MISS: trial_info[%s] (completed=%s, ttl=%.0fs)",
-            trial_id,
-            is_completed,
-            ttl,
-        )
-        return data
-
-    async def get_trial_details(
-        self,
-        trial_id: str,
-        trace_reader: "TraceReader",
-    ) -> list[dict[str, Any]]:
-        """Get cached trial details with incremental span fetching.
-
-        This method implements an incremental caching strategy:
-        1. On cache miss: Fetch all spans, serialize, and cache
-        2. On cache hit for live trial: Fetch only new spans (since max_timestamp),
-           merge with cached data
-        3. On cache hit for completed trial: Return cached data immediately
-           (no SLS query since completed trials don't change)
-
-        Args:
-            trial_id: The trial ID to get details for
-            trace_reader: TraceReader for fetching spans from SLS/Jaeger
-
-        Returns:
-            List of serialized spans (items) ready for API response
-        """
-        from datetime import datetime, timezone
-
-        # Initialize variables that will be used outside the lock
-        entry: CacheEntry | None = None
-        items: list[dict[str, Any]] = []
-        max_timestamp: int = 0
-        is_completed: bool = False
-        start_time: datetime | None = None
-
-        async with self._lock:
-            entry = self._trial_details.get(trial_id)
-            if entry is not None and entry.is_valid():
-                # Cache hit
-                cached_data = entry.data
-                items = cached_data.get("items", [])
-                max_timestamp = cached_data.get("max_timestamp", 0)
-                is_completed = cached_data.get("is_completed", False)
-
-                # If trial is completed, return cached data immediately (no new spans)
-                if is_completed:
-                    LOGGER.debug(
-                        "Cache HIT: trial_details[%s] (completed, skipping SLS query)",
-                        trial_id,
-                    )
-                    return items
-
-                LOGGER.debug(
-                    "Cache HIT: trial_details[%s] (live), incremental fetch since %d",
-                    trial_id,
-                    max_timestamp,
-                )
-
-                # Fetch new spans outside lock
-                start_time = datetime.fromtimestamp(
-                    max_timestamp / 1_000_000, tz=timezone.utc
-                )
-
-        # Fetch new spans (outside lock to avoid blocking)
+    def get_trial_info(self, trial_id: str) -> dict[str, Any] | None:
+        """Get cached trial info. Returns None if not cached."""
+        entry = self._trial_info.get(trial_id)
         if entry is not None and entry.is_valid():
-            new_spans = await trace_reader.get_spans(trial_id, start_time=start_time)
+            return entry.data
+        return None
 
-            # Serialize new spans
-            new_items = []
-            new_max_timestamp = max_timestamp
-            is_now_completed = False
-            for span in new_spans:
-                typed = deserialize_span(span)
-                if typed is not None:
-                    new_items.append(serialize_span_for_ws(typed))
-                    new_max_timestamp = max(new_max_timestamp, span.start_time)
-                    # Check if trial just completed
-                    if isinstance(typed, TrialLifecycleSpan) and typed.phase in (
-                        "completed",
-                        "stopped",
-                    ):
-                        is_now_completed = True
+    def get_trial_details(self, trial_id: str) -> dict[str, Any] | None:
+        """Get cached trial details. Returns None if not cached.
 
-            if new_items:
-                LOGGER.debug(
-                    "Incremental fetch: %d new spans for trial %s",
-                    len(new_items),
-                    trial_id,
-                )
-                # Merge with cached items
-                merged_items = items + new_items
-
-                # Use longer TTL if trial just completed
-                ttl = (
-                    self.config.completed_trial_ttl
-                    if is_now_completed
-                    else self.config.trial_details_ttl
-                )
-
-                # Update cache with merged data
-                async with self._lock:
-                    self._trial_details[trial_id] = CacheEntry(
-                        data={
-                            "items": merged_items,
-                            "max_timestamp": new_max_timestamp,
-                            "is_completed": is_now_completed,
-                        },
-                        expires_at=time.time() + ttl,
-                    )
-
-                return merged_items
-            else:
-                LOGGER.debug(
-                    "No new spans for trial %s, returning cached data", trial_id
-                )
-                return items
-
-        # Cache miss - fetch all spans
-        LOGGER.debug("Cache MISS: trial_details[%s], fetching all spans", trial_id)
-        all_spans = await trace_reader.get_spans(trial_id)
-
-        # Serialize all spans
-        items = []
-        max_timestamp = 0
-        is_completed = False
-        for span in all_spans:
-            typed = deserialize_span(span)
-            if typed is not None:
-                items.append(serialize_span_for_ws(typed))
-                max_timestamp = max(max_timestamp, span.start_time)
-                # Check if trial is completed
-                if isinstance(typed, TrialLifecycleSpan) and typed.phase in (
-                    "completed",
-                    "stopped",
-                ):
-                    is_completed = True
-
-        # Use longer TTL for completed trials since they don't change
-        ttl = (
-            self.config.completed_trial_ttl
-            if is_completed
-            else self.config.trial_details_ttl
-        )
-
-        # Cache the result
-        async with self._lock:
-            self._trial_details[trial_id] = CacheEntry(
-                data={
-                    "items": items,
-                    "max_timestamp": max_timestamp,
-                    "is_completed": is_completed,
-                },
-                expires_at=time.time() + ttl,
-            )
-
-        LOGGER.debug(
-            "Cached %d spans for trial %s (completed=%s, ttl=%.0fs)",
-            len(items),
-            trial_id,
-            is_completed,
-            ttl,
-        )
-        return items
-
-    async def get_stats(
-        self,
-        fetcher: Any,
-        league: str | None = None,
-    ) -> StatsResponse:
-        """Get cached stats or fetch if expired.
-
-        Args:
-            fetcher: Async callable that returns StatsResponse
-            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
-
-        Returns:
-            StatsResponse with gamesPlayed, liveNow, wageredToday
+        Returns dict with keys: items, max_timestamp, is_completed
         """
-        # Determine which cache to use
-        # league_key is str when use_league_cache is True
-        league_key: str | None = league.upper() if league else None
-        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
+        entry = self._trial_details.get(trial_id)
+        if entry is not None and entry.is_valid():
+            return entry.data
+        return None
 
-        async with self._lock:
-            if use_league_cache and league_key is not None:
+    def get_stats(self, league: str | None = None) -> StatsResponse | None:
+        """Get cached stats. Returns None if not cached."""
+        if league:
+            league_key = league.upper()
+            if league_key in CACHEABLE_LEAGUES:
                 entry = self._stats_by_league.get(league_key)
                 if entry is not None and entry.is_valid():
-                    LOGGER.debug(
-                        "Cache HIT: stats[%s] (age=%.1fs)",
-                        league_key,
-                        entry.age_seconds(),
-                    )
                     return entry.data
-            elif not use_league_cache:
-                if self._stats is not None and self._stats.is_valid():
-                    LOGGER.debug(
-                        "Cache HIT: stats (age=%.1fs)", self._stats.age_seconds()
-                    )
-                    return self._stats.data
+                return None
+        # Global stats
+        if self._stats is not None and self._stats.is_valid():
+            return self._stats.data
+        return None
 
-        data: StatsResponse = await fetcher()
-
-        # Only cache non-empty results
-        if (
-            data.games_played
-            or data.live_now
-            or data.wagered_today
-            or data.total_agents
-        ):
-            async with self._lock:
-                entry = CacheEntry(
-                    data=data,
-                    expires_at=time.time() + self.config.stats_ttl,
-                )
-                if use_league_cache and league_key is not None:
-                    self._stats_by_league[league_key] = entry
-                    LOGGER.debug(
-                        "Cache MISS: stats[%s] (ttl=%.0fs)",
-                        league_key,
-                        self.config.stats_ttl,
-                    )
-                else:
-                    self._stats = entry
-                    LOGGER.debug("Cache MISS: stats (ttl=%.0fs)", self.config.stats_ttl)
-        else:
-            LOGGER.warning("Fetcher returned empty stats, not caching")
-            # Stale-while-revalidate
-            async with self._lock:
-                if use_league_cache and league_key is not None:
-                    entry = self._stats_by_league.get(league_key)
-                    if entry is not None:
-                        LOGGER.info(
-                            "Using STALE cache: stats[%s] (age=%.1fs)",
-                            league_key,
-                            entry.age_seconds(),
-                        )
-                        return entry.data
-                elif self._stats is not None:
-                    LOGGER.info(
-                        "Using STALE cache: stats (age=%.1fs)",
-                        self._stats.age_seconds(),
-                    )
-                    return self._stats.data
-
-        return data
-
-    async def get_leaderboard(
-        self,
-        fetcher: Any,
-        league: str | None = None,
-    ) -> list[LeaderboardEntry]:
-        """Get cached leaderboard or fetch if expired.
-
-        Args:
-            fetcher: Async callable that returns list[LeaderboardEntry]
-            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
-
-        Returns:
-            List of LeaderboardEntry sorted by winnings
-        """
-        league_key: str | None = league.upper() if league else None
-        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
-
-        async with self._lock:
-            if use_league_cache and league_key is not None:
-                entry = self._leaderboard_by_league.get(league_key)
-                if entry is not None and entry.is_valid():
-                    LOGGER.debug(
-                        "Cache HIT: leaderboard[%s] (age=%.1fs)",
-                        league_key,
-                        entry.age_seconds(),
-                    )
-                    return entry.data
-            elif not use_league_cache:
-                if self._leaderboard is not None and self._leaderboard.is_valid():
-                    LOGGER.debug(
-                        "Cache HIT: leaderboard (age=%.1fs)",
-                        self._leaderboard.age_seconds(),
-                    )
-                    return self._leaderboard.data
-
-        data = await fetcher()
-
-        # Only cache non-empty results
-        if data:
-            async with self._lock:
-                entry = CacheEntry(
-                    data=data,
-                    expires_at=time.time() + self.config.leaderboard_ttl,
-                )
-                if use_league_cache and league_key is not None:
-                    self._leaderboard_by_league[league_key] = entry
-                    LOGGER.debug(
-                        "Cache MISS: leaderboard[%s] (ttl=%.0fs)",
-                        league_key,
-                        self.config.leaderboard_ttl,
-                    )
-                else:
-                    self._leaderboard = entry
-                    LOGGER.debug(
-                        "Cache MISS: leaderboard (ttl=%.0fs)",
-                        self.config.leaderboard_ttl,
-                    )
-        else:
-            LOGGER.warning("Fetcher returned empty leaderboard, not caching")
-            # Stale-while-revalidate
-            async with self._lock:
-                if use_league_cache and league_key is not None:
-                    entry = self._leaderboard_by_league.get(league_key)
-                    if entry is not None:
-                        LOGGER.info(
-                            "Using STALE cache: leaderboard[%s] (age=%.1fs)",
-                            league_key,
-                            entry.age_seconds(),
-                        )
-                        return entry.data
-                elif self._leaderboard is not None:
-                    LOGGER.info(
-                        "Using STALE cache: leaderboard (age=%.1fs)",
-                        self._leaderboard.age_seconds(),
-                    )
-                    return self._leaderboard.data
-
-        return data
-
-    async def get_agent_actions(
-        self,
-        fetcher: Any,
-        league: str | None = None,
-    ) -> list[AgentAction]:
-        """Get cached agent actions or fetch if expired.
-
-        Args:
-            fetcher: Async callable that returns list[AgentAction]
-            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
-
-        Returns:
-            List of recent agent actions for the ticker
-        """
-        league_key: str | None = league.upper() if league else None
-        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
-
-        async with self._lock:
-            if use_league_cache and league_key is not None:
-                entry = self._agent_actions_by_league.get(league_key)
-                if entry is not None and entry.is_valid():
-                    LOGGER.debug(
-                        "Cache HIT: agent_actions[%s] (age=%.1fs)",
-                        league_key,
-                        entry.age_seconds(),
-                    )
-                    return entry.data
-            elif not use_league_cache:
-                if self._agent_actions is not None and self._agent_actions.is_valid():
-                    LOGGER.debug(
-                        "Cache HIT: agent_actions (age=%.1fs)",
-                        self._agent_actions.age_seconds(),
-                    )
-                    return self._agent_actions.data
-
-        data = await fetcher()
-
-        # Only cache non-empty results
-        if data:
-            async with self._lock:
-                entry = CacheEntry(
-                    data=data,
-                    expires_at=time.time() + self.config.agent_actions_ttl,
-                )
-                if use_league_cache and league_key is not None:
-                    self._agent_actions_by_league[league_key] = entry
-                    LOGGER.debug(
-                        "Cache MISS: agent_actions[%s] (ttl=%.0fs)",
-                        league_key,
-                        self.config.agent_actions_ttl,
-                    )
-                else:
-                    self._agent_actions = entry
-                    LOGGER.debug(
-                        "Cache MISS: agent_actions (ttl=%.0fs)",
-                        self.config.agent_actions_ttl,
-                    )
-        else:
-            LOGGER.warning("Fetcher returned empty agent actions, not caching")
-            # Stale-while-revalidate
-            async with self._lock:
-                if use_league_cache and league_key is not None:
-                    entry = self._agent_actions_by_league.get(league_key)
-                    if entry is not None:
-                        LOGGER.info(
-                            "Using STALE cache: agent_actions[%s] (age=%.1fs)",
-                            league_key,
-                            entry.age_seconds(),
-                        )
-                        return entry.data
-                elif self._agent_actions is not None:
-                    LOGGER.info(
-                        "Using STALE cache: agent_actions (age=%.1fs)",
-                        self._agent_actions.age_seconds(),
-                    )
-                    return self._agent_actions.data
-
-        return data
-
-    async def get_games(
-        self,
-        fetcher: Any,
-        league: str | None = None,
-    ) -> GamesResponse:
-        """Get cached games list or fetch if expired.
-
-        Args:
-            fetcher: Async callable that returns GamesResponse
-            league: Optional league filter. If in CACHEABLE_LEAGUES, uses per-league cache.
-
-        Returns:
-            GamesResponse with live_games, upcoming_games, completed_games
-        """
-        league_key: str | None = league.upper() if league else None
-        use_league_cache = league_key is not None and league_key in CACHEABLE_LEAGUES
-
-        async with self._lock:
-            if use_league_cache and league_key is not None:
+    def get_games(self, league: str | None = None) -> GamesResponse | None:
+        """Get cached games. Returns None if not cached."""
+        if league:
+            league_key = league.upper()
+            if league_key in CACHEABLE_LEAGUES:
                 entry = self._games_by_league.get(league_key)
                 if entry is not None and entry.is_valid():
-                    LOGGER.debug(
-                        "Cache HIT: games[%s] (age=%.1fs)",
-                        league_key,
-                        entry.age_seconds(),
-                    )
                     return entry.data
-            elif not use_league_cache:
-                if self._games is not None and self._games.is_valid():
-                    LOGGER.debug(
-                        "Cache HIT: games (age=%.1fs)", self._games.age_seconds()
-                    )
-                    return self._games.data
+                return None
+        # Global games
+        if self._games is not None and self._games.is_valid():
+            return self._games.data
+        return None
 
-        data: GamesResponse = await fetcher()
+    def get_leaderboard(self, league: str | None = None) -> list[LeaderboardEntry] | None:
+        """Get cached leaderboard. Returns None if not cached."""
+        if league:
+            league_key = league.upper()
+            if league_key in CACHEABLE_LEAGUES:
+                entry = self._leaderboard_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    return entry.data
+                return None
+        # Global leaderboard
+        if self._leaderboard is not None and self._leaderboard.is_valid():
+            return self._leaderboard.data
+        return None
 
-        # Only cache non-empty results
-        has_data = data.live_games or data.upcoming_games or data.completed_games
-        if has_data:
-            async with self._lock:
-                entry = CacheEntry(
-                    data=data,
-                    expires_at=time.time() + self.config.games_ttl,
-                )
-                if use_league_cache and league_key is not None:
-                    self._games_by_league[league_key] = entry
-                    LOGGER.debug(
-                        "Cache MISS: games[%s] (ttl=%.0fs)",
-                        league_key,
-                        self.config.games_ttl,
-                    )
-                else:
-                    self._games = entry
-                    LOGGER.debug("Cache MISS: games (ttl=%.0fs)", self.config.games_ttl)
-        else:
-            LOGGER.warning("Fetcher returned empty games data, not caching")
-            # Stale-while-revalidate
-            async with self._lock:
-                if use_league_cache and league_key is not None:
-                    entry = self._games_by_league.get(league_key)
-                    if entry is not None:
-                        LOGGER.info(
-                            "Using STALE cache: games[%s] (age=%.1fs)",
-                            league_key,
-                            entry.age_seconds(),
-                        )
-                        return entry.data
-                elif self._games is not None:
-                    LOGGER.info(
-                        "Using STALE cache: games (age=%.1fs)",
-                        self._games.age_seconds(),
-                    )
-                    return self._games.data
+    def get_agent_actions(self, league: str | None = None) -> list[AgentAction] | None:
+        """Get cached agent actions. Returns None if not cached."""
+        if league:
+            league_key = league.upper()
+            if league_key in CACHEABLE_LEAGUES:
+                entry = self._agent_actions_by_league.get(league_key)
+                if entry is not None and entry.is_valid():
+                    return entry.data
+                return None
+        # Global agent actions
+        if self._agent_actions is not None and self._agent_actions.is_valid():
+            return self._agent_actions.data
+        return None
 
-        return data
+    def get_live_trial_ids(self) -> list[str]:
+        """Get list of live/running trial IDs from cached trial_info."""
+        live_trials = []
+        for trial_id, entry in self._trial_info.items():
+            if entry.is_valid():
+                phase = entry.data.get("phase", "")
+                if phase == "running":
+                    live_trials.append(trial_id)
+        return live_trials
+
+    def get_completed_trial_ids(self) -> list[str]:
+        """Get list of completed trial IDs from cached trial_info."""
+        completed_trials = []
+        for trial_id, entry in self._trial_info.items():
+            if entry.is_valid():
+                phase = entry.data.get("phase", "")
+                # Trials that have ended (stopped/terminated/completed)
+                if phase in ("stopped", "terminated", "completed"):
+                    completed_trials.append(trial_id)
+        return completed_trials
+
+    # -------------------------------------------------------------------------
+    # SET Methods - Update cache (overwrite previous data)
+    # -------------------------------------------------------------------------
+
+    def set_trials_list(self, data: list[str]) -> None:
+        """Set trials list cache (overwrites previous)."""
+        self._trials_list = CacheEntry(
+            data=data,
+            expires_at=time.time() + self.config.max_cache_ttl,
+        )
+        LOGGER.debug("Cache SET: trials_list (%d trials)", len(data))
+
+    def set_trial_info(self, trial_id: str, data: dict[str, Any]) -> None:
+        """Set trial info cache (overwrites previous)."""
+        phase = data.get("phase", "unknown")
+        is_completed = phase in ("completed", "stopped")
+        ttl = self.config.completed_trial_ttl if is_completed else self.config.max_cache_ttl
+        self._trial_info[trial_id] = CacheEntry(
+            data=data,
+            expires_at=time.time() + ttl,
+        )
+        LOGGER.debug("Cache SET: trial_info[%s] (phase=%s)", trial_id, phase)
+
+    def set_trial_details(
+        self,
+        trial_id: str,
+        items: list[dict[str, Any]],
+        max_timestamp: int,
+        is_completed: bool,
+    ) -> None:
+        """Set trial details cache (overwrites previous)."""
+        ttl = self.config.completed_trial_ttl if is_completed else self.config.max_cache_ttl
+        self._trial_details[trial_id] = CacheEntry(
+            data={
+                "items": items,
+                "max_timestamp": max_timestamp,
+                "is_completed": is_completed,
+            },
+            expires_at=time.time() + ttl,
+        )
+        LOGGER.debug(
+            "Cache SET: trial_details[%s] (%d items, completed=%s)",
+            trial_id,
+            len(items),
+            is_completed,
+        )
+
+    def set_stats(self, data: StatsResponse, league: str | None = None) -> None:
+        """Set stats cache (overwrites previous)."""
+        entry = CacheEntry(
+            data=data,
+            expires_at=time.time() + self.config.max_cache_ttl,
+        )
+        if league:
+            league_key = league.upper()
+            if league_key in CACHEABLE_LEAGUES:
+                self._stats_by_league[league_key] = entry
+                LOGGER.debug("Cache SET: stats[%s]", league_key)
+                return
+        self._stats = entry
+        LOGGER.debug("Cache SET: stats (global)")
+
+    def set_games(self, data: GamesResponse, league: str | None = None) -> None:
+        """Set games cache (overwrites previous)."""
+        entry = CacheEntry(
+            data=data,
+            expires_at=time.time() + self.config.max_cache_ttl,
+        )
+        if league:
+            league_key = league.upper()
+            if league_key in CACHEABLE_LEAGUES:
+                self._games_by_league[league_key] = entry
+                LOGGER.debug("Cache SET: games[%s]", league_key)
+                return
+        self._games = entry
+        LOGGER.debug("Cache SET: games (global)")
+
+    def set_leaderboard(
+        self, data: list[LeaderboardEntry], league: str | None = None
+    ) -> None:
+        """Set leaderboard cache (overwrites previous)."""
+        entry = CacheEntry(
+            data=data,
+            expires_at=time.time() + self.config.max_cache_ttl,
+        )
+        if league:
+            league_key = league.upper()
+            if league_key in CACHEABLE_LEAGUES:
+                self._leaderboard_by_league[league_key] = entry
+                LOGGER.debug("Cache SET: leaderboard[%s]", league_key)
+                return
+        self._leaderboard = entry
+        LOGGER.debug("Cache SET: leaderboard (global)")
+
+    def set_agent_actions(
+        self, data: list[AgentAction], league: str | None = None
+    ) -> None:
+        """Set agent actions cache (overwrites previous)."""
+        entry = CacheEntry(
+            data=data,
+            expires_at=time.time() + self.config.max_cache_ttl,
+        )
+        if league:
+            league_key = league.upper()
+            if league_key in CACHEABLE_LEAGUES:
+                self._agent_actions_by_league[league_key] = entry
+                LOGGER.debug("Cache SET: agent_actions[%s]", league_key)
+                return
+        self._agent_actions = entry
+        LOGGER.debug("Cache SET: agent_actions (global)")
+
+    # -------------------------------------------------------------------------
+    # Cache Management
+    # -------------------------------------------------------------------------
+
+    def remove_trial_details(self, trial_id: str) -> None:
+        """Remove trial details from cache (called when trial completes)."""
+        if trial_id in self._trial_details:
+            del self._trial_details[trial_id]
+            LOGGER.debug("Cache REMOVE: trial_details[%s]", trial_id)
 
     def invalidate_trial(self, trial_id: str) -> None:
         """Invalidate cache for a specific trial."""
@@ -1450,12 +1088,6 @@ class LandingPageCache:
             del self._trial_info[trial_id]
         if trial_id in self._trial_details:
             del self._trial_details[trial_id]
-        # Also invalidate aggregated data since trial state changed
-        self._stats = None
-        self._games = None
-        # Invalidate per-league caches as well
-        self._stats_by_league.clear()
-        self._games_by_league.clear()
         LOGGER.debug("Invalidated cache for trial: %s", trial_id)
 
     def invalidate_all(self) -> None:
@@ -1475,11 +1107,7 @@ class LandingPageCache:
         LOGGER.debug("Invalidated all cache entries")
 
     def get_cache_stats(self) -> dict[str, Any]:
-        """Get cache statistics for debugging/monitoring.
-
-        Returns:
-            Dict with cache status for each cache type
-        """
+        """Get cache statistics for debugging/monitoring."""
 
         def _entry_info(entry: CacheEntry | None) -> dict[str, Any]:
             if entry is None:
@@ -1491,20 +1119,17 @@ class LandingPageCache:
             }
 
         def _league_cache_info(cache: dict[str, CacheEntry]) -> dict[str, Any]:
-            """Get info for per-league cache entries."""
             return {league: _entry_info(entry) for league, entry in cache.items()}
 
         return {
             "config": {
-                "trials_list_ttl": self.config.trials_list_ttl,
-                "trial_info_ttl": self.config.trial_info_ttl,
-                "trial_details_ttl": self.config.trial_details_ttl,
-                "stats_ttl": self.config.stats_ttl,
-                "games_ttl": self.config.games_ttl,
-                "leaderboard_ttl": self.config.leaderboard_ttl,
-                "agent_actions_ttl": self.config.agent_actions_ttl,
+                "trials_list_refresh_interval": self.config.trials_list_refresh_interval,
+                "stats_refresh_interval": self.config.stats_refresh_interval,
+                "games_refresh_interval": self.config.games_refresh_interval,
+                "leaderboard_refresh_interval": self.config.leaderboard_refresh_interval,
+                "agent_actions_refresh_interval": self.config.agent_actions_refresh_interval,
+                "max_cache_ttl": self.config.max_cache_ttl,
                 "completed_trial_ttl": self.config.completed_trial_ttl,
-                "agent_actions_max_trials": self.config.agent_actions_max_trials,
                 "cacheable_leagues": list(CACHEABLE_LEAGUES),
             },
             "caches": {
@@ -1574,11 +1199,16 @@ class ReplayCache:
 
     The cache stores both the serialized items and pre-computed metadata
     (play indices, period info) to enable efficient seek operations.
+
+    Replay data is preloaded at startup and refreshed when:
+    - A new trial completion is detected
+    - User requests trigger on-demand loading
+    TTL is set to 7 days to match trials_lookback_days.
     """
 
     _cache: dict[str, ReplayCacheEntry] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    ttl: float = 3600.0  # 1 hour
+    ttl: float = 7 * 24 * 3600.0  # 7 days (matches trials_lookback_days)
     max_entries: int = 100  # Max trials to cache
     core_categories: list[str] = field(default_factory=lambda: ["play", "game_update"])
 
@@ -1639,6 +1269,582 @@ class ReplayCache:
             "ttl": self.ttl,
             "core_categories": self.core_categories,
         }
+
+
+# =============================================================================
+# Background Cache Refresher
+# =============================================================================
+
+
+@dataclass
+class BackgroundRefresher:
+    """Background cache refresh manager.
+
+    Proactively refreshes all caches at configured intervals. User requests
+    only read from cache and never trigger fetches directly (except for cache
+    miss on truly new data).
+
+    Refresh Strategy:
+    - trials_list: Refreshed at trials_list_refresh_interval
+    - stats/games: Refreshed at their respective intervals (global + per-league)
+    - leaderboard: Refreshed at leaderboard_refresh_interval (global + per-league)
+    - agent_actions: Refreshed at agent_actions_refresh_interval (global + per-league)
+    - trial_info: Refreshed for live trials only
+    - trial_details: Refreshed for live trials only; removed when trial completes
+    - replay_cache: Preloaded at startup; refreshed when new trial completion detected
+      or on user demand (NOT periodically)
+
+    Startup:
+    - Performs initial refresh of all caches
+    - Preloads replay data for completed trials
+    - Blocks until complete (with timeout)
+    """
+
+    trace_reader: TraceReader
+    cache: LandingPageCache
+    replay_cache: ReplayCache
+    config: CacheConfig = field(default_factory=lambda: DEFAULT_CACHE_CONFIG)
+
+    # Background tasks
+    _tasks: list[asyncio.Task[None]] = field(default_factory=list)
+    _running: bool = False
+    _initial_refresh_done: asyncio.Event = field(default_factory=asyncio.Event)
+
+    # Track previously known live trials (for detecting completion)
+    _known_live_trials: set[str] = field(default_factory=set)
+
+    async def start(self) -> None:
+        """Start background refresh tasks.
+
+        Performs initial refresh and then starts periodic refresh loops.
+        """
+        if self._running:
+            return
+
+        self._running = True
+        LOGGER.info("BackgroundRefresher: Starting...")
+
+        # Perform initial refresh (blocking)
+        try:
+            await self._refresh_all()
+            self._initial_refresh_done.set()
+            LOGGER.info("BackgroundRefresher: Initial refresh complete")
+        except Exception as e:
+            LOGGER.error("BackgroundRefresher: Initial refresh failed: %s", e)
+            self._initial_refresh_done.set()  # Still set to unblock startup
+
+        # Start periodic refresh tasks
+        self._tasks.append(
+            asyncio.create_task(
+                self._refresh_loop(
+                    "trials_list",
+                    self._refresh_trials_list,
+                    self.config.trials_list_refresh_interval,
+                )
+            )
+        )
+        self._tasks.append(
+            asyncio.create_task(
+                self._refresh_loop(
+                    "stats",
+                    self._refresh_stats,
+                    self.config.stats_refresh_interval,
+                )
+            )
+        )
+        self._tasks.append(
+            asyncio.create_task(
+                self._refresh_loop(
+                    "games",
+                    self._refresh_games,
+                    self.config.games_refresh_interval,
+                )
+            )
+        )
+        self._tasks.append(
+            asyncio.create_task(
+                self._refresh_loop(
+                    "leaderboard",
+                    self._refresh_leaderboard,
+                    self.config.leaderboard_refresh_interval,
+                )
+            )
+        )
+        self._tasks.append(
+            asyncio.create_task(
+                self._refresh_loop(
+                    "agent_actions",
+                    self._refresh_agent_actions,
+                    self.config.agent_actions_refresh_interval,
+                )
+            )
+        )
+        self._tasks.append(
+            asyncio.create_task(
+                self._refresh_loop(
+                    "live_trials",
+                    self._refresh_live_trials,
+                    self.config.live_trial_details_refresh_interval,
+                )
+            )
+        )
+
+        LOGGER.info("BackgroundRefresher: Started %d refresh tasks", len(self._tasks))
+
+    async def stop(self) -> None:
+        """Stop all background refresh tasks."""
+        if not self._running:
+            return
+
+        self._running = False
+        LOGGER.info("BackgroundRefresher: Stopping...")
+
+        for task in self._tasks:
+            task.cancel()
+
+        # Wait for all tasks to complete
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        self._tasks.clear()
+        LOGGER.info("BackgroundRefresher: Stopped")
+
+    async def wait_for_ready(self, timeout: float | None = None) -> None:
+        """Wait for initial refresh to complete.
+
+        Args:
+            timeout: Max seconds to wait. Uses config.startup_timeout if None.
+        """
+        if timeout is None:
+            timeout = self.config.startup_timeout
+
+        try:
+            await asyncio.wait_for(self._initial_refresh_done.wait(), timeout)
+        except asyncio.TimeoutError:
+            LOGGER.warning(
+                "BackgroundRefresher: Startup timeout (%.1fs), continuing with partial cache",
+                timeout,
+            )
+
+    async def _refresh_loop(
+        self,
+        name: str,
+        refresh_fn: Any,
+        interval: float,
+    ) -> None:
+        """Generic refresh loop that calls refresh_fn at interval."""
+        while self._running:
+            try:
+                await asyncio.sleep(interval)
+                if not self._running:
+                    break
+                await refresh_fn()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                LOGGER.warning("BackgroundRefresher: %s refresh failed: %s", name, e)
+
+    async def _refresh_all(self) -> None:
+        """Refresh all caches (used for initial population)."""
+        LOGGER.info("BackgroundRefresher: Refreshing all caches...")
+
+        # 1. Refresh trials list first (foundation for other caches)
+        await self._refresh_trials_list()
+
+        # 2. Refresh aggregated caches in parallel
+        await asyncio.gather(
+            self._refresh_stats(),
+            self._refresh_games(),
+            self._refresh_leaderboard(),
+            self._refresh_agent_actions(),
+            return_exceptions=True,
+        )
+
+        # 3. Refresh live trial details
+        await self._refresh_live_trials()
+
+        # 4. Preload replay data for completed trials
+        await self._preload_replay_cache()
+
+        LOGGER.info("BackgroundRefresher: All caches refreshed")
+
+    async def _refresh_trials_list(self) -> None:
+        """Refresh trials list cache."""
+        start_dt = datetime.now(timezone.utc) - timedelta(
+            days=self.config.trials_lookback_days
+        )
+        trial_ids = await self.trace_reader.list_trials(start_time=start_dt, limit=500)
+
+        if trial_ids:
+            self.cache.set_trials_list(trial_ids)
+
+            # Also refresh trial_info for all trials
+            await self._refresh_trial_info_batch(trial_ids)
+
+    async def _refresh_trial_info_batch(self, trial_ids: list[str]) -> None:
+        """Refresh trial_info for a batch of trials."""
+        for trial_id in trial_ids:
+            try:
+                trial_info = await _extract_trial_info_from_traces(
+                    self.trace_reader, trial_id
+                )
+                self.cache.set_trial_info(trial_id, trial_info)
+            except Exception as e:
+                LOGGER.warning(
+                    "BackgroundRefresher: Failed to refresh trial_info[%s]: %s",
+                    trial_id,
+                    e,
+                )
+
+    async def _refresh_stats(self) -> None:
+        """Refresh stats cache (global + per-league)."""
+        trial_ids = self.cache.get_trials_list() or []
+
+        # Refresh global stats
+        stats = await _compute_stats(self.trace_reader, trial_ids, self.cache)
+        self.cache.set_stats(stats, league=None)
+
+        # Refresh per-league stats
+        for league in CACHEABLE_LEAGUES:
+            filtered_ids = await _filter_trials_by_league(
+                self.trace_reader, trial_ids, league, self.cache
+            )
+            league_stats = await _compute_stats(
+                self.trace_reader, filtered_ids, self.cache
+            )
+            self.cache.set_stats(league_stats, league=league)
+
+    async def _refresh_games(self) -> None:
+        """Refresh games cache (global + per-league)."""
+        trial_ids = self.cache.get_trials_list() or []
+
+        # Refresh global games
+        games = await _extract_games_from_trials(
+            self.trace_reader, trial_ids, self.cache
+        )
+        self.cache.set_games(games, league=None)
+
+        # Refresh per-league games
+        for league in CACHEABLE_LEAGUES:
+            filtered_ids = await _filter_trials_by_league(
+                self.trace_reader, trial_ids, league, self.cache
+            )
+            league_games = await _extract_games_from_trials(
+                self.trace_reader, filtered_ids, self.cache
+            )
+            self.cache.set_games(league_games, league=league)
+
+    async def _refresh_leaderboard(self) -> None:
+        """Refresh leaderboard cache (global + per-league)."""
+        trial_ids = self.cache.get_trials_list() or []
+
+        # Refresh global leaderboard
+        leaderboard = await _compute_leaderboard(self.trace_reader, trial_ids)
+        self.cache.set_leaderboard(leaderboard, league=None)
+
+        # Refresh per-league leaderboard
+        for league in CACHEABLE_LEAGUES:
+            filtered_ids = await _filter_trials_by_league(
+                self.trace_reader, trial_ids, league, self.cache
+            )
+            league_leaderboard = await _compute_leaderboard(
+                self.trace_reader, filtered_ids
+            )
+            self.cache.set_leaderboard(league_leaderboard, league=league)
+
+    async def _refresh_agent_actions(self) -> None:
+        """Refresh agent actions cache (global + per-league)."""
+        trial_ids = self.cache.get_trials_list() or []
+
+        # Refresh global agent actions
+        actions = await _extract_agent_actions(
+            self.trace_reader,
+            trial_ids,
+            limit=self.config.agent_actions_limit,
+            max_trials=self.config.agent_actions_max_trials,
+        )
+        self.cache.set_agent_actions(actions, league=None)
+
+        # Refresh per-league agent actions
+        for league in CACHEABLE_LEAGUES:
+            filtered_ids = await _filter_trials_by_league(
+                self.trace_reader, trial_ids, league, self.cache
+            )
+            league_actions = await _extract_agent_actions(
+                self.trace_reader,
+                filtered_ids,
+                limit=self.config.agent_actions_limit,
+                max_trials=self.config.agent_actions_max_trials,
+            )
+            self.cache.set_agent_actions(league_actions, league=league)
+
+    async def _refresh_live_trials(self) -> None:
+        """Refresh trial_details for live trials only.
+
+        Also handles trial completion: when a trial transitions from live to
+        completed, we remove its trial_details and load replay data.
+        """
+        # Get current live trials from cache
+        current_live = set(self.cache.get_live_trial_ids())
+
+        # Detect completed trials (were live, now not)
+        completed_trials = self._known_live_trials - current_live
+        for trial_id in completed_trials:
+            LOGGER.info(
+                "BackgroundRefresher: Trial %s completed, removing from trial_details",
+                trial_id,
+            )
+            self.cache.remove_trial_details(trial_id)
+
+            # Load replay data for newly completed trial
+            await self._load_replay_for_trial(trial_id)
+
+        # Update known live trials
+        self._known_live_trials = current_live
+
+        # Refresh trial_details for live trials
+        for trial_id in current_live:
+            try:
+                await self._refresh_trial_details(trial_id)
+            except Exception as e:
+                LOGGER.warning(
+                    "BackgroundRefresher: Failed to refresh trial_details[%s]: %s",
+                    trial_id,
+                    e,
+                )
+
+    async def _refresh_trial_details(self, trial_id: str) -> None:
+        """Refresh trial_details for a single trial (incremental fetch)."""
+        existing = self.cache.get_trial_details(trial_id)
+
+        if existing is not None:
+            # Incremental fetch: only get spans since last fetch
+            items = existing.get("items", [])
+            max_timestamp = existing.get("max_timestamp", 0)
+            is_completed = existing.get("is_completed", False)
+
+            if is_completed:
+                # Already completed, no need to refresh
+                return
+
+            start_time = datetime.fromtimestamp(
+                max_timestamp / 1_000_000, tz=timezone.utc
+            )
+            new_spans = await self.trace_reader.get_spans(trial_id, start_time=start_time)
+
+            # Serialize and merge
+            new_items = []
+            new_max_timestamp = max_timestamp
+            is_now_completed = False
+
+            for span in new_spans:
+                typed = deserialize_span(span)
+                if typed is not None:
+                    new_items.append(serialize_span_for_ws(typed))
+                    new_max_timestamp = max(new_max_timestamp, span.start_time)
+                    if isinstance(typed, TrialLifecycleSpan) and typed.phase in (
+                        "completed",
+                        "stopped",
+                    ):
+                        is_now_completed = True
+
+            if new_items:
+                merged_items = items + new_items
+                self.cache.set_trial_details(
+                    trial_id, merged_items, new_max_timestamp, is_now_completed
+                )
+        else:
+            # Full fetch
+            spans = await self.trace_reader.get_spans(trial_id)
+
+            items = []
+            max_timestamp = 0
+            is_completed = False
+
+            for span in spans:
+                typed = deserialize_span(span)
+                if typed is not None:
+                    items.append(serialize_span_for_ws(typed))
+                    max_timestamp = max(max_timestamp, span.start_time)
+                    if isinstance(typed, TrialLifecycleSpan) and typed.phase in (
+                        "completed",
+                        "stopped",
+                    ):
+                        is_completed = True
+
+            self.cache.set_trial_details(trial_id, items, max_timestamp, is_completed)
+
+    async def _preload_replay_cache(self) -> None:
+        """Preload replay data for all completed trials at startup."""
+        completed_trial_ids = self.cache.get_completed_trial_ids()
+        if not completed_trial_ids:
+            LOGGER.info("BackgroundRefresher: No completed trials to preload for replay")
+            return
+
+        LOGGER.info(
+            "BackgroundRefresher: Preloading replay cache for %d completed trials",
+            len(completed_trial_ids),
+        )
+
+        # Use semaphore to limit concurrency
+        semaphore = asyncio.Semaphore(5)
+
+        async def load_with_semaphore(trial_id: str) -> None:
+            async with semaphore:
+                await self._load_replay_for_trial(trial_id)
+
+        await asyncio.gather(
+            *[load_with_semaphore(tid) for tid in completed_trial_ids],
+            return_exceptions=True,
+        )
+
+        LOGGER.info(
+            "BackgroundRefresher: Replay cache preloaded (%d entries)",
+            len(self.replay_cache._cache),
+        )
+
+    async def _load_replay_for_trial(self, trial_id: str) -> None:
+        """Load replay data for a single completed trial into replay_cache.
+
+        This is called:
+        - At startup for all completed trials (preloading)
+        - When a live trial transitions to completed
+        """
+        # Check if already cached
+        cached = await self.replay_cache.get(trial_id)
+        if cached:
+            LOGGER.debug(
+                "BackgroundRefresher: Replay for %s already cached, skipping", trial_id
+            )
+            return
+
+        try:
+            # Use the existing _load_replay_data function
+            cache_entry, error_reason = await _load_replay_data(
+                self.trace_reader,
+                self.replay_cache,
+                trial_id,
+            )
+
+            if cache_entry:
+                LOGGER.info(
+                    "BackgroundRefresher: Loaded replay for %s (%d items, %d plays)",
+                    trial_id,
+                    len(cache_entry.items),
+                    cache_entry.meta.total_play_count,
+                )
+            else:
+                LOGGER.debug(
+                    "BackgroundRefresher: Replay not available for %s: %s",
+                    trial_id,
+                    error_reason,
+                )
+        except Exception as e:
+            LOGGER.warning(
+                "BackgroundRefresher: Failed to load replay for %s: %s",
+                trial_id,
+                e,
+            )
+
+    # -------------------------------------------------------------------------
+    # On-demand refresh (for cache miss on new data)
+    # -------------------------------------------------------------------------
+
+    async def refresh_trial_info_on_demand(self, trial_id: str) -> dict[str, Any]:
+        """Refresh trial_info for a specific trial (on-demand for cache miss)."""
+        trial_info = await _extract_trial_info_from_traces(self.trace_reader, trial_id)
+        self.cache.set_trial_info(trial_id, trial_info)
+        return trial_info
+
+    async def refresh_trial_details_on_demand(
+        self, trial_id: str
+    ) -> list[dict[str, Any]]:
+        """Refresh trial_details for a specific trial (on-demand for cache miss)."""
+        await self._refresh_trial_details(trial_id)
+        cached = self.cache.get_trial_details(trial_id)
+        return cached.get("items", []) if cached else []
+
+    async def refresh_stats_on_demand(
+        self, league: str | None = None
+    ) -> StatsResponse:
+        """Refresh stats cache on demand (for cache miss)."""
+        trial_ids = self.cache.get_trials_list() or []
+
+        if league:
+            filtered_ids = await _filter_trials_by_league(
+                self.trace_reader, trial_ids, league, self.cache
+            )
+            stats = await _compute_stats(self.trace_reader, filtered_ids, self.cache)
+        else:
+            stats = await _compute_stats(self.trace_reader, trial_ids, self.cache)
+
+        self.cache.set_stats(stats, league=league)
+        return stats
+
+    async def refresh_games_on_demand(
+        self, league: str | None = None
+    ) -> GamesResponse:
+        """Refresh games cache on demand (for cache miss)."""
+        trial_ids = self.cache.get_trials_list() or []
+
+        if league:
+            filtered_ids = await _filter_trials_by_league(
+                self.trace_reader, trial_ids, league, self.cache
+            )
+            games = await _extract_games_from_trials(
+                self.trace_reader, filtered_ids, self.cache
+            )
+        else:
+            games = await _extract_games_from_trials(
+                self.trace_reader, trial_ids, self.cache
+            )
+
+        self.cache.set_games(games, league=league)
+        return games
+
+    async def refresh_leaderboard_on_demand(
+        self, league: str | None = None
+    ) -> list[LeaderboardEntry]:
+        """Refresh leaderboard cache on demand (for cache miss)."""
+        trial_ids = self.cache.get_trials_list() or []
+
+        if league:
+            filtered_ids = await _filter_trials_by_league(
+                self.trace_reader, trial_ids, league, self.cache
+            )
+            leaderboard = await _compute_leaderboard(self.trace_reader, filtered_ids)
+        else:
+            leaderboard = await _compute_leaderboard(self.trace_reader, trial_ids)
+
+        self.cache.set_leaderboard(leaderboard, league=league)
+        return leaderboard
+
+    async def refresh_agent_actions_on_demand(
+        self, league: str | None = None
+    ) -> list[AgentAction]:
+        """Refresh agent actions cache on demand (for cache miss)."""
+        trial_ids = self.cache.get_trials_list() or []
+
+        if league:
+            filtered_ids = await _filter_trials_by_league(
+                self.trace_reader, trial_ids, league, self.cache
+            )
+            actions = await _extract_agent_actions(
+                self.trace_reader,
+                filtered_ids,
+                limit=self.config.agent_actions_limit,
+                max_trials=self.config.agent_actions_max_trials,
+            )
+        else:
+            actions = await _extract_agent_actions(
+                self.trace_reader,
+                trial_ids,
+                limit=self.config.agent_actions_limit,
+                max_trials=self.config.agent_actions_max_trials,
+            )
+
+        self.cache.set_agent_actions(actions, league=league)
+        return actions
 
 
 # =============================================================================
@@ -1809,12 +2015,13 @@ class ArenaServerState:
     broadcaster: SpanBroadcaster = field(default_factory=SpanBroadcaster)
     cache: LandingPageCache = field(default_factory=LandingPageCache)
     replay_cache: ReplayCache = field(default_factory=ReplayCache)
+    refresher: BackgroundRefresher | None = None  # Set during lifespan
     static_dir: Path | None = None
-    poll_interval: float = 1.0  # Seconds between trace polls
+    poll_interval: float = 1.0  # Seconds between trace polls (for WebSocket)
     trace_backend: str = "jaeger"
     by_alias: bool = True  # Use camelCase aliases in REST JSON responses
 
-    # Tracking last poll time per trial for incremental updates
+    # Tracking last poll time per trial for incremental updates (WebSocket)
     _last_poll: dict[str, datetime] = field(default_factory=dict)
 
 
@@ -1951,7 +2158,7 @@ async def _filter_trials_by_league(
         trace_reader: TraceReader for fetching trial info
         trial_ids: List of trial IDs to filter
         league: League to filter by (e.g., 'NBA', 'NFL'). None means return all.
-        cache: Optional cache for trial info (recommended for performance)
+        cache: Optional cache for trial info (uses cache if available, fetches if not)
 
     Returns:
         Filtered list of trial IDs matching the specified league
@@ -1964,17 +2171,18 @@ async def _filter_trials_by_league(
 
     for trial_id in trial_ids:
         try:
+            # Try cache first, then fetch if not cached
+            trial_info = None
             if cache is not None:
-                trial_info = await cache.get_trial_info(
-                    trial_id,
-                    lambda tid=trial_id: _extract_trial_info_from_traces(
-                        trace_reader, tid
-                    ),
-                )
-            else:
+                trial_info = cache.get_trial_info(trial_id)
+
+            if trial_info is None:
                 trial_info = await _extract_trial_info_from_traces(
                     trace_reader, trial_id
                 )
+                # Store in cache if available
+                if cache is not None:
+                    cache.set_trial_info(trial_id, trial_info)
 
             metadata = trial_info.get("metadata", {})
             # Note: BettingTrialMetadata has no `league` field.
@@ -1999,42 +2207,6 @@ async def _filter_trials_by_league(
         len(trial_ids),
     )
     return filtered
-
-
-async def _get_filtered_trial_ids(
-    state: "ArenaServerState",
-    days: int,
-    league: str | None,
-    limit: int = 100,
-) -> list[str]:
-    """Get trial IDs with optional league filtering.
-
-    This is a convenience wrapper that combines:
-    1. Fetching trial IDs from trace store (with caching)
-    2. Filtering by league if specified
-
-    Args:
-        state: ArenaServerState with trace_reader and cache
-        days: Number of days to look back
-        league: League to filter by (e.g., 'NBA', 'NFL'). None means all.
-        limit: Maximum number of trials to fetch from trace store
-
-    Returns:
-        List of trial IDs, optionally filtered by league
-    """
-
-    async def fetch_trials() -> list[str]:
-        start_dt = datetime.now(timezone.utc) - timedelta(days=days)
-        return await state.trace_reader.list_trials(start_time=start_dt, limit=limit)
-
-    trial_ids = await state.cache.get_trials_list(fetch_trials)
-
-    if league:
-        trial_ids = await _filter_trials_by_league(
-            state.trace_reader, trial_ids, league, state.cache
-        )
-
-    return trial_ids
 
 
 def _resolve_team_identity(
@@ -2159,30 +2331,33 @@ async def _extract_games_from_trials(
     Args:
         trace_reader: Trace reader for fetching spans
         trial_ids: List of trial IDs to process
-        cache: Optional cache for trial info (recommended for performance)
+        cache: Optional cache for trial info (uses cache if available, fetches if not)
     """
     live_games: list[GameCardData] = []
     completed_games: list[GameCardData] = []
 
     for trial_id in trial_ids:
         try:
-            # Use cache if available, otherwise fetch directly
+            # Try cache first, then fetch if not cached
+            trial_info = None
             if cache is not None:
-                trial_info = await cache.get_trial_info(
-                    trial_id,
-                    lambda: _extract_trial_info_from_traces(trace_reader, trial_id),
-                )
-            else:
+                trial_info = cache.get_trial_info(trial_id)
+
+            if trial_info is None:
                 trial_info = await _extract_trial_info_from_traces(
                     trace_reader, trial_id
                 )
+                # Store in cache if available
+                if cache is not None:
+                    cache.set_trial_info(trial_id, trial_info)
         except Exception as e:
             LOGGER.warning("Failed to get info for trial '%s': %s", trial_id, e)
             continue
 
         phase = trial_info["phase"]
         metadata = trial_info["metadata"]
-        league = metadata.get("sport_type", "NBA")
+        # Normalize league to uppercase for frontend compatibility
+        league = metadata.get("sport_type", "NBA").upper()
 
         home_tricode = metadata.get("home_team_tricode", "TBD")
         away_tricode = metadata.get("away_team_tricode", "TBD")
@@ -2346,7 +2521,7 @@ async def _compute_stats(
     Args:
         trace_reader: Trace reader for fetching spans
         trial_ids: List of trial IDs to process
-        cache: Optional cache for trial info (recommended for performance)
+        cache: Optional cache for trial info (uses cache if available, fetches if not)
     """
     games_played = 0
     live_now = 0
@@ -2354,18 +2529,18 @@ async def _compute_stats(
 
     for trial_id in trial_ids:
         try:
-            # Use cache if available, otherwise fetch directly
+            # Try cache first, then fetch if not cached
+            trial_info = None
             if cache is not None:
-                trial_info = await cache.get_trial_info(
-                    trial_id,
-                    lambda tid=trial_id: _extract_trial_info_from_traces(
-                        trace_reader, tid
-                    ),
-                )
-            else:
+                trial_info = cache.get_trial_info(trial_id)
+
+            if trial_info is None:
                 trial_info = await _extract_trial_info_from_traces(
                     trace_reader, trial_id
                 )
+                # Store in cache if available
+                if cache is not None:
+                    cache.set_trial_info(trial_id, trial_info)
         except Exception:
             continue
 
@@ -2672,22 +2847,43 @@ def create_arena_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         global _server_state
+
+        # Create cache and refresher
+        cache = LandingPageCache()
+        replay_cache = ReplayCache()
+        refresher = BackgroundRefresher(
+            trace_reader=trace_reader,
+            cache=cache,
+            replay_cache=replay_cache,
+        )
+
         _server_state = ArenaServerState(
             trace_reader=trace_reader,
             broadcaster=broadcaster,
+            cache=cache,
+            replay_cache=replay_cache,
+            refresher=refresher,
             static_dir=static_dir,
             poll_interval=poll_interval,
             trace_backend=trace_backend,
             by_alias=by_alias,
         )
+
+        # Start background refresher and wait for initial cache population
+        LOGGER.info("Arena Server starting (waiting for initial cache population)...")
+        await refresher.start()
+        await refresher.wait_for_ready()
+
         LOGGER.info(
-            "Arena Server started (trace backend: %s, static_dir: %s, service_name: %s)",
+            "Arena Server ready (trace backend: %s, static_dir: %s, service_name: %s)",
             trace_backend,
             static_dir,
             service_name,
         )
         yield
+
         # Cleanup
+        await refresher.stop()
         close_fn = getattr(trace_reader, "close", None)
         if close_fn is not None:
             await close_fn()
@@ -2777,20 +2973,27 @@ def create_arena_app(
 
     @app.get("/api/trials/{trial_id}")
     async def get_trial(trial_id: str) -> JSONResponse:
-        """Get trial info and spans with incremental caching.
+        """Get trial info and spans.
 
-        Uses a 60-second cache with incremental span fetching to reduce SLS load.
-        On cache hit, only new spans (since last fetch) are retrieved and merged.
+        Data is served from cache (background refresh keeps it fresh for live trials).
+        On cache miss, triggers on-demand refresh.
         """
         state = get_server_state()
+        refresher = state.refresher
+        assert refresher is not None, "BackgroundRefresher not initialized"
 
-        start_time = time.time()
+        start_time_ts = time.time()
         LOGGER.info("Fetching trial details for: %s", trial_id)
 
-        # Use cached trial details with incremental fetching
-        items = await state.cache.get_trial_details(trial_id, state.trace_reader)
+        # Get trial details from cache
+        cached = state.cache.get_trial_details(trial_id)
+        if cached is not None:
+            items = cached.get("items", [])
+        else:
+            # Cache miss - refresh on demand
+            items = await refresher.refresh_trial_details_on_demand(trial_id)
 
-        elapsed = time.time() - start_time
+        elapsed = time.time() - start_time_ts
         LOGGER.info(
             "Trial %s: Returned %d items in %.2fs",
             trial_id,
@@ -2800,7 +3003,7 @@ def create_arena_app(
 
         if not items:
             # Check if trial exists (may have no spans yet)
-            trial_ids = await state.trace_reader.list_trials()
+            trial_ids = state.cache.get_trials_list() or []
             if trial_id not in trial_ids:
                 return JSONResponse(
                     content={"error": f"Trial '{trial_id}' not found"},
@@ -2816,12 +3019,6 @@ def create_arena_app(
 
     @app.get("/api/landing")
     async def get_landing_data(
-        days: int = Query(
-            default=7,
-            description="Number of days to look back for games.",
-            ge=1,
-            le=30,
-        ),
         league: str | None = Query(
             default=None,
             description="Filter by league: 'NBA', 'NFL', etc. Returns all if not specified.",
@@ -2830,41 +3027,30 @@ def create_arena_app(
         """Get aggregated landing page data.
 
         Returns games, stats, and recent agent actions in a single call.
-        Data is cached to reduce load on the trace store.
+        Data is served from cache (background refresh keeps it fresh).
 
-        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
+        On cache miss (new data not yet in cache), triggers on-demand refresh.
         """
         state = get_server_state()
+        refresher = state.refresher
+        assert refresher is not None, "BackgroundRefresher not initialized"
 
-        # Get trial IDs with optional league filtering
-        trial_ids = await _get_filtered_trial_ids(state, days, league)
+        # Get stats from cache, or refresh on demand
+        stats = state.cache.get_stats(league=league)
+        if stats is None:
+            stats = await refresher.refresh_stats_on_demand(league=league)
 
-        # Fetch stats (cached, with per-league support)
-        async def fetch_stats() -> StatsResponse:
-            return await _compute_stats(state.trace_reader, trial_ids, state.cache)
+        # Get games from cache, or refresh on demand
+        games = state.cache.get_games(league=league)
+        if games is None:
+            games = await refresher.refresh_games_on_demand(league=league)
 
-        stats = await state.cache.get_stats(fetch_stats, league=league)
-
-        # Fetch games (cached, with per-league support)
-        async def fetch_games() -> GamesResponse:
-            return await _extract_games_from_trials(
-                state.trace_reader, trial_ids, state.cache
+        # Get agent actions from cache, or refresh on demand
+        agent_actions = state.cache.get_agent_actions(league=league)
+        if agent_actions is None:
+            agent_actions = await refresher.refresh_agent_actions_on_demand(
+                league=league
             )
-
-        games = await state.cache.get_games(fetch_games, league=league)
-
-        # Fetch agent actions (cached, with per-league support)
-        async def fetch_actions() -> list[AgentAction]:
-            return await _extract_agent_actions(
-                state.trace_reader,
-                trial_ids,
-                limit=state.cache.config.agent_actions_limit,
-                max_trials=state.cache.config.agent_actions_max_trials,
-            )
-
-        agent_actions = await state.cache.get_agent_actions(
-            fetch_actions, league=league
-        )
 
         all_games = games.live_games + games.upcoming_games + games.completed_games
         # NOTE! Fallback: use all_games if live_games is empty! For temporary use
@@ -2879,12 +3065,6 @@ def create_arena_app(
 
     @app.get("/api/stats")
     async def get_stats(
-        days: int = Query(
-            default=7,
-            description="Number of days to aggregate stats over.",
-            ge=1,
-            le=30,
-        ),
         league: str | None = Query(
             default=None,
             description="Filter by league: 'NBA', 'NFL', etc. Returns all if not specified.",
@@ -2897,16 +3077,17 @@ def create_arena_app(
             liveNow: Currently running games
             wageredToday: Total amount wagered (if available)
 
-        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
+        Data is served from cache (background refresh keeps it fresh).
+        On cache miss, triggers on-demand refresh.
         """
         state = get_server_state()
+        refresher = state.refresher
+        assert refresher is not None, "BackgroundRefresher not initialized"
 
-        trial_ids = await _get_filtered_trial_ids(state, days, league)
-
-        async def fetch_stats() -> StatsResponse:
-            return await _compute_stats(state.trace_reader, trial_ids, state.cache)
-
-        stats = await state.cache.get_stats(fetch_stats, league=league)
+        # Get stats from cache, or refresh on demand
+        stats = state.cache.get_stats(league=league)
+        if stats is None:
+            stats = await refresher.refresh_stats_on_demand(league=league)
 
         return JSONResponse(content=stats.model_dump(by_alias=state.by_alias))
 
@@ -2920,12 +3101,6 @@ def create_arena_app(
             default=None,
             description="Filter by league: 'NBA', 'NFL', etc.",
         ),
-        days: int = Query(
-            default=7,
-            description="Number of days to look back.",
-            ge=1,
-            le=30,
-        ),
         limit: int = Query(
             default=50,
             description="Maximum number of games to return.",
@@ -2936,23 +3111,19 @@ def create_arena_app(
         """Get games list with optional filters.
 
         Returns games grouped by status or filtered by query params.
-        League filtering is done at trial level for efficiency.
-
-        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
+        Data is served from cache (background refresh keeps it fresh).
+        On cache miss, triggers on-demand refresh.
         """
         state = get_server_state()
+        refresher = state.refresher
+        assert refresher is not None, "BackgroundRefresher not initialized"
 
-        # Filter trials by league at trial level (more efficient than post-filtering)
-        trial_ids = await _get_filtered_trial_ids(state, days, league, limit=limit)
+        # Get games from cache, or refresh on demand
+        games_data = state.cache.get_games(league=league)
+        if games_data is None:
+            games_data = await refresher.refresh_games_on_demand(league=league)
 
-        async def fetch_games() -> GamesResponse:
-            return await _extract_games_from_trials(
-                state.trace_reader, trial_ids, state.cache
-            )
-
-        games_data = await state.cache.get_games(fetch_games, league=league)
-
-        # Apply status filter (league already filtered at trial level)
+        # Apply status filter
         all_games: list[GameCardData] = (
             games_data.live_games
             + games_data.upcoming_games
@@ -2982,12 +3153,6 @@ def create_arena_app(
             default=None,
             description="Filter by league: 'NBA', 'NFL', etc.",
         ),
-        days: int = Query(
-            default=30,
-            description="Number of days to aggregate over.",
-            ge=1,
-            le=365,
-        ),
         limit: int = Query(
             default=20,
             description="Maximum number of agents to return.",
@@ -2998,21 +3163,20 @@ def create_arena_app(
         """Get agent leaderboard ranked by winnings.
 
         Returns agents sorted by total winnings with win rate and ROI.
-        League filtering is applied at trial level.
-
-        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
+        Data is served from cache (background refresh keeps it fresh).
+        On cache miss, triggers on-demand refresh.
         """
         state = get_server_state()
+        refresher = state.refresher
+        assert refresher is not None, "BackgroundRefresher not initialized"
 
-        # Filter trials by league at trial level
-        trial_ids = await _get_filtered_trial_ids(state, days, league, limit=500)
+        # Get leaderboard from cache, or refresh on demand
+        leaderboard = state.cache.get_leaderboard(league=league)
+        if leaderboard is None:
+            leaderboard = await refresher.refresh_leaderboard_on_demand(league=league)
 
-        async def fetch_leaderboard() -> list[LeaderboardEntry]:
-            return await _compute_leaderboard(state.trace_reader, trial_ids, limit)
-
-        leaderboard = await state.cache.get_leaderboard(
-            fetch_leaderboard, league=league
-        )
+        # Apply limit
+        leaderboard = leaderboard[:limit]
 
         response = LeaderboardResponse(leaderboard=leaderboard)
         return JSONResponse(
@@ -3035,33 +3199,20 @@ def create_arena_app(
         """Get recent agent actions for the live ticker.
 
         Returns the most recent agent actions sorted by time.
-
-        Caching: Uses per-league caching for leagues in CACHEABLE_LEAGUES (NBA, NFL).
+        Data is served from cache (background refresh keeps it fresh).
+        On cache miss, triggers on-demand refresh.
         """
         state = get_server_state()
+        refresher = state.refresher
+        assert refresher is not None, "BackgroundRefresher not initialized"
 
-        # Agent actions uses hours (not days) for freshness
-        async def fetch_trials() -> list[str]:
-            start_dt = datetime.now(timezone.utc) - timedelta(hours=1)
-            return await state.trace_reader.list_trials(start_time=start_dt, limit=20)
+        # Get agent actions from cache, or refresh on demand
+        actions = state.cache.get_agent_actions(league=league)
+        if actions is None:
+            actions = await refresher.refresh_agent_actions_on_demand(league=league)
 
-        trial_ids = await state.cache.get_trials_list(fetch_trials)
-
-        # Apply league filter if specified
-        if league:
-            trial_ids = await _filter_trials_by_league(
-                state.trace_reader, trial_ids, league, state.cache
-            )
-
-        async def fetch_actions() -> list[AgentAction]:
-            return await _extract_agent_actions(
-                state.trace_reader,
-                trial_ids,
-                limit=limit,
-                max_trials=state.cache.config.agent_actions_max_trials,
-            )
-
-        actions = await state.cache.get_agent_actions(fetch_actions, league=league)
+        # Apply limit
+        actions = actions[:limit]
 
         response = AgentActionsResponse(actions=actions)
         return JSONResponse(
@@ -3088,29 +3239,31 @@ def create_arena_app(
     ):
         """WebSocket endpoint for real-time span streaming with pause/resume and filtering.
 
+        Uses cached trial_details (refreshed by background task every 5s for live trials).
+        On cache miss, triggers on-demand refresh.
+
         Protocol:
         - Server sends 'snapshot' immediately upon connection
-        - Server pushes 'span' messages as new spans are detected
+        - Server pushes 'span' messages as new spans are detected in cache
         - Server sends 'trial_ended' when trial completes
         - Server sends 'heartbeat' periodically
         - Server sends 'stream_status' in response to control commands
 
-        Query Parameters:
-            categories: Comma-separated categories to filter (e.g., 'play,game_update')
-            filter_mode: 'include' or 'exclude' (default: 'include')
-
         Control commands (send as JSON):
-            {"command": "pause"}   - Pause streaming (buffers spans)
-            {"command": "resume"}  - Resume streaming (sends buffered spans)
+            {"command": "pause"}   - Pause streaming (buffers items)
+            {"command": "resume"}  - Resume streaming (sends buffered items)
             {"command": "status"}  - Get current stream status
             {"command": "filter", "categories": [...], "mode": "include"}
                                    - Update category filter dynamically
         """
         state = get_server_state()
+        refresher = state.refresher
+        assert refresher is not None, "BackgroundRefresher not initialized"
+
         await websocket.accept()
         LOGGER.info("WebSocket connection accepted for trial '%s'", trial_id)
 
-        # Per-connection stream controller
+        # Per-connection stream controller (stores items during pause, not raw spans)
         controller = StreamController()
 
         # Initialize category filter from query params
@@ -3119,18 +3272,18 @@ def create_arena_app(
         try:
             await state.broadcaster.subscribe(trial_id, websocket)
 
-            # Send initial snapshot (with filtering)
-            spans = await state.trace_reader.get_spans(trial_id)
+            # Get initial snapshot from cache (or refresh on demand)
+            cached = state.cache.get_trial_details(trial_id)
+            if cached is None:
+                # Cache miss - refresh on demand
+                await refresher.refresh_trial_details_on_demand(trial_id)
+                cached = state.cache.get_trial_details(trial_id)
 
-            # Filter spans for snapshot: serialize, filter, then send
-            snapshot_items = []
-            for span in spans:
-                typed = deserialize_span(span)
-                if typed is not None:
-                    ws_payload = serialize_span_for_ws(typed)
-                    if cat_filter.filter_item(ws_payload):
-                        snapshot_items.append(ws_payload)
+            all_items = cached.get("items", []) if cached else []
+            is_completed = cached.get("is_completed", False) if cached else False
 
+            # Filter and send snapshot
+            snapshot_items = cat_filter.filter_items(all_items)
             snapshot_msg = WSSnapshotMessage(
                 trial_id=trial_id,
                 timestamp=datetime.now(timezone.utc),
@@ -3138,23 +3291,29 @@ def create_arena_app(
             )
             await websocket.send_text(snapshot_msg.model_dump_json())
             LOGGER.info(
-                "Stream: Sent snapshot with %d items (filtered from %d spans) for trial '%s'",
+                "Stream: Sent snapshot with %d items (filtered from %d) for trial '%s'",
                 len(snapshot_items),
-                len(spans),
+                len(all_items),
                 trial_id,
             )
 
-            # Track seen span IDs to avoid duplicates
-            seen_span_ids: set[str] = {s.span_id for s in spans}
+            # Track how many items we've sent (to detect new items in cache)
+            items_sent_count = len(all_items)
 
-            # Track last seen timestamp for efficient querying
-            last_time = datetime.now(timezone.utc)
-            if spans:
-                # Get the latest span timestamp
-                last_us = max(s.start_time for s in spans)
-                last_time = datetime.fromtimestamp(last_us / 1_000_000, tz=timezone.utc)
+            # If already completed, send trial_ended and close
+            if is_completed:
+                ended_msg = WSTrialEndedMessage(
+                    trial_id=trial_id,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                await websocket.send_text(ended_msg.model_dump_json())
+                LOGGER.info("Trial '%s' already completed, closing stream", trial_id)
+                return
 
-            # Poll for new spans and broadcast
+            # Pause buffer: stores items (not raw spans)
+            pause_buffer: list[dict[str, Any]] = []
+
+            # Poll for new items in cache
             while True:
                 try:
                     # Wait for client message or timeout
@@ -3172,36 +3331,30 @@ def create_arena_app(
                             controller.pause()
                             status_msg = WSStreamStatusMessage(
                                 is_paused=True,
-                                buffer_size=len(controller.pause_buffer),
+                                buffer_size=len(pause_buffer),
                                 timestamp=datetime.now(timezone.utc),
                             )
                             await websocket.send_text(status_msg.model_dump_json())
 
                         elif command == "resume":
                             controller.resume()
-                            # Send buffered spans as snapshot (catch-up mode, with filtering)
-                            buffered = controller.drain_buffer()
-                            if buffered:
-                                # Filter buffered spans before sending
-                                filtered_items = []
-                                for span in buffered:
-                                    typed = deserialize_span(span)
-                                    if typed is not None:
-                                        ws_payload = serialize_span_for_ws(typed)
-                                        if cat_filter.filter_item(ws_payload):
-                                            filtered_items.append(ws_payload)
-                                if filtered_items:
+                            # Send buffered items as snapshot (catch-up mode)
+                            if pause_buffer:
+                                filtered_buffered = cat_filter.filter_items(pause_buffer)
+                                if filtered_buffered:
                                     snapshot_msg = WSSnapshotMessage(
                                         trial_id=trial_id,
                                         timestamp=datetime.now(timezone.utc),
-                                        data={"items": filtered_items},
+                                        data={"items": filtered_buffered},
                                     )
                                     await websocket.send_text(
                                         snapshot_msg.model_dump_json()
                                     )
+                            buffered_count = len(pause_buffer)
+                            pause_buffer = []
                             status_msg = WSStreamStatusMessage(
                                 is_paused=False,
-                                buffered_count=len(buffered),
+                                buffered_count=buffered_count,
                                 timestamp=datetime.now(timezone.utc),
                             )
                             await websocket.send_text(status_msg.model_dump_json())
@@ -3221,7 +3374,7 @@ def create_arena_app(
                             )
                             status_msg = WSStreamStatusMessage(
                                 is_paused=controller.is_paused,
-                                buffer_size=len(controller.pause_buffer),
+                                buffer_size=len(pause_buffer),
                                 timestamp=datetime.now(timezone.utc),
                             )
                             await websocket.send_text(status_msg.model_dump_json())
@@ -3229,7 +3382,7 @@ def create_arena_app(
                         elif command == "status":
                             status_msg = WSStreamStatusMessage(
                                 is_paused=controller.is_paused,
-                                buffer_size=len(controller.pause_buffer),
+                                buffer_size=len(pause_buffer),
                                 timestamp=datetime.now(timezone.utc),
                             )
                             await websocket.send_text(status_msg.model_dump_json())
@@ -3238,52 +3391,55 @@ def create_arena_app(
                         LOGGER.warning("Invalid JSON command: %s", msg_text)
 
                 except asyncio.TimeoutError:
-                    # Poll for new spans (start_time for incremental updates)
-                    new_spans = await state.trace_reader.get_spans(
-                        trial_id, start_time=last_time
-                    )
+                    # Check cache for new items
+                    cached = state.cache.get_trial_details(trial_id)
+                    if cached is None:
+                        # Cache was invalidated, skip this cycle
+                        pass
+                    else:
+                        current_items = cached.get("items", [])
+                        is_now_completed = cached.get("is_completed", False)
 
-                    # Filter out already-seen spans (double protection)
-                    truly_new_spans = [
-                        s for s in new_spans if s.span_id not in seen_span_ids
-                    ]
+                        # Check for new items
+                        if len(current_items) > items_sent_count:
+                            new_items = current_items[items_sent_count:]
 
-                    for span in truly_new_spans:
-                        seen_span_ids.add(span.span_id)
+                            for item in new_items:
+                                if controller.is_paused:
+                                    # Buffer during pause
+                                    if len(pause_buffer) < 1000:  # Max buffer size
+                                        pause_buffer.append(item)
+                                else:
+                                    # Send immediately (with category filter)
+                                    if not cat_filter.filter_item(item):
+                                        continue
 
-                        if controller.is_paused:
-                            # Buffer during pause
-                            controller.buffer_span(span)
-                        else:
-                            # Broadcast immediately (with category filter)
-                            typed = deserialize_span(span)
-                            if typed is None:
-                                continue
-                            ws_payload = serialize_span_for_ws(typed)
+                                    message = WSSpanMessage(
+                                        trial_id=trial_id,
+                                        timestamp=datetime.now(timezone.utc),
+                                        category=item.get("category", ""),
+                                        data=item.get("data", {}),
+                                    )
+                                    await websocket.send_text(message.model_dump_json())
 
-                            # Apply category filter
-                            if not cat_filter.filter_item(ws_payload):
-                                continue
+                            items_sent_count = len(current_items)
 
-                            message = WSSpanMessage(
+                            if not controller.is_paused:
+                                LOGGER.debug(
+                                    "Sent %d new items for trial '%s'",
+                                    len(new_items),
+                                    trial_id,
+                                )
+
+                        # Check if trial just completed
+                        if is_now_completed:
+                            ended_msg = WSTrialEndedMessage(
                                 trial_id=trial_id,
                                 timestamp=datetime.now(timezone.utc),
-                                category=ws_payload.get("category", ""),
-                                data=ws_payload.get("data", {}),
                             )
-                            await websocket.send_text(message.model_dump_json())
-
-                    if truly_new_spans:
-                        last_us = max(s.start_time for s in truly_new_spans)
-                        last_time = datetime.fromtimestamp(
-                            last_us / 1_000_000, tz=timezone.utc
-                        )
-                        if not controller.is_paused:
-                            LOGGER.debug(
-                                "Sent %d new spans for trial '%s'",
-                                len(truly_new_spans),
-                                trial_id,
-                            )
+                            await websocket.send_text(ended_msg.model_dump_json())
+                            LOGGER.info("Trial '%s' completed, closing stream", trial_id)
+                            return
 
                     # Send heartbeat (even when paused, to keep connection alive)
                     heartbeat = WSHeartbeatMessage(
@@ -3768,6 +3924,7 @@ async def run_arena_server(
 
 __all__ = [
     "ArenaServerState",
+    "BackgroundRefresher",
     "CacheConfig",
     "CacheEntry",
     "CategoryFilter",
