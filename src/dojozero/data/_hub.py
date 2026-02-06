@@ -404,9 +404,18 @@ class DataHub:
             elif isinstance(event, GameResultEvent):
                 # Concluded/historical game: GameStartEvent never fires (status already FINAL)
                 # Transition to LIVE, flush buffered plays/drives, then deliver result
+                logger.info(
+                    "GameResultEvent in PREGAME for game %s - transitioning to LIVE",
+                    event_game_id,
+                )
                 self._game_phases[event_game_id] = _GamePhase.LIVE
                 await self._flush_pending_dispatch(event_game_id)
                 await self._deliver_event(envelope)
+                logger.info(
+                    "GameResultEvent delivered for game %s, handlers: %s",
+                    event_game_id,
+                    list(self._event_handlers.get("event.game_result", [])),
+                )
             else:
                 self._pending_dispatch[event_game_id].append(envelope)
                 await self._check_buffer_overflow(event_game_id)
@@ -535,9 +544,15 @@ class DataHub:
 
         # Dispatch to handlers for this event type
         if event_type in self._event_handlers:
+            logger.debug(
+                "Dispatching %s to %d handler(s)",
+                event_type,
+                len(self._event_handlers[event_type]),
+            )
             for handler in self._event_handlers[event_type]:
                 try:
                     handler(event)
+                    logger.debug("Handler %s called for %s", handler, event_type)
                 except Exception as e:
                     logger.error("Error in event handler for %s: %s", event_type, e)
 

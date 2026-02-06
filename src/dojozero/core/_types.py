@@ -57,6 +57,14 @@ class RuntimeContext:
     grace period for broker settlement.
     """
 
+    set_stop_callback: Callable[[Callable[[], None]], None] | None = None
+    """Optional setter for the orchestrator to inject its wrapped stop callback.
+
+    The factory creates a self-stop subscription that calls request_stop().
+    The orchestrator wraps request_stop with delayed stop logic and uses this
+    setter to inject that wrapper so the subscription invokes it.
+    """
+
 
 def _utcnow() -> datetime:
     """Return a timezone-aware UTC timestamp for event defaults."""

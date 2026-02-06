@@ -22,7 +22,7 @@ Usage:
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Callable
 
 from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.core._types import RuntimeContext
@@ -172,7 +172,9 @@ def build_runtime_context(
             raise
 
     # Self-stop mechanism: request trial stop when game ends
+    # Use a mutable container so the callback can be updated by the orchestrator
     _stop_requested = False
+    _stop_callback: list[Callable[[], None] | None] = [None]
 
     def _request_stop() -> None:
         nonlocal _stop_requested
@@ -182,6 +184,13 @@ def build_runtime_context(
         logger.info(
             "Trial '%s' self-stop requested (GameResultEvent received)", trial_id
         )
+        # Call the wrapped callback if orchestrator has set one
+        if _stop_callback[0] is not None:
+            _stop_callback[0]()
+
+    def _set_stop_callback(callback: Callable[[], None]) -> None:
+        """Allow orchestrator to inject its wrapped stop callback."""
+        _stop_callback[0] = callback
 
     hub.subscribe_agent(
         agent_id=f"_trial_self_stop_{trial_id}",
@@ -207,6 +216,7 @@ def build_runtime_context(
         startup=start_data_stores,
         cleanup=stop_data_stores,
         request_stop=_request_stop,
+        set_stop_callback=_set_stop_callback,
     )
 
 
