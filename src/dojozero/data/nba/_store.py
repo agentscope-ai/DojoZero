@@ -393,6 +393,8 @@ class NBAStore(DataStore):
                             ),
                         )
                     )
+                    # Track emitted scores for score-change detection in PBP
+                    self._state.mark_scores_emitted(game_id, home_score, away_score)
                     # Mark final update as emitted if game is concluded
                     if game_concluded:
                         self._state.mark_final_update_emitted(game_id)
@@ -627,6 +629,34 @@ class NBAStore(DataStore):
                         score_value=score_value,
                     )
                 )
+
+                # Emit immediate game update after scoring plays for real-time score tracking
+                if is_scoring_play and self._state.score_changed(
+                    game_id, home_score, away_score
+                ):
+                    logger.info(
+                        "Score change detected for game %s: %d-%d (scoring play)",
+                        game_id,
+                        home_score,
+                        away_score,
+                    )
+                    events.append(
+                        NBAGameUpdateEvent(
+                            timestamp=timestamp,
+                            game_timestamp=game_timestamp,
+                            game_id=game_id,
+                            sport="nba",
+                            period=period,
+                            game_clock=clock,
+                            game_time_utc="",
+                            home_score=home_score,
+                            away_score=away_score,
+                            home_team_stats=NBATeamGameStats(),
+                            away_team_stats=NBATeamGameStats(),
+                            player_stats=NBAGamePlayerStats(home=[], away=[]),
+                        )
+                    )
+                    self._state.mark_scores_emitted(game_id, home_score, away_score)
 
             # Emit GameResultEvent AFTER all play events for correct ordering
             if game_ended:

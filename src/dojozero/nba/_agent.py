@@ -51,6 +51,8 @@ class BettingAgent(BaseBettingAgent):
 
         # Inline config mode (already expanded by trial builder)
         llm_config = config.get("llm", {})
+        if not llm_config:
+            raise ValueError(f"Missing 'llm' config for agent {actor_id}")
         model_type = llm_config.get("model_type", "openai")
         return cls(
             actor_id=actor_id,

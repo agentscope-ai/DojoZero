@@ -10,7 +10,7 @@ import inspect
 import json
 import logging
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Sequence, TypedDict
 
 from agentscope.agent import ReActAgent
@@ -477,6 +477,8 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         # Inline config mode (already expanded by trial builder)
         llm_config = config.get("llm", {})
+        if not llm_config:
+            raise ValueError(f"Missing 'llm' config for agent {actor_id}")
         model_type = llm_config.get("model_type", "openai")
         return cls(
             actor_id=actor_id,
@@ -634,6 +636,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         """Filter out events that should be throttled.
 
         Currently throttles ODDS_UPDATE events to at most once per cooldown period.
+        Uses event timestamps (not wall-clock time) so backtest replay works correctly.
 
         Args:
             events: List of events to filter
@@ -641,7 +644,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         Returns:
             Filtered list of events (throttled events removed)
         """
-        now = datetime.now(timezone.utc)
         filtered: list[StreamEvent[Any]] = []
 
         for event in events:
@@ -651,19 +653,21 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             if isinstance(payload, DataEvent):
                 event_type = getattr(payload, "event_type", None)
                 if event_type == EventTypes.ODDS_UPDATE:
+                    # Use event timestamp for cooldown (works for both live and backtest)
+                    event_time = payload.timestamp
                     if (
                         self._last_odds_update_time
-                        and (now - self._last_odds_update_time)
+                        and (event_time - self._last_odds_update_time)
                         < self._odds_update_cooldown
                     ):
                         logger.debug(
                             "agent '%s' throttling odds_update (last update: %s ago)",
                             self.actor_id,
-                            now - self._last_odds_update_time,
+                            event_time - self._last_odds_update_time,
                         )
                         continue  # Skip this event
-                    # Update last processed time
-                    self._last_odds_update_time = now
+                    # Update last processed time with event timestamp
+                    self._last_odds_update_time = event_time
 
             filtered.append(event)
 

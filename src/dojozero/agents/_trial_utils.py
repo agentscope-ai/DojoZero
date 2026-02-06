@@ -192,7 +192,8 @@ def build_agent_specs(
 
             for single_config in expanded_configs:
                 # Create unique actor_id using model name
-                model_name = single_config["llm"].get("model_name", "unknown")
+                llm_config = single_config["llm"]
+                model_name = llm_config.get("model_name", "unknown")
                 expanded_actor_id = f"{agent_id}-{model_name}"
 
                 # Extract persona from agent_dict (e.g., "degen" from persona field)
@@ -202,12 +203,10 @@ def build_agent_specs(
                     "actor_id": expanded_actor_id,
                     "persona": persona,
                     "sys_prompt": single_config["sys_prompt"],
-                    "llm": single_config["llm"],
+                    "llm": llm_config,
                     # Display fields for agent registration
-                    "model_display_name": single_config["llm"].get(
-                        "model_display_name", ""
-                    ),
-                    "cdn_url": single_config["llm"].get("cdn_url", ""),
+                    "model_display_name": llm_config.get("model_display_name", ""),
+                    "cdn_url": llm_config.get("cdn_url", ""),
                 }
 
                 agent_spec = AgentSpec(
@@ -235,13 +234,15 @@ def build_agent_specs(
             if agent_dict.get("sys_prompt"):
                 inline_agent_config["sys_prompt"] = agent_dict["sys_prompt"]
 
-            # Build LLM config if model_type or model_name are specified
-            if agent_dict.get("model_type") or agent_dict.get("model_name"):
-                inline_llm_config: LLMConfig = {}
-                if agent_dict.get("model_type"):
-                    inline_llm_config["model_type"] = agent_dict["model_type"]
-                if agent_dict.get("model_name"):
-                    inline_llm_config["model_name"] = agent_dict["model_name"]
+            # Build LLM config if model_name and api_key_env are specified
+            if agent_dict.get("model_name") and agent_dict.get("api_key_env"):
+                inline_llm_config: LLMConfig = {
+                    "model_type": agent_dict.get("model_type", "openai"),
+                    "model_name": agent_dict["model_name"],
+                    "api_key_env": agent_dict["api_key_env"],
+                }
+                if agent_dict.get("base_url_env"):
+                    inline_llm_config["base_url_env"] = agent_dict["base_url_env"]
                 if agent_dict.get("model_display_name"):
                     inline_llm_config["model_display_name"] = agent_dict[
                         "model_display_name"

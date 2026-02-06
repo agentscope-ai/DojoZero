@@ -1,182 +1,157 @@
-# Trial Runner - Deployment Guide
+# DojoZero - Deployment Guide
 
-## Setup
-
-1. Transfer project: `scp -r /path/to/DojoZero user@host:/path/` or `git clone`
-2. Run setup: `cd DojoZero && chmod +x deploy/setup.sh && ./deploy/setup.sh` (creates `.env.template` if missing)
-3. Configure: `cp .env.template .env && nano .env` (add `DOJOZERO_TAVILY_API_KEY`, `DOJOZERO_DASHSCOPE_API_KEY`, `DOJOZERO_PROXY_URL`, `DOJOZERO_POLY_PRIVATE_KEY`)
-4. Test: `python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml`
-
-## Usage
-
-The script requires a config file and automatically detects trial type (NBA/NFL) from it:
+## Quick Start (Docker)
 
 ```bash
-# NBA trials (local mode)
-python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml
-python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --date 2025-01-20
+# 1. Configure environment
+cp deploy/.env.template .env
+nano .env  # Fill in API keys and credentials
 
-# NFL trials (local mode)
-python deploy/run_daily_trials.py trial_params/nfl-moneyline.yaml
-python deploy/run_daily_trials.py trial_params/nfl-moneyline.yaml --date 2025-01-20
+# 2. Build and run
+# International (default):
+docker-compose -f deploy/docker-compose.yml up -d --build
 
-# With Dashboard Server (SLS + OSS integration)
-# Terminal 1: Start server (SLS config from env vars)
-dojo0 serve --trace-backend sls --oss-backup
+# China (use mirrors for faster builds):
+CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build
 
-# Terminal 2: Run trials
-python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --server http://localhost:8000
+# 3. Verify
+docker logs dojozero-nba --tail 50
+docker logs dojozero-nfl --tail 50
+curl http://localhost:8001/health  # NBA
+curl http://localhost:8002/health  # NFL
 ```
 
-## Automation
+Two containers run separately for NBA (port 8001) and NFL (port 8002). Each automatically discovers games from ESPN and schedules trials. No cron needed.
 
-**Cron (recommended):**
+---
 
-The setup script can configure cron for you:
+## Architecture
+
+```
+┌───────────────────────────────┐    ┌───────────────────────────────┐
+│  dojozero-nba (port 8001)     │    │  dojozero-nfl (port 8002)     │
+│                               │    │                               │
+│  dojo0 serve                  │    │  dojo0 serve                  │
+│    --trial-source nba.yaml    │    │    --trial-source nfl.yaml    │
+│                               │    │                               │
+│  ┌─────────────────────────┐  │    │  ┌─────────────────────────┐  │
+│  │  ScheduleManager        │  │    │  │  ScheduleManager        │  │
+│  │  - ESPN sync (hourly)   │  │    │  │  - ESPN sync (hourly)   │  │
+│  │  - Game discovery       │  │    │  │  - Game discovery       │  │
+│  │  - Trial lifecycle      │  │    │  │  - Trial lifecycle      │  │
+│  └─────────────────────────┘  │    │  └─────────────────────────┘  │
+│             │                 │    │             │                 │
+│             ▼                 │    │             ▼                 │
+│  ┌────────┬────────┬───────┐  │    │  ┌────────┬────────┬───────┐  │
+│  │  SLS   │  OSS   │ JSONL │  │    │  │  SLS   │  OSS   │ JSONL │  │
+│  └────────┴────────┴───────┘  │    │  └────────┴────────┴───────┘  │
+└───────────────────────────────┘    └───────────────────────────────┘
+                │                                │
+                └────────────┬───────────────────┘
+                             ▼
+                     Shared volumes:
+                     - ./outputs/
+                     - ./data/
+                     - .env
+```
+
+Two separate containers run NBA and NFL independently.
+
+---
+
+## Cloud VM Deployment (ECS/EC2)
+
+### Setup Script
+
 ```bash
-./deploy/setup.sh  # Follow prompts to set up cron
+# SSH into your server
+ssh user@your-server-ip
+
+# Clone the repo
+git clone https://github.com/your-org/DojoZero.git
+cd DojoZero
+
+# Run setup script
+chmod +x deploy/setup.sh
+
+# International:
+./deploy/setup.sh --docker
+
+# China (configures Docker daemon and build mirrors):
+./deploy/setup.sh --docker --china
+
+# Log out and back in for docker group (if Docker was just installed)
+exit
+# SSH back in
+
+# Configure environment
+cd DojoZero
+nano .env  # Fill in credentials
+
+# Build and run
+# International:
+docker-compose -f deploy/docker-compose.yml up -d --build
+
+# China:
+CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build
 ```
 
-Or manually:
+The setup script:
+- Installs Docker and docker-compose if missing
+- With `--china`: Configures Docker daemon with DaoCloud mirror
+- Creates .env from template
+
+### Verify Deployment
+
 ```bash
-crontab -e
-# NBA trials at 6 AM (local mode):
-# 0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --data-dir data/nba-betting >> cron.log 2>&1
+# Check container status
+docker ps
 
-# NFL trials at 10 AM:
-# 0 10 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py trial_params/nfl-moneyline.yaml --data-dir data/nfl >> cron_nfl.log 2>&1
+# View logs
+docker logs dojozero-nba --tail 100
+docker logs dojozero-nfl --tail 100
+
+# Health checks
+curl http://localhost:8001/health  # NBA
+curl http://localhost:8002/health  # NFL
+
+# Check scheduled trials
+curl http://localhost:8001/api/schedules  # NBA
+curl http://localhost:8002/api/schedules  # NFL
 ```
 
-**Systemd (Linux):**
-```ini
-# /etc/systemd/system/nba-trials.service
-[Unit]
-Description=NBA Betting Trials Daily Run
-After=network.target
-[Service]
-Type=oneshot
-User=your-username
-WorkingDirectory=/path/to/DojoZero
-ExecStart=/usr/bin/python3 deploy/run_daily_trials.py trial_params/nba-moneyline.yaml
-StandardOutput=append:/path/to/DojoZero/systemd.log
-StandardError=append:/path/to/DojoZero/systemd_error.log
-
-# /etc/systemd/system/nba-trials.timer
-[Unit]
-Description=Run NBA Betting Trials Daily
-Requires=nba-trials.service
-[Timer]
-OnCalendar=*-*-* 06:00:00
-Persistent=true
-[Install]
-WantedBy=timers.target
-```
-```bash
-sudo systemctl daemon-reload && sudo systemctl enable --now nba-trials.timer
-```
+---
 
 ## Configuration
 
-**CLI options:**
-- `--data-dir` - Output directory (auto-detected from config if not specified)
-- `--server` - Dashboard Server URL for SLS/OSS integration
-- `--log-level` - DEBUG, INFO, WARNING, ERROR (default: INFO)
-- `--timeout` - Timeout in seconds (default: 86400 = 24 hours)
+### Environment Variables
 
-**Example with custom data directory:**
-```bash
-python deploy/run_daily_trials.py trial_params/nfl-moneyline.yaml --data-dir /custom/path --date 2025-01-20
-```
+Copy `deploy/.env.template` to `.env` and fill in:
 
-## Monitoring
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DOJOZERO_DASHSCOPE_API_KEY` | Yes | LLM API key for agent reasoning |
+| `DOJOZERO_TAVILY_API_KEY` | Yes | Web search API key |
+| `ALIBABA_CLOUD_ACCESS_KEY_ID` | Yes | Alibaba Cloud credentials |
+| `ALIBABA_CLOUD_ACCESS_KEY_SECRET` | Yes | Alibaba Cloud credentials |
+| `DOJOZERO_SLS_ENDPOINT` | Yes | SLS endpoint (e.g., `cn-wulanchabu.log.aliyuncs.com`) |
+| `DOJOZERO_SLS_PROJECT` | Yes | SLS project name |
+| `DOJOZERO_SLS_LOGSTORE` | Yes | SLS logstore (default: `dojozero-traces`) |
+| `DOJOZERO_OSS_ENDPOINT` | Yes | OSS endpoint |
+| `DOJOZERO_OSS_BUCKET` | Yes | OSS bucket name |
+| `DOJOZERO_OSS_PREFIX` | No | Key prefix (e.g., `prod/`) |
+| `TZ` | No | Timezone (default: `UTC`) |
 
-```bash
-# Per-game logs (created by trial runner)
-tail -f data/nba-betting/$(date +%Y-%m-%d)/*.log
+### Trial Source Configuration
 
-# Check trial outputs
-ls -lh data/nba-betting/2025-12-17/
-```
+Edit `trial_sources/nba.yaml` or `trial_sources/nfl.yaml`:
 
-## Troubleshooting
-
-- `python3 not found` → Install Python 3.11+, check PATH
-- `DOJOZERO_TAVILY_API_KEY not set` or missing keys → Verify `.env` exists with all required keys (`chmod 600 .env`)
-- `No games found` → Normal if no games scheduled
-- `Trials timed out` → Increase `--timeout` value
-- Cron not running → Check `crontab -l`, service status, logs
-
-## Maintenance
-
-```bash
-# Update
-uv pip install --upgrade . "tavily-python" "dashscope"
-
-# Clean old game logs (30+ days)
-find data/nba-betting/ -name "*.log" -mtime +30 -delete
-
-# Backup
-tar -czf nba-betting-backup-$(date +%Y%m%d).tar.gz data/nba-betting/
-```
-
-## SLS + OSS Integration (Production)
-
-For production deployments with trace export and backup, use the Dashboard Server.
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    DASHBOARD SERVER                              │
-│                    (dojo0 serve)                                 │
-│                                                                  │
-│   --trace-backend sls  →  SLS trace export (config from env)    │
-│   --oss-backup         →  OSS backup on trial stop              │
-└─────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ --server http://localhost:8000
-                              │
-┌─────────────────────────────────────────────────────────────────┐
-│                    TRIAL RUNNER                                  │
-│              (deploy/run_daily_trials.py)                        │
-│                                                                  │
-│   Submits trials to Dashboard Server                             │
-│   Local events JSONL still written to --data-dir                │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Configuration
-
-Add to `.env`:
-```bash
-# SLS credentials - handled by alibabacloud-credentials SDK
-ALIBABA_CLOUD_ACCESS_KEY_ID=LTAI5t...
-ALIBABA_CLOUD_ACCESS_KEY_SECRET=abc123...
-
-# SLS configuration
-DOJOZERO_SLS_PROJECT=my-project
-DOJOZERO_SLS_ENDPOINT=cn-hangzhou.log.aliyuncs.com
-DOJOZERO_SLS_LOGSTORE=dojozero-traces
-
-# OSS configuration (for backup)
-DOJOZERO_OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
-DOJOZERO_OSS_BUCKET=your-bucket-name
-DOJOZERO_OSS_PREFIX=prod/  # Optional prefix for all keys
-```
-
-### Usage
-
-**Start Dashboard Server (keep running):**
-```bash
-# SLS configuration is read from environment variables
-dojo0 serve --trace-backend sls --oss-backup
-```
-
-**Run trials via cron:**
-```bash
-crontab -e
-# Add:
-0 6 * * * cd /path/to/DojoZero && python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --data-dir data/nba-betting --server http://localhost:8000 >> cron.log 2>&1
+```yaml
+# Schedule options
+pre_start_hours: 0.1           # Start 6 minutes before game
+sync_interval_seconds: 3600.0  # Sync with ESPN every hour
+check_interval_seconds: 60.0   # Check game status every minute
+auto_stop_on_completion: true  # Stop when game ends
 ```
 
 ### Common SLS/OSS Endpoints
@@ -185,19 +160,186 @@ crontab -e
 |--------|--------------|--------------|
 | China (Hangzhou) | `cn-hangzhou.log.aliyuncs.com` | `oss-cn-hangzhou.aliyuncs.com` |
 | China (Shanghai) | `cn-shanghai.log.aliyuncs.com` | `oss-cn-shanghai.aliyuncs.com` |
-| China (Beijing) | `cn-beijing.log.aliyuncs.com` | `oss-cn-beijing.aliyuncs.com` |
 | China (Wulanchabu) | `cn-wulanchabu.log.aliyuncs.com` | `oss-cn-wulanchabu.aliyuncs.com` |
 
-### Data Flow
+---
 
-| Location | Description |
-|----------|-------------|
-| Local `{data-dir}/{date}/{game_id}.jsonl` | Always written |
-| SLS | Real-time trace spans (if server has `--trace-backend sls`) |
-| OSS `trials/{trial_id}/events.jsonl` | Backup on trial stop (if server has `--oss-backup`) |
+## Operations
 
-## Advanced
+### View Logs
 
-- Custom data dir: `python deploy/run_daily_trials.py trial_params/nba-moneyline.yaml --data-dir /custom/path`
-- Multiple dates: Loop through dates with `--date` parameter
-- Run both NBA and NFL: Set up two cron entries with different configs
+```bash
+# Live logs (Docker handles rotation: 5 files x 100MB per container)
+docker logs dojozero-nba -f
+docker logs dojozero-nfl -f
+
+# Recent logs
+docker logs dojozero-nba --tail 100
+docker logs dojozero-nfl --tail 100
+
+# Logs since timestamp
+docker logs dojozero-nba --since 2025-01-20T10:00:00
+```
+
+### Restart / Update
+
+```bash
+# Restart (after .env changes)
+docker compose -f deploy/docker-compose.yml restart
+
+# Update code and rebuild
+cd DojoZero
+git pull
+docker compose -f deploy/docker-compose.yml up -d --build
+
+# Full rebuild (clear cache)
+docker compose -f deploy/docker-compose.yml build --no-cache
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+### Stop
+
+```bash
+# Stop container (preserves volumes)
+docker compose -f deploy/docker-compose.yml down
+
+# Stop and remove volumes (full reset)
+docker compose -f deploy/docker-compose.yml down -v
+```
+
+### Monitor Resources
+
+```bash
+# CPU/memory usage
+docker stats dojozero-nba dojozero-nfl
+
+# Disk usage
+docker system df
+du -sh outputs/ data/
+```
+
+---
+
+## Maintenance
+
+### Clean Up Old Data
+
+```bash
+# Remove event files older than 30 days
+find outputs/ -name "*.jsonl" -mtime +30 -delete
+
+# Remove old log files
+find data/ -name "*.log" -mtime +30 -delete
+
+# Docker cleanup (unused images, containers, volumes)
+docker system prune -f
+```
+
+### Backup
+
+```bash
+# Backup outputs directory
+tar -czf backup-$(date +%Y%m%d).tar.gz outputs/
+
+# Note: Event data is also backed up to OSS automatically when trials stop
+```
+
+### Check Trial Data
+
+```bash
+# List recent trial outputs
+ls -lht outputs/ | head -20
+
+# View specific trial events
+cat outputs/2025-01-20/401810490.jsonl | head -10
+```
+
+---
+
+## Troubleshooting
+
+### Container won't start
+
+```bash
+# Check logs for errors
+docker logs dojozero-nba
+docker logs dojozero-nfl
+
+# Common issues:
+# - Missing .env file or variables
+# - Invalid API keys
+# - Port 8001/8002 already in use
+```
+
+### No trials scheduled
+
+```bash
+# Check if trial sources loaded
+curl http://localhost:8001/api/trial-sources  # NBA
+curl http://localhost:8002/api/trial-sources  # NFL
+
+# Check ESPN sync status
+docker logs dojozero-nba | grep -i "sync\|espn\|schedule"
+docker logs dojozero-nfl | grep -i "sync\|espn\|schedule"
+
+# Verify trial source configs exist
+ls -la trial_sources/
+```
+
+### SLS/OSS connection issues
+
+```bash
+# Validate credentials
+python tools/validate_alicloud_access.py --verbose
+
+# Check endpoints match region
+# SLS and OSS should be in same region for best performance
+```
+
+### Health check failing
+
+```bash
+# Check if servers are responding
+curl -v http://localhost:8001/health  # NBA
+curl -v http://localhost:8002/health  # NFL
+
+# Check containers are running
+docker ps -a | grep dojozero
+
+# Restart containers
+docker-compose -f deploy/docker-compose.yml restart
+```
+
+---
+
+## Volume Mounts
+
+| Host Path | Container Path | Purpose |
+|-----------|----------------|---------|
+| `./outputs` | `/app/outputs` | Trial event JSONL files (shared) |
+| `./data` | `/app/data` | Local data cache (shared) |
+| `./trial_sources` | `/app/trial_sources` | Trial source configs (read-only) |
+| `dojozero-nba-schedules` | `/app/.dojozero` | NBA schedule state |
+| `dojozero-nfl-schedules` | `/app/.dojozero` | NFL schedule state |
+
+---
+
+## Local Development
+
+For development without Docker:
+
+```bash
+# Setup (installs Python deps via uv)
+chmod +x deploy/setup.sh
+./deploy/setup.sh
+
+# Configure
+cp .env.template .env
+nano .env
+
+# Run single trial
+dojo0 run trial_params/nba-moneyline.yaml
+
+# Run server locally
+dojo0 serve --trial-source trial_sources/nba.yaml
+```

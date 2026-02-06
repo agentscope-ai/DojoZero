@@ -497,7 +497,44 @@ class NFLStore(DataStore):
                 possession_team = situation.get("possession", "")
                 down = int(situation.get("down", 0) or 0)
                 distance = int(situation.get("distance", 0) or 0)
-                yard_line = situation.get("yardLine", "")
+                yard_line_raw = situation.get("yardLine", "")
+
+                # Convert yard_line to 0-100 int
+                # API may return integer (26) or string "KC 25" format
+                # 0 = home goal line, 100 = away goal line
+                yard_line = 0
+                if isinstance(yard_line_raw, int):
+                    # Already an integer (PBP-style format)
+                    yard_line = yard_line_raw
+                elif yard_line_raw:
+                    yard_line_str = str(yard_line_raw)
+                    if " " in yard_line_str:
+                        # "KC 25" format - parse team and yards
+                        try:
+                            parts = yard_line_str.split()
+                            yl_team = parts[0]
+                            yl_yards = int(parts[1])
+                            # Get home team abbreviation
+                            home_abbrev = ""
+                            for team in teams:
+                                if team and team.get("homeAway") == "home":
+                                    team_info = team.get("team", {}) or {}
+                                    home_abbrev = team_info.get("abbreviation", "")
+                                    break
+                            # If yard_line team is home team, it's in home territory (0-50)
+                            # If yard_line team is away team, it's in away territory (50-100)
+                            if yl_team == home_abbrev:
+                                yard_line = yl_yards
+                            else:
+                                yard_line = 100 - yl_yards
+                        except (ValueError, IndexError):
+                            yard_line = 0
+                    else:
+                        # Plain numeric string
+                        try:
+                            yard_line = int(yard_line_str)
+                        except ValueError:
+                            yard_line = 0
 
                 # Get line scores from header competitors
                 home_line_scores: list[int] = []
@@ -601,6 +638,10 @@ class NFLStore(DataStore):
                                 away_line_scores=away_line_scores,
                             )
                         )
+                        # Track emitted scores for score-change detection in PBP
+                        self._state.mark_scores_emitted(
+                            event_id, home_score, away_score
+                        )
                         # Mark final update as emitted if game is concluded
                         if game_concluded:
                             self._state.mark_final_update_emitted(event_id)
@@ -690,6 +731,7 @@ class NFLStore(DataStore):
 
         Emits:
         - NFLPlayEvent for each new play
+        - NFLGameUpdateEvent immediately after scoring plays (score-change detection)
         - GameStartEvent when first play is detected
         """
         events: list[DataEvent] = []
@@ -797,6 +839,9 @@ class NFLStore(DataStore):
                 int(start.get("yardLine", 0) or 0) if isinstance(start, dict) else 0
             )
 
+            home_score = int(play.get("homeScore", 0) or 0)
+            away_score = int(play.get("awayScore", 0) or 0)
+
             events.append(
                 NFLPlayEvent(
                     timestamp=timestamp,
@@ -815,14 +860,46 @@ class NFLStore(DataStore):
                     yards_gained=int(play.get("statYardage", 0) or 0),
                     is_scoring_play=is_scoring,
                     score_value=score_value,
-                    home_score=int(play.get("homeScore", 0) or 0),
-                    away_score=int(play.get("awayScore", 0) or 0),
+                    home_score=home_score,
+                    away_score=away_score,
                     team_id=team_id,
                     team_tricode=team_abbrev,
                     team_abbreviation=team_abbrev,
                     is_turnover=bool(play.get("isTurnover", False)),
                 )
             )
+
+            # Emit immediate game update after scoring plays for real-time score tracking
+            if is_scoring and self._state.score_changed(
+                event_id, home_score, away_score
+            ):
+                logger.info(
+                    "Score change detected for game %s: %d-%d (scoring play)",
+                    event_id,
+                    home_score,
+                    away_score,
+                )
+                events.append(
+                    NFLGameUpdateEvent(
+                        timestamp=timestamp,
+                        game_timestamp=play_game_timestamp,
+                        game_id=event_id,
+                        sport="nfl",
+                        period=quarter,
+                        game_clock=game_clock,
+                        home_score=home_score,
+                        away_score=away_score,
+                        possession=team_abbrev,
+                        down=down,
+                        distance=distance,
+                        yard_line=yard_line,
+                        home_team_stats=NFLTeamGameStats(),
+                        away_team_stats=NFLTeamGameStats(),
+                        home_line_scores=[],
+                        away_line_scores=[],
+                    )
+                )
+                self._state.mark_scores_emitted(event_id, home_score, away_score)
 
         return events
 
