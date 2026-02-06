@@ -2771,11 +2771,11 @@ def create_arena_app(
         )
 
         all_games = games.live_games + games.upcoming_games + games.completed_games
-        # Fallback: use all_games if live_games is empty
-        live_games_to_return = games.live_games if games.live_games else all_games
+        # NOTE! Fallback: use all_games if live_games is empty! For temporary use
+        live_games = games.live_games if games.live_games else all_games
         response = LandingResponse(
             stats=stats,
-            live_games=live_games_to_return,
+            live_games=live_games,
             all_games=all_games,
             live_agent_actions=agent_actions,
         )
