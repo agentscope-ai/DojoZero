@@ -10,6 +10,14 @@ Orchestrates betting trials for NFL games:
 - Persists all events to event files (for backtesting)
 """
 
+# Load .env file before importing other modules
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed
+
 import argparse
 import asyncio
 import hashlib
