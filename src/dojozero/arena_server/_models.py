@@ -17,6 +17,13 @@ from dojozero.core._models import AgentAction, LeaderboardEntry
 from dojozero.data._models import TeamIdentity
 
 # ============================================================================
+# Type Aliases
+# ============================================================================
+
+# Type alias for replay error reasons
+ReplayErrorReason = Literal["trial_not_found", "trial_still_running", "no_data"]
+
+# ============================================================================
 # Arena API Response Models
 # ============================================================================
 
