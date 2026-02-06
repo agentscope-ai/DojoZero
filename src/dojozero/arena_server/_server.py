@@ -66,6 +66,7 @@ from dojozero.arena_server._models import (
     TrialDetailResponse,
     TrialListItem,
     WSHeartbeatMessage,
+    WSReplayMetaInfoMessage,
     WSReplayStatusMessage,
     WSReplayUnavailableMessage,
     WSSnapshotMessage,
@@ -1433,10 +1434,33 @@ class LandingPageCache:
 
 
 @dataclass
+class PeriodInfo:
+    """Information about a single period/quarter in a game."""
+
+    period: int
+    play_count: int  # Number of plays in this period
+    start_play_index: int  # Index of first play in this period (0-based)
+
+
+@dataclass
+class ReplayMetaInfo:
+    """Pre-computed metadata for replay progress tracking.
+
+    Computed once when caching replay data. Enables O(1) seek operations
+    and provides period segmentation for frontend progress bar.
+    """
+
+    total_play_count: int  # Number of items matching core_categories
+    play_item_indices: list[int]  # play_index -> item_index mapping
+    periods: list[PeriodInfo]  # Period segmentation info
+
+
+@dataclass
 class ReplayCacheEntry:
     """Cache entry for replay data."""
 
     items: list[dict[str, Any]]  # Serialized spans for WS
+    meta: ReplayMetaInfo  # Pre-computed metadata
     created_at: float = field(default_factory=time.time)
     ttl: float = 3600.0  # 1 hour default
 
@@ -1450,29 +1474,38 @@ class ReplayCache:
 
     Only stores data for trials that have ended (trial.stopped/terminated).
     Reduces SLS queries for frequently replayed trials.
+
+    The cache stores both the serialized items and pre-computed metadata
+    (play indices, period info) to enable efficient seek operations.
     """
 
     _cache: dict[str, ReplayCacheEntry] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     ttl: float = 3600.0  # 1 hour
     max_entries: int = 100  # Max trials to cache
+    core_categories: list[str] = field(default_factory=lambda: ["play"])
 
-    async def get(self, trial_id: str) -> list[dict[str, Any]] | None:
-        """Get cached replay data, or None if not cached/expired."""
+    async def get(self, trial_id: str) -> ReplayCacheEntry | None:
+        """Get cached replay entry, or None if not cached/expired."""
         async with self._lock:
             entry = self._cache.get(trial_id)
             if entry and entry.is_valid():
                 LOGGER.debug(
-                    "ReplayCache HIT: %s (%d items)", trial_id, len(entry.items)
+                    "ReplayCache HIT: %s (%d items, %d plays)",
+                    trial_id,
+                    len(entry.items),
+                    entry.meta.total_play_count,
                 )
-                return entry.items
+                return entry
             elif entry:
                 # Expired, remove it
                 del self._cache[trial_id]
                 LOGGER.debug("ReplayCache EXPIRED: %s", trial_id)
             return None
 
-    async def set(self, trial_id: str, items: list[dict[str, Any]]) -> None:
+    async def set(
+        self, trial_id: str, items: list[dict[str, Any]], meta: ReplayMetaInfo
+    ) -> None:
         """Cache replay data for a completed trial."""
         async with self._lock:
             # Evict oldest if at capacity
@@ -1483,9 +1516,16 @@ class ReplayCache:
 
             self._cache[trial_id] = ReplayCacheEntry(
                 items=items,
+                meta=meta,
                 ttl=self.ttl,
             )
-            LOGGER.info("ReplayCache SET: %s (%d items)", trial_id, len(items))
+            LOGGER.info(
+                "ReplayCache SET: %s (%d items, %d plays, %d periods)",
+                trial_id,
+                len(items),
+                meta.total_play_count,
+                len(meta.periods),
+            )
 
     def invalidate(self, trial_id: str) -> None:
         """Remove a trial from cache."""
@@ -1500,6 +1540,7 @@ class ReplayCache:
             "valid_entries": valid_count,
             "max_entries": self.max_entries,
             "ttl": self.ttl,
+            "core_categories": self.core_categories,
         }
 
 
@@ -1544,17 +1585,18 @@ class TrialReplayController:
     """Controls replay of a completed trial's historical data.
 
     Loads from real trace data. Supports 1x, 2x, 4x, 10x, 20x playback speeds.
+    Supports seeking to specific play positions using pre-computed metadata.
     """
 
     trial_id: str
-    items: list[dict[str, Any]] = field(default_factory=list)
+    items: list[dict[str, Any]]
+    meta: ReplayMetaInfo
     current_index: int = 0
-    speed: float = 1.0  # 1x, 2x, 4x
+    speed: float = 1.0  # 1x, 2x, 4x, 10x, 20x
     is_paused: bool = False
     base_interval: float = 2.0  # 2 seconds per event at 1x speed
-
-    # Initial snapshot size (first N items sent immediately)
-    snapshot_size: int = 20
+    heartbeat_interval: float = 5.0  # Fixed interval for heartbeat (not affected by speed)
+    snapshot_size: int = 20  # Number of items to send in snapshot
 
     def set_speed(self, speed: float) -> None:
         """Set playback speed (1x, 2x, 4x, 10x, 20x)."""
@@ -1601,11 +1643,48 @@ class TrialReplayController:
         return item
 
     def get_effective_interval(self) -> float:
-        """Get actual interval based on speed."""
+        """Get actual playback interval based on speed."""
         return self.base_interval / self.speed
 
     def is_complete(self) -> bool:
         return self.current_index >= len(self.items)
+
+    def seek_to_play_index(self, play_index: int) -> list[dict[str, Any]]:
+        """Seek to a specific play index and return snapshot of items up to that point.
+
+        Args:
+            play_index: 0-based index among play items (not all items)
+
+        Returns:
+            List of items to send as snapshot (last snapshot_size items up to target)
+        """
+        if not self.meta.play_item_indices:
+            # No plays, return empty
+            return []
+
+        # Clamp play_index to valid range
+        play_index = max(0, min(play_index, self.meta.total_play_count - 1))
+
+        # Find the actual item index for this play
+        target_item_index = self.meta.play_item_indices[play_index]
+
+        # Set current_index to continue from after this item
+        self.current_index = target_item_index + 1
+
+        # Return last snapshot_size items up to and including the target
+        start = max(0, target_item_index + 1 - self.snapshot_size)
+        return self.items[start : target_item_index + 1]
+
+    def get_current_play_index(self) -> int:
+        """Get current position in terms of play index (0-based)."""
+        # Binary search would be more efficient, but linear is fine for typical sizes
+        count = 0
+        for play_item_idx in self.meta.play_item_indices:
+            if play_item_idx < self.current_index:
+                count += 1
+            else:
+                break
+        return count
 
     def get_status(self) -> WSReplayStatusMessage:
         """Get current replay status."""
@@ -1614,6 +1693,8 @@ class TrialReplayController:
         return WSReplayStatusMessage(
             current_index=self.current_index,
             total_items=total,
+            current_play_index=self.get_current_play_index(),
+            total_play_count=self.meta.total_play_count,
             is_paused=self.is_paused,
             speed=self.speed,
             progress_percent=round(progress, 1),
@@ -2334,16 +2415,77 @@ async def _compute_leaderboard(
     return ranked
 
 
+def _compute_replay_meta(
+    items: list[dict[str, Any]],
+    core_categories: list[str],
+) -> ReplayMetaInfo:
+    """Compute replay metadata from serialized items.
+
+    Scans through items once to build:
+    - play_item_indices: mapping from play_index to item_index
+    - periods: list of PeriodInfo with play counts per period
+
+    Args:
+        items: List of serialized span dicts with "category" and "data" keys
+        core_categories: Categories to count as "plays" (e.g., ["play"])
+
+    Returns:
+        ReplayMetaInfo with pre-computed indices and period info
+    """
+    play_item_indices: list[int] = []
+    period_play_counts: dict[int, int] = {}  # period -> play count
+    period_start_indices: dict[int, int] = {}  # period -> first play index
+
+    current_period: int = 1  # Default period
+
+    for item_index, item in enumerate(items):
+        category = item.get("category", "")
+        data = item.get("data", {})
+
+        # Track core category items (plays)
+        if category in core_categories:
+            play_index = len(play_item_indices)
+            play_item_indices.append(item_index)
+
+            # Get period from play data
+            period = data.get("period")
+            if period is not None and isinstance(period, int):
+                current_period = period
+
+            # Track period stats
+            if current_period not in period_play_counts:
+                period_play_counts[current_period] = 0
+                period_start_indices[current_period] = play_index
+            period_play_counts[current_period] += 1
+
+    # Build sorted periods list
+    periods: list[PeriodInfo] = []
+    for period in sorted(period_play_counts.keys()):
+        periods.append(
+            PeriodInfo(
+                period=period,
+                play_count=period_play_counts[period],
+                start_play_index=period_start_indices[period],
+            )
+        )
+
+    return ReplayMetaInfo(
+        total_play_count=len(play_item_indices),
+        play_item_indices=play_item_indices,
+        periods=periods,
+    )
+
+
 async def _load_replay_data(
     trace_reader: TraceReader,
     replay_cache: ReplayCache,
     trial_id: str,
-) -> tuple[list[dict[str, Any]] | None, ReplayErrorReason | Literal[""]]:
+) -> tuple[ReplayCacheEntry | None, ReplayErrorReason | Literal[""]]:
     """Load replay data for a trial.
 
     Returns:
-        Tuple of (items, error_reason)
-        - If successful: (items, "")
+        Tuple of (cache_entry, error_reason)
+        - If successful: (ReplayCacheEntry, "")
         - If failed: (None, reason)
 
     Reasons:
@@ -2390,10 +2532,12 @@ async def _load_replay_data(
     if not items:
         return None, "no_data"
 
-    # 4. Cache the result (only for completed trials)
-    await replay_cache.set(trial_id, items)
+    # 4. Compute metadata and cache the result
+    meta = _compute_replay_meta(items, replay_cache.core_categories)
+    await replay_cache.set(trial_id, items, meta)
 
-    return items, ""
+    # Return a fresh entry (same as what we just cached)
+    return ReplayCacheEntry(items=items, meta=meta), ""
 
 
 def create_arena_app(
@@ -2962,39 +3106,63 @@ def create_arena_app(
             await state.broadcaster.unsubscribe(trial_id, websocket)
 
     @app.websocket("/ws/trials/{trial_id}/replay")
-    async def trial_replay(websocket: WebSocket, trial_id: str):
+    async def trial_replay(
+        websocket: WebSocket,
+        trial_id: str,
+        autostart: bool = Query(
+            default=True,
+            description="Auto-start playback on connection. If false, waits for resume.",
+        ),
+        snapshot_size: int = Query(
+            default=20,
+            description="Number of items to include in snapshot.",
+            ge=1,
+            le=200,
+        ),
+    ):
         """WebSocket endpoint for replaying completed trials.
 
         Only works for trials that have ended (trial.stopped/terminated).
-        Replays at uniform speed with support for pause/resume and speed control.
+        Replays at uniform speed with support for pause/resume, speed control, and seeking.
+
+        Query Parameters:
+            autostart: If false, only sends meta_info; waits for resume to start (default: true)
+            snapshot_size: Number of items in snapshot (default: 20)
 
         Control commands (send as JSON):
-            {"command": "pause"}              - Pause replay
-            {"command": "resume"}             - Resume replay
-            {"command": "speed", "value": 2}  - Set speed (1, 2, 4, 10, or 20)
-            {"command": "reset"}              - Restart from beginning
-            {"command": "status"}             - Get current status
+            {"command": "pause"}                     - Pause replay
+            {"command": "resume"}                    - Resume replay (also starts if autostart=false)
+            {"command": "speed", "value": 2}         - Set speed (1, 2, 4, 10, or 20)
+            {"command": "reset"}                     - Restart from beginning
+            {"command": "seek", "play_index": N}     - Seek to play index N (0-based)
+            {"command": "status"}                    - Get current status
 
         Server messages:
-            {"type": "snapshot", ...}           - Initial batch of events
-            {"type": "span", ...}               - Single event during playback
-            {"type": "replay_status", ...}      - Playback status update
-            {"type": "replay_unavailable", ...} - Replay not available
-            {"type": "trial_ended", ...}        - End of replay
-            {"type": "heartbeat", ...}          - Keepalive
+            {"type": "replay_meta_info", ...}       - Metadata (sent first, always)
+            {"type": "snapshot", ...}               - Batch of events
+            {"type": "span", ...}                   - Single event during playback
+            {"type": "replay_status", ...}          - Playback status update
+            {"type": "replay_unavailable", ...}     - Replay not available
+            {"type": "trial_ended", ...}            - End of replay
+            {"type": "heartbeat", ...}              - Keepalive (fixed interval)
         """
         state = get_server_state()
         await websocket.accept()
-        LOGGER.info("Replay WebSocket connection accepted for trial '%s'", trial_id)
+        LOGGER.info(
+            "Replay WebSocket connection accepted for trial '%s' (autostart=%s, snapshot_size=%d)",
+            trial_id,
+            autostart,
+            snapshot_size,
+        )
 
-        # Load replay data
-        items, error_reason = await _load_replay_data(
+        # Load replay data (includes pre-computed meta)
+        cache_entry, error_reason = await _load_replay_data(
             state.trace_reader,
             state.replay_cache,
             trial_id,
         )
 
-        if items is None:
+        if cache_entry is None:
             # Send unavailable message and close
             unavailable_msg = WSReplayUnavailableMessage(
                 trial_id=trial_id,
@@ -3006,37 +3174,83 @@ def create_arena_app(
             LOGGER.info("Replay unavailable for trial '%s': %s", trial_id, error_reason)
             return
 
-        # Create controller
+        # Create controller with pre-computed meta
         controller = TrialReplayController(
             trial_id=trial_id,
-            items=items,
+            items=cache_entry.items,
+            meta=cache_entry.meta,
+            snapshot_size=snapshot_size,
         )
 
         try:
-            # Send initial snapshot
-            snapshot_items = controller.get_snapshot_items()
-            snapshot_msg = WSSnapshotMessage(
+            # 1. Always send meta info first
+            meta_msg = WSReplayMetaInfoMessage(
                 trial_id=trial_id,
+                total_items=len(cache_entry.items),
+                total_play_count=cache_entry.meta.total_play_count,
+                periods=[
+                    {
+                        "period": p.period,
+                        "playCount": p.play_count,
+                        "startPlayIndex": p.start_play_index,
+                    }
+                    for p in cache_entry.meta.periods
+                ],
                 timestamp=datetime.now(timezone.utc),
-                data={"items": snapshot_items},
             )
-            await websocket.send_text(snapshot_msg.model_dump_json())
+            await websocket.send_text(meta_msg.model_dump_json())
             LOGGER.info(
-                "Replay: Sent snapshot with %d items for trial '%s'",
-                len(snapshot_items),
+                "Replay: Sent meta info for trial '%s' (plays=%d, periods=%d)",
                 trial_id,
+                cache_entry.meta.total_play_count,
+                len(cache_entry.meta.periods),
             )
+
+            # 2. If autostart, send initial snapshot; otherwise pause and wait
+            if autostart:
+                snapshot_items = controller.get_snapshot_items()
+                snapshot_msg = WSSnapshotMessage(
+                    trial_id=trial_id,
+                    timestamp=datetime.now(timezone.utc),
+                    data={"items": snapshot_items},
+                )
+                await websocket.send_text(snapshot_msg.model_dump_json())
+                LOGGER.info(
+                    "Replay: Sent snapshot with %d items for trial '%s'",
+                    len(snapshot_items),
+                    trial_id,
+                )
+            else:
+                # Pause immediately when autostart=false
+                controller.pause()
+                LOGGER.info("Replay: Waiting for resume command (autostart=false)")
 
             # Send initial status
             await websocket.send_text(controller.get_status().model_dump_json())
 
+            # Track last heartbeat time (separate from playback timing)
+            last_heartbeat_time = time.time()
+
             # Main replay loop
             while True:
+                # Calculate timeout: use shorter of playback interval and time until next heartbeat
+                playback_interval = controller.get_effective_interval()
+                time_since_heartbeat = time.time() - last_heartbeat_time
+                time_until_heartbeat = max(
+                    0, controller.heartbeat_interval - time_since_heartbeat
+                )
+
+                # When paused, only wait for heartbeat; when playing, use shorter interval
+                if controller.is_paused:
+                    timeout = time_until_heartbeat
+                else:
+                    timeout = min(playback_interval, time_until_heartbeat)
+
                 try:
                     # Wait for command or timeout
                     msg_text = await asyncio.wait_for(
                         websocket.receive_text(),
-                        timeout=controller.get_effective_interval(),
+                        timeout=max(timeout, 0.1),  # Minimum 100ms to avoid busy loop
                     )
 
                     # Handle command
@@ -3048,6 +3262,15 @@ def create_arena_app(
                         if command == "pause":
                             controller.pause()
                         elif command == "resume":
+                            # If first resume after autostart=false, send snapshot
+                            if not autostart and controller.current_index == 0:
+                                snapshot_items = controller.get_snapshot_items()
+                                snapshot_msg = WSSnapshotMessage(
+                                    trial_id=trial_id,
+                                    timestamp=datetime.now(timezone.utc),
+                                    data={"items": snapshot_items},
+                                )
+                                await websocket.send_text(snapshot_msg.model_dump_json())
                             controller.resume()
                         elif command == "speed" and value is not None:
                             controller.set_speed(float(value))
@@ -3061,6 +3284,20 @@ def create_arena_app(
                                 data={"items": snapshot_items},
                             )
                             await websocket.send_text(snapshot_msg.model_dump_json())
+                        elif command == "seek":
+                            play_index = command_data.get("play_index", 0)
+                            seek_items = controller.seek_to_play_index(int(play_index))
+                            snapshot_msg = WSSnapshotMessage(
+                                trial_id=trial_id,
+                                timestamp=datetime.now(timezone.utc),
+                                data={"items": seek_items},
+                            )
+                            await websocket.send_text(snapshot_msg.model_dump_json())
+                            LOGGER.debug(
+                                "Replay: Seeked to play_index %d for trial '%s'",
+                                play_index,
+                                trial_id,
+                            )
                         elif command == "status":
                             pass  # Just send status below
                         else:
@@ -3076,13 +3313,16 @@ def create_arena_app(
                         LOGGER.warning("Invalid JSON command: %s", msg_text)
 
                 except asyncio.TimeoutError:
-                    # No command, continue playback if not paused
-                    if controller.is_paused:
-                        # Send heartbeat while paused
+                    # Check if we need to send heartbeat (fixed interval)
+                    if time.time() - last_heartbeat_time >= controller.heartbeat_interval:
                         heartbeat = WSHeartbeatMessage(
                             timestamp=datetime.now(timezone.utc),
                         )
                         await websocket.send_text(heartbeat.model_dump_json())
+                        last_heartbeat_time = time.time()
+
+                    # Skip playback logic if paused
+                    if controller.is_paused:
                         continue
 
                     if controller.is_complete():
@@ -3094,7 +3334,7 @@ def create_arena_app(
                         await websocket.send_text(ended_msg.model_dump_json())
                         LOGGER.info("Replay completed for trial '%s'", trial_id)
 
-                        # Pause at end, allow reset
+                        # Pause at end, allow reset/seek
                         controller.pause()
                         await websocket.send_text(
                             controller.get_status().model_dump_json()
@@ -3141,13 +3381,13 @@ def create_arena_app(
         """
         state = get_server_state()
 
-        items, error_reason = await _load_replay_data(
+        cache_entry, error_reason = await _load_replay_data(
             state.trace_reader,
             state.replay_cache,
             trial_id,
         )
 
-        if items is None:
+        if cache_entry is None:
             response = ReplayResponse(
                 trial_id=trial_id,
                 available=False,
@@ -3162,9 +3402,9 @@ def create_arena_app(
         response = ReplayResponse(
             trial_id=trial_id,
             available=True,
-            items=items,
+            items=cache_entry.items,
             reason=None,
-            total_items=len(items),
+            total_items=len(cache_entry.items),
         )
         return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
 
@@ -3272,8 +3512,10 @@ __all__ = [
     "CacheEntry",
     "DEFAULT_CACHE_CONFIG",
     "LandingPageCache",
+    "PeriodInfo",
     "ReplayCache",
     "ReplayCacheEntry",
+    "ReplayMetaInfo",
     "SpanBroadcaster",
     "StreamController",
     "TrialReplayController",
