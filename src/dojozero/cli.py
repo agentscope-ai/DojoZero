@@ -397,6 +397,13 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Path to built static assets to serve (optional).",
     )
+    arena_parser.add_argument(
+        "--no-alias",
+        dest="no_alias",
+        action="store_true",
+        default=False,
+        help="Disable camelCase aliases in REST JSON responses (output snake_case keys instead).",
+    )
 
     # List trials command
     list_trials_parser = subparsers.add_parser(
@@ -2050,6 +2057,7 @@ async def _arena_command(args: argparse.Namespace) -> int:
     trace_query_endpoint = getattr(args, "trace_query_endpoint", None)
     static_dir = getattr(args, "static_dir", None)
     service_name = getattr(args, "service_name", "dojozero")
+    by_alias = not getattr(args, "no_alias", False)
 
     LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
     if trace_backend == "sls":
@@ -2057,6 +2065,7 @@ async def _arena_command(args: argparse.Namespace) -> int:
     else:
         LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_query_endpoint)
     LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
+    LOGGER.info("REST JSON aliases (camelCase): %s", by_alias)
     if static_dir:
         LOGGER.info("Static files: %s", static_dir)
 
@@ -2067,6 +2076,7 @@ async def _arena_command(args: argparse.Namespace) -> int:
         trace_query_endpoint=trace_query_endpoint,
         static_dir=static_dir,
         service_name=service_name,
+        by_alias=by_alias,
     )
     return 0
 

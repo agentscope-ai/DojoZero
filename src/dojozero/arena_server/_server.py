@@ -73,9 +73,6 @@ from dojozero.arena_server._models import (
     WSStreamStatusMessage,
     WSTrialEndedMessage,
 )
-from dojozero.arena_server._replay import (
-    create_replay_websocket_handler,
-)
 from dojozero.betting import AgentInfo, AgentList, AgentResponseMessage
 from dojozero.core._models import (
     AgentAction,
@@ -1546,8 +1543,7 @@ class StreamController:
 class TrialReplayController:
     """Controls replay of a completed trial's historical data.
 
-    Unlike the mock ReplayController, this loads from real trace data.
-    Supports 1x, 2x, 4x playback speeds.
+    Loads from real trace data. Supports 1x, 2x, 4x playback speeds.
     """
 
     trial_id: str
@@ -1636,6 +1632,7 @@ class ArenaServerState:
     static_dir: Path | None = None
     poll_interval: float = 1.0  # Seconds between trace polls
     trace_backend: str = "jaeger"
+    by_alias: bool = True  # Use camelCase aliases in REST JSON responses
 
     # Tracking last poll time per trial for incremental updates
     _last_poll: dict[str, datetime] = field(default_factory=dict)
@@ -2405,6 +2402,7 @@ def create_arena_app(
     static_dir: Path | None = None,
     poll_interval: float = 1.0,
     service_name: str = "dojozero",
+    by_alias: bool = True,
 ) -> FastAPI:
     """Create the Arena Server FastAPI application.
 
@@ -2414,6 +2412,8 @@ def create_arena_app(
         static_dir: Path to static files (React build output)
         poll_interval: Interval for polling new spans
         service_name: Service name for Jaeger or SLS trace backend (use --service-name)
+        by_alias: Use serialization aliases (camelCase) in REST JSON responses.
+            True (default) outputs camelCase keys; False outputs snake_case keys.
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
@@ -2436,6 +2436,7 @@ def create_arena_app(
             static_dir=static_dir,
             poll_interval=poll_interval,
             trace_backend=trace_backend,
+            by_alias=by_alias,
         )
         LOGGER.info(
             "Arena Server started (trace backend: %s, static_dir: %s, service_name: %s)",
@@ -2528,7 +2529,7 @@ def create_arena_app(
                 )
             )
 
-        return JSONResponse(content=[item.model_dump(by_alias=True) for item in result])
+        return JSONResponse(content=[item.model_dump(by_alias=state.by_alias) for item in result])
 
     @app.get("/api/trials/{trial_id}")
     async def get_trial(trial_id: str) -> JSONResponse:
@@ -2563,7 +2564,7 @@ def create_arena_app(
                 )
 
         response = TrialDetailResponse(trial_id=trial_id, items=items)
-        return JSONResponse(content=response.model_dump(by_alias=True))
+        return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
 
     # -------------------------------------------------------------------------
     # Landing Page Endpoints (with caching)
@@ -2628,7 +2629,7 @@ def create_arena_app(
             all_games=all_games,
             live_agent_actions=agent_actions,
         )
-        return JSONResponse(content=response.model_dump(by_alias=True))
+        return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
 
     @app.get("/api/stats")
     async def get_stats(
@@ -2661,7 +2662,7 @@ def create_arena_app(
 
         stats = await state.cache.get_stats(fetch_stats, league=league)
 
-        return JSONResponse(content=stats.model_dump(by_alias=True))
+        return JSONResponse(content=stats.model_dump(by_alias=state.by_alias))
 
     @app.get("/api/games")
     async def get_games(
@@ -2724,7 +2725,7 @@ def create_arena_app(
         filtered = all_games[:limit]
         return JSONResponse(
             content={
-                "games": [g.model_dump(by_alias=True) for g in filtered],
+                "games": [g.model_dump(by_alias=state.by_alias) for g in filtered],
                 "total": len(all_games),
             }
         )
@@ -2769,7 +2770,7 @@ def create_arena_app(
 
         response = LeaderboardResponse(leaderboard=leaderboard)
         return JSONResponse(
-            content=response.model_dump(by_alias=True),
+            content=response.model_dump(by_alias=state.by_alias),
         )
 
     @app.get("/api/agent-actions")
@@ -2818,31 +2819,12 @@ def create_arena_app(
 
         response = AgentActionsResponse(actions=actions)
         return JSONResponse(
-            content=response.model_dump(by_alias=True),
+            content=response.model_dump(by_alias=state.by_alias),
         )
 
     # -------------------------------------------------------------------------
     # WebSocket Endpoint for Real-time Streaming
     # -------------------------------------------------------------------------
-
-    @app.websocket("/ws/test/replay")
-    async def test_replay_stream(websocket: WebSocket):
-        """WebSocket endpoint for testing with recorded replay data.
-
-        This endpoint replays the bundled snapshot_data.json file, allowing
-        frontend developers to test and debug without needing a live trial.
-
-        Control commands (send as JSON):
-            {"command": "speed", "value": 2}  - Set playback speed (0.1x to 10x)
-            {"command": "pause"}              - Pause playback
-            {"command": "resume"}             - Resume playback
-            {"command": "reset"}              - Reset to beginning
-            {"command": "skip", "value": 10}  - Skip forward N events
-            {"command": "seek", "value": 50}  - Jump to event index N
-            {"command": "status"}             - Get current playback status
-        """
-        handler = create_replay_websocket_handler()
-        await handler(websocket)
 
     @app.websocket("/ws/trials/{trial_id}/stream")
     async def trial_stream(websocket: WebSocket, trial_id: str):
@@ -3175,7 +3157,7 @@ def create_arena_app(
             )
             # Return 200 with available=false rather than 404
             # This allows frontend to handle gracefully
-            return JSONResponse(content=response.model_dump(by_alias=True))
+            return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
 
         response = ReplayResponse(
             trial_id=trial_id,
@@ -3184,7 +3166,7 @@ def create_arena_app(
             reason=None,
             total_items=len(items),
         )
-        return JSONResponse(content=response.model_dump(by_alias=True))
+        return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
 
     # -------------------------------------------------------------------------
     # Health Check
@@ -3208,78 +3190,6 @@ def create_arena_app(
         """
         state = get_server_state()
         return JSONResponse(content=state.cache.get_cache_stats())
-
-    # -------------------------------------------------------------------------
-    # Test/Replay Endpoints
-    # -------------------------------------------------------------------------
-
-    @app.get("/api/test/replay-info")
-    async def get_replay_info() -> JSONResponse:
-        """Get information about the available replay data.
-
-        Returns metadata about the bundled snapshot_data.json file,
-        including total items, categories breakdown, and trial info.
-        """
-        from collections import Counter
-
-        from dojozero.arena_server._replay import DEFAULT_SNAPSHOT_PATH
-
-        if not DEFAULT_SNAPSHOT_PATH.exists():
-            return JSONResponse(
-                content={"error": "No replay data available"},
-                status_code=404,
-            )
-
-        import json
-
-        with open(DEFAULT_SNAPSHOT_PATH) as f:
-            data = json.load(f)
-
-        items = data.get("items", [])
-        categories = Counter(item.get("category", "unknown") for item in items)
-
-        # Extract basic trial info from first items
-        trial_info = {}
-        for item in items[:20]:
-            if item.get("category") == "event.game_initialize":
-                game_data = item.get("data", {})
-                trial_info = {
-                    "game_id": game_data.get("game_id"),
-                    "sport": game_data.get("sport"),
-                    "home_team": game_data.get("home_team", {}).get("name"),
-                    "away_team": game_data.get("away_team", {}).get("name"),
-                }
-                break
-
-        return JSONResponse(
-            content={
-                "total_items": len(items),
-                "categories": dict(categories.most_common()),
-                "trial_info": trial_info,
-                "websocket_url": "/ws/test/replay",
-                "commands": [
-                    {
-                        "command": "speed",
-                        "value": "number",
-                        "description": "Set playback speed (0.1x to 10x)",
-                    },
-                    {"command": "pause", "description": "Pause playback"},
-                    {"command": "resume", "description": "Resume playback"},
-                    {"command": "reset", "description": "Reset to beginning"},
-                    {
-                        "command": "skip",
-                        "value": "number",
-                        "description": "Skip forward N events",
-                    },
-                    {
-                        "command": "seek",
-                        "value": "number",
-                        "description": "Jump to event index N",
-                    },
-                    {"command": "status", "description": "Get current playback status"},
-                ],
-            }
-        )
 
     # -------------------------------------------------------------------------
     # Static File Serving (SPA support)
@@ -3318,6 +3228,7 @@ async def run_arena_server(
     trace_query_endpoint: str | None = None,
     static_dir: Path | None = None,
     service_name: str = "dojozero",
+    by_alias: bool = True,
 ) -> None:
     """Run the Arena Server.
 
@@ -3328,6 +3239,7 @@ async def run_arena_server(
         trace_query_endpoint: Jaeger Query API endpoint (only used when trace_backend="jaeger")
         static_dir: Path to static files (React build output)
         service_name: Service name for Jaeger or SLS trace backend (use --service-name)
+        by_alias: Use serialization aliases (camelCase) in REST JSON responses.
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
@@ -3341,6 +3253,7 @@ async def run_arena_server(
         trace_query_endpoint=trace_query_endpoint,
         static_dir=static_dir,
         service_name=service_name,
+        by_alias=by_alias,
     )
 
     config = uvicorn.Config(
