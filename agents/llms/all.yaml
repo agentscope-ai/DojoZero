@@ -30,5 +30,4 @@ llm:
     model_name: grok-4-1-fast-reasoning
     api_key_env: DOJOZERO_XAI_API_KEY
     model_display_name: Grok
-    # TODO: please replace the icon with grok's own logo when it's available
-    cdn_url: https://img.alicdn.com/imgextra/i1/O1CN01ESEMwe1ZfGqicfO7r_!!6000000003221-55-tps-24-24.svg
+    cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01msAuHH23CMJvdjF1u_!!6000000007219-55-tps-24-24.svg
