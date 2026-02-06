@@ -1543,7 +1543,7 @@ class StreamController:
 class TrialReplayController:
     """Controls replay of a completed trial's historical data.
 
-    Loads from real trace data. Supports 1x, 2x, 4x playback speeds.
+    Loads from real trace data. Supports 1x, 2x, 4x, 10x, 20x playback speeds.
     """
 
     trial_id: str
@@ -1557,8 +1557,8 @@ class TrialReplayController:
     snapshot_size: int = 20
 
     def set_speed(self, speed: float) -> None:
-        """Set playback speed (1x, 2x, 4x only)."""
-        allowed = [1.0, 2.0, 4.0]
+        """Set playback speed (1x, 2x, 4x, 10x, 20x)."""
+        allowed = [1.0, 2.0, 4.0, 10.0, 20.0]
         if speed in allowed:
             self.speed = speed
         else:
@@ -2971,7 +2971,7 @@ def create_arena_app(
         Control commands (send as JSON):
             {"command": "pause"}              - Pause replay
             {"command": "resume"}             - Resume replay
-            {"command": "speed", "value": 2}  - Set speed (1, 2, or 4)
+            {"command": "speed", "value": 2}  - Set speed (1, 2, 4, 10, or 20)
             {"command": "reset"}              - Restart from beginning
             {"command": "status"}             - Get current status
 
