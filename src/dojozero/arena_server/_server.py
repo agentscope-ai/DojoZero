@@ -46,7 +46,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -96,6 +96,9 @@ from dojozero.data._models import BaseGameUpdateEvent, GameInitializeEvent, Team
 AgentAction.model_rebuild()
 LeaderboardEntry.model_rebuild()
 BetSummary.model_rebuild()
+
+# Type alias for replay error reasons
+ReplayErrorReason = Literal["trial_not_found", "trial_still_running", "no_data"]
 
 # NBA team data lookup: tricode -> TeamIdentity
 # Used to fill in team details when not available in trial metadata
@@ -514,7 +517,7 @@ class SpanBroadcaster:
         ws_payload = serialize_span_for_ws(typed)
         message = WSSpanMessage(
             trial_id=trial_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc),
             category=ws_payload.get("category", ""),
             data=ws_payload.get("data", {}),
         )
@@ -524,7 +527,7 @@ class SpanBroadcaster:
         """Notify all clients that a trial has ended."""
         message = WSTrialEndedMessage(
             trial_id=trial_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc),
         )
         await self._send_to_trial(trial_id, message)
 
@@ -571,7 +574,7 @@ class SpanBroadcaster:
         )
         message = WSSnapshotMessage(
             trial_id=trial_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc),
             data={"items": items},
         )
         await self._send_to_client(websocket, message)
@@ -1618,7 +1621,7 @@ class TrialReplayController:
             is_paused=self.is_paused,
             speed=self.speed,
             progress_percent=round(progress, 1),
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc),
         )
 
 
@@ -2338,7 +2341,7 @@ async def _load_replay_data(
     trace_reader: TraceReader,
     replay_cache: ReplayCache,
     trial_id: str,
-) -> tuple[list[dict[str, Any]] | None, str]:
+) -> tuple[list[dict[str, Any]] | None, ReplayErrorReason | Literal[""]]:
     """Load replay data for a trial.
 
     Returns:
@@ -2900,7 +2903,7 @@ def create_arena_app(
                             status_msg = WSStreamStatusMessage(
                                 is_paused=True,
                                 buffer_size=len(controller.pause_buffer),
-                                timestamp=datetime.now(timezone.utc).isoformat(),
+                                timestamp=datetime.now(timezone.utc),
                             )
                             await websocket.send_text(status_msg.model_dump_json())
 
@@ -2915,7 +2918,7 @@ def create_arena_app(
                             status_msg = WSStreamStatusMessage(
                                 is_paused=False,
                                 buffered_count=len(buffered),
-                                timestamp=datetime.now(timezone.utc).isoformat(),
+                                timestamp=datetime.now(timezone.utc),
                             )
                             await websocket.send_text(status_msg.model_dump_json())
 
@@ -2923,7 +2926,7 @@ def create_arena_app(
                             status_msg = WSStreamStatusMessage(
                                 is_paused=controller.is_paused,
                                 buffer_size=len(controller.pause_buffer),
-                                timestamp=datetime.now(timezone.utc).isoformat(),
+                                timestamp=datetime.now(timezone.utc),
                             )
                             await websocket.send_text(status_msg.model_dump_json())
 
@@ -2965,7 +2968,7 @@ def create_arena_app(
 
                     # Send heartbeat (even when paused, to keep connection alive)
                     heartbeat = WSHeartbeatMessage(
-                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        timestamp=datetime.now(timezone.utc),
                     )
                     await websocket.send_text(heartbeat.model_dump_json())
 
@@ -3013,8 +3016,8 @@ def create_arena_app(
             # Send unavailable message and close
             unavailable_msg = WSReplayUnavailableMessage(
                 trial_id=trial_id,
-                reason=error_reason,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                reason=cast(ReplayErrorReason, error_reason),
+                timestamp=datetime.now(timezone.utc),
             )
             await websocket.send_text(unavailable_msg.model_dump_json())
             await websocket.close()
@@ -3032,7 +3035,7 @@ def create_arena_app(
             snapshot_items = controller.get_snapshot_items()
             snapshot_msg = WSSnapshotMessage(
                 trial_id=trial_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(timezone.utc),
                 data={"items": snapshot_items},
             )
             await websocket.send_text(snapshot_msg.model_dump_json())
@@ -3072,7 +3075,7 @@ def create_arena_app(
                             snapshot_items = controller.get_snapshot_items()
                             snapshot_msg = WSSnapshotMessage(
                                 trial_id=trial_id,
-                                timestamp=datetime.now(timezone.utc).isoformat(),
+                                timestamp=datetime.now(timezone.utc),
                                 data={"items": snapshot_items},
                             )
                             await websocket.send_text(snapshot_msg.model_dump_json())
@@ -3095,7 +3098,7 @@ def create_arena_app(
                     if controller.is_paused:
                         # Send heartbeat while paused
                         heartbeat = WSHeartbeatMessage(
-                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            timestamp=datetime.now(timezone.utc),
                         )
                         await websocket.send_text(heartbeat.model_dump_json())
                         continue
@@ -3104,7 +3107,7 @@ def create_arena_app(
                         # Send trial ended
                         ended_msg = WSTrialEndedMessage(
                             trial_id=trial_id,
-                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            timestamp=datetime.now(timezone.utc),
                         )
                         await websocket.send_text(ended_msg.model_dump_json())
                         LOGGER.info("Replay completed for trial '%s'", trial_id)
@@ -3121,7 +3124,7 @@ def create_arena_app(
                     if item:
                         span_msg = WSSpanMessage(
                             trial_id=trial_id,
-                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            timestamp=datetime.now(timezone.utc),
                             category=item.get("category", ""),
                             data=item.get("data", {}),
                         )
@@ -3166,7 +3169,7 @@ def create_arena_app(
             response = ReplayResponse(
                 trial_id=trial_id,
                 available=False,
-                reason=error_reason,
+                reason=cast(ReplayErrorReason, error_reason),
                 items=[],
                 total_items=0,
             )
@@ -3178,6 +3181,7 @@ def create_arena_app(
             trial_id=trial_id,
             available=True,
             items=items,
+            reason=None,
             total_items=len(items),
         )
         return JSONResponse(content=response.model_dump(by_alias=True))

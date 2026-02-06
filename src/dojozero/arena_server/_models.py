@@ -230,7 +230,7 @@ class ReplayResponse(BaseModel):
 
     trial_id: str = Field(serialization_alias="trialId")
     available: bool
-    reason: Literal["trial_not_found", "trial_still_running", "no_data"]
+    reason: None | Literal["trial_not_found", "trial_still_running", "no_data"]
     items: list[dict[str, Any]] = Field(default_factory=list)
     total_items: int = Field(default=0, serialization_alias="totalItems")
 
