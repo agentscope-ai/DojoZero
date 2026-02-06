@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from dojozero.data._models import (
     DataEvent,
     GameInitializeEvent,
+    GameResultEvent,
     GameStartEvent,
     OddsUpdateEvent,
     PreGameInsightEvent,
@@ -400,6 +401,12 @@ class DataHub:
                 self._game_phases[event_game_id] = _GamePhase.LIVE
                 await self._deliver_event(envelope)
                 await self._flush_pending_dispatch(event_game_id)
+            elif isinstance(event, GameResultEvent):
+                # Concluded/historical game: GameStartEvent never fires (status already FINAL)
+                # Transition to LIVE, flush buffered plays/drives, then deliver result
+                self._game_phases[event_game_id] = _GamePhase.LIVE
+                await self._flush_pending_dispatch(event_game_id)
+                await self._deliver_event(envelope)
             else:
                 self._pending_dispatch[event_game_id].append(envelope)
                 await self._check_buffer_overflow(event_game_id)

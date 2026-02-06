@@ -36,6 +36,18 @@ class TestEvent(DataEvent):
 
 
 @register_event
+class TestGameEvent(DataEvent):
+    """Test event with game_id for lifecycle gate testing."""
+
+    __test__ = False
+
+    event_type: Literal["test_game_event"] = "test_game_event"
+    game_id: str = ""
+    sport: str = "test"
+    value: str = ""
+
+
+@register_event
 class TestEventWithGameTime(DataEvent):
     """Event with game_time field for testing game_date extraction."""
 
@@ -681,6 +693,13 @@ class TestDataHubLifecycleGate:
             away_score=98,
         )
 
+    def _make_generic_event(self, game_id: str | None = None) -> "TestGameEvent":
+        """Create a generic event that will be buffered in PREGAME."""
+        return TestGameEvent(
+            game_id=game_id or self.GAME_ID,
+            value="generic_buffered",
+        )
+
     def _buffered_events(self, hub: DataHub, game_id: str) -> list[DataEvent]:
         """Extract raw events from buffered envelopes."""
         return [env.event for env in hub._pending_dispatch.get(game_id, [])]
@@ -757,16 +776,19 @@ class TestDataHubLifecycleGate:
         assert gated_hub._dispatched == [odds]
 
     @pytest.mark.asyncio
-    async def test_game_result_buffered_in_pregame(self, gated_hub):
-        """Non-insight/odds events should be buffered in PREGAME phase."""
+    async def test_game_result_transitions_to_live_in_pregame(self, gated_hub):
+        """GameResultEvent in PREGAME should transition to LIVE and dispatch.
+
+        This handles concluded/historical games where GameStartEvent never fires.
+        """
         await gated_hub._gated_dispatch(self._wrap(self._make_init_event()))
         gated_hub._dispatched.clear()
 
         result = self._make_result_event()
         await gated_hub._gated_dispatch(self._wrap(result))
 
-        assert gated_hub._dispatched == []
-        assert self._buffered_events(gated_hub, self.GAME_ID) == [result]
+        assert gated_hub._dispatched == [result]
+        assert gated_hub._game_phases[self.GAME_ID] == _GamePhase.LIVE
 
     # ----- LIVE phase -----
 
@@ -787,16 +809,16 @@ class TestDataHubLifecycleGate:
         """GameStartEvent should flush any remaining buffered events."""
         await gated_hub._gated_dispatch(self._wrap(self._make_init_event()))
 
-        # Buffer a result event (not allowed in PREGAME)
-        result = self._make_result_event()
-        await gated_hub._gated_dispatch(self._wrap(result))
+        # Buffer a generic event (not allowed in PREGAME)
+        generic = self._make_generic_event()
+        await gated_hub._gated_dispatch(self._wrap(generic))
         gated_hub._dispatched.clear()
 
         # GameStartEvent triggers LIVE + flush
         start = self._make_start_event()
         await gated_hub._gated_dispatch(self._wrap(start))
 
-        assert gated_hub._dispatched == [start, result]
+        assert gated_hub._dispatched == [start, generic]
         assert self.GAME_ID not in gated_hub._pending_dispatch
 
     @pytest.mark.asyncio
