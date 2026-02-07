@@ -50,6 +50,7 @@ from dojozero.betting._models import (
     BetStatus,
     BetType,
     BettingEvent,
+    BrokerFinalStats,
     EventStatus,
     OrderType,
     Statistics,
@@ -91,6 +92,7 @@ __all__ = [
     "BetExecutedPayload",
     "BetSettledPayload",
     "Statistics",
+    "BrokerFinalStats"
     # Enums
     "EventStatus",
     "OrderType",

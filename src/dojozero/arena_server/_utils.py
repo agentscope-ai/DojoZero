@@ -3,8 +3,6 @@ from typing import Any, Literal
 import logging
 
 from dojozero.arena_server._cache import (
-    _AGENT_CACHE,
-    get_cached_agent,
     PeriodInfo,
     ReplayCache,
     ReplayCacheEntry,
@@ -19,7 +17,7 @@ from dojozero.arena_server._models import (
     ReplayErrorReason,
     StatsResponse,
 )
-from dojozero.betting import AgentResponseMessage, AgentInfo
+from dojozero.betting import AgentResponseMessage, AgentInfo, BrokerFinalStats
 from dojozero.core import (
     AgentAction,
     deserialize_span,
@@ -32,32 +30,6 @@ from dojozero.core import (
 from dojozero.data import BaseGameUpdateEvent, GameInitializeEvent, TeamIdentity
 
 LOGGER = logging.getLogger("dojozero.arena_server.utils")
-
-
-def _extract_agent_info_from_spans(
-    spans: list[SpanData],
-) -> dict[str, AgentInfo]:
-    """Extract agent info from pre-fetched spans.
-
-    Looks for agent.initialized spans to build agent info cache.
-
-    Args:
-        spans: List of spans (typically from all trials)
-
-    Returns:
-        Dict mapping agent_id -> AgentInfo
-    """
-    agent_info_cache: dict[str, AgentInfo] = {}
-
-    for span in spans:
-        if span.operation_name != "agent.initialized":
-            continue
-
-        typed = deserialize_span(span)
-        if isinstance(typed, AgentInfo):
-            agent_info_cache[typed.agent_id] = typed
-
-    return agent_info_cache
 
 
 async def _extract_trial_info_from_traces(
@@ -377,6 +349,7 @@ def _parse_bet_selection(selection: str) -> tuple[str, str]:
 async def _extract_bets_for_trial(
     trace_reader: TraceReader,
     trial_id: str,
+    cache: "LandingPageCache | None" = None,
     limit: int = 10,
 ) -> list["BetSummary"]:
     """Extract recent bets from broker.bet spans for a specific trial.
@@ -384,6 +357,7 @@ async def _extract_bets_for_trial(
     Args:
         trace_reader: TraceReader for querying SLS
         trial_id: Trial ID to query
+        cache: Optional cache for agent info lookup
         limit: Maximum number of bets to return
 
     Returns:
@@ -409,15 +383,9 @@ async def _extract_bets_for_trial(
             continue
 
         # Get agent info from cache
-        agent_info = await get_cached_agent(trace_reader, typed.agent_id, trial_id)
+        agent_info = cache.get_agent_info(typed.agent_id) if cache else None
         if agent_info is None:
             # Fallback: create minimal AgentInfo
-            from dojozero.betting import AgentInfo
-
-            LOGGER.warning(
-                "AgentInfo for agent_id '%s' not found in cache. Using fallback.",
-                typed.agent_id,
-            )
             agent_info = AgentInfo(agent_id=typed.agent_id, persona=typed.agent_id)
 
         # Parse selection to extract team and type
@@ -503,7 +471,9 @@ async def _extract_games_from_trials(
         bets = []
         if phase == "running":
             try:
-                bets = await _extract_bets_for_trial(trace_reader, trial_id, limit=10)
+                bets = await _extract_bets_for_trial(
+                    trace_reader, trial_id, cache, limit=10
+                )
             except Exception as e:
                 LOGGER.warning("Failed to get bets for trial '%s': %s", trial_id, e)
 
@@ -631,6 +601,7 @@ def _extract_agent_actions_from_spans(
 async def _extract_agent_actions(
     trace_reader: TraceReader,
     trial_ids: list[str],
+    cache: "LandingPageCache | None" = None,
     limit: int = 20,
     max_trials: int = 5,
 ) -> list[AgentAction]:
@@ -645,6 +616,7 @@ async def _extract_agent_actions(
     Args:
         trace_reader: TraceReader for querying SLS/Jaeger
         trial_ids: List of trial IDs to check for actions
+        cache: Optional cache for agent info lookup
         limit: Maximum number of actions to return
         max_trials: Maximum number of trials to query (reduces SLS load)
 
@@ -685,8 +657,8 @@ async def _extract_agent_actions(
             if not agent_id:
                 continue
 
-            # Get agent info from cache (lazy loading)
-            agent_info = await get_cached_agent(trace_reader, agent_id, trial_id)
+            # Get agent info from cache
+            agent_info = cache.get_agent_info(agent_id) if cache else None
             if agent_info is None:
                 # Fallback: create minimal AgentInfo
                 agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
@@ -719,13 +691,15 @@ async def _compute_stats(
     trace_reader: TraceReader,
     trial_ids: list[str],
     cache: "LandingPageCache | None" = None,
+    spans_by_trial: dict[str, list[SpanData]] | None = None,
 ) -> StatsResponse:
     """Compute aggregate stats for landing page.
 
     Args:
         trace_reader: Trace reader for fetching spans
         trial_ids: List of trial IDs to process
-        cache: Optional cache for trial info (uses cache if available, fetches if not)
+        cache: Optional cache for trial info and agent info
+        spans_by_trial: Optional pre-fetched spans grouped by trial_id for wagered calculation
     """
     games_played = 0
     live_now = 0
@@ -750,23 +724,76 @@ async def _compute_stats(
 
         phase = trial_info["phase"]
 
-        if phase == "completed":
+        # Count completed games (both "completed" and "stopped" phases)
+        if phase in ("completed", "stopped"):
             games_played += 1
         elif phase == "running":
             live_now += 1
 
-        # Sum wagered amount from metadata if available
-        metadata = trial_info.get("metadata", {})
-        wagered = metadata.get("total_wagered", 0)
-        if wagered:
-            wagered_today += float(wagered)
+    # Calculate total wagered from broker.final_stats spans
+    wagered_today = await _compute_total_wagered(
+        trace_reader, trial_ids, spans_by_trial
+    )
+
+    # Get total agents from cache
+    total_agents = cache.get_total_agents() if cache else 0
 
     return StatsResponse(
         games_played=games_played,
         live_now=live_now,
         wagered_today=int(wagered_today),
-        total_agents=len(_AGENT_CACHE),
+        total_agents=total_agents,
     )
+
+
+async def _compute_total_wagered(
+    trace_reader: TraceReader,
+    trial_ids: list[str],
+    spans_by_trial: dict[str, list[SpanData]] | None = None,
+) -> float:
+    """Compute total wagered amount from broker.final_stats spans.
+
+    Args:
+        trace_reader: Trace reader for fetching spans
+        trial_ids: List of trial IDs to process
+        spans_by_trial: Optional pre-fetched spans grouped by trial_id
+
+    Returns:
+        Total wagered amount across all trials
+    """
+    total_wagered = 0.0
+
+    for trial_id in trial_ids:
+        try:
+            # Use pre-fetched spans if available, otherwise query
+            if spans_by_trial is not None:
+                spans = spans_by_trial.get(trial_id, [])
+                # Filter to broker.final_stats spans
+                final_stats_spans = [
+                    s for s in spans if s.operation_name == "broker.final_stats"
+                ]
+            else:
+                final_stats_spans = await trace_reader.get_spans(
+                    trial_id,
+                    operation_names=["broker.final_stats"],
+                )
+
+            # Extract total_wagered from StatisticsList
+            for span in final_stats_spans:
+                typed = deserialize_span(span)
+                if isinstance(typed, BrokerFinalStats):
+                    for stats in typed.statistics.values():
+                        total_wagered += float(stats.total_wagered)
+
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to get broker.final_stats for trial '%s': %s",
+                trial_id,
+                e,
+            )
+            continue
+
+    return total_wagered
 
 
 def _compute_leaderboard_from_spans(
@@ -891,6 +918,7 @@ def _compute_leaderboard_from_spans(
 async def _compute_leaderboard(
     trace_reader: TraceReader,
     trial_ids: list[str],
+    cache: "LandingPageCache | None" = None,
     limit: int = 20,
 ) -> list[LeaderboardEntry]:
     """Compute agent leaderboard from trial results (on-demand version).
@@ -901,10 +929,15 @@ async def _compute_leaderboard(
     Uses broker.final_stats spans when available for accurate statistics.
     Falls back to counting agent.response spans if final_stats not found.
 
+    Args:
+        trace_reader: TraceReader for querying spans
+        trial_ids: List of trial IDs to process
+        cache: Optional cache for agent info lookup
+        limit: Maximum entries to return
+
     Returns:
         List of agents sorted by winnings (highest first)
     """
-    from dojozero.betting import StatisticsList
 
     # Accumulator for per-agent stats
     @dataclass
@@ -929,10 +962,10 @@ async def _compute_leaderboard(
                 # Use final_stats if available
                 for span in spans:
                     typed = deserialize_span(span)
-                    if isinstance(typed, StatisticsList):
+                    if isinstance(typed, BrokerFinalStats):
                         for agent_id, stats in typed.statistics.items():
-                            agent_info = await get_cached_agent(
-                                trace_reader, agent_id, trial_id
+                            agent_info = (
+                                cache.get_agent_info(agent_id) if cache else None
                             )
                             if agent_info is None:
                                 agent_info = AgentInfo(
@@ -964,9 +997,7 @@ async def _compute_leaderboard(
                         continue
 
                     if agent_id not in agent_stats:
-                        agent_info = await get_cached_agent(
-                            trace_reader, agent_id, trial_id
-                        )
+                        agent_info = cache.get_agent_info(agent_id) if cache else None
                         if agent_info is None:
                             agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
                         agent_stats[agent_id] = _AgentStats(agent=agent_info)

@@ -6,10 +6,8 @@ import logging
 from dojozero.arena_server._models import StatsResponse, GamesResponse
 
 from dojozero.betting import AgentInfo, AgentList
-from dojozero.core import TraceReader, deserialize_span, LeaderboardEntry, AgentAction
-
-_AGENT_CACHE: dict[str, AgentInfo] = {}
-_AGENT_CACHE_LOCK = asyncio.Lock()
+from dojozero.core import deserialize_span, LeaderboardEntry, AgentAction
+from dojozero.core._tracing import SpanData
 
 LOGGER = logging.getLogger("dojozero.arena_server.cache")
 
@@ -129,6 +127,9 @@ class LandingPageCache:
     _leaderboard_by_league: dict[str, CacheEntry] = field(default_factory=dict)
     _agent_actions_by_league: dict[str, CacheEntry] = field(default_factory=dict)
 
+    # Agent info cache - single source of truth (agent_id -> AgentInfo)
+    _agent_info: dict[str, AgentInfo] = field(default_factory=dict)
+
     # -------------------------------------------------------------------------
     # GET Methods - Read from cache only, return None if not cached
     # -------------------------------------------------------------------------
@@ -234,6 +235,55 @@ class LandingPageCache:
                 if phase in ("stopped", "terminated", "completed"):
                     completed_trials.append(trial_id)
         return completed_trials
+
+    # -------------------------------------------------------------------------
+    # Agent Info Methods - Single source of truth for agent metadata
+    # -------------------------------------------------------------------------
+
+    def get_agent_info(self, agent_id: str) -> AgentInfo | None:
+        """Get cached agent info by ID."""
+        return self._agent_info.get(agent_id)
+
+    def get_all_agent_info(self) -> dict[str, AgentInfo]:
+        """Get all cached agent info (for batch operations)."""
+        return self._agent_info
+
+    def get_total_agents(self) -> int:
+        """Get total number of cached agents."""
+        return len(self._agent_info)
+
+    def update_agent_info_from_spans(self, spans: list[SpanData]) -> int:
+        """Extract and merge agent info from spans.
+
+        Looks for agent.agent_initialize spans containing AgentList payloads.
+        New agents are added to cache; existing agents are not overwritten.
+
+        Args:
+            spans: List of spans to extract from
+
+        Returns:
+            Number of new agents added
+        """
+        added = 0
+        for span in spans:
+            if span.operation_name != "agent.agent_initialize":
+                continue
+            typed = deserialize_span(span)
+            if isinstance(typed, AgentList):
+                for agent_info in typed.agents:
+                    if (
+                        agent_info.agent_id
+                        and agent_info.agent_id not in self._agent_info
+                    ):
+                        self._agent_info[agent_info.agent_id] = agent_info
+                        added += 1
+                        LOGGER.debug("Cached agent: %s", agent_info.agent_id)
+        return added
+
+    def clear_agent_info(self) -> None:
+        """Clear all cached agent info."""
+        self._agent_info.clear()
+        LOGGER.debug("Cache CLEAR: agent_info")
 
     # -------------------------------------------------------------------------
     # SET Methods - Update cache (overwrite previous data)
@@ -386,6 +436,8 @@ class LandingPageCache:
         self._games_by_league.clear()
         self._leaderboard_by_league.clear()
         self._agent_actions_by_league.clear()
+        # Clear agent info cache
+        self._agent_info.clear()
         LOGGER.debug("Invalidated all cache entries")
 
     def get_cache_stats(self) -> dict[str, Any]:
@@ -424,6 +476,7 @@ class LandingPageCache:
                 "agent_actions": _entry_info(self._agent_actions),
                 "trial_info_count": len(self._trial_info),
                 "trial_details_count": len(self._trial_details),
+                "agent_info_count": len(self._agent_info),
             },
             "caches_by_league": {
                 "stats": _league_cache_info(self._stats_by_league),
@@ -559,77 +612,3 @@ class ReplayCache:
             "ttl": self.ttl,
             "core_categories": self.core_categories,
         }
-
-
-# ============================================================================
-# Global Agent Cache
-# ============================================================================
-
-# Global agent cache: agent_id → AgentInfo
-# Populated lazily from agent.agent_initialize spans
-
-
-async def _populate_agent_cache(
-    trace_reader: TraceReader,
-    trial_id: str,
-) -> None:
-    """Populate agent cache from agent.agent_initialize spans.
-
-    This function is called lazily when an agent_id is not found in cache.
-    It queries the trace store for agent.agent_initialize spans and populates
-    the cache with AgentInfo objects.
-    """
-    try:
-        spans = await trace_reader.get_spans(
-            trial_id,
-            operation_names=["agent.agent_initialize"],
-        )
-    except Exception as e:
-        LOGGER.warning(
-            "Failed to get agent.agent_initialize spans for trial '%s': %s",
-            trial_id,
-            e,
-        )
-        return
-
-    async with _AGENT_CACHE_LOCK:
-        for span in spans:
-            typed = deserialize_span(span)
-            if isinstance(typed, AgentList):
-                for agent_info in typed.agents:
-                    if agent_info.agent_id:
-                        _AGENT_CACHE[agent_info.agent_id] = agent_info
-                        LOGGER.debug(
-                            "Cached agent: %s (from trial %s)",
-                            agent_info.agent_id,
-                            trial_id,
-                        )
-
-
-async def get_cached_agent(
-    trace_reader: TraceReader,
-    agent_id: str,
-    trial_id: str,
-) -> AgentInfo | None:
-    """Get agent info from cache, populating if needed.
-
-    Uses lazy loading: if agent_id is not in cache, queries trace store
-    for agent.agent_initialize spans from the given trial.
-
-    Args:
-        trace_reader: TraceReader to query for agent info
-        agent_id: The agent ID to look up
-        trial_id: The trial ID to query if cache miss
-
-    Returns:
-        AgentInfo if found, None otherwise
-    """
-    # Check cache first
-    if agent_id in _AGENT_CACHE:
-        return _AGENT_CACHE[agent_id]
-
-    # Cache miss: try to populate from trace store
-    await _populate_agent_cache(trace_reader, trial_id)
-
-    # Check again after population
-    return _AGENT_CACHE.get(agent_id)

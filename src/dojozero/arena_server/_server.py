@@ -80,7 +80,6 @@ from dojozero.betting._models import (  # noqa: F401 - Required for model_rebuil
 from dojozero.arena_server._utils import (
     _extract_trial_info_from_traces,
     _extract_trial_info_from_spans,
-    _extract_agent_info_from_spans,
     _filter_trials_by_league,
     _extract_games_from_trials,
     _extract_agent_actions,
@@ -353,34 +352,6 @@ class SpanBroadcaster:
 
 
 # =============================================================================
-# Cache Configuration
-# =============================================================================
-#
-# Background Refresh Architecture:
-# - Background tasks proactively refresh all caches at configured intervals
-# - User requests ONLY read from cache (never trigger fetches directly)
-# - On cache miss (new data not yet in cache), trigger refresh and wait
-# - Server blocks on initial cache population at startup
-#
-# This eliminates:
-# - Cache stampede (concurrent requests hitting SLS on TTL expiry)
-# - User-visible latency (first request after expiration)
-# - Cold start penalty (initial cache population happens at startup)
-#
-
-
-# Default configuration instance
-
-# Leagues that should be cached separately when filtered
-# Add new leagues here as they become supported
-
-
-# =============================================================================
-# Replay Cache
-# =============================================================================
-
-
-# =============================================================================
 # Background Cache Refresher
 # =============================================================================
 
@@ -421,7 +392,6 @@ class BackgroundRefresher:
 
     # Cached spans for incremental refresh (populated on initial, merged on periodic)
     _spans_by_trial: dict[str, list[SpanData]] = field(default_factory=dict)
-    _agent_info_cache: dict[str, Any] = field(default_factory=dict)
     _last_span_fetch_time: datetime | None = None
 
     async def start(self) -> None:
@@ -556,7 +526,7 @@ class BackgroundRefresher:
 
             # Reset cached data on full fetch
             self._spans_by_trial.clear()
-            self._agent_info_cache.clear()
+            self.cache.clear_agent_info()
         else:
             # Incremental fetch since last refresh
             all_spans = await self.trace_reader.get_all_spans(
@@ -602,11 +572,11 @@ class BackgroundRefresher:
             )
 
         # 5. Extract agent info from new spans and merge into cache
-        new_agent_infos = _extract_agent_info_from_spans(all_spans)
-        self._agent_info_cache.update(new_agent_infos)
+        added = self.cache.update_agent_info_from_spans(all_spans)
         LOGGER.info(
-            "BackgroundRefresher: [5/9] Agent info updated (%d total)",
-            len(self._agent_info_cache),
+            "BackgroundRefresher: [5/9] Agent info updated (%d new, %d total)",
+            added,
+            self.cache.get_total_agents(),
         )
 
         # 6. Process trial_info from cached spans
@@ -622,11 +592,12 @@ class BackgroundRefresher:
         LOGGER.info("BackgroundRefresher: [7/9] Stats and games refreshed")
 
         # 8. Refresh leaderboard and agent actions from cached spans
+        agent_info_cache = self.cache.get_all_agent_info()
         self._refresh_leaderboard_from_spans(
-            self._spans_by_trial, self._agent_info_cache, trial_ids
+            self._spans_by_trial, agent_info_cache, trial_ids
         )
         self._refresh_agent_actions_from_spans(
-            self._spans_by_trial, self._agent_info_cache, trial_ids
+            self._spans_by_trial, agent_info_cache, trial_ids
         )
         LOGGER.info("BackgroundRefresher: [8/9] Leaderboard and actions refreshed")
 
@@ -859,8 +830,10 @@ class BackgroundRefresher:
         """Refresh stats cache (global + per-league)."""
         trial_ids = self.cache.get_trials_list() or []
 
-        # Refresh global stats
-        stats = await _compute_stats(self.trace_reader, trial_ids, self.cache)
+        # Refresh global stats (pass spans_by_trial for wagered calculation)
+        stats = await _compute_stats(
+            self.trace_reader, trial_ids, self.cache, self._spans_by_trial
+        )
         self.cache.set_stats(stats, league=None)
 
         # Refresh per-league stats
@@ -869,7 +842,7 @@ class BackgroundRefresher:
                 self.trace_reader, trial_ids, league, self.cache
             )
             league_stats = await _compute_stats(
-                self.trace_reader, filtered_ids, self.cache
+                self.trace_reader, filtered_ids, self.cache, self._spans_by_trial
             )
             self.cache.set_stats(league_stats, league=league)
 
@@ -1102,9 +1075,13 @@ class BackgroundRefresher:
             filtered_ids = await _filter_trials_by_league(
                 self.trace_reader, trial_ids, league, self.cache
             )
-            leaderboard = await _compute_leaderboard(self.trace_reader, filtered_ids)
+            leaderboard = await _compute_leaderboard(
+                self.trace_reader, filtered_ids, self.cache
+            )
         else:
-            leaderboard = await _compute_leaderboard(self.trace_reader, trial_ids)
+            leaderboard = await _compute_leaderboard(
+                self.trace_reader, trial_ids, self.cache
+            )
 
         self.cache.set_leaderboard(leaderboard, league=league)
         return leaderboard
@@ -1122,6 +1099,7 @@ class BackgroundRefresher:
             actions = await _extract_agent_actions(
                 self.trace_reader,
                 filtered_ids,
+                self.cache,
                 limit=self.config.agent_actions_limit,
                 max_trials=self.config.agent_actions_max_trials,
             )
@@ -1129,6 +1107,7 @@ class BackgroundRefresher:
             actions = await _extract_agent_actions(
                 self.trace_reader,
                 trial_ids,
+                self.cache,
                 limit=self.config.agent_actions_limit,
                 max_trials=self.config.agent_actions_max_trials,
             )

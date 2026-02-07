@@ -334,6 +334,23 @@ class StatisticsList(BaseModel):
     )
 
 
+class BrokerFinalStats(BaseModel):
+    """Broker state update payload for tracing."""
+
+    accounts_count: int = 0
+    bets_count: int = 0
+    accounts: Dict[str, Account] = Field(default_factory=dict)
+    bets: Dict[str, Bet] = Field(default_factory=dict)
+    estimated_net_values: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Estimated net values for each account (account_id -> net_value)",
+    )
+
+    statistics: Dict[str, Statistics] = Field(
+        default_factory=dict, description="Statistics for each agent"
+    )
+
+
 # =============================================================================
 # Agent Message Models for Tracing
 # =============================================================================
@@ -467,6 +484,7 @@ __all__ = [
     "BetSettledPayload",
     "BettingEvent",
     "BrokerStateUpdate",
+    "BrokerFinalStats",
     "Holding",
     "Statistics",
     "StatisticsList",

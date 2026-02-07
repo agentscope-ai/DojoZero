@@ -13,7 +13,7 @@ Span Categories:
 - trial.started/stopped/terminated → TrialLifecycleSpan
 - broker.bet → BetExecutedPayload (from betting/_models.py)
 - broker.state_update → BrokerStateUpdate (from betting/_models.py)
-- broker.final_stats → StatisticsList (from betting/_models.py)
+- broker.final_stats → BrokerFinalStats (from betting/_models.py)
 - agent.response → AgentResponseMessage (from betting/_models.py)
 - agent.agent_initialize → AgentList (from betting/_models.py)
 """
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
         AgentResponseMessage,
         BetExecutedPayload,
         BrokerStateUpdate,
-        StatisticsList,
+        BrokerFinalStats,
     )
     from dojozero.data._models import DataEvent
 
@@ -122,14 +122,14 @@ class TrialLifecycleSpan(BaseModel):
 # SpanModel is either:
 # - A DataEvent (from data._models, for event.* spans)
 # - An internal span model (TrialLifecycleSpan)
-# - A broker span model (BetExecutedPayload, BrokerStateUpdate, StatisticsList)
+# - A broker span model (BetExecutedPayload, BrokerStateUpdate, BrokerFinalStats)
 # - An agent span model (AgentResponseMessage, AgentList)
 # Note: Use string forward references to avoid circular imports
 SpanModel = Union[
     TrialLifecycleSpan,
     "BetExecutedPayload",
     "BrokerStateUpdate",
-    "StatisticsList",
+    "BrokerFinalStats",
     "AgentResponseMessage",
     "AgentList",
     "DataEvent",
@@ -181,14 +181,14 @@ def _get_span_models() -> dict[str, type[SpanModel]]:
         AgentResponseMessage,
         BetExecutedPayload,
         BrokerStateUpdate,
-        StatisticsList,
+        BrokerFinalStats,
     )
 
     return {
         # Broker spans
         "broker.bet": BetExecutedPayload,
         "broker.bet_executed": BrokerStateUpdate,
-        "broker.final_stats": StatisticsList,
+        "broker.final_stats": BrokerFinalStats,
         # Agent spans
         "agent.response": AgentResponseMessage,
         "agent.agent_initialize": AgentList,
@@ -258,7 +258,7 @@ def deserialize_span(span: SpanData) -> SpanModel | None:
 _OPERATION_NAME_MAP: dict[str, str] = {
     "BetExecutedPayload": "broker.bet",
     "BrokerStateUpdate": "broker.state_update",
-    "StatisticsList": "broker.final_stats",
+    "BrokerFinalStats": "broker.final_stats",
     "AgentResponseMessage": "agent.response",
     "AgentList": "agent.agent_initialize",
     "TrialLifecycleSpan": "trial.lifecycle",
