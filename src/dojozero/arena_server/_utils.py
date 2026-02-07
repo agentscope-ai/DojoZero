@@ -735,6 +735,11 @@ async def _compute_stats(
         trace_reader, trial_ids, spans_by_trial
     )
 
+    # Calculate total bet counts from broker.final_stats spans
+    bet_counts = await _compute_total_bet_counts(
+        trace_reader, trial_ids, spans_by_trial
+    )
+
     # Get total agents from cache
     total_agents = cache.get_total_agents() if cache else 0
 
@@ -743,6 +748,7 @@ async def _compute_stats(
         live_now=live_now,
         wagered_today=int(wagered_today),
         total_agents=total_agents,
+        bet_counts=bet_counts,
     )
 
 
@@ -794,6 +800,55 @@ async def _compute_total_wagered(
             continue
 
     return total_wagered
+
+
+async def _compute_total_bet_counts(
+    trace_reader: TraceReader,
+    trial_ids: list[str],
+    spans_by_trial: dict[str, list[SpanData]] | None = None,
+) -> int:
+    """Compute total bet counts from broker.final_stats spans.
+
+    Args:
+        trace_reader: Trace reader for fetching spans
+        trial_ids: List of trial IDs to process
+        spans_by_trial: Optional pre-fetched spans grouped by trial_id
+
+    Returns:
+        Total bet counts across all trials
+    """
+    total_bet_counts = 0
+
+    for trial_id in trial_ids:
+        try:
+            # Use pre-fetched spans if available, otherwise query
+            if spans_by_trial is not None:
+                spans = spans_by_trial.get(trial_id, [])
+                # Filter to broker.final_stats spans
+                final_stats_spans = [
+                    s for s in spans if s.operation_name == "broker.final_stats"
+                ]
+            else:
+                final_stats_spans = await trace_reader.get_spans(
+                    trial_id,
+                    operation_names=["broker.final_stats"],
+                )
+
+            # Extract bets_count from BrokerFinalStats
+            for span in final_stats_spans:
+                typed = deserialize_span(span)
+                if isinstance(typed, BrokerFinalStats):
+                    total_bet_counts += typed.bets_count
+
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to get broker.final_stats for trial '%s': %s",
+                trial_id,
+                e,
+            )
+            continue
+
+    return total_bet_counts
 
 
 def _compute_leaderboard_from_spans(
