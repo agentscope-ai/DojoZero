@@ -539,6 +539,7 @@ def register_websocket_endpoints(app: FastAPI) -> None:
             {"command": "status"}  - Get current stream status
             {"command": "filter", "categories": [...], "mode": "include"}
                                    - Update category filter dynamically
+            {"command": "disconnect"} - Close connection gracefully
         """
         state = get_server_state()
         refresher = state.refresher
@@ -673,6 +674,13 @@ def register_websocket_endpoints(app: FastAPI) -> None:
                             )
                             await websocket.send_text(status_msg.model_dump_json())
 
+                        elif command == "disconnect":
+                            LOGGER.info(
+                                "Stream: Client requested disconnect for trial '%s'",
+                                trial_id,
+                            )
+                            return
+
                     except json.JSONDecodeError:
                         LOGGER.warning("Invalid JSON command: %s", msg_text)
 
@@ -787,6 +795,7 @@ def register_websocket_endpoints(app: FastAPI) -> None:
             {"command": "status"}                    - Get current status
             {"command": "filter", "categories": [...], "mode": "include"}
                                                      - Update category filter dynamically
+            {"command": "disconnect"}                - Close connection gracefully
 
         Server messages:
             {"type": "replay_meta_info", ...}       - Metadata (sent first, always)
@@ -977,6 +986,12 @@ def register_websocket_endpoints(app: FastAPI) -> None:
                             )
                         elif command == "status":
                             pass  # Just send status below
+                        elif command == "disconnect":
+                            LOGGER.info(
+                                "Replay: Client requested disconnect for trial '%s'",
+                                trial_id,
+                            )
+                            return
                         else:
                             LOGGER.warning("Unknown replay command: %s", command)
                             continue
