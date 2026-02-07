@@ -195,8 +195,17 @@ def register_rest_endpoints(app: FastAPI) -> None:
             )
 
         all_games = games.live_games + games.upcoming_games + games.completed_games
-        # NOTE! Fallback: use all_games if live_games is empty! For temporary use
         live_games = games.live_games if games.live_games else all_games
+
+        # NOTE! Super Bowl 60 fallback: inject hardcoded game before kickoff
+        # Remove this after Feb 8, 2026 6:30pm ET
+        if league == "NFL":
+            from ._superbowl import SUPER_BOWL_GAME, should_show_superbowl_placeholder
+
+            if should_show_superbowl_placeholder():
+                # Convert dict to GameCardData and prepend to live games
+                superbowl_game = GameCardData.model_validate(SUPER_BOWL_GAME)
+                live_games = [superbowl_game] + list(live_games)
         response = LandingResponse(
             stats=stats,
             live_games=live_games,
