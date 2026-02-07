@@ -23,10 +23,10 @@ Proactively fetch all data in the background. User requests only read from cache
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                    Background Tasks                                │  │
 │  │                                                                    │  │
-│  │  REST Cache Refresher          Live Stream Managers               │  │
-│  │  (every 15-30s)                (1 per live trial, ~10 max)        │  │
+│  │  REST Cache Refresher          Live Stream Refresher              │  │
+│  │  (every 15-30s)                (every 5s for live trials)         │  │
 │  │                                                                    │  │
-│  │  - trials_list                 - polls SLS every 1s               │  │
+│  │  - trials_list                 - refreshes live trial spans       │  │
 │  │  - stats (global/NBA/NFL)      - caches recent spans              │  │
 │  │  - games (global/NBA/NFL)      - broadcasts to viewers            │  │
 │  │  - leaderboard                                                    │  │
@@ -80,12 +80,11 @@ Proactively stream all live trials (max ~10 at any time). Don't wait for first v
 
 **How it works:**
 
-1. `LiveTrialRegistry` discovers live trials from `trials_list` cache
-2. Creates a `TrialStreamManager` for each live trial
-3. Each manager polls SLS every 1s, caches recent spans (last 5 min)
-4. When viewer connects, they subscribe to the manager and get cached snapshot
-5. New spans are broadcast to all subscribers
-6. When trial completes, manager stops and trial moves to replay cache
+1. Background refresher discovers live trials from `trials_list` cache
+2. Every 5s, fetches new spans for all live trials (incremental)
+3. Cached spans include last 5 min of data for each live trial
+4. WebSocket viewers read from cache and receive new items as they arrive
+5. When trial completes, cached data moves to replay cache
 
 **Per-connection state:**
 - Each viewer has a `StreamController` for pause/resume
@@ -123,7 +122,7 @@ Server blocks until step 2 completes (with timeout). This ensures first user req
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
 | REST refresh interval | 15-30s | How often to refresh REST caches |
-| Live stream poll interval | 1s | How often to poll SLS for live trials |
+| Live stream refresh interval | 5s | How often to refresh live trial spans |
 | Replay lookback | 24h | How far back to load completed trials |
 | Max replay entries | 100 | LRU cache size for replay data |
 | Startup timeout | 30s | Max wait for initial cache warm |

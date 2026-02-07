@@ -16,67 +16,53 @@ LOGGER = logging.getLogger("dojozero.arena_server.cache")
 
 @dataclass(frozen=True)
 class CacheConfig:
-    """Configuration for cache refresh intervals and TTLs.
+    """Configuration for cache refresh and TTLs.
 
     Background Refresh Model:
-    - refresh_interval: How often background task refreshes the cache
-    - max_ttl: Maximum time to keep data (very long, e.g., 1 month)
+    - Single consolidated refresh task fetches ALL data in one pass
+    - refresh_interval: How often the background task runs
+    - max_ttl: Maximum time to keep data (safety limit)
 
-    The refresh_interval controls freshness; max_ttl is just a safety limit.
+    Note: This is created from ArenaServerConfig. Use from_arena_config() factory.
     """
 
-    # -------------------------------------------------------------------------
-    # Background Refresh Intervals (how often to refresh each cache type)
-    # -------------------------------------------------------------------------
+    # Background Refresh
+    refresh_interval: float = 5.0
 
-    # List of trial IDs - foundation for other caches
-    trials_list_refresh_interval: float = 60.0
-
-    # Aggregated statistics (gamesPlayed, liveNow, wageredToday)
-    stats_refresh_interval: float = 30.0
-
-    # Games list (live, upcoming, completed)
-    games_refresh_interval: float = 30.0
-
-    # Agent leaderboard - only changes when games complete
-    leaderboard_refresh_interval: float = 60.0
-
-    # Live agent actions ticker - needs frequent updates
-    agent_actions_refresh_interval: float = 10.0
-
-    # Live trial details (for streaming) - very frequent for live trials
-    live_trial_details_refresh_interval: float = 5.0
-
-    # -------------------------------------------------------------------------
-    # Maximum Cache TTL (safety limit, not freshness control)
-    # -------------------------------------------------------------------------
-
-    # Default max TTL for all caches (1 month)
+    # Cache TTL
     max_cache_ttl: float = 30 * 24 * 3600.0  # 30 days
-
-    # TTL for completed/stopped trials (they never change)
     completed_trial_ttl: float = 30 * 24 * 3600.0  # 30 days
 
-    # -------------------------------------------------------------------------
-    # Startup Configuration
-    # -------------------------------------------------------------------------
-
-    # Max wait time for initial cache population at startup
+    # Startup
     startup_timeout: float = 30.0
 
-    # -------------------------------------------------------------------------
     # Query Limits
-    # -------------------------------------------------------------------------
-
-    # Max trials to query for agent actions (reduces SLS queries)
     agent_actions_max_trials: int = 5
-
-    # Max actions to return from ticker
     agent_actions_limit: int = 20
+    leaderboard_limit: int = 20
+    trials_limit: int = 500
 
-    # Days to look back for trials
+    # Time range
     trials_lookback_days: int = 7
 
+    @classmethod
+    def from_arena_config(cls, config: "ArenaServerConfig") -> "CacheConfig":
+        """Create CacheConfig from ArenaServerConfig."""
+        return cls(
+            refresh_interval=config.cache.refresh_interval,
+            max_cache_ttl=config.cache.max_cache_ttl,
+            completed_trial_ttl=config.cache.completed_trial_ttl,
+            startup_timeout=config.cache.startup_timeout,
+            agent_actions_max_trials=config.query_limits.agent_actions_max_trials,
+            agent_actions_limit=config.query_limits.agent_actions_limit,
+            leaderboard_limit=config.query_limits.leaderboard_limit,
+            trials_limit=config.cache.trials_limit,
+            trials_lookback_days=config.cache.trials_lookback_days,
+        )
+
+
+# Import here to avoid circular import
+from dojozero.arena_server._config import ArenaServerConfig  # noqa: E402
 
 DEFAULT_CACHE_CONFIG = CacheConfig()
 CACHEABLE_LEAGUES: frozenset[str] = frozenset({"NBA", "NFL"})
@@ -119,6 +105,9 @@ class LandingPageCache:
     - agent_actions: Recent agent actions (global + per-league)
 
     Per-league caches are maintained for CACHEABLE_LEAGUES (NBA, NFL).
+
+    Note: No lock is needed because BackgroundRefresher is the single writer
+    and Python's GIL ensures atomic reference assignments.
     """
 
     # Configuration
@@ -139,9 +128,6 @@ class LandingPageCache:
     _games_by_league: dict[str, CacheEntry] = field(default_factory=dict)
     _leaderboard_by_league: dict[str, CacheEntry] = field(default_factory=dict)
     _agent_actions_by_league: dict[str, CacheEntry] = field(default_factory=dict)
-
-    # Concurrency control
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # -------------------------------------------------------------------------
     # GET Methods - Read from cache only, return None if not cached
@@ -419,13 +405,15 @@ class LandingPageCache:
 
         return {
             "config": {
-                "trials_list_refresh_interval": self.config.trials_list_refresh_interval,
-                "stats_refresh_interval": self.config.stats_refresh_interval,
-                "games_refresh_interval": self.config.games_refresh_interval,
-                "leaderboard_refresh_interval": self.config.leaderboard_refresh_interval,
-                "agent_actions_refresh_interval": self.config.agent_actions_refresh_interval,
+                "refresh_interval": self.config.refresh_interval,
+                "startup_timeout": self.config.startup_timeout,
                 "max_cache_ttl": self.config.max_cache_ttl,
                 "completed_trial_ttl": self.config.completed_trial_ttl,
+                "trials_lookback_days": self.config.trials_lookback_days,
+                "trials_limit": self.config.trials_limit,
+                "agent_actions_max_trials": self.config.agent_actions_max_trials,
+                "agent_actions_limit": self.config.agent_actions_limit,
+                "leaderboard_limit": self.config.leaderboard_limit,
                 "cacheable_leagues": list(CACHEABLE_LEAGUES),
             },
             "caches": {
@@ -494,14 +482,25 @@ class ReplayCache:
     Replay data is preloaded at startup and refreshed when:
     - A new trial completion is detected
     - User requests trigger on-demand loading
-    TTL is set to 7 days to match trials_lookback_days.
+
+    TTL matches trials_lookback_days (7 days) - after this, trials are no longer
+    in the trials_list anyway, so replay data can be evicted.
     """
 
     _cache: dict[str, ReplayCacheEntry] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    ttl: float = 7 * 24 * 3600.0  # 7 days (matches trials_lookback_days)
+    ttl: float = 7 * 24 * 3600.0  # 7 days
     max_entries: int = 100  # Max trials to cache
     core_categories: list[str] = field(default_factory=lambda: ["play", "game_update"])
+
+    @classmethod
+    def from_arena_config(cls, config: "ArenaServerConfig") -> "ReplayCache":
+        """Create ReplayCache from ArenaServerConfig."""
+        return cls(
+            ttl=config.replay_cache.ttl,
+            max_entries=config.replay_cache.max_entries,
+            core_categories=list(config.replay_cache.core_categories),
+        )
 
     async def get(self, trial_id: str) -> ReplayCacheEntry | None:
         """Get cached replay entry, or None if not cached/expired."""

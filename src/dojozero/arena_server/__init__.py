@@ -9,6 +9,7 @@ This package provides the Arena Server functionality including:
 Moved from core module to keep server-related code separate from core abstractions.
 """
 
+from ._config import ArenaServerConfig
 from ._server import (
     ArenaServerState,
     SpanBroadcaster,
@@ -20,6 +21,8 @@ from ._server import (
 from ._cache import CacheEntry, LandingPageCache
 
 __all__ = [
+    # Config
+    "ArenaServerConfig",
     # Server
     "ArenaServerState",
     "CacheEntry",

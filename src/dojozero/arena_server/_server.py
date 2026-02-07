@@ -38,16 +38,21 @@ Configuration:
     # Use --service-name to specify the service name for both Jaeger and SLS backends
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+
+if TYPE_CHECKING:
+    from dojozero.arena_server._config import ArenaServerConfig
 from pydantic import BaseModel
 
 from dojozero.arena_server._cache import (
@@ -68,14 +73,23 @@ from dojozero.arena_server._models import (
     WSSpanMessage,
     WSTrialEndedMessage,
 )
+from dojozero.betting._models import (  # noqa: F401 - Required for model_rebuild()
+    AgentInfo,  # For BetSummary
+    AgentResponseMessage,  # For AgentAction
+)
 from dojozero.arena_server._utils import (
     _extract_trial_info_from_traces,
+    _extract_trial_info_from_spans,
+    _extract_agent_info_from_spans,
     _filter_trials_by_league,
     _extract_games_from_trials,
     _extract_agent_actions,
+    _extract_agent_actions_from_spans,
     _compute_stats,
     _compute_leaderboard,
+    _compute_leaderboard_from_spans,
     _load_replay_data,
+    TRIAL_INFO_OPERATION_NAMES,
 )
 from dojozero.core._models import (
     AgentAction,
@@ -375,22 +389,19 @@ class SpanBroadcaster:
 class BackgroundRefresher:
     """Background cache refresh manager.
 
-    Proactively refreshes all caches at configured intervals. User requests
-    only read from cache and never trigger fetches directly (except for cache
-    miss on truly new data).
+    Proactively refreshes all caches using a single consolidated refresh task.
+    User requests only read from cache and never trigger fetches directly.
 
-    Refresh Strategy:
-    - trials_list: Refreshed at trials_list_refresh_interval
-    - stats/games: Refreshed at their respective intervals (global + per-league)
-    - leaderboard: Refreshed at leaderboard_refresh_interval (global + per-league)
-    - agent_actions: Refreshed at agent_actions_refresh_interval (global + per-league)
-    - trial_info: Refreshed for live trials only
-    - trial_details: Refreshed for live trials only; removed when trial completes
-    - replay_cache: Preloaded at startup; refreshed when new trial completion detected
-      or on user demand (NOT periodically)
+    Refresh Strategy (single task at config.refresh_interval):
+    - Uses ONE get_all_spans() call per cycle (minimizes SLS queries)
+    - Incremental fetch: only fetches spans since last refresh (not full lookback)
+    - All caches refreshed together: trials_list, stats, games, leaderboard,
+      agent_actions, trial_info, trial_details (global + per-league)
+    - trial_details: Removed when trial completes
+    - replay_cache: Preloaded at startup; refreshed on trial completion detection
 
     Startup:
-    - Performs initial refresh of all caches
+    - Performs initial full refresh of all caches
     - Preloads replay data for completed trials
     - Blocks until complete (with timeout)
     """
@@ -407,6 +418,11 @@ class BackgroundRefresher:
 
     # Track previously known live trials (for detecting completion)
     _known_live_trials: set[str] = field(default_factory=set)
+
+    # Cached spans for incremental refresh (populated on initial, merged on periodic)
+    _spans_by_trial: dict[str, list[SpanData]] = field(default_factory=dict)
+    _agent_info_cache: dict[str, Any] = field(default_factory=dict)
+    _last_span_fetch_time: datetime | None = None
 
     async def start(self) -> None:
         """Start background refresh tasks.
@@ -428,58 +444,14 @@ class BackgroundRefresher:
             LOGGER.error("BackgroundRefresher: Initial refresh failed: %s", e)
             self._initial_refresh_done.set()  # Still set to unblock startup
 
-        # Start periodic refresh tasks
+        # Single consolidated refresh loop for ALL caches
+        # Uses ONE get_all_spans() call per cycle instead of multiple queries
         self._tasks.append(
             asyncio.create_task(
                 self._refresh_loop(
-                    "trials_list",
-                    self._refresh_trials_list,
-                    self.config.trials_list_refresh_interval,
-                )
-            )
-        )
-        self._tasks.append(
-            asyncio.create_task(
-                self._refresh_loop(
-                    "stats",
-                    self._refresh_stats,
-                    self.config.stats_refresh_interval,
-                )
-            )
-        )
-        self._tasks.append(
-            asyncio.create_task(
-                self._refresh_loop(
-                    "games",
-                    self._refresh_games,
-                    self.config.games_refresh_interval,
-                )
-            )
-        )
-        self._tasks.append(
-            asyncio.create_task(
-                self._refresh_loop(
-                    "leaderboard",
-                    self._refresh_leaderboard,
-                    self.config.leaderboard_refresh_interval,
-                )
-            )
-        )
-        self._tasks.append(
-            asyncio.create_task(
-                self._refresh_loop(
-                    "agent_actions",
-                    self._refresh_agent_actions,
-                    self.config.agent_actions_refresh_interval,
-                )
-            )
-        )
-        self._tasks.append(
-            asyncio.create_task(
-                self._refresh_loop(
-                    "live_trials",
-                    self._refresh_live_trials,
-                    self.config.live_trial_details_refresh_interval,
+                    "all_data",
+                    self._refresh_all_periodic,
+                    self.config.refresh_interval,
                 )
             )
         )
@@ -539,57 +511,349 @@ class BackgroundRefresher:
             except Exception as e:
                 LOGGER.warning("BackgroundRefresher: %s refresh failed: %s", name, e)
 
-    async def _refresh_all(self) -> None:
-        """Refresh all caches (used for initial population)."""
-        LOGGER.info("BackgroundRefresher: Refreshing all caches...")
+    async def _refresh_all(self, *, is_initial: bool = True) -> None:
+        """Refresh all caches using bulk fetch.
 
-        # 1. Refresh trials list first (foundation for other caches)
-        await self._refresh_trials_list()
+        For initial refresh: fetches all spans from lookback period.
+        For periodic refresh: fetches only new spans since last fetch (incremental).
 
-        # 2. Refresh aggregated caches in parallel
-        await asyncio.gather(
-            self._refresh_stats(),
-            self._refresh_games(),
-            self._refresh_leaderboard(),
-            self._refresh_agent_actions(),
-            return_exceptions=True,
-        )
+        Args:
+            is_initial: True for startup refresh (full fetch, preloads all replay data),
+                       False for periodic refresh (incremental fetch)
+        """
+        prefix = "Initial" if is_initial else "Periodic"
+        LOGGER.info("BackgroundRefresher: [1/9] %s refresh starting...", prefix)
 
-        # 3. Refresh live trial details
-        await self._refresh_live_trials()
-
-        # 4. Preload replay data for completed trials
-        await self._preload_replay_cache()
-
-        LOGGER.info("BackgroundRefresher: All caches refreshed")
-
-    async def _refresh_trials_list(self) -> None:
-        """Refresh trials list cache."""
+        # 1. Get trial list (lightweight list_trials query)
         start_dt = datetime.now(timezone.utc) - timedelta(
             days=self.config.trials_lookback_days
         )
-        trial_ids = await self.trace_reader.list_trials(start_time=start_dt, limit=500)
-
+        trial_ids = await self.trace_reader.list_trials(
+            start_time=start_dt, limit=self.config.trials_limit
+        )
         if trial_ids:
             self.cache.set_trials_list(trial_ids)
+            LOGGER.info(
+                "BackgroundRefresher: [2/9] Trial list refreshed (%d trials)",
+                len(trial_ids),
+            )
 
-            # Also refresh trial_info for all trials
-            await self._refresh_trial_info_batch(trial_ids)
+        if not trial_ids:
+            LOGGER.info("BackgroundRefresher: No trials found, skipping refresh")
+            return
 
-    async def _refresh_trial_info_batch(self, trial_ids: list[str]) -> None:
-        """Refresh trial_info for a batch of trials."""
-        for trial_id in trial_ids:
-            try:
-                trial_info = await _extract_trial_info_from_traces(
-                    self.trace_reader, trial_id
+        # 2. Fetch spans - full for initial, incremental for periodic
+        now = datetime.now(timezone.utc)
+        if is_initial or self._last_span_fetch_time is None:
+            # Full fetch with lookback buffer
+            spans_start_dt = now - timedelta(days=self.config.trials_lookback_days + 1)
+            all_spans = await self.trace_reader.get_all_spans(start_time=spans_start_dt)
+            LOGGER.info(
+                "BackgroundRefresher: [3/9] Full fetch complete (%d spans, lookback=%d+1 days)",
+                len(all_spans),
+                self.config.trials_lookback_days,
+            )
+
+            # Reset cached data on full fetch
+            self._spans_by_trial.clear()
+            self._agent_info_cache.clear()
+        else:
+            # Incremental fetch since last refresh
+            all_spans = await self.trace_reader.get_all_spans(
+                start_time=self._last_span_fetch_time
+            )
+            LOGGER.info(
+                "BackgroundRefresher: [3/9] Incremental fetch complete (%d new spans)",
+                len(all_spans),
+            )
+
+        # Update last fetch time
+        self._last_span_fetch_time = now
+
+        # 3. Group new spans by trial_id and merge into cache
+        new_span_count = 0
+        for span in all_spans:
+            trial_id = span.trace_id
+            if trial_id not in self._spans_by_trial:
+                self._spans_by_trial[trial_id] = []
+            self._spans_by_trial[trial_id].append(span)
+            new_span_count += 1
+
+        # Prune trials that are no longer in the active trial list
+        trial_ids_set = set(trial_ids)
+        stale_trial_ids = [
+            tid for tid in self._spans_by_trial if tid not in trial_ids_set
+        ]
+        for tid in stale_trial_ids:
+            del self._spans_by_trial[tid]
+
+        if stale_trial_ids:
+            LOGGER.info(
+                "BackgroundRefresher: [4/9] Merged %d spans, pruned %d stale trials (%d cached)",
+                new_span_count,
+                len(stale_trial_ids),
+                len(self._spans_by_trial),
+            )
+        else:
+            LOGGER.info(
+                "BackgroundRefresher: [4/9] Merged %d spans into %d trials",
+                new_span_count,
+                len(self._spans_by_trial),
+            )
+
+        # 5. Extract agent info from new spans and merge into cache
+        new_agent_infos = _extract_agent_info_from_spans(all_spans)
+        self._agent_info_cache.update(new_agent_infos)
+        LOGGER.info(
+            "BackgroundRefresher: [5/9] Agent info updated (%d total)",
+            len(self._agent_info_cache),
+        )
+
+        # 6. Process trial_info from cached spans
+        await self._refresh_trial_info_from_spans(trial_ids, self._spans_by_trial)
+        LOGGER.info("BackgroundRefresher: [6/9] Trial info refreshed")
+
+        # 7. Refresh aggregated caches (these use trial_info cache, no SLS queries)
+        await asyncio.gather(
+            self._refresh_stats(),
+            self._refresh_games(),
+            return_exceptions=True,
+        )
+        LOGGER.info("BackgroundRefresher: [7/9] Stats and games refreshed")
+
+        # 8. Refresh leaderboard and agent actions from cached spans
+        self._refresh_leaderboard_from_spans(
+            self._spans_by_trial, self._agent_info_cache, trial_ids
+        )
+        self._refresh_agent_actions_from_spans(
+            self._spans_by_trial, self._agent_info_cache, trial_ids
+        )
+        LOGGER.info("BackgroundRefresher: [8/9] Leaderboard and actions refreshed")
+
+        # 9. Refresh live trials and handle replay loading
+        await self._refresh_live_trials_and_replay(
+            self._spans_by_trial, is_initial=is_initial
+        )
+
+        LOGGER.info(
+            "BackgroundRefresher: [9/9] %s refresh complete (%d new spans, %d cached trials)",
+            prefix,
+            len(all_spans),
+            len(self._spans_by_trial),
+        )
+
+    async def _refresh_all_periodic(self) -> None:
+        """Periodic refresh - delegates to _refresh_all with is_initial=False."""
+        await self._refresh_all(is_initial=False)
+
+    async def _refresh_live_trials_and_replay(
+        self,
+        spans_by_trial: dict[str, list[SpanData]],
+        *,
+        is_initial: bool,
+    ) -> None:
+        """Refresh live trial details and handle replay loading.
+
+        Args:
+            spans_by_trial: Pre-fetched spans grouped by trial_id
+            is_initial: If True, preload all completed trials; if False, only newly completed
+        """
+        # Get current live trials from cache
+        current_live = set(self.cache.get_live_trial_ids())
+
+        # Detect completed trials (were live, now not)
+        completed_trials = self._known_live_trials - current_live
+        for trial_id in completed_trials:
+            LOGGER.info(
+                "BackgroundRefresher: Trial %s completed, removing from trial_details",
+                trial_id,
+            )
+            self.cache.remove_trial_details(trial_id)
+            # Load replay data for newly completed trial
+            await self._load_replay_for_trial(trial_id)
+
+        # Update known live trials
+        self._known_live_trials = current_live
+
+        # Process each live trial
+        for trial_id in current_live:
+            existing = self.cache.get_trial_details(trial_id)
+            if existing is not None:
+                existing_items = existing.get("items", [])
+                max_ts = existing.get("max_timestamp", 0)
+                is_completed = existing.get("is_completed", False)
+                if is_completed:
+                    continue  # Skip completed trials
+            else:
+                existing_items = []
+                max_ts = 0
+
+            spans = spans_by_trial.get(trial_id, [])
+            if spans:
+                try:
+                    self._process_trial_details(trial_id, spans, existing_items, max_ts)
+                except Exception as e:
+                    LOGGER.warning(
+                        "BackgroundRefresher: Failed to process trial_details[%s]: %s",
+                        trial_id,
+                        e,
+                    )
+
+        LOGGER.debug(
+            "BackgroundRefresher: Refreshed %d live trials from pre-fetched spans",
+            len(current_live),
+        )
+
+        # On initial refresh, preload replay for ALL completed trials
+        if is_initial:
+            await self._preload_replay_cache()
+
+    async def _refresh_trial_info_from_spans(
+        self,
+        trial_ids: list[str],
+        spans_by_trial: dict[str, list[SpanData]],
+    ) -> None:
+        """Refresh trial_info from pre-fetched spans grouped by trial_id.
+
+        Args:
+            trial_ids: List of all trial IDs to process
+            spans_by_trial: Pre-fetched spans grouped by trial_id
+        """
+        # Filter out trials already in cache
+        missing_trial_ids = set(
+            tid for tid in trial_ids if self.cache.get_trial_info(tid) is None
+        )
+
+        if not missing_trial_ids:
+            return
+
+        LOGGER.info(
+            "BackgroundRefresher: Processing trial_info for %d/%d trials from pre-fetched spans",
+            len(missing_trial_ids),
+            len(trial_ids),
+        )
+
+        processed = 0
+        for trial_id in missing_trial_ids:
+            spans = spans_by_trial.get(trial_id, [])
+
+            # Filter to trial_info relevant spans
+            relevant_spans = [
+                s for s in spans if s.operation_name in TRIAL_INFO_OPERATION_NAMES
+            ]
+
+            if relevant_spans:
+                try:
+                    trial_info = _extract_trial_info_from_spans(relevant_spans)
+                    self.cache.set_trial_info(trial_id, trial_info)
+                    processed += 1
+                except Exception as e:
+                    LOGGER.warning(
+                        "BackgroundRefresher: Failed to process trial_info[%s]: %s",
+                        trial_id,
+                        e,
+                    )
+            else:
+                # No spans found - set unknown phase
+                self.cache.set_trial_info(
+                    trial_id, {"phase": "unknown", "metadata": {}}
                 )
-                self.cache.set_trial_info(trial_id, trial_info)
-            except Exception as e:
-                LOGGER.warning(
-                    "BackgroundRefresher: Failed to refresh trial_info[%s]: %s",
-                    trial_id,
-                    e,
-                )
+
+        LOGGER.info(
+            "BackgroundRefresher: Processed trial_info for %d trials",
+            processed,
+        )
+
+    def _refresh_leaderboard_from_spans(
+        self,
+        spans_by_trial: dict[str, list[SpanData]],
+        agent_info_cache: dict[str, Any],
+        trial_ids: list[str],
+    ) -> None:
+        """Refresh leaderboard cache from pre-fetched spans.
+
+        Args:
+            spans_by_trial: Pre-fetched spans grouped by trial_id
+            agent_info_cache: Pre-populated agent info cache
+            trial_ids: List of trial IDs to process
+        """
+        # Refresh global leaderboard
+        leaderboard = _compute_leaderboard_from_spans(
+            spans_by_trial, agent_info_cache, trial_ids
+        )
+        self.cache.set_leaderboard(leaderboard, league=None)
+
+        # Refresh per-league leaderboard
+        for league in CACHEABLE_LEAGUES:
+            # Get trial IDs for this league from cache
+            league_ids = [
+                tid for tid in trial_ids if self._trial_matches_league(tid, league)
+            ]
+            league_leaderboard = _compute_leaderboard_from_spans(
+                spans_by_trial, agent_info_cache, league_ids
+            )
+            self.cache.set_leaderboard(league_leaderboard, league=league)
+
+        LOGGER.info("BackgroundRefresher: Refreshed leaderboard from pre-fetched spans")
+
+    def _refresh_agent_actions_from_spans(
+        self,
+        spans_by_trial: dict[str, list[SpanData]],
+        agent_info_cache: dict[str, Any],
+        trial_ids: list[str],
+    ) -> None:
+        """Refresh agent actions cache from pre-fetched spans.
+
+        Args:
+            spans_by_trial: Pre-fetched spans grouped by trial_id
+            agent_info_cache: Pre-populated agent info cache
+            trial_ids: List of trial IDs to process
+        """
+        # Refresh global agent actions
+        actions = _extract_agent_actions_from_spans(
+            spans_by_trial,
+            agent_info_cache,
+            trial_ids,
+            limit=self.config.agent_actions_limit,
+            max_trials=self.config.agent_actions_max_trials,
+        )
+        self.cache.set_agent_actions(actions, league=None)
+
+        # Refresh per-league agent actions
+        for league in CACHEABLE_LEAGUES:
+            league_ids = [
+                tid for tid in trial_ids if self._trial_matches_league(tid, league)
+            ]
+            league_actions = _extract_agent_actions_from_spans(
+                spans_by_trial,
+                agent_info_cache,
+                league_ids,
+                limit=self.config.agent_actions_limit,
+                max_trials=self.config.agent_actions_max_trials,
+            )
+            self.cache.set_agent_actions(league_actions, league=league)
+
+        LOGGER.info(
+            "BackgroundRefresher: Refreshed agent actions from pre-fetched spans"
+        )
+
+    def _trial_matches_league(self, trial_id: str, league: str) -> bool:
+        """Check if a trial matches a specific league.
+
+        Args:
+            trial_id: Trial ID to check
+            league: League to match (e.g., 'NBA', 'NFL')
+
+        Returns:
+            True if trial matches the league
+        """
+        trial_info = self.cache.get_trial_info(trial_id)
+        if trial_info is None:
+            return False
+
+        metadata = trial_info.get("metadata", {})
+        trial_league = metadata.get("sport_type", "")
+        return trial_league.upper() == league.upper()
 
     async def _refresh_stats(self) -> None:
         """Refresh stats cache (global + per-league)."""
@@ -629,115 +893,36 @@ class BackgroundRefresher:
             )
             self.cache.set_games(league_games, league=league)
 
-    async def _refresh_leaderboard(self) -> None:
-        """Refresh leaderboard cache (global + per-league)."""
-        trial_ids = self.cache.get_trials_list() or []
+    def _process_trial_details(
+        self,
+        trial_id: str,
+        spans: list[SpanData],
+        existing_items: list[dict[str, Any]],
+        existing_max_timestamp: int,
+    ) -> None:
+        """Process spans for a single trial and update cache.
 
-        # Refresh global leaderboard
-        leaderboard = await _compute_leaderboard(self.trace_reader, trial_ids)
-        self.cache.set_leaderboard(leaderboard, league=None)
-
-        # Refresh per-league leaderboard
-        for league in CACHEABLE_LEAGUES:
-            filtered_ids = await _filter_trials_by_league(
-                self.trace_reader, trial_ids, league, self.cache
-            )
-            league_leaderboard = await _compute_leaderboard(
-                self.trace_reader, filtered_ids
-            )
-            self.cache.set_leaderboard(league_leaderboard, league=league)
-
-    async def _refresh_agent_actions(self) -> None:
-        """Refresh agent actions cache (global + per-league)."""
-        trial_ids = self.cache.get_trials_list() or []
-
-        # Refresh global agent actions
-        actions = await _extract_agent_actions(
-            self.trace_reader,
-            trial_ids,
-            limit=self.config.agent_actions_limit,
-            max_trials=self.config.agent_actions_max_trials,
-        )
-        self.cache.set_agent_actions(actions, league=None)
-
-        # Refresh per-league agent actions
-        for league in CACHEABLE_LEAGUES:
-            filtered_ids = await _filter_trials_by_league(
-                self.trace_reader, trial_ids, league, self.cache
-            )
-            league_actions = await _extract_agent_actions(
-                self.trace_reader,
-                filtered_ids,
-                limit=self.config.agent_actions_limit,
-                max_trials=self.config.agent_actions_max_trials,
-            )
-            self.cache.set_agent_actions(league_actions, league=league)
-
-    async def _refresh_live_trials(self) -> None:
-        """Refresh trial_details for live trials only.
-
-        Also handles trial completion: when a trial transitions from live to
-        completed, we remove its trial_details and load replay data.
+        Args:
+            trial_id: The trial ID
+            spans: All spans for this trial (may include old ones)
+            existing_items: Previously cached items
+            existing_max_timestamp: Max timestamp from previous cache
         """
-        # Get current live trials from cache
-        current_live = set(self.cache.get_live_trial_ids())
+        if existing_items and existing_max_timestamp > 0:
+            # Incremental: filter to only new spans
+            new_spans = [s for s in spans if s.start_time > existing_max_timestamp]
+            if not new_spans:
+                return  # No new data
 
-        # Detect completed trials (were live, now not)
-        completed_trials = self._known_live_trials - current_live
-        for trial_id in completed_trials:
-            LOGGER.info(
-                "BackgroundRefresher: Trial %s completed, removing from trial_details",
-                trial_id,
-            )
-            self.cache.remove_trial_details(trial_id)
-
-            # Load replay data for newly completed trial
-            await self._load_replay_for_trial(trial_id)
-
-        # Update known live trials
-        self._known_live_trials = current_live
-
-        # Refresh trial_details for live trials
-        for trial_id in current_live:
-            try:
-                await self._refresh_trial_details(trial_id)
-            except Exception as e:
-                LOGGER.warning(
-                    "BackgroundRefresher: Failed to refresh trial_details[%s]: %s",
-                    trial_id,
-                    e,
-                )
-
-    async def _refresh_trial_details(self, trial_id: str) -> None:
-        """Refresh trial_details for a single trial (incremental fetch)."""
-        existing = self.cache.get_trial_details(trial_id)
-
-        if existing is not None:
-            # Incremental fetch: only get spans since last fetch
-            items = existing.get("items", [])
-            max_timestamp = existing.get("max_timestamp", 0)
-            is_completed = existing.get("is_completed", False)
-
-            if is_completed:
-                # Already completed, no need to refresh
-                return
-
-            start_time = datetime.fromtimestamp(
-                max_timestamp / 1_000_000, tz=timezone.utc
-            )
-            new_spans = await self.trace_reader.get_spans(
-                trial_id, start_time=start_time
-            )
-
-            # Serialize and merge
             new_items = []
-            new_max_timestamp = max_timestamp
+            new_max_timestamp = existing_max_timestamp
             is_now_completed = False
 
             for span in new_spans:
                 typed = deserialize_span(span)
                 if typed is not None:
-                    new_items.append(serialize_span_for_ws(typed))
+                    item = serialize_span_for_ws(typed)
+                    new_items.append(item)
                     new_max_timestamp = max(new_max_timestamp, span.start_time)
                     if isinstance(typed, TrialLifecycleSpan) and typed.phase in (
                         "completed",
@@ -746,14 +931,12 @@ class BackgroundRefresher:
                         is_now_completed = True
 
             if new_items:
-                merged_items = items + new_items
+                merged_items = existing_items + new_items
                 self.cache.set_trial_details(
                     trial_id, merged_items, new_max_timestamp, is_now_completed
                 )
         else:
-            # Full fetch
-            spans = await self.trace_reader.get_spans(trial_id)
-
+            # Full fetch: process all spans
             items = []
             max_timestamp = 0
             is_completed = False
@@ -761,7 +944,8 @@ class BackgroundRefresher:
             for span in spans:
                 typed = deserialize_span(span)
                 if typed is not None:
-                    items.append(serialize_span_for_ws(typed))
+                    item = serialize_span_for_ws(typed)
+                    items.append(item)
                     max_timestamp = max(max_timestamp, span.start_time)
                     if isinstance(typed, TrialLifecycleSpan) and typed.phase in (
                         "completed",
@@ -859,7 +1043,18 @@ class BackgroundRefresher:
         self, trial_id: str
     ) -> list[dict[str, Any]]:
         """Refresh trial_details for a specific trial (on-demand for cache miss)."""
-        await self._refresh_trial_details(trial_id)
+        # For on-demand single trial, fetch directly
+        spans = await self.trace_reader.get_spans(trial_id)
+        existing = self.cache.get_trial_details(trial_id)
+
+        if existing is not None:
+            existing_items = existing.get("items", [])
+            max_ts = existing.get("max_timestamp", 0)
+        else:
+            existing_items = []
+            max_ts = 0
+
+        self._process_trial_details(trial_id, spans, existing_items, max_ts)
         cached = self.cache.get_trial_details(trial_id)
         return cached.get("items", []) if cached else []
 
@@ -951,12 +1146,15 @@ class BackgroundRefresher:
 class StreamController:
     """Per-connection stream state controller for live streams.
 
-    Manages pause/resume state and buffers spans during pause for catch-up.
+    Manages pause/resume state and buffers items during pause for catch-up.
+    Items are serialized dicts (not raw SpanData) since the stream endpoint
+    works with cached items that are already serialized.
     """
 
     is_paused: bool = False
-    # Buffer for spans received during pause (for catch-up mode)
-    pause_buffer: list[SpanData] = field(default_factory=list)
+    # Buffer for items received during pause (for catch-up mode)
+    # Items are serialized dicts from cache, not raw SpanData
+    pause_buffer: list[dict[str, Any]] = field(default_factory=list)
     # Max buffer size to prevent memory issues
     max_buffer_size: int = 1000
 
@@ -966,16 +1164,16 @@ class StreamController:
     def resume(self) -> None:
         self.is_paused = False
 
-    def buffer_span(self, span: SpanData) -> None:
-        """Buffer a span during pause (for catch-up on resume)."""
+    def buffer_item(self, item: dict[str, Any]) -> None:
+        """Buffer an item during pause (for catch-up on resume)."""
         if len(self.pause_buffer) < self.max_buffer_size:
-            self.pause_buffer.append(span)
+            self.pause_buffer.append(item)
 
-    def drain_buffer(self) -> list[SpanData]:
-        """Get and clear buffered spans."""
-        spans = self.pause_buffer
+    def drain_buffer(self) -> list[dict[str, Any]]:
+        """Get and clear buffered items."""
+        items = self.pause_buffer
         self.pause_buffer = []
-        return spans
+        return items
 
 
 @dataclass
@@ -1114,7 +1312,7 @@ class ArenaServerState:
     static_dir: Path | None = None
     poll_interval: float = 1.0  # Seconds between trace polls (for WebSocket)
     trace_backend: str = "jaeger"
-    by_alias: bool = True  # Use camelCase aliases in REST JSON responses
+    by_alias: bool = False  # Use snake_case keys in REST JSON responses
 
     # Tracking last poll time per trial for incremental updates (WebSocket)
     _last_poll: dict[str, datetime] = field(default_factory=dict)
@@ -1131,47 +1329,59 @@ def get_server_state() -> ArenaServerState:
 
 
 def create_arena_app(
-    trace_backend: str,
-    trace_query_endpoint: str | None = None,
+    config: "ArenaServerConfig | None" = None,
+    *,
+    trace_backend: str = "jaeger",
+    trace_query_endpoint: str = "http://localhost:16686",
     static_dir: Path | None = None,
     poll_interval: float = 1.0,
     service_name: str = "dojozero",
-    by_alias: bool = True,
+    by_alias: bool = False,
 ) -> FastAPI:
     """Create the Arena Server FastAPI application.
 
     Args:
+        config: ArenaServerConfig for cache/query settings. Uses defaults if None.
         trace_backend: Trace backend type ("jaeger" or "sls")
-        trace_query_endpoint: Jaeger Query API endpoint (only used when trace_backend="jaeger")
+        trace_query_endpoint: Jaeger Query API endpoint
         static_dir: Path to static files (React build output)
         poll_interval: Interval for polling new spans
-        service_name: Service name for Jaeger or SLS trace backend (use --service-name)
+        service_name: Service name for trace backend
         by_alias: Use serialization aliases (camelCase) in REST JSON responses.
-            True (default) outputs camelCase keys; False outputs snake_case keys.
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
         DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
         DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
+    from dojozero.arena_server._config import DEFAULT_CONFIG
+
+    # Use provided config or default for cache/query settings
+    resolved_config = config if config is not None else DEFAULT_CONFIG
+
+    # Create trace reader using CLI args
     trace_reader = create_trace_reader(
         backend=trace_backend,
         trace_query_endpoint=trace_query_endpoint,
-        service_name=service_name,  # Used for both Jaeger and SLS backends
+        service_name=service_name,
     )
     broadcaster = SpanBroadcaster()
+
+    # Pre-compute configs for lifespan closure
+    cache_config = CacheConfig.from_arena_config(resolved_config)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         global _server_state
 
-        # Create cache and refresher
-        cache = LandingPageCache()
-        replay_cache = ReplayCache()
+        # Create cache and refresher using config
+        cache = LandingPageCache(config=cache_config)
+        replay_cache = ReplayCache.from_arena_config(resolved_config)
         refresher = BackgroundRefresher(
             trace_reader=trace_reader,
             cache=cache,
             replay_cache=replay_cache,
+            config=cache_config,
         )
 
         _server_state = ArenaServerState(
@@ -1242,23 +1452,26 @@ def create_arena_app(
 
 
 async def run_arena_server(
+    config: "ArenaServerConfig | None" = None,
+    *,
     host: str = "127.0.0.1",
     port: int = 3001,
     trace_backend: str = "jaeger",
-    trace_query_endpoint: str | None = None,
+    trace_query_endpoint: str = "http://localhost:16686",
     static_dir: Path | None = None,
     service_name: str = "dojozero",
-    by_alias: bool = True,
+    by_alias: bool = False,
 ) -> None:
     """Run the Arena Server.
 
     Args:
+        config: ArenaServerConfig for cache/query settings. Uses defaults if None.
         host: Host to bind to
         port: Port to listen on
         trace_backend: Trace backend type ("jaeger" or "sls")
         trace_query_endpoint: Jaeger Query API endpoint (only used when trace_backend="jaeger")
         static_dir: Path to static files (React build output)
-        service_name: Service name for Jaeger or SLS trace backend (use --service-name)
+        service_name: Service name for Jaeger or SLS trace backend
         by_alias: Use serialization aliases (camelCase) in REST JSON responses.
 
     For SLS backend, configuration comes from environment variables:
@@ -1269,6 +1482,7 @@ async def run_arena_server(
     import uvicorn
 
     app = create_arena_app(
+        config=config,
         trace_backend=trace_backend,
         trace_query_endpoint=trace_query_endpoint,
         static_dir=static_dir,
@@ -1276,13 +1490,13 @@ async def run_arena_server(
         by_alias=by_alias,
     )
 
-    config = uvicorn.Config(
+    uvicorn_config = uvicorn.Config(
         app,
         host=host,
         port=port,
         log_level="info",
     )
-    server = uvicorn.Server(config)
+    server = uvicorn.Server(uvicorn_config)
     await server.serve()
 
 

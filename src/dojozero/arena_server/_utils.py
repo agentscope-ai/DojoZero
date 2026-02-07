@@ -25,12 +25,39 @@ from dojozero.core import (
     deserialize_span,
     LeaderboardEntry,
     serialize_span_for_ws,
+    SpanData,
     TraceReader,
     TrialLifecycleSpan,
 )
 from dojozero.data import BaseGameUpdateEvent, GameInitializeEvent, TeamIdentity
 
 LOGGER = logging.getLogger("dojozero.arena_server.utils")
+
+
+def _extract_agent_info_from_spans(
+    spans: list[SpanData],
+) -> dict[str, AgentInfo]:
+    """Extract agent info from pre-fetched spans.
+
+    Looks for agent.initialized spans to build agent info cache.
+
+    Args:
+        spans: List of spans (typically from all trials)
+
+    Returns:
+        Dict mapping agent_id -> AgentInfo
+    """
+    agent_info_cache: dict[str, AgentInfo] = {}
+
+    for span in spans:
+        if span.operation_name != "agent.initialized":
+            continue
+
+        typed = deserialize_span(span)
+        if isinstance(typed, AgentInfo):
+            agent_info_cache[typed.agent_id] = typed
+
+    return agent_info_cache
 
 
 async def _extract_trial_info_from_traces(
@@ -128,6 +155,101 @@ async def _extract_trial_info_from_traces(
         phase = "stopped"
     elif has_game_result:
         # Game has concluded (game_result span found)
+        phase = "completed"
+    elif has_started and not has_stopped:
+        phase = "running"
+    elif has_stopped:
+        phase = "stopped"
+    elif spans:
+        phase = "running"
+    else:
+        phase = "unknown"
+
+    return {"phase": phase, "metadata": metadata, "game_init": game_init}
+
+
+# Operation names used for trial info extraction
+TRIAL_INFO_OPERATION_NAMES = [
+    "trial.started",
+    "trial.stopped",
+    "trial.terminated",
+    "event.game_initialize",
+    "event.game_result",
+    "event.nba_game_update",
+    "event.nfl_game_update",
+]
+
+
+def _extract_trial_info_from_spans(spans: list[SpanData]) -> dict[str, Any]:
+    """Extract trial phase and metadata from pre-fetched spans.
+
+    This is the core processing logic, separated from fetching for batch operations.
+
+    Args:
+        spans: Pre-fetched spans for a single trial
+
+    Returns:
+        dict with "phase", "metadata", and optional "game_init"
+    """
+    has_started = False
+    has_stopped = False
+    has_game_result = False
+    latest_start_time = 0
+    latest_stop_time = 0
+
+    metadata: dict[str, Any] = {}
+    game_init: GameInitializeEvent | None = None
+    latest_game_update: BaseGameUpdateEvent | None = None
+    latest_game_update_time = 0
+
+    for span in spans:
+        typed = deserialize_span(span)
+
+        if isinstance(typed, TrialLifecycleSpan):
+            if typed.phase == "started":
+                has_started = True
+                if typed.start_time > latest_start_time:
+                    latest_start_time = typed.start_time
+                metadata.update(
+                    {
+                        "home_team_tricode": typed.home_team_tricode,
+                        "away_team_tricode": typed.away_team_tricode,
+                        "home_team_name": typed.home_team_name,
+                        "away_team_name": typed.away_team_name,
+                        "game_date": typed.game_date,
+                        "sport_type": typed.sport_type,
+                        "espn_game_id": typed.espn_game_id,
+                        **typed.extra_metadata,
+                    }
+                )
+            elif typed.phase in ("stopped", "terminated"):
+                has_stopped = True
+                if typed.start_time > latest_stop_time:
+                    latest_stop_time = typed.start_time
+
+        elif isinstance(typed, GameInitializeEvent):
+            game_init = typed
+
+        elif isinstance(typed, BaseGameUpdateEvent):
+            span_time = span.start_time
+            if span_time > latest_game_update_time:
+                latest_game_update_time = span_time
+                latest_game_update = typed
+
+        elif "game_result" in span.operation_name:
+            has_game_result = True
+
+    # Add live scores to metadata if we have a game update
+    if latest_game_update is not None:
+        metadata["home_score"] = latest_game_update.home_score
+        metadata["away_score"] = latest_game_update.away_score
+        metadata["period"] = latest_game_update.period
+        metadata["game_clock"] = latest_game_update.game_clock
+
+    # Determine phase
+    if has_stopped and latest_stop_time >= latest_start_time:
+        phase = "stopped"
+    elif has_game_result:
         phase = "completed"
     elif has_started and not has_stopped:
         phase = "running"
@@ -425,13 +547,97 @@ async def _extract_games_from_trials(
     )
 
 
+def _extract_agent_actions_from_spans(
+    spans_by_trial: dict[str, list[SpanData]],
+    agent_info_cache: dict[str, AgentInfo],
+    trial_ids: list[str] | None = None,
+    limit: int = 20,
+    max_trials: int = 5,
+) -> list[AgentAction]:
+    """Extract recent agent actions from pre-fetched spans.
+
+    Args:
+        spans_by_trial: Pre-fetched spans grouped by trial_id
+        agent_info_cache: Pre-populated agent info cache (agent_id -> AgentInfo)
+        trial_ids: Optional list to filter which trials to process (None = all)
+        limit: Maximum number of actions to return
+        max_trials: Maximum number of trials to process
+
+    Returns:
+        List of agent actions sorted by time (newest first)
+    """
+    all_actions: list[AgentAction] = []
+
+    # Filter to requested trials or use all
+    trials_to_process = (
+        trial_ids if trial_ids is not None else list(spans_by_trial.keys())
+    )
+
+    LOGGER.debug(
+        "Extracting agent actions from %d trials (limit=%d, max_trials=%d)",
+        min(len(trials_to_process), max_trials),
+        limit,
+        max_trials,
+    )
+
+    for trial_id in trials_to_process[:max_trials]:
+        spans = spans_by_trial.get(trial_id, [])
+
+        # Filter to agent.response spans
+        response_spans = [s for s in spans if s.operation_name == "agent.response"]
+        LOGGER.debug(
+            "Trial %s: found %d agent.response spans", trial_id, len(response_spans)
+        )
+
+        for span in response_spans:
+            typed = deserialize_span(span)
+            if not isinstance(typed, AgentResponseMessage):
+                continue
+
+            agent_id = typed.agent_id
+            if not agent_id:
+                continue
+
+            # Get agent info from pre-populated cache
+            agent_info = agent_info_cache.get(agent_id)
+            if agent_info is None:
+                # Fallback: create minimal AgentInfo
+                agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
+
+            all_actions.append(
+                AgentAction(
+                    agent=agent_info,
+                    response=typed,
+                    timestamp=span.start_time,
+                )
+            )
+
+        # Early exit if we have enough actions (optimization)
+        if len(all_actions) >= limit * 2:
+            LOGGER.debug("Early exit: collected %d actions", len(all_actions))
+            break
+
+    # Sort by timestamp (newest first) and limit
+    all_actions.sort(key=lambda x: x.timestamp, reverse=True)
+    result = all_actions[:limit]
+    LOGGER.debug(
+        "Returning %d actions (from %d total)",
+        len(result),
+        len(all_actions),
+    )
+    return result
+
+
 async def _extract_agent_actions(
     trace_reader: TraceReader,
     trial_ids: list[str],
     limit: int = 20,
     max_trials: int = 5,
 ) -> list[AgentAction]:
-    """Extract recent agent actions from trial spans.
+    """Extract recent agent actions from trial spans (on-demand version).
+
+    This is the async version that fetches spans directly from trace_reader.
+    For batch operations, prefer _extract_agent_actions_from_spans with pre-fetched data.
 
     Queries agent.response spans from recent games (both live and completed) and returns
     AgentAction objects with agent info, response message, and timestamp.
@@ -563,12 +769,134 @@ async def _compute_stats(
     )
 
 
+def _compute_leaderboard_from_spans(
+    spans_by_trial: dict[str, list[SpanData]],
+    agent_info_cache: dict[str, AgentInfo],
+    trial_ids: list[str] | None = None,
+    limit: int = 20,
+) -> list[LeaderboardEntry]:
+    """Compute agent leaderboard from pre-fetched spans.
+
+    Uses broker.final_stats spans when available for accurate statistics.
+    Falls back to counting agent.response spans if final_stats not found.
+
+    Args:
+        spans_by_trial: Pre-fetched spans grouped by trial_id
+        agent_info_cache: Pre-populated agent info cache (agent_id -> AgentInfo)
+        trial_ids: Optional list to filter which trials to process (None = all)
+        limit: Maximum entries to return
+
+    Returns:
+        List of agents sorted by winnings (highest first)
+    """
+    from dojozero.betting import StatisticsList
+
+    # Accumulator for per-agent stats
+    @dataclass
+    class _AgentStats:
+        agent: AgentInfo
+        winnings: float = 0.0
+        wins: int = 0
+        total_bets: int = 0
+        total_wagered: float = 0.0
+
+    agent_stats: dict[str, _AgentStats] = {}
+
+    # Filter to requested trials or use all
+    trials_to_process = (
+        trial_ids if trial_ids is not None else list(spans_by_trial.keys())
+    )
+
+    for trial_id in trials_to_process:
+        spans = spans_by_trial.get(trial_id, [])
+        if not spans:
+            continue
+
+        # Separate spans by operation
+        final_stats_spans = [
+            s for s in spans if s.operation_name == "broker.final_stats"
+        ]
+        response_spans = [s for s in spans if s.operation_name == "agent.response"]
+
+        if final_stats_spans:
+            # Use final_stats if available
+            for span in final_stats_spans:
+                typed = deserialize_span(span)
+                if isinstance(typed, StatisticsList):
+                    for agent_id, stats in typed.statistics.items():
+                        agent_info = agent_info_cache.get(agent_id)
+                        if agent_info is None:
+                            agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
+
+                        if agent_id not in agent_stats:
+                            agent_stats[agent_id] = _AgentStats(agent=agent_info)
+
+                        acc = agent_stats[agent_id]
+                        acc.winnings += float(stats.net_profit)
+                        acc.wins += stats.wins
+                        acc.total_bets += stats.total_bets
+                        acc.total_wagered += float(stats.total_wagered)
+        else:
+            # Fallback: count from agent.response spans
+            for span in response_spans:
+                typed = deserialize_span(span)
+                if not isinstance(typed, AgentResponseMessage):
+                    continue
+
+                agent_id = typed.agent_id
+                if not agent_id:
+                    continue
+
+                if agent_id not in agent_stats:
+                    agent_info = agent_info_cache.get(agent_id)
+                    if agent_info is None:
+                        agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
+                    agent_stats[agent_id] = _AgentStats(agent=agent_info)
+
+                acc = agent_stats[agent_id]
+                if typed.bet_amount:
+                    acc.total_bets += 1
+                    acc.total_wagered += typed.bet_amount
+
+    # Convert to sorted list
+    leaderboard: list[LeaderboardEntry] = []
+    for stats in agent_stats.values():
+        win_rate = (stats.wins / stats.total_bets * 100) if stats.total_bets > 0 else 0
+        roi = (
+            (stats.winnings / stats.total_wagered * 100)
+            if stats.total_wagered > 0
+            else 0
+        )
+
+        leaderboard.append(
+            LeaderboardEntry(
+                agent=stats.agent,
+                winnings=round(stats.winnings, 2),
+                winRate=round(win_rate, 1),
+                totalBets=stats.total_bets,
+                roi=round(roi, 1),
+            )
+        )
+
+    # Sort by winnings (descending) and add rank
+    leaderboard.sort(key=lambda x: x.winnings, reverse=True)
+    ranked = [
+        entry.model_copy(update={"rank": i + 1})
+        for i, entry in enumerate(leaderboard[:limit])
+    ]
+
+    return ranked
+
+
 async def _compute_leaderboard(
     trace_reader: TraceReader,
     trial_ids: list[str],
     limit: int = 20,
 ) -> list[LeaderboardEntry]:
-    """Compute agent leaderboard from trial results.
+    """Compute agent leaderboard from trial results (on-demand version).
+
+    This is the async version that fetches spans directly from trace_reader.
+    For batch operations, prefer _compute_leaderboard_from_spans with pre-fetched data.
 
     Uses broker.final_stats spans when available for accurate statistics.
     Falls back to counting agent.response spans if final_stats not found.
