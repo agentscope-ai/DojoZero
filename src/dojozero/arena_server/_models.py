@@ -17,6 +17,13 @@ from dojozero.core._models import AgentAction, LeaderboardEntry
 from dojozero.data._models import TeamIdentity
 
 # ============================================================================
+# Type Aliases
+# ============================================================================
+
+# Type alias for replay error reasons
+ReplayErrorReason = Literal["trial_not_found", "trial_still_running", "no_data"]
+
+# ============================================================================
 # Arena API Response Models
 # ============================================================================
 
@@ -198,6 +205,19 @@ class WSStreamStatusMessage(BaseModel):
     timestamp: datetime
 
 
+class WSReplayMetaInfoMessage(BaseModel):
+    """Replay metadata sent at the beginning of replay connection."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    type: Literal["replay_meta_info"] = "replay_meta_info"
+    trial_id: str = Field(serialization_alias="trialId")
+    total_items: int = Field(serialization_alias="totalItems")
+    total_play_count: int = Field(serialization_alias="totalPlayCount")
+    periods: list[dict[str, Any]] = Field(default_factory=list)
+    timestamp: datetime
+
+
 class WSReplayStatusMessage(BaseModel):
     """Replay-specific status message with playback progress."""
 
@@ -206,6 +226,8 @@ class WSReplayStatusMessage(BaseModel):
     type: Literal["replay_status"] = "replay_status"
     current_index: int = Field(serialization_alias="currentIndex")
     total_items: int = Field(serialization_alias="totalItems")
+    current_play_index: int = Field(default=0, serialization_alias="currentPlayIndex")
+    total_play_count: int = Field(default=0, serialization_alias="totalPlayCount")
     is_paused: bool = Field(serialization_alias="isPaused")
     speed: float  # 1.0, 2.0, 4.0
     progress_percent: float = Field(serialization_alias="progressPercent")
@@ -249,6 +271,7 @@ __all__ = [
     "TrialListItem",
     # WebSocket Models
     "WSHeartbeatMessage",
+    "WSReplayMetaInfoMessage",
     "WSReplayStatusMessage",
     "WSReplayUnavailableMessage",
     "WSSnapshotMessage",

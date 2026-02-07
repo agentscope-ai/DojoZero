@@ -1,65 +1,28 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Clock, TrendingUp, Users, Play, Activity } from "lucide-react";
+import { ArrowLeft, Clock, TrendingUp, Users, Play, Activity, Wifi, WifiOff } from "lucide-react";
 import { motion } from "framer-motion";
+import { useTrialWebSocket } from "../hooks/useTrialWebSocket";
 
 export default function GameDetailPage() {
   const { trialId } = useParams();
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [trialData, setTrialData] = useState(null);
 
-  useEffect(() => {
-    const fetchGameDetail = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
+  // Use WebSocket for real-time updates
+  const { items, isConnected, isLoading, error, isCompleted } = useTrialWebSocket(trialId);
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 120000);
-
-        const response = await fetch(`${apiUrl}/api/trials/${trialId}`, {
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch game detail: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        setTrialData(data);
-      } catch (err) {
-        console.error("Failed to fetch game detail:", err);
-        if (err.name === 'AbortError') {
-          setError("Request timed out. The backend may be slow or unavailable.");
-        } else {
-          setError(err.message);
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (trialId) {
-      fetchGameDetail();
-    }
-  }, [trialId]);
-
-  // Parse game info and events
+  // Parse game info and events from WebSocket items
   const gameInfo = useMemo(() => {
-    if (!trialData?.items) return null;
-    return parseGameInfo(trialData.items);
-  }, [trialData]);
+    if (!items || items.length === 0) return null;
+    return parseGameInfo(items);
+  }, [items]);
 
   const events = useMemo(() => {
-    if (!trialData?.items) return [];
-    return parseEvents(trialData.items);
-  }, [trialData]);
+    if (!items || items.length === 0) return [];
+    return parseEvents(items);
+  }, [items]);
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div style={styles.loadingScreen}>
         <div style={styles.loadingSpinner} />
@@ -123,6 +86,22 @@ export default function GameDetailPage() {
           <ArrowLeft size={18} />
           <span>LOBBY</span>
         </motion.button>
+        <div style={styles.connectionStatus}>
+          {isConnected ? (
+            <>
+              <Wifi size={14} style={{ color: "#10B981" }} />
+              <span style={{ color: "#10B981" }}>LIVE</span>
+            </>
+          ) : (
+            <>
+              <WifiOff size={14} style={{ color: "#EF4444" }} />
+              <span style={{ color: "#EF4444" }}>OFFLINE</span>
+            </>
+          )}
+          {isCompleted && (
+            <span style={styles.completedBadge}>COMPLETED</span>
+          )}
+        </div>
       </header>
 
       {/* Main Content */}
@@ -739,6 +718,11 @@ function AgentRankings({ agents }) {
   );
 }
 
+// Helper to extract _event_time from an item for sorting
+function getItemTimestamp(item) {
+  return item.data?._event_time || 0;
+}
+
 // Parse game info from items
 function parseGameInfo(items) {
   const info = {
@@ -755,9 +739,12 @@ function parseGameInfo(items) {
 
   if (!items || items.length === 0) return null;
 
+  // Sort items by timestamp to ensure we process in chronological order
+  const sortedItems = [...items].sort((a, b) => getItemTimestamp(a) - getItemTimestamp(b));
+
   const agentsMap = new Map();
 
-  for (const item of items) {
+  for (const item of sortedItems) {
     const category = item.category || "";
     const data = item.data || {};
 
@@ -850,10 +837,13 @@ function parseGameInfo(items) {
 function parseEvents(items) {
   if (!items || items.length === 0) return [];
 
-  let lastGameScore = null;
-  let lastLifecyclePhase = null;
+  // Sort items by timestamp (ascending order - oldest first)
+  const sortedItems = [...items].sort((a, b) => getItemTimestamp(a) - getItemTimestamp(b));
 
-  return items
+  let lastGameScore = null;
+  const seenLifecyclePhases = new Set();
+
+  return sortedItems
     .filter(item => {
       const category = item.category || "";
 
@@ -872,17 +862,27 @@ function parseEvents(items) {
         lastGameScore = currentScore;
       }
 
-      // Filter out consecutive lifecycle events with the same phase
+      // Filter out ALL duplicate lifecycle events (not just consecutive)
+      // Normalize by what will be displayed (started, finished, etc.)
       if (category.includes("lifecycle") || category.includes("trial.") ||
           category.includes("game_initialize") || category.includes("game_result")) {
         const data = item.data || item;
-        const currentPhase = data.phase || category;
 
-        if (lastLifecyclePhase === currentPhase) {
+        // Determine the normalized lifecycle key based on what will be displayed
+        let lifecycleKey;
+        if (category.includes("result") || data.phase === "stopped" || data.phase === "completed") {
+          lifecycleKey = "finished";
+        } else if (category.includes("initialize") || data.phase === "started") {
+          lifecycleKey = "started";
+        } else {
+          lifecycleKey = data.phase || category;
+        }
+
+        if (seenLifecyclePhases.has(lifecycleKey)) {
           return false; // Skip duplicate lifecycle event
         }
 
-        lastLifecyclePhase = currentPhase;
+        seenLifecyclePhases.add(lifecycleKey);
       }
 
       return true;
@@ -900,22 +900,12 @@ function parseEvents(items) {
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
         .join(" ");
 
-      // Get time - try different timestamp field names
-      // OpenTelemetry spans can have different timestamp formats
-      let timestamp = data.timestamp || data.start_time || data.time || data.end_time;
-
+      // Get time from _event_time (microseconds)
+      const timestamp = data._event_time;
       let time = "N/A";
       if (timestamp) {
-        // Try different timestamp formats
-        if (typeof timestamp === 'number') {
-          // Assume microseconds (OpenTelemetry format)
-          const date = new Date(timestamp / 1000);
-          time = date.toLocaleTimeString();
-        } else if (typeof timestamp === 'string') {
-          // ISO string format
-          const date = new Date(timestamp);
-          time = date.toLocaleTimeString();
-        }
+        const date = new Date(timestamp / 1000);
+        time = date.toLocaleTimeString();
       }
 
       // Create description based on category
@@ -979,6 +969,25 @@ const styles = {
     borderBottom: "1px solid var(--border-subtle)",
     background: "var(--bg-secondary)",
     backdropFilter: "blur(20px)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  connectionStatus: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 12,
+    fontWeight: 600,
+    letterSpacing: "0.1em",
+  },
+  completedBadge: {
+    marginLeft: 8,
+    padding: "4px 8px",
+    background: "var(--bg-tertiary)",
+    borderRadius: 4,
+    color: "var(--text-muted)",
+    fontSize: 11,
   },
   backButton: {
     display: "flex",

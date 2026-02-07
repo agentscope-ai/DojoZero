@@ -59,7 +59,7 @@ function PodiumSection({ leaderboardData }) {
                 <span style={styles.podiumWinnings}>
                   +${entry.winnings.toLocaleString()}
                 </span>
-                <span style={styles.podiumWinRate}>{entry.winRate}% Win Rate</span>
+                <span style={styles.podiumWinRate}>{entry.win_rate}% Win Rate</span>
               </div>
 
               {/* Podium Block */}
@@ -209,10 +209,10 @@ function RankingTable({ selectedAgent, setSelectedAgent, leaderboardData }) {
                 </span>
               </td>
               <td style={{ textAlign: "right" }}>
-                <span style={styles.statValue}>{entry.winRate}%</span>
+                <span style={styles.statValue}>{entry.win_rate}%</span>
               </td>
               <td style={{ textAlign: "right" }}>
-                <span style={styles.statValue}>{entry.totalBets}</span>
+                <span style={styles.statValue}>{entry.total_bets}</span>
               </td>
               <td style={{ textAlign: "right" }}>
                 <span style={{

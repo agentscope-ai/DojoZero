@@ -1,0 +1,37 @@
+# Arena Server Configuration
+# Copy to arena-server.yaml and customize as needed.
+#
+# Note: Server settings (host, port, static_dir) and trace backend settings
+# (trace_backend, query_endpoint, service_name) are configured via CLI arguments.
+# See: uv run dojozero arena --help
+#
+# For SLS backend, set these environment variables:
+#   DOJOZERO_SLS_PROJECT, DOJOZERO_SLS_ENDPOINT, DOJOZERO_SLS_LOGSTORE
+
+cache:
+  refresh_interval: 5.0  # How often to refresh all caches (seconds)
+  startup_timeout: 30.0  # Max wait for initial cache population
+  trials_lookback_days: 7  # Days to look back for trials
+  trials_limit: 500  # Max trials to fetch per query
+  max_cache_ttl: 2592000.0  # 30 days
+  completed_trial_ttl: 2592000.0  # 30 days
+
+replay_cache:
+  ttl: 604800.0  # 7 days
+  max_entries: 100  # Max trials to cache for replay
+  core_categories:
+    - "play"
+    - "game_update"
+
+query_limits:
+  agent_actions_max_trials: 5
+  agent_actions_limit: 20
+  leaderboard_limit: 20
+
+websocket:
+  heartbeat_interval: 5.0
+  pause_buffer_size: 1000
+
+sls:
+  page_size: 100
+  max_total: 100000

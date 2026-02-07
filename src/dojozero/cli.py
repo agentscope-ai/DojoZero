@@ -360,6 +360,12 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Launch the Arena Server for real-time span streaming to browsers.",
     )
     arena_parser.add_argument(
+        "--config",
+        dest="config_file",
+        type=Path,
+        help="Path to YAML configuration file. CLI args override config file values.",
+    )
+    arena_parser.add_argument(
         "--host",
         default="127.0.0.1",
         help="Host address to bind to (default: 127.0.0.1).",
@@ -395,9 +401,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--static-dir",
         dest="static_dir",
         type=Path,
+        default=None,
         help="Path to built static assets to serve (optional).",
     )
-
     # List trials command
     list_trials_parser = subparsers.add_parser(
         "list-trials",
@@ -2043,13 +2049,27 @@ async def _clear_schedules_command(args: argparse.Namespace) -> int:
 async def _arena_command(args: argparse.Namespace) -> int:
     """Handle arena command - start Arena Server."""
     from dojozero.arena_server import run_arena_server
+    from dojozero.arena_server._config import ArenaServerConfig
 
+    # Load config from YAML file if provided (for cache/query settings only)
+    config = None
+    config_file = getattr(args, "config_file", None)
+    if config_file:
+        try:
+            config = ArenaServerConfig.from_yaml(config_file)
+            LOGGER.info("Loaded config from: %s", config_file)
+        except FileNotFoundError:
+            raise DojoZeroCLIError(f"Config file not found: {config_file}")
+        except Exception as e:
+            raise DojoZeroCLIError(f"Failed to load config file: {e}")
+
+    # Get CLI args (all have defaults now)
     host = args.host
     port = args.port
     trace_backend = args.trace_backend
-    trace_query_endpoint = getattr(args, "trace_query_endpoint", None)
+    trace_query_endpoint = args.trace_query_endpoint
     static_dir = getattr(args, "static_dir", None)
-    service_name = getattr(args, "service_name", "dojozero")
+    service_name = args.service_name
 
     LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
     if trace_backend == "sls":
@@ -2061,6 +2081,7 @@ async def _arena_command(args: argparse.Namespace) -> int:
         LOGGER.info("Static files: %s", static_dir)
 
     await run_arena_server(
+        config=config,
         host=host,
         port=port,
         trace_backend=trace_backend,
