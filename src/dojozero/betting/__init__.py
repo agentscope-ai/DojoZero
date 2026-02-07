@@ -92,7 +92,7 @@ __all__ = [
     "BetExecutedPayload",
     "BetSettledPayload",
     "Statistics",
-    "BrokerFinalStats"
+    "BrokerFinalStats",
     # Enums
     "EventStatus",
     "OrderType",
