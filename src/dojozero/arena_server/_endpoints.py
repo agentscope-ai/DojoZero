@@ -205,7 +205,7 @@ def register_rest_endpoints(app: FastAPI) -> None:
             if should_show_superbowl_placeholder():
                 # Convert dict to GameCardData and prepend to live games
                 superbowl_game = GameCardData.model_validate(SUPER_BOWL_GAME)
-                live_games = [superbowl_game] + list(live_games)
+                live_games = [superbowl_game]
         response = LandingResponse(
             stats=stats,
             live_games=live_games,
