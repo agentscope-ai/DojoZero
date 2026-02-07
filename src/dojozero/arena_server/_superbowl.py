@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 # Super Bowl 60: Seattle Seahawks @ New England Patriots
 # February 8th, 2026 at 6:30pm ET (23:30 UTC)
 SUPER_BOWL_KICKOFF_UTC = datetime(2026, 2, 8, 23, 30, tzinfo=timezone.utc)
-
+SUPER_BOWL_GAME_ID = "nfl-game-401772988-superbowl60"
 SUPER_BOWL_GAME = {
     "id": "nfl-game-401772988-superbowl60",
     "league": "NFL",
