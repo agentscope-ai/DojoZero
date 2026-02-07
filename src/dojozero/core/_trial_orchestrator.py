@@ -1069,11 +1069,9 @@ class TrialOrchestrator:
         context = runtime._context
         if context is not None and context.request_stop is not None:
             trial_id = runtime.spec.trial_id
-            original_request_stop = context.request_stop
 
-            def _orchestrator_stop() -> None:
-                # Call original for idempotency flag + logging
-                original_request_stop()
+            def _delayed_stop_callback() -> None:
+                """Callback injected into factory's self-stop mechanism."""
 
                 async def _delayed_stop() -> None:
                     await asyncio.sleep(10)
@@ -1102,7 +1100,9 @@ class TrialOrchestrator:
                         trial_id,
                     )
 
-            context.request_stop = _orchestrator_stop
+            # Inject the delayed stop callback into the factory's self-stop mechanism
+            if context.set_stop_callback is not None:
+                context.set_stop_callback(_delayed_stop_callback)
 
     async def _stop_runtime(self, runtime: TrialRuntime) -> None:
         if runtime.phase in {TrialPhase.STOPPED, TrialPhase.INITIALIZED}:

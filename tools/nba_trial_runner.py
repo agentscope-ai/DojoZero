@@ -22,6 +22,14 @@ Usage:
     python nba_trial_runner.py run --data-dir outputs --server http://localhost:8000
 """
 
+# Load .env file before importing other modules
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed
+
 import argparse
 import asyncio
 import hashlib
