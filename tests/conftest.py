@@ -122,7 +122,7 @@ def nfl_odds_data(test_game_id):
     """NFL odds update data."""
     return {
         "game_id": test_game_id,
-        "provider": "Draft Kings",
+        "provider": "polymarket",
         "moneyline_home": -150,
         "moneyline_away": 130,
         "spread": -3.0,

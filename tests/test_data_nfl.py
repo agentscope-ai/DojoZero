@@ -162,25 +162,6 @@ class TestNFLGameStateTracker:
         state_tracker.mark_game_initialized("event123")
         assert state_tracker.is_game_initialized("event123") is True
 
-    def test_odds_changed_first_time(self, state_tracker):
-        """Test that first odds are always considered changed."""
-        odds = {"spread": 3.5, "overUnder": 45.5}
-        assert state_tracker.odds_changed("event123", odds) is True
-
-    def test_odds_changed_when_different(self, state_tracker):
-        """Test that different odds are detected."""
-        old_odds = {"spread": 3.5, "overUnder": 45.5}
-        state_tracker.set_last_odds("event123", old_odds)
-
-        new_odds = {"spread": 4.0, "overUnder": 45.5}
-        assert state_tracker.odds_changed("event123", new_odds) is True
-
-    def test_odds_not_changed_when_same(self, state_tracker):
-        """Test that same odds are not marked as changed."""
-        odds = {"spread": 3.5, "overUnder": 45.5}
-        state_tracker.set_last_odds("event123", odds)
-        assert state_tracker.odds_changed("event123", odds) is False
-
     def test_filter_new_plays(self, state_tracker):
         """Test filtering new plays."""
         plays = [
@@ -320,7 +301,7 @@ class TestNFLEvents:
         event = OddsUpdateEvent(
             game_id="401671827",
             odds=OddsInfo(
-                provider="Draft Kings",
+                provider="polymarket",
                 spreads=[SpreadOdds(spread=-3.5)],
                 moneyline=MoneylineOdds(home_odds=-150.0, away_odds=130.0),
             ),
@@ -329,7 +310,7 @@ class TestNFLEvents:
         )
 
         assert len(event.odds.spreads) > 0 and event.odds.spreads[0].spread == -3.5
-        assert event.odds.provider == "Draft Kings"
+        assert event.odds.provider == "polymarket"
         assert event.event_type == "event.odds_update"
 
 
@@ -351,53 +332,6 @@ class TestNFLStoreParseScoreboard:
         assert len(init_events) == 1
         assert str(init_events[0].home_team) == "Kansas City Chiefs"
         assert str(init_events[0].away_team) == "San Francisco 49ers"
-
-    def test_parse_scoreboard_emits_odds_update(self, nfl_store):
-        """Test that scoreboard parsing emits OddsUpdateEvent from ESPN sportsbook data."""
-        scoreboard_data = {
-            "scoreboard": {
-                "events": [
-                    {
-                        "id": "401671827",
-                        "competitions": [
-                            {
-                                "competitors": [
-                                    {
-                                        "homeAway": "home",
-                                        "team": {"id": "12", "displayName": "KC"},
-                                    },
-                                    {
-                                        "homeAway": "away",
-                                        "team": {"id": "25", "displayName": "SF"},
-                                    },
-                                ],
-                                "odds": [
-                                    {
-                                        "provider": {"name": "Draft Kings"},
-                                        "spread": -2.5,
-                                        "overUnder": 47.5,
-                                        "homeTeamOdds": {"moneyLine": -130},
-                                        "awayTeamOdds": {"moneyLine": +110},
-                                    }
-                                ],
-                                "status": {"type": {"name": "STATUS_SCHEDULED"}},
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
-
-        events = nfl_store._parse_api_response(scoreboard_data)
-
-        # Should emit OddsUpdateEvent from ESPN sportsbook data
-        odds_events = [e for e in events if isinstance(e, OddsUpdateEvent)]
-        assert len(odds_events) == 1
-        assert (
-            len(odds_events[0].odds.spreads) > 0
-            and odds_events[0].odds.spreads[0].spread == -2.5
-        )
-        assert odds_events[0].odds.provider == "Draft Kings"
 
     def test_parse_scoreboard_emits_game_result(self, nfl_store):
         """Test that scoreboard parsing emits GameResultEvent for finished games."""

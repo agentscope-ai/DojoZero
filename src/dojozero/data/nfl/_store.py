@@ -9,14 +9,10 @@ from dojozero.data._models import (
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
-    OddsUpdateEvent,
     PlayerIdentity,
     PollProfile,
 )
 from dojozero.data._models import (
-    MoneylineOdds,
-    OddsInfo,
-    SpreadOdds,
     TeamIdentity,
     VenueInfo,
     get_timezone_for_state,
@@ -333,42 +329,8 @@ class NFLStore(DataStore):
                 )
                 self._state.mark_game_initialized(event_id)
 
-            # Handle odds updates from ESPN scoreboard
-            # ESPN provides sportsbook odds from providers like DraftKings, FanDuel
-            odds_list = competition.get("odds", []) or []
-            if odds_list and odds_list[0] and isinstance(odds_list[0], dict):
-                odds = odds_list[0]  # Use first provider
-                if self._state.odds_changed(event_id, odds):
-                    # Extract odds data
-                    provider_data = odds.get("provider", {}) or {}
-                    provider = provider_data.get("name", "")
-                    spread = float(odds.get("spread", 0) or 0)
-
-                    # Get team-specific odds
-                    home_odds = odds.get("homeTeamOdds", {}) or {}
-                    away_odds = odds.get("awayTeamOdds", {}) or {}
-
-                    moneyline_home = int(home_odds.get("moneyLine", 0) or 0)
-                    moneyline_away = int(away_odds.get("moneyLine", 0) or 0)
-
-                    events.append(
-                        OddsUpdateEvent(
-                            timestamp=timestamp,
-                            game_id=event_id,
-                            sport="nfl",
-                            odds=OddsInfo(
-                                provider=provider,
-                                spreads=[SpreadOdds(spread=spread)],
-                                moneyline=MoneylineOdds(
-                                    home_odds=float(moneyline_home),
-                                    away_odds=float(moneyline_away),
-                                ),
-                            ),
-                            home_tricode=home_team_info.get("abbreviation", ""),
-                            away_tricode=away_team_info.get("abbreviation", ""),
-                        )
-                    )
-                    self._state.set_last_odds(event_id, odds)
+            # Note: ESPN odds from DraftKings/FanDuel are ignored.
+            # We rely solely on Polymarket odds via PolymarketStore.
 
             # Handle game status transitions
             status_data = competition.get("status", {}) or {}
