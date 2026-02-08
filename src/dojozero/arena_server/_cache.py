@@ -256,13 +256,13 @@ class LandingPageCache:
         """Extract and merge agent info from spans.
 
         Looks for agent.agent_initialize spans containing AgentList payloads.
-        New agents are added to cache; existing agents are not overwritten.
+        New agents are added to cache; existing agents are updated with newer info.
 
         Args:
             spans: List of spans to extract from
 
         Returns:
-            Number of new agents added
+            Number of new agents added (not counting updates)
         """
         added = 0
         for span in spans:
@@ -271,13 +271,14 @@ class LandingPageCache:
             typed = deserialize_span(span)
             if isinstance(typed, AgentList):
                 for agent_info in typed.agents:
-                    if (
-                        agent_info.agent_id
-                        and agent_info.agent_id not in self._agent_info
-                    ):
+                    if agent_info.agent_id:
+                        is_new = agent_info.agent_id not in self._agent_info
                         self._agent_info[agent_info.agent_id] = agent_info
-                        added += 1
-                        LOGGER.debug("Cached agent: %s", agent_info.agent_id)
+                        if is_new:
+                            added += 1
+                            LOGGER.debug("Cached new agent: %s", agent_info.agent_id)
+                        else:
+                            LOGGER.debug("Updated agent: %s", agent_info.agent_id)
         return added
 
     def clear_agent_info(self) -> None:
