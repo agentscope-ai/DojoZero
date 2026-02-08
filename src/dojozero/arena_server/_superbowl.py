@@ -38,7 +38,7 @@ SUPER_BOWL_GAME = {
     "home_score": 0,
     "away_score": 0,
     "status": "upcoming",
-    "date": "2026-02-08",
+    "date": "2026-02-08T23:30:00+00:00",
     "quarter": "",
     "clock": "",
     "bets": [],
