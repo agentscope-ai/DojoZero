@@ -686,26 +686,42 @@ class BackgroundRefresher:
     ) -> None:
         """Refresh trial_info from pre-fetched spans grouped by trial_id.
 
+        Processes:
+        1. Trials not yet in cache (missing)
+        2. Trials currently marked as "running" (to update scores and detect completion)
+
+        Completed trials are not re-processed as their data is final.
+
         Args:
             trial_ids: List of all trial IDs to process
             spans_by_trial: Pre-fetched spans grouped by trial_id
         """
-        # Filter out trials already in cache
-        missing_trial_ids = set(
-            tid for tid in trial_ids if self.cache.get_trial_info(tid) is None
-        )
+        # Determine which trials need processing:
+        # 1. Missing trials (not in cache)
+        # 2. Running trials (need score updates and completion detection)
+        trials_to_process: set[str] = set()
 
-        if not missing_trial_ids:
+        for tid in trial_ids:
+            cached_info = self.cache.get_trial_info(tid)
+            if cached_info is None:
+                # Not in cache - needs processing
+                trials_to_process.add(tid)
+            elif cached_info.get("phase") == "running":
+                # Running trial - needs re-processing for score updates
+                trials_to_process.add(tid)
+            # Completed trials (phase in completed/stopped) are skipped
+
+        if not trials_to_process:
             return
 
         LOGGER.info(
             "BackgroundRefresher: Processing trial_info for %d/%d trials from pre-fetched spans",
-            len(missing_trial_ids),
+            len(trials_to_process),
             len(trial_ids),
         )
 
         processed = 0
-        for trial_id in missing_trial_ids:
+        for trial_id in trials_to_process:
             spans = spans_by_trial.get(trial_id, [])
 
             # Filter to trial_info relevant spans
