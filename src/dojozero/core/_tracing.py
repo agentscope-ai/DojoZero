@@ -779,7 +779,7 @@ class SLSTraceReader:
 
         # Pagination: SLS GetLogs API limits to 100 rows per request
         page_size = 100
-        max_total = 100000  # Safety limit
+        max_total = 1000000  # Safety limit
         all_rows: list[dict[str, Any]] = []
         offset = 0
 
