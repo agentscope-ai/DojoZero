@@ -104,23 +104,121 @@ def is_clock_in_range(
 
 
 def compute_win_probability(
-    home_score: int, away_score: int, period: int, clock: str
+    home_score: int,
+    away_score: int,
+    period: int,
+    clock: str,
+    *,
+    home_tricode: str = "",
+    possession_team: str = "",
+    yard_line: int = 50,
 ) -> float:
-    """Compute home team win probability from score and time remaining.
+    """Compute home team win probability from score and game state.
 
-    Simple logistic model: score differential matters more as time runs out.
+    For regulation (Q1-Q4):
+    - Uses score differential and time remaining
+    - Score matters more as time runs out
+
+    For overtime (Q5+, NFL playoff sudden death):
+    - Any score wins the game
+    - Possession is critical - team with ball has major advantage
+    - Field position determines scoring probability
     """
+    score_diff = home_score - away_score
+
+    # Overtime: sudden death rules (any score wins)
+    if period >= 5:
+        return _compute_ot_win_probability(
+            score_diff=score_diff,
+            home_tricode=home_tricode,
+            possession_team=possession_team,
+            yard_line=yard_line,
+        )
+
+    # Regulation: time-based model
     time_remaining = game_clock_to_remaining(period, clock)
     total_time = 4 * QUARTER_SECONDS  # 3600 seconds
     time_fraction = time_remaining / total_time if total_time > 0 else 0.0
+    time_elapsed_fraction = 1.0 - time_fraction
 
-    score_diff = home_score - away_score
+    if time_remaining >= 120:  # More than 2 minutes left
+        base_coef = 0.08 + 0.27 * (time_elapsed_fraction**1.5)
+    else:
+        # Final 2 minutes: rapid increase
+        base_coef = 0.35 + 0.65 * ((120 - time_remaining) / 120) ** 0.7
 
-    # Score matters more as game progresses; at game start it barely matters
-    weight = 1.0 + 2.0 * (1.0 - time_fraction)
-    logit = score_diff * weight * 0.2
-
+    logit = score_diff * base_coef
     return 1.0 / (1.0 + math.exp(-logit))
+
+
+def _compute_ot_win_probability(
+    *,
+    score_diff: int,
+    home_tricode: str,
+    possession_team: str,
+    yard_line: int,
+) -> float:
+    """Compute win probability in NFL overtime (sudden death).
+
+    In playoff OT, any score wins. Key factors:
+    - Team with possession has a big advantage
+    - Field position determines scoring probability
+    - Closer to end zone = higher chance of scoring
+
+    yard_line interpretation (from ESPN data):
+    - Represents distance from HOME team's end zone (0-100)
+    - YL=0 is home end zone, YL=100 is away end zone
+    - Home team scores at YL=100, away team scores at YL=0
+    """
+    # If already a score difference, game is over
+    if score_diff != 0:
+        return 1.0 if score_diff > 0 else 0.0
+
+    # Determine if home team has possession
+    home_has_ball = possession_team == home_tricode if possession_team else True
+
+    # Calculate yards to score based on who has the ball
+    # yard_line = distance from home end zone
+    # - Home team needs to reach YL=100: yards_to_score = 100 - yard_line
+    # - Away team needs to reach YL=0: yards_to_score = yard_line
+    if home_has_ball:
+        yards_to_score = max(1, 100 - yard_line) if yard_line else 50
+    else:
+        yards_to_score = max(1, yard_line) if yard_line else 50
+
+    # NFL drive success rates by field position (approximate):
+    # 80 yards to score: ~25% TD rate
+    # 50 yards (midfield): ~35% TD rate
+    # 35 yards: ~50% TD rate
+    # 20 yards (red zone edge): ~65% TD rate
+    # 10 yards (red zone): ~80% TD rate
+    # 5 yards (goal line): ~92% TD rate
+
+    if yards_to_score <= 5:
+        scoring_prob = 0.92
+    elif yards_to_score <= 10:
+        scoring_prob = 0.80
+    elif yards_to_score <= 20:
+        scoring_prob = 0.65
+    elif yards_to_score <= 35:
+        scoring_prob = 0.50
+    elif yards_to_score <= 50:
+        scoring_prob = 0.38
+    elif yards_to_score <= 65:
+        scoring_prob = 0.30
+    else:
+        scoring_prob = 0.25
+
+    # Model: team with ball can score (winning) or fail (giving opponent a chance)
+    if home_has_ball:
+        # Home team has ball - their scoring prob contributes to win prob
+        # Plus some chance opponent fails to score on their turn
+        home_win_prob = scoring_prob + (1 - scoring_prob) * 0.35
+    else:
+        # Away team has ball - home needs them to fail, then home to score
+        home_win_prob = (1 - scoring_prob) * 0.55
+
+    return max(0.01, min(0.99, home_win_prob))
 
 
 def make_odds_event(
@@ -426,21 +524,32 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
         )
     )
 
-    # Build scoring timeline: list of (game_timestamp, home_score, away_score)
-    # so we can track current score at any point during the game
-    scoring_timeline: list[tuple[datetime, int, int]] = []
+    # Build game state timeline from ALL plays (not just scoring plays)
+    # Each entry: (game_timestamp, home_score, away_score, period, clock, possession, yard_line)
+    game_state_timeline: list[tuple[datetime, int, int, int, str, str, int]] = []
     for play in plays:
-        if not play.get("is_scoring_play"):
-            continue
         play_ts = play.get("game_timestamp", "")
         if not play_ts:
             continue
         home_score = int(play.get("home_score", 0) or 0)
         away_score = int(play.get("away_score", 0) or 0)
-        scoring_timeline.append(
-            (datetime.fromisoformat(play_ts), home_score, away_score)
+        period = int(play.get("period", 0) or 0)
+        clock = play.get("clock", "15:00")
+        # Track possession (team with the ball) and field position
+        possession = play.get("team_tricode", "") or play.get("team_abbreviation", "")
+        yard_line = int(play.get("yard_line", 50) or 50)
+        game_state_timeline.append(
+            (
+                datetime.fromisoformat(play_ts),
+                home_score,
+                away_score,
+                period,
+                clock,
+                possession,
+                yard_line,
+            )
         )
-    scoring_timeline.sort(key=lambda x: x[0])
+    game_state_timeline.sort(key=lambda x: x[0])
 
     # In-game odds: emit every 5 seconds from first play to last play
     if plays:
@@ -448,49 +557,50 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
         game_end_ts = datetime.fromisoformat(last_play_ts)
         game_duration = (game_end_ts - game_start_ts).total_seconds()
 
-        # Track current score by walking through scoring timeline
-        score_idx = 0
+        # Track current game state by walking through timeline
+        state_idx = 0
         current_home_score = 0
         current_away_score = 0
+        current_period = 1
+        current_clock = "15:00"
+        current_possession = ""
+        current_yard_line = 50
 
         tick = 0.0
         while tick <= game_duration:
             tick_ts = game_start_ts + timedelta(seconds=tick)
 
-            # Advance score to this point in time
-            while score_idx < len(scoring_timeline):
-                score_time, h_score, a_score = scoring_timeline[score_idx]
-                if score_time <= tick_ts:
+            # Advance game state to this point in time
+            # Use the most recent play's state (not future plays)
+            while state_idx < len(game_state_timeline):
+                (
+                    state_time,
+                    h_score,
+                    a_score,
+                    period,
+                    clock,
+                    possession,
+                    yard_line,
+                ) = game_state_timeline[state_idx]
+                if state_time <= tick_ts:
                     current_home_score = h_score
                     current_away_score = a_score
-                    score_idx += 1
+                    current_period = period
+                    current_clock = clock
+                    current_possession = possession
+                    current_yard_line = yard_line
+                    state_idx += 1
                 else:
                     break
 
-            # Estimate period and clock from wallclock elapsed time
-            elapsed = tick
-            # Reverse the game_timestamp computation to get approximate period+clock
-            # Walk through quarters to find which one we're in
-            period = 1
-            clock_remaining = QUARTER_SECONDS
-            for q in range(1, 6):
-                q_start = QUARTER_OFFSETS.get(q, QUARTER_OFFSETS[5])
-                q_end = QUARTER_OFFSETS.get(
-                    q + 1, q_start + int(QUARTER_SECONDS * GAME_CLOCK_MULTIPLIER)
-                )
-                if elapsed < q_end:
-                    period = q
-                    elapsed_in_q = max(0, elapsed - q_start)
-                    game_seconds_elapsed = elapsed_in_q / GAME_CLOCK_MULTIPLIER
-                    clock_remaining = max(0, QUARTER_SECONDS - game_seconds_elapsed)
-                    break
-
-            minutes = int(clock_remaining) // 60
-            seconds = int(clock_remaining) % 60
-            clock_str = f"{minutes}:{seconds:02d}"
-
             prob = compute_win_probability(
-                current_home_score, current_away_score, period, clock_str
+                current_home_score,
+                current_away_score,
+                current_period,
+                current_clock,
+                home_tricode=home_tricode,
+                possession_team=current_possession,
+                yard_line=current_yard_line,
             )
 
             odds_ts = tick_ts.isoformat()
