@@ -477,6 +477,15 @@ async def _extract_games_from_trials(
             except Exception as e:
                 LOGGER.warning("Failed to get bets for trial '%s': %s", trial_id, e)
 
+        # Extract game timestamp from GameInitializeEvent (ISO format with seconds)
+        # Fallback to metadata game_date if GameInitializeEvent not available
+        game_date_str = metadata.get("game_date", "")
+        if isinstance(game_init, GameInitializeEvent):
+            # Prefer game_timestamp (actual game time), fallback to game_time
+            event_time = game_init.game_timestamp or game_init.game_time
+            if event_time:
+                game_date_str = event_time.isoformat()
+
         # Map phase to frontend status
         status = (
             "live"
@@ -494,7 +503,7 @@ async def _extract_games_from_trials(
             home_score=metadata.get("home_score", 0),
             away_score=metadata.get("away_score", 0),
             status=status,
-            date=metadata.get("game_date", ""),
+            date=game_date_str,
             quarter=metadata.get("quarter", "") if phase == "running" else "",
             clock=metadata.get("clock", "") if phase == "running" else "",
             bets=bets,
