@@ -362,17 +362,17 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
 
         # Primary: compute timestamp from drive end time using game clock
         # This ensures drives are placed at the correct point in game time
+        dt = None
         if end_period >= 1:
             dt = compute_game_timestamp(game_time, end_period, end_clock or "0:00")
-            # Add small offset based on drive_number to ensure stable ordering
-            drive_num = int(drive.get("drive_number", 0) or 0)
-            dt = dt + timedelta(milliseconds=drive_num)
-            drive["game_timestamp"] = dt.isoformat()
         elif start_period >= 1:
             # Fallback to start time if end time not available
             dt = compute_game_timestamp(game_time, start_period, start_clock)
+
+        if dt:
+            # Add small offset based on drive_number to ensure stable ordering
             drive_num = int(drive.get("drive_number", 0) or 0)
-            dt = dt + timedelta(milliseconds=drive_num)
+            dt += timedelta(milliseconds=drive_num)
             drive["game_timestamp"] = dt.isoformat()
         else:
             # Last resort: find nearest play by game clock proximity
