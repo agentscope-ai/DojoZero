@@ -347,6 +347,12 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
     last_play_ts = plays[-1]["game_timestamp"] if plays else game_time.isoformat()
 
     # ── Step 3: Assign game_timestamp to drives ──────────────────────────
+    #
+    # Sort drives by drive_number first (authoritative ordering from ESPN).
+    # Then compute game_timestamp based on drive end time, ensuring drives
+    # appear in correct game order regardless of when they were recorded.
+
+    drives.sort(key=lambda d: int(d.get("drive_number", 0) or 0))
 
     for drive in drives:
         start_period = int(drive.get("start_period", 0) or 0)
@@ -354,25 +360,24 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
         end_period = int(drive.get("end_period", 0) or 0)
         end_clock = drive.get("end_clock", "")
 
-        # Find the last play in this drive's time range
-        best_play_ts: str | None = None
-        for play in plays:
-            p_period = int(play.get("period", 0) or 0)
-            p_clock = play.get("clock", "")
-            if p_period >= 1 and start_period >= 1 and end_period >= 1:
-                if is_clock_in_range(
-                    p_period, p_clock, start_period, start_clock, end_period, end_clock
-                ):
-                    best_play_ts = play.get("game_timestamp")
-
-        if best_play_ts:
-            # Place drive slightly after its last play (1 second)
-            dt = datetime.fromisoformat(best_play_ts) + timedelta(seconds=1)
+        # Primary: compute timestamp from drive end time using game clock
+        # This ensures drives are placed at the correct point in game time
+        if end_period >= 1:
+            dt = compute_game_timestamp(game_time, end_period, end_clock or "0:00")
+            # Add small offset based on drive_number to ensure stable ordering
+            drive_num = int(drive.get("drive_number", 0) or 0)
+            dt = dt + timedelta(milliseconds=drive_num)
+            drive["game_timestamp"] = dt.isoformat()
+        elif start_period >= 1:
+            # Fallback to start time if end time not available
+            dt = compute_game_timestamp(game_time, start_period, start_clock)
+            drive_num = int(drive.get("drive_number", 0) or 0)
+            dt = dt + timedelta(milliseconds=drive_num)
             drive["game_timestamp"] = dt.isoformat()
         else:
-            # No matching plays in range — find nearest play by game clock proximity
+            # Last resort: find nearest play by game clock proximity
             target_remaining = game_clock_to_remaining(
-                end_period or start_period, end_clock or start_clock
+                end_period or start_period or 1, end_clock or start_clock or "15:00"
             )
             nearest_ts = last_play_ts
             nearest_dist = float("inf")
@@ -617,9 +622,21 @@ def cook_jsonl(input_path: Path, output_path: Path) -> None:
 
     # ── Step 8: Sort in-game events and set timestamp = game_timestamp ───
 
-    def sort_key(e: dict[str, Any]) -> str:
+    def sort_key(e: dict[str, Any]) -> tuple[str, int, int]:
         gt = e.get("game_timestamp") or e.get("timestamp") or ""
-        return gt
+        # Use drive_number for drives, sequence_number for plays as secondary sort
+        etype = e.get("event_type", "")
+        if etype == "event.nfl_drive":
+            secondary = int(e.get("drive_number", 0) or 0)
+        elif etype == "event.nfl_play":
+            secondary = int(e.get("sequence_number", 0) or 0)
+        else:
+            secondary = 0
+        # Tertiary: event type priority (plays before drives at same timestamp)
+        type_priority = (
+            0 if etype == "event.nfl_play" else 1 if etype == "event.nfl_drive" else 2
+        )
+        return (gt, type_priority, secondary)
 
     in_game_events.sort(key=sort_key)
 
