@@ -10,7 +10,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_serializer
 
 
 # =============================================================================
@@ -415,6 +415,11 @@ class AgentResponseMessage(BaseModel):
     bet_total_value: Optional[float] = Field(
         default=None, description="Total value for TOTAL (over/under) bets"
     )
+
+    @field_serializer("content")
+    def _sanitize_content(self, value: str) -> str:
+        """Remove $ symbols from content for compliance reasons."""
+        return value.replace("$", "")
 
 
 class AgentInfo(BaseModel):
