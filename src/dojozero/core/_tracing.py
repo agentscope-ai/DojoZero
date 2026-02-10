@@ -113,17 +113,17 @@ class TraceReader(Protocol):
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         operation_names: list[str] | None = None,
+        max_concurrency: int = 10,
     ) -> list[SpanData]:
         """Get all spans without filtering by trial_id.
 
-        This is more efficient than calling get_spans() for each trial_id
-        when you need spans for multiple trials. The caller can group
-        results by trace_id (trial_id) downstream.
+        Fetches spans by day in parallel for better performance.
 
         Args:
             start_time: Start of time range. Defaults to 7 days ago.
             end_time: End of time range. Defaults to now.
             operation_names: If provided, only return spans with operation_name in this list.
+            max_concurrency: Maximum number of parallel day fetches. Defaults to 10.
 
         Returns:
             List of SpanData from all trials in the time range.
@@ -311,85 +311,146 @@ class JaegerTraceReader:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         operation_names: list[str] | None = None,
+        max_concurrency: int = 10,
     ) -> list[SpanData]:
         """Get all spans without filtering by trial_id.
 
-        For Jaeger, we query by service name only (no trial_id filter).
-        This returns spans from all trials in the time range.
-        """
-        now = datetime.now(timezone.utc)
+        Fetches spans by day in parallel for better performance.
 
+        Args:
+            start_time: Start of time range. Defaults to 7 days ago.
+            end_time: End of time range. Defaults to now.
+            operation_names: If provided, only return spans with operation_name in this list.
+            max_concurrency: Maximum number of parallel day fetches. Defaults to 10.
+
+        Returns:
+            List of SpanData from all trials in the time range.
+        """
+        import asyncio
+
+        now = datetime.now(timezone.utc)
         if end_time is None:
             end_time = now
-        end_us = int(end_time.timestamp() * 1_000_000)
-
         if start_time is None:
             start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
-        start_us = int(start_time.timestamp() * 1_000_000)
 
-        all_spans: list[SpanData] = []
+        # Split time range into days
+        day_ranges: list[tuple[datetime, datetime]] = []
+        current = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        while current < end_time:
+            day_end = min(current + timedelta(days=1), end_time)
+            day_start = max(current, start_time)
+            day_ranges.append((day_start, day_end))
+            current += timedelta(days=1)
 
-        # If operation_names specified, query each separately
-        if operation_names:
-            for op_name in operation_names:
-                spans = await self._get_all_spans_for_operation(
-                    start_us, end_us, op_name
+        LOGGER.info(
+            "Jaeger get_all_spans: fetching %d days in parallel (max_concurrency=%d)",
+            len(day_ranges),
+            max_concurrency,
+        )
+
+        # Fetch days in parallel with semaphore
+        semaphore = asyncio.Semaphore(max_concurrency)
+        completed = [0]
+        total_days = len(day_ranges)
+
+        async def fetch_day(day_start: datetime, day_end: datetime) -> list[SpanData]:
+            async with semaphore:
+                result = await self._fetch_spans_for_day(
+                    day_start, day_end, operation_names
                 )
-                all_spans.extend(spans)
-        else:
-            all_spans = await self._get_all_spans_for_operation(start_us, end_us, None)
+                completed[0] += 1
+                if completed[0] % 10 == 0 or completed[0] == total_days:
+                    LOGGER.info(
+                        "Jaeger fetch progress: %d/%d days", completed[0], total_days
+                    )
+                return result
 
-        # Sort by start time
+        tasks = [fetch_day(ds, de) for ds, de in day_ranges]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Merge results
+        all_spans: list[SpanData] = []
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                LOGGER.warning("Jaeger fetch failed for day %d: %s", i, result)
+            else:
+                all_spans.extend(result)
+
         all_spans.sort(key=lambda s: s.start_time)
+        LOGGER.info(
+            "Jaeger get_all_spans: total %d spans from %d days",
+            len(all_spans),
+            total_days,
+        )
         return all_spans
 
-    async def _get_all_spans_for_operation(
+    async def _fetch_spans_for_day(
+        self,
+        day_start: datetime,
+        day_end: datetime,
+        operation_names: list[str] | None,
+    ) -> list[SpanData]:
+        """Fetch all spans for a single day."""
+        start_us = int(day_start.timestamp() * 1_000_000)
+        end_us = int(day_end.timestamp() * 1_000_000)
+
+        if operation_names:
+            all_spans: list[SpanData] = []
+            for op_name in operation_names:
+                spans = await self._query_jaeger_spans(start_us, end_us, op_name)
+                all_spans.extend(spans)
+            return all_spans
+        return await self._query_jaeger_spans(start_us, end_us, None)
+
+    async def _query_jaeger_spans(
         self,
         start_us: int,
         end_us: int,
         operation_name: str | None,
     ) -> list[SpanData]:
-        """Get all spans for an operation without trial_id filter."""
+        """Query Jaeger API for spans in a time range."""
         params: dict[str, Any] = {
             "service": self._service_name,
             "start": start_us,
             "end": end_us,
-            "limit": 5000,  # Higher limit for batch fetch
+            "limit": 5000,
         }
-
         if operation_name:
             params["operation"] = operation_name
 
-        response = await self._client.get(
-            f"{self._base_url}/api/traces",
-            params=params,
-        )
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response = await self._client.get(
+                f"{self._base_url}/api/traces", params=params
+            )
+            response.raise_for_status()
+            data = response.json()
 
-        spans: list[SpanData] = []
-        for trace in data.get("data", []):
-            for span in trace.get("spans", []):
-                tags: dict[str, Any] = {}
-                for tag in span.get("tags", []):
-                    tags[tag.get("key", "")] = tag.get("value")
-
-                spans.append(
-                    SpanData(
-                        trace_id=span.get("traceID", ""),
-                        span_id=span.get("spanID", ""),
-                        operation_name=span.get("operationName", ""),
-                        start_time=span.get("startTime", 0),
-                        duration=span.get("duration", 0),
-                        parent_span_id=span.get("references", [{}])[0].get("spanID")
-                        if span.get("references")
-                        else None,
-                        tags=tags,
-                        logs=span.get("logs", []),
+            spans: list[SpanData] = []
+            for trace in data.get("data", []):
+                for span in trace.get("spans", []):
+                    tags = {
+                        tag.get("key", ""): tag.get("value")
+                        for tag in span.get("tags", [])
+                    }
+                    spans.append(
+                        SpanData(
+                            trace_id=span.get("traceID", ""),
+                            span_id=span.get("spanID", ""),
+                            operation_name=span.get("operationName", ""),
+                            start_time=span.get("startTime", 0),
+                            duration=span.get("duration", 0),
+                            parent_span_id=span.get("references", [{}])[0].get("spanID")
+                            if span.get("references")
+                            else None,
+                            tags=tags,
+                            logs=span.get("logs", []),
+                        )
                     )
-                )
-
-        return spans
+            return spans
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            LOGGER.warning("Jaeger query error: %s", e)
+            return []
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -743,22 +804,24 @@ class SLSTraceReader:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         operation_names: list[str] | None = None,
+        max_concurrency: int = 10,
     ) -> list[SpanData]:
         """Get all spans without filtering by trial_id.
 
-        This is more efficient than calling get_spans() for each trial_id
-        when you need spans for multiple trials.
+        Fetches spans by day in parallel for better performance.
 
         Args:
             start_time: Start of time range. Defaults to 7 days ago.
             end_time: End of time range. Defaults to now.
             operation_names: If provided, only return spans with operation_name in this list.
+            max_concurrency: Maximum number of parallel day fetches. Defaults to 10.
 
         Returns:
             List of SpanData from all trials in the time range.
         """
-        now = datetime.now(timezone.utc)
+        import asyncio
 
+        now = datetime.now(timezone.utc)
         if end_time is None:
             end_time = now
         if start_time is None:
@@ -766,20 +829,70 @@ class SLSTraceReader:
 
         # Build query without trial_id filter
         query = f'_service:"{self._service_name}"'
-
-        # Add operation_names filter with OR logic if specified
         if operation_names:
             op_conditions = " OR ".join(
                 f'_operation_name:"{op}"' for op in operation_names
             )
             query = f"{query} AND ({op_conditions})"
 
+        # Split time range into days
+        day_ranges: list[tuple[datetime, datetime]] = []
+        current = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        while current < end_time:
+            day_end = min(current + timedelta(days=1), end_time)
+            day_start = max(current, start_time)
+            day_ranges.append((day_start, day_end))
+            current += timedelta(days=1)
+
+        LOGGER.info(
+            "SLS get_all_spans: fetching %d days in parallel (max_concurrency=%d)",
+            len(day_ranges),
+            max_concurrency,
+        )
+
+        # Fetch days in parallel with semaphore
+        semaphore = asyncio.Semaphore(max_concurrency)
+        completed = [0]
+        total_days = len(day_ranges)
+
+        async def fetch_day(day_start: datetime, day_end: datetime) -> list[SpanData]:
+            async with semaphore:
+                result = await self._fetch_spans_for_day(query, day_start, day_end)
+                completed[0] += 1
+                if completed[0] % 10 == 0 or completed[0] == total_days:
+                    LOGGER.info(
+                        "SLS fetch progress: %d/%d days", completed[0], total_days
+                    )
+                return result
+
+        tasks = [fetch_day(ds, de) for ds, de in day_ranges]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Merge results
+        all_spans: list[SpanData] = []
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                LOGGER.warning("SLS fetch failed for day %d: %s", i, result)
+            else:
+                all_spans.extend(result)
+
+        all_spans.sort(key=lambda s: s.start_time)
+        LOGGER.info(
+            "SLS get_all_spans: total %d spans from %d days", len(all_spans), total_days
+        )
+        return all_spans
+
+    async def _fetch_spans_for_day(
+        self,
+        query: str,
+        day_start: datetime,
+        day_end: datetime,
+    ) -> list[SpanData]:
+        """Fetch all spans for a single day with pagination."""
         resource = f"/logstores/{self._logstore}"
         url = f"{self._get_base_url()}{resource}"
-
-        # Pagination: SLS GetLogs API limits to 100 rows per request
         page_size = 100
-        max_total = 1000000  # Safety limit
+        max_total = 100000
         all_rows: list[dict[str, Any]] = []
         offset = 0
 
@@ -787,73 +900,45 @@ class SLSTraceReader:
             while offset < max_total:
                 params = {
                     "type": "log",
-                    "from": str(int(start_time.timestamp())),
-                    "to": str(int(end_time.timestamp())),
+                    "from": str(int(day_start.timestamp())),
+                    "to": str(int(day_end.timestamp())),
                     "query": query,
                     "line": str(page_size),
                     "offset": str(offset),
                 }
                 headers = self._sign_request("GET", resource, params)
-
-                LOGGER.debug(
-                    "SLS get_all_spans request: offset=%d, query=%s", offset, query
-                )
-                response = await self._client.get(
-                    url,
-                    params=params,
-                    headers=headers,
-                )
+                response = await self._client.get(url, params=params, headers=headers)
                 if response.status_code != 200:
-                    LOGGER.error(
-                        "SLS get_all_spans error response: status=%d, body=%s",
+                    LOGGER.warning(
+                        "SLS day fetch error: status=%d, day=%s",
                         response.status_code,
-                        response.text[:500] if response.text else "(empty)",
+                        day_start.date(),
                     )
                 response.raise_for_status()
                 data = response.json()
-
                 rows = data if isinstance(data, list) else data.get("data", [])
-
                 if not rows:
                     break
-
                 all_rows.extend(rows)
-
                 if len(rows) < page_size:
                     break
-
                 offset += page_size
 
-            LOGGER.info(
-                "SLS get_all_spans: total_rows=%d (pages=%d)",
+            spans = [
+                span
+                for row in all_rows
+                if isinstance(row, dict)
+                and (span := self._convert_sls_row_to_span(row))
+            ]
+            LOGGER.debug(
+                "SLS day %s: %d rows -> %d spans",
+                day_start.date(),
                 len(all_rows),
-                (offset // page_size) + 1,
-            )
-
-            # Convert rows to spans
-            spans: list[SpanData] = []
-            for row in all_rows:
-                if isinstance(row, dict):
-                    span = self._convert_sls_row_to_span(row)
-                    if span:
-                        spans.append(span)
-
-            # Sort by start time
-            spans.sort(key=lambda s: s.start_time)
-            LOGGER.info(
-                "SLS get_all_spans: converted %d/%d rows to spans",
                 len(spans),
-                len(all_rows),
             )
             return spans
-        except httpx.HTTPStatusError as e:
-            LOGGER.error("SLS HTTP error getting all spans: %s", e)
-            return []
-        except httpx.RequestError as e:
-            LOGGER.error("SLS request error getting all spans: %s", e)
-            return []
-        except (KeyError, TypeError, ValueError, AttributeError) as e:
-            LOGGER.error("Failed to parse SLS response for all spans: %s", e)
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            LOGGER.warning("SLS fetch error for day %s: %s", day_start.date(), e)
             return []
 
     def _convert_sls_row_to_span(self, row: dict[str, Any]) -> SpanData | None:

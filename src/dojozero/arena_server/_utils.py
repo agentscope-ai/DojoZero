@@ -1,6 +1,7 @@
+import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
-import logging
 
 from dojozero.arena_server._cache import (
     PeriodInfo,
@@ -1170,6 +1171,27 @@ def _compute_replay_meta(
     )
 
 
+def _process_spans_for_replay(
+    spans: list[SpanData],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Process spans into replay items (CPU-bound, runs in thread pool)."""
+    has_ended = False
+    items: list[dict[str, Any]] = []
+
+    for span in spans:
+        typed = deserialize_span(span)
+        if typed is None:
+            continue
+        items.append(serialize_span_for_ws(typed))
+        if isinstance(typed, TrialLifecycleSpan) and typed.phase in (
+            "stopped",
+            "terminated",
+        ):
+            has_ended = True
+
+    return items, has_ended
+
+
 async def _load_replay_data(
     trace_reader: TraceReader,
     replay_cache: ReplayCache,
@@ -1188,7 +1210,7 @@ async def _load_replay_data(
         - "no_data": Trial exists but no spans to replay
     """
     # 1. Check cache first
-    cached = await replay_cache.get(trial_id)
+    cached = replay_cache.get(trial_id)
     if cached:
         return cached, ""
 
@@ -1202,22 +1224,8 @@ async def _load_replay_data(
     if not spans:
         return None, "trial_not_found"
 
-    # 3. Check if trial has ended
-    has_ended = False
-    items: list[dict[str, Any]] = []
-
-    for span in spans:
-        typed = deserialize_span(span)
-        if typed is None:
-            continue
-
-        # Serialize for WS
-        items.append(serialize_span_for_ws(typed))
-
-        # Check for end marker
-        if isinstance(typed, TrialLifecycleSpan):
-            if typed.phase in ("stopped", "terminated"):
-                has_ended = True
+    # 3. Process spans in thread pool (CPU-bound)
+    items, has_ended = await asyncio.to_thread(_process_spans_for_replay, spans)
 
     if not has_ended:
         LOGGER.info("Trial %s has not ended yet, replay unavailable", trial_id)
@@ -1226,9 +1234,10 @@ async def _load_replay_data(
     if not items:
         return None, "no_data"
 
-    # 4. Compute metadata and cache the result
-    meta = _compute_replay_meta(items, replay_cache.core_categories)
-    await replay_cache.set(trial_id, items, meta)
+    # 4. Compute metadata in thread pool and cache
+    meta = await asyncio.to_thread(
+        _compute_replay_meta, items, replay_cache.core_categories
+    )
+    replay_cache.set(trial_id, items, meta)
 
-    # Return a fresh entry (same as what we just cached)
     return ReplayCacheEntry(items=items, meta=meta), ""

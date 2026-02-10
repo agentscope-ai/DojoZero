@@ -958,8 +958,8 @@ class BackgroundRefresher:
             len(completed_trial_ids),
         )
 
-        # Use semaphore to limit concurrency
-        semaphore = asyncio.Semaphore(5)
+        # Limit concurrency (16 for 16-core server, balances parallelism vs memory)
+        semaphore = asyncio.Semaphore(16)
 
         async def load_with_semaphore(trial_id: str) -> None:
             async with semaphore:
@@ -983,7 +983,7 @@ class BackgroundRefresher:
         - When a live trial transitions to completed
         """
         # Check if already cached
-        cached = await self.replay_cache.get(trial_id)
+        cached = self.replay_cache.get(trial_id)
         if cached:
             LOGGER.debug(
                 "BackgroundRefresher: Replay for %s already cached, skipping", trial_id
