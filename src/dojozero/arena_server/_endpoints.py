@@ -195,32 +195,21 @@ def register_rest_endpoints(app: FastAPI) -> None:
             )
 
         all_games = games.live_games + games.upcoming_games + games.completed_games
-        live_games = games.live_games if games.live_games else all_games
+        live_games = games.live_games
 
-        # NOTE! Super Bowl 60 fallback: inject hardcoded game before kickoff
-        # Remove this after Feb 8, 2026 6:30pm ET
-
+        # special logic for Super Bowl
         if league in ["NFL", "nfl"]:
             from dojozero.arena_server._superbowl import (
                 SUPER_BOWL_GAME,
                 SUPER_BOWL_GAME_ID,
-                should_show_superbowl_placeholder,
             )
 
-            if should_show_superbowl_placeholder():
-                # Convert dict to GameCardData and prepend to live games
+            superbowl_game = next(
+                (g for g in all_games if SUPER_BOWL_GAME_ID in g.id), None
+            )
+            if not superbowl_game:
                 superbowl_game = GameCardData.model_validate(SUPER_BOWL_GAME)
-                live_games = [superbowl_game]
-
-            else:
-                superbowl_game = next(
-                    (g for g in all_games if SUPER_BOWL_GAME_ID in g.id), None
-                )
-                if superbowl_game:
-                    other_live = [
-                        g for g in live_games if SUPER_BOWL_GAME_ID not in g.id
-                    ]
-                    live_games = [superbowl_game] + other_live
+            live_games = [superbowl_game]
 
         response = LandingResponse(
             stats=stats,
