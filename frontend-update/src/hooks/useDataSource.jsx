@@ -30,7 +30,8 @@ export function DataSourceProvider({ children }) {
   const [error, setError] = useState(null);
 
   // Landing page data state - all initialized with empty data
-  const [stats, setStats] = useState({ gamesPlayed: 0, liveNow: 0, wageredToday: 0 });
+  // Note: API returns snake_case keys (games_played, live_now, wagered_today)
+  const [stats, setStats] = useState({ games_played: 0, live_now: 0, wagered_today: 0 });
   const [liveGames, setLiveGames] = useState([]);
   const [allGames, setAllGames] = useState([]);
   const [agentActions, setAgentActions] = useState([]);
@@ -55,15 +56,15 @@ export function DataSourceProvider({ children }) {
 
     try {
       const data = await fetchFromApi("/api/landing");
-      setStats(data.stats || { gamesPlayed: 0, liveNow: 0, wageredToday: 0 });
-      setLiveGames(data.liveGames || []);
-      setAllGames(data.allGames || []);
-      setAgentActions(data.liveAgentActions || []);
+      setStats(data.stats || { games_played: 0, live_now: 0, wagered_today: 0 });
+      setLiveGames(data.live_games || []);
+      setAllGames(data.all_games || []);
+      setAgentActions(data.live_agent_actions || []);
     } catch (err) {
       console.error("Failed to fetch landing data:", err);
       setError(err.message);
       // Keep empty state on error
-      setStats({ gamesPlayed: 0, liveNow: 0, wageredToday: 0 });
+      setStats({ games_played: 0, live_now: 0, wagered_today: 0 });
       setLiveGames([]);
       setAllGames([]);
       setAgentActions([]);

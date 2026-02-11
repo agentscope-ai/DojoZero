@@ -10,6 +10,14 @@ Orchestrates betting trials for NFL games:
 - Persists all events to event files (for backtesting)
 """
 
+# Load .env file before importing other modules
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed
+
 import argparse
 import asyncio
 import hashlib
@@ -350,6 +358,7 @@ class NFLGameTrialManager:
         oss_bucket: str | None = None,
         oss_prefix: str | None = None,
         server: str | None = None,
+        custom_trial_id: str | None = None,
     ):
         """Initialize NFL game trial manager.
 
@@ -365,6 +374,7 @@ class NFLGameTrialManager:
             oss_bucket: Override OSS bucket name (default: from env)
             oss_prefix: Override OSS prefix (default: from env)
             server: Dashboard Server URL for SLS/OSS integration
+            custom_trial_id: Custom trial ID (if None, auto-generate)
         """
         self.game = game
         self.event_id = str(game.get("eventId", ""))
@@ -378,6 +388,7 @@ class NFLGameTrialManager:
         self.oss_bucket = oss_bucket
         self.oss_prefix = oss_prefix
         self.server = server
+        self.custom_trial_id = custom_trial_id
 
         # Parse game time
         self.game_time_utc: datetime | None = game.get("gameTimeLTZ")
@@ -442,11 +453,14 @@ class NFLGameTrialManager:
         self.events_file = events_file
         self.log_file = log_file
 
-        # Generate unique trial ID
-        timestamp = datetime.now(timezone.utc).isoformat()
-        hash_input = f"{self.event_id}-{self.game_date or 'unknown'}-{timestamp}"
-        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        self.trial_id = f"nfl-game-{self.event_id}-{hash_suffix}"
+        # Use custom trial ID if provided, otherwise generate unique one
+        if self.custom_trial_id:
+            self.trial_id = self.custom_trial_id
+        else:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            hash_input = f"{self.event_id}-{self.game_date or 'unknown'}-{timestamp}"
+            hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+            self.trial_id = f"nfl-game-{self.event_id}-{hash_suffix}"
 
         # Set up file logger
         self._setup_file_logger()
@@ -982,6 +996,7 @@ async def run_trial_for_event(
     oss_bucket: str | None = None,
     oss_prefix: str | None = None,
     server: str | None = None,
+    custom_trial_id: str | None = None,
 ) -> list[NFLGameTrialManager]:
     """Run trial for a specific NFL game by event ID.
 
@@ -996,6 +1011,7 @@ async def run_trial_for_event(
         oss_bucket: Override OSS bucket name
         oss_prefix: Override OSS prefix
         server: Dashboard Server URL for SLS/OSS integration
+        custom_trial_id: Custom trial ID (if None, auto-generate)
 
     Returns:
         List with single NFLGameTrialManager, or empty list if not found
@@ -1099,6 +1115,7 @@ async def run_trial_for_event(
             oss_bucket=oss_bucket,
             oss_prefix=oss_prefix,
             server=server,
+            custom_trial_id=custom_trial_id,
         )
         manager.generate_config_file()
         manager.log_status()
@@ -1399,6 +1416,12 @@ def main() -> int:
         help="Maximum number of trials to start concurrently (default: 10). "
         "This prevents overwhelming the server with simultaneous submissions.",
     )
+    run_parser.add_argument(
+        "--trial-id",
+        type=str,
+        default=None,
+        help="Custom trial ID to use instead of auto-generated one",
+    )
 
     args = arg_parser.parse_args()
 
@@ -1455,6 +1478,7 @@ def main() -> int:
                         oss_bucket=args.oss_bucket,
                         oss_prefix=args.oss_prefix,
                         server=args.server,
+                        custom_trial_id=args.trial_id,
                     )
                 )
             elif args.week:

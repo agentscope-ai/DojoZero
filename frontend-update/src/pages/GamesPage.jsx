@@ -11,11 +11,11 @@ import { useDataSource } from "../hooks/useDataSource.jsx";
 
 // Hero Section with newspaper-style live stats
 function HeroSection({ stats }) {
-  // Stats from API
-  const gamesPlayed = stats.gamesPlayed;
-  const liveNow = stats.liveNow;
-  const wageredToday = stats.wageredToday;
-  const betsPlaced = stats.betsPlaced || 0;
+  // Stats from API (snake_case)
+  const gamesPlayed = stats.games_played;
+  const liveNow = stats.live_now;
+  const wageredToday = stats.wagered_today;
+  const betsPlaced = stats.bets_placed || 0;
 
   return (
     <section style={styles.hero}>
@@ -302,7 +302,7 @@ function LiveGameCard({ game, index }) {
       tabIndex={0}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
-      aria-label={`View game details for ${game.homeTeam.name} vs ${game.awayTeam.name}`}
+      aria-label={`View game details for ${game.home_team.name} vs ${game.away_team.name}`}
     >
       {/* Top badges row */}
       <div style={styles.cardBadges}>
@@ -322,12 +322,12 @@ function LiveGameCard({ game, index }) {
 
       {/* Teams */}
       <div style={styles.teamsContainer}>
-        <TeamDisplay team={game.homeTeam} score={game.homeScore} />
+        <TeamDisplay team={game.home_team} score={game.home_score} />
         <div style={styles.vsContainer}>
           <span style={styles.vsText}>VS</span>
           <span style={styles.gameTime}>{game.quarter} {game.clock}</span>
         </div>
-        <TeamDisplay team={game.awayTeam} score={game.awayScore} />
+        <TeamDisplay team={game.away_team} score={game.away_score} />
       </div>
 
       {/* Agent Bets */}
@@ -367,8 +367,8 @@ function TeamDisplay({ team, score }) {
         ...styles.teamLogo,
         background: `linear-gradient(135deg, ${team.color}88 0%, ${team.color}44 100%)`,
       }}>
-        {team.logoUrl ? (
-          <img src={team.logoUrl} alt={team.name} style={styles.teamLogoImg} />
+        {team.logo_url ? (
+          <img src={team.logo_url} alt={team.name} style={styles.teamLogoImg} />
         ) : (
           <span style={styles.teamLogoText}>{team.abbrev}</span>
         )}
@@ -527,7 +527,7 @@ function GameRow({ game, index }) {
       tabIndex={0}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
-      aria-label={`View game details for ${game.homeTeam.name} vs ${game.awayTeam.name}`}
+      aria-label={`View game details for ${game.home_team.name} vs ${game.away_team.name}`}
     >
       <div style={styles.gameRowStatus}>
         {getStatusBadge()}
@@ -537,36 +537,36 @@ function GameRow({ game, index }) {
         <div style={styles.gameRowTeam}>
           <span style={{
             ...styles.teamLogSmall,
-            background: `linear-gradient(135deg, ${game.homeTeam.color}88 0%, ${game.homeTeam.color}44 100%)`,
+            background: `linear-gradient(135deg, ${game.home_team.color}88 0%, ${game.home_team.color}44 100%)`,
           }}>
-            {game.homeTeam.logoUrl ? (
-              <img src={game.homeTeam.logoUrl} alt={game.homeTeam.name} style={styles.teamLogSmallImg} />
+            {game.home_team.logo_url ? (
+              <img src={game.home_team.logo_url} alt={game.home_team.name} style={styles.teamLogSmallImg} />
             ) : (
-              game.homeTeam.abbrev
+              game.home_team.abbrev
             )}
           </span>
-          <span>{game.homeTeam.name}</span>
+          <span>{game.home_team.name}</span>
         </div>
         <span style={styles.gameRowVs}>vs</span>
         <div style={styles.gameRowTeam}>
           <span style={{
             ...styles.teamLogSmall,
-            background: `linear-gradient(135deg, ${game.awayTeam.color}88 0%, ${game.awayTeam.color}44 100%)`,
+            background: `linear-gradient(135deg, ${game.away_team.color}88 0%, ${game.away_team.color}44 100%)`,
           }}>
-            {game.awayTeam.logoUrl ? (
-              <img src={game.awayTeam.logoUrl} alt={game.awayTeam.name} style={styles.teamLogSmallImg} />
+            {game.away_team.logo_url ? (
+              <img src={game.away_team.logo_url} alt={game.away_team.name} style={styles.teamLogSmallImg} />
             ) : (
-              game.awayTeam.abbrev
+              game.away_team.abbrev
             )}
           </span>
-          <span>{game.awayTeam.name}</span>
+          <span>{game.away_team.name}</span>
         </div>
       </div>
 
       <div style={styles.gameRowInfo}>
         {game.status === "live" && (
           <span style={styles.liveScore}>
-            {game.homeScore} - {game.awayScore}
+            {game.home_score} - {game.away_score}
           </span>
         )}
         {game.status === "upcoming" && (
@@ -576,7 +576,7 @@ function GameRow({ game, index }) {
         )}
         {game.status === "completed" && (
           <span style={styles.finalScore}>
-            Final: {game.homeScore} - {game.awayScore}
+            Final: {game.home_score} - {game.away_score}
           </span>
         )}
       </div>
@@ -591,13 +591,13 @@ function GameRow({ game, index }) {
               {game.winner.avatar}
             </span>
             <span style={styles.winnerName}>{game.winner.name}</span>
-            <span style={styles.winAmount}>+${game.winAmount}</span>
+            <span style={styles.winAmount}>+${game.win_amount}</span>
           </div>
         )}
         {game.status === "upcoming" && (
           <span style={styles.agentCount}>
             <Users size={14} />
-            {game.agentCount} agents
+            {game.agent_count} agents
           </span>
         )}
       </div>

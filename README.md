@@ -210,21 +210,28 @@ The Arena Server (`dojo0 arena`) serves the web UI and streams real-time data to
 ### Arena Server Options
 
 ```bash
+# Local development with Jaeger
+dojo0 arena --trace-backend jaeger
+
 # With SLS as trace source (production)
 dojo0 arena --trace-backend sls
 
 # Production deployment (serves both API and frontend, default: 127.0.0.1:3001)
 cd frontend && npm run build
 dojo0 arena --trace-backend sls --static-dir ./frontend/dist
+
+# With custom cache settings from YAML config
+dojo0 arena --trace-backend sls --config configs/arena-server.yaml
 ```
 
 CLI options:
+- `--trace-backend {jaeger,sls}` - Trace backend type (required)
 - `--host` - Host address (default: 127.0.0.1)
 - `--port` - Port (default: 3001)
-- `--trace-backend {jaeger,sls}` - Trace backend type (required)
 - `--trace-query-endpoint` - Jaeger Query API endpoint (default: http://localhost:16686)
 - `--service-name` - Service name for trace queries (default: dojozero)
 - `--static-dir` - Path to built static assets (for production)
+- `--config` - Path to YAML config file for cache/query settings (optional)
 
 ### UI Development
 

@@ -13,7 +13,6 @@ class NFLGameStateTracker(BaseGameStateTracker):
 
     NFL-specific state:
     - _seen_drive_ids: Deduplication for drive events
-    - _last_odds: Cache last odds to detect changes
     - _current_drive: Track current drive ID per game
     - _starters: Game-day starters per team
     - _last_valid_clock: Last valid game clock per game (to handle post-game invalid data)
@@ -23,7 +22,6 @@ class NFLGameStateTracker(BaseGameStateTracker):
         """Initialize all state tracking variables."""
         super().__init__()
         self._seen_drive_ids: set[str] = set()
-        self._last_odds: dict[str, dict[str, Any]] = {}
         self._current_drive: dict[str, str] = {}
         # key = "{event_id}_{team_id}" -> list of starters
         self._starters: dict[str, list[PlayerIdentity]] = {}
@@ -60,26 +58,6 @@ class NFLGameStateTracker(BaseGameStateTracker):
     def mark_drive_seen(self, drive_id: str) -> None:
         """Mark drive as processed."""
         self._seen_drive_ids.add(drive_id)
-
-    # -- Odds tracking --------------------------------------------------------
-
-    def get_last_odds(self, event_id: str) -> dict[str, Any] | None:
-        """Get last odds snapshot for change detection."""
-        return self._last_odds.get(event_id)
-
-    def set_last_odds(self, event_id: str, odds: dict[str, Any]) -> None:
-        """Set last odds snapshot."""
-        self._last_odds[event_id] = odds
-
-    def odds_changed(self, event_id: str, new_odds: dict[str, Any]) -> bool:
-        """Check if odds have changed since last update."""
-        last_odds = self.get_last_odds(event_id)
-        if last_odds is None:
-            return True
-        for key in ["spread", "overUnder", "homeMoneyLine", "awayMoneyLine"]:
-            if last_odds.get(key) != new_odds.get(key):
-                return True
-        return False
 
     # -- Drive tracking -------------------------------------------------------
 

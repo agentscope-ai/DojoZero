@@ -108,6 +108,28 @@ class TraceReader(Protocol):
         """
         ...
 
+    async def get_all_spans(
+        self,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        operation_names: list[str] | None = None,
+    ) -> list[SpanData]:
+        """Get all spans without filtering by trial_id.
+
+        This is more efficient than calling get_spans() for each trial_id
+        when you need spans for multiple trials. The caller can group
+        results by trace_id (trial_id) downstream.
+
+        Args:
+            start_time: Start of time range. Defaults to 7 days ago.
+            end_time: End of time range. Defaults to now.
+            operation_names: If provided, only return spans with operation_name in this list.
+
+        Returns:
+            List of SpanData from all trials in the time range.
+        """
+        ...
+
 
 class JaegerTraceReader:
     """TraceReader that reads from Jaeger HTTP API."""
@@ -282,6 +304,91 @@ class JaegerTraceReader:
 
         # Sort by start time
         spans.sort(key=lambda s: s.start_time)
+        return spans
+
+    async def get_all_spans(
+        self,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        operation_names: list[str] | None = None,
+    ) -> list[SpanData]:
+        """Get all spans without filtering by trial_id.
+
+        For Jaeger, we query by service name only (no trial_id filter).
+        This returns spans from all trials in the time range.
+        """
+        now = datetime.now(timezone.utc)
+
+        if end_time is None:
+            end_time = now
+        end_us = int(end_time.timestamp() * 1_000_000)
+
+        if start_time is None:
+            start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
+        start_us = int(start_time.timestamp() * 1_000_000)
+
+        all_spans: list[SpanData] = []
+
+        # If operation_names specified, query each separately
+        if operation_names:
+            for op_name in operation_names:
+                spans = await self._get_all_spans_for_operation(
+                    start_us, end_us, op_name
+                )
+                all_spans.extend(spans)
+        else:
+            all_spans = await self._get_all_spans_for_operation(start_us, end_us, None)
+
+        # Sort by start time
+        all_spans.sort(key=lambda s: s.start_time)
+        return all_spans
+
+    async def _get_all_spans_for_operation(
+        self,
+        start_us: int,
+        end_us: int,
+        operation_name: str | None,
+    ) -> list[SpanData]:
+        """Get all spans for an operation without trial_id filter."""
+        params: dict[str, Any] = {
+            "service": self._service_name,
+            "start": start_us,
+            "end": end_us,
+            "limit": 5000,  # Higher limit for batch fetch
+        }
+
+        if operation_name:
+            params["operation"] = operation_name
+
+        response = await self._client.get(
+            f"{self._base_url}/api/traces",
+            params=params,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        spans: list[SpanData] = []
+        for trace in data.get("data", []):
+            for span in trace.get("spans", []):
+                tags: dict[str, Any] = {}
+                for tag in span.get("tags", []):
+                    tags[tag.get("key", "")] = tag.get("value")
+
+                spans.append(
+                    SpanData(
+                        trace_id=span.get("traceID", ""),
+                        span_id=span.get("spanID", ""),
+                        operation_name=span.get("operationName", ""),
+                        start_time=span.get("startTime", 0),
+                        duration=span.get("duration", 0),
+                        parent_span_id=span.get("references", [{}])[0].get("spanID")
+                        if span.get("references")
+                        else None,
+                        tags=tags,
+                        logs=span.get("logs", []),
+                    )
+                )
+
         return spans
 
     async def close(self) -> None:
@@ -629,6 +736,124 @@ class SLSTraceReader:
             return []
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             LOGGER.error("Failed to parse SLS response for trial '%s': %s", trial_id, e)
+            return []
+
+    async def get_all_spans(
+        self,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        operation_names: list[str] | None = None,
+    ) -> list[SpanData]:
+        """Get all spans without filtering by trial_id.
+
+        This is more efficient than calling get_spans() for each trial_id
+        when you need spans for multiple trials.
+
+        Args:
+            start_time: Start of time range. Defaults to 7 days ago.
+            end_time: End of time range. Defaults to now.
+            operation_names: If provided, only return spans with operation_name in this list.
+
+        Returns:
+            List of SpanData from all trials in the time range.
+        """
+        now = datetime.now(timezone.utc)
+
+        if end_time is None:
+            end_time = now
+        if start_time is None:
+            start_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
+
+        # Build query without trial_id filter
+        query = f'_service:"{self._service_name}"'
+
+        # Add operation_names filter with OR logic if specified
+        if operation_names:
+            op_conditions = " OR ".join(
+                f'_operation_name:"{op}"' for op in operation_names
+            )
+            query = f"{query} AND ({op_conditions})"
+
+        resource = f"/logstores/{self._logstore}"
+        url = f"{self._get_base_url()}{resource}"
+
+        # Pagination: SLS GetLogs API limits to 100 rows per request
+        page_size = 100
+        max_total = 1000000  # Safety limit
+        all_rows: list[dict[str, Any]] = []
+        offset = 0
+
+        try:
+            while offset < max_total:
+                params = {
+                    "type": "log",
+                    "from": str(int(start_time.timestamp())),
+                    "to": str(int(end_time.timestamp())),
+                    "query": query,
+                    "line": str(page_size),
+                    "offset": str(offset),
+                }
+                headers = self._sign_request("GET", resource, params)
+
+                LOGGER.debug(
+                    "SLS get_all_spans request: offset=%d, query=%s", offset, query
+                )
+                response = await self._client.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                )
+                if response.status_code != 200:
+                    LOGGER.error(
+                        "SLS get_all_spans error response: status=%d, body=%s",
+                        response.status_code,
+                        response.text[:500] if response.text else "(empty)",
+                    )
+                response.raise_for_status()
+                data = response.json()
+
+                rows = data if isinstance(data, list) else data.get("data", [])
+
+                if not rows:
+                    break
+
+                all_rows.extend(rows)
+
+                if len(rows) < page_size:
+                    break
+
+                offset += page_size
+
+            LOGGER.info(
+                "SLS get_all_spans: total_rows=%d (pages=%d)",
+                len(all_rows),
+                (offset // page_size) + 1,
+            )
+
+            # Convert rows to spans
+            spans: list[SpanData] = []
+            for row in all_rows:
+                if isinstance(row, dict):
+                    span = self._convert_sls_row_to_span(row)
+                    if span:
+                        spans.append(span)
+
+            # Sort by start time
+            spans.sort(key=lambda s: s.start_time)
+            LOGGER.info(
+                "SLS get_all_spans: converted %d/%d rows to spans",
+                len(spans),
+                len(all_rows),
+            )
+            return spans
+        except httpx.HTTPStatusError as e:
+            LOGGER.error("SLS HTTP error getting all spans: %s", e)
+            return []
+        except httpx.RequestError as e:
+            LOGGER.error("SLS request error getting all spans: %s", e)
+            return []
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            LOGGER.error("Failed to parse SLS response for all spans: %s", e)
             return []
 
     def _convert_sls_row_to_span(self, row: dict[str, Any]) -> SpanData | None:
