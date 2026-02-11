@@ -249,7 +249,7 @@ def _create_test_agent(llm_config: LLMConfig, config_name: str) -> BettingAgent:
         name=f"test-{config_name}-{model_name}",
         sys_prompt="You are a test agent. Reply with 'OK' to any message.",
         model=create_model(test_config),
-        formatter=create_formatter(model_type),
+        formatter=create_formatter(model_type, model_name),
     )
 
 

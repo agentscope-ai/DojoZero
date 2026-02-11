@@ -167,13 +167,14 @@ def create_nba_test_agent(
     llm_config["api_key_env"] = TEST_API_KEY_ENV
     llm_config["base_url_env"] = TEST_BASE_URL_ENV
     model_type = llm_config.get("model_type", "openai")
+    model_name = llm_config.get("model_name", "")
     return BettingAgent(
         actor_id=config["name"],
         trial_id=trial_id,
         name=config["name"],
         sys_prompt=config["sys_prompt"],
         model=create_model(llm_config),
-        formatter=create_formatter(model_type),
+        formatter=create_formatter(model_type, model_name),
     )
 
 
@@ -192,13 +193,14 @@ def create_nfl_test_agent(
     llm_config["api_key_env"] = TEST_API_KEY_ENV
     llm_config["base_url_env"] = TEST_BASE_URL_ENV
     model_type = llm_config.get("model_type", "openai")
+    model_name = llm_config.get("model_name", "")
     return BettingAgent(
         actor_id=config["name"],
         trial_id=trial_id,
         name=config["name"],
         sys_prompt=config["sys_prompt"],
         model=create_model(llm_config),
-        formatter=create_formatter(model_type),
+        formatter=create_formatter(model_type, model_name),
     )
 
 

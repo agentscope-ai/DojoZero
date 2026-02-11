@@ -480,13 +480,14 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         if not llm_config:
             raise ValueError(f"Missing 'llm' config for agent {actor_id}")
         model_type = llm_config.get("model_type", "openai")
+        model_name = llm_config.get("model_name", "")
         return cls(
             actor_id=actor_id,
             trial_id=context.trial_id,
             name=config.get("name", actor_id),
             sys_prompt=config.get("sys_prompt", ""),
             model=create_model(llm_config),
-            formatter=create_formatter(model_type),
+            formatter=create_formatter(model_type, model_name),
         )
 
     async def register_operators(self, operators: Sequence[Operator]) -> None:
