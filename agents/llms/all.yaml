@@ -18,11 +18,10 @@ llm:
     model_display_name: Claude
     old_cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01kiSypx1Oxcwxq1bPV_!!6000000001772-55-tps-24-24.svg
     cdn_url: https://img.alicdn.com/imgextra/i3/O1CN01bbhJZa1W0YnVufCiY_!!6000000002726-2-tps-200-200.png
-  # - model_type: openai
+  # - model_type: gemini
   #   model_name: gemini-3-pro-preview
-  #   api_key_env: DOJOZERO_MODEL_API_KEY
+  #   api_key_env: DOJOZERO_GEMINI_API_KEY
   #   model_display_name: gemini
-  #   base_url_env: DOJOZERO_OPENAI_BASE_URL
   #   old_cdn_url: https://img.alicdn.com/imgextra/i4/O1CN017FCueZ1iF0gKs1l3G_!!6000000004382-55-tps-24-24.svg
   #   cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01fzpr3E1vL2uJ1WrCE_!!6000000006155-2-tps-200-200.png
   - model_type: openai
