@@ -1,9 +1,4 @@
 llm:
-  # - model_type: dashscope
-  #   model_name: deepseek-v3.2
-  #   api_key_env: DOJOZERO_DASHSCOPE_API_KEY
-  #   model_display_name: deepseek
-  #   cdn_url: https://img.alicdn.com/imgextra/i4/O1CN01wat3rK1Q9MiURXMTb_!!6000000001933-55-tps-24-24.svg
   - model_type: dashscope
     model_name: deepseek-v3.2
     model_display_name: Deepseek

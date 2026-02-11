@@ -216,8 +216,6 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
             model_name=model_name, api_key=api_key, client_kwargs=grok_client_kwargs
         )
     elif model_type == "openai":
-        # AWS Bedrock Claude models use OpenAI-compatible API but need Anthropic tool format
-        # So we use OpenAIChatModel (supports custom base_url) with AnthropicChatFormatter
         if base_url:
             client_kwargs: dict[str, Any] = {"base_url": base_url}
         else:
@@ -237,8 +235,6 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
 
 def create_formatter(model_type: str, model_name: str) -> FormatterBase:
     """Create formatter matching model type."""
-    # Detect AWS Bedrock Claude models (model name starts with "aws." and contains "claude")
-    # These need Anthropic format for tools, not OpenAI format
     if model_type == "openai":
         if "grok" in model_name:
             return GrokChatFormatter()
