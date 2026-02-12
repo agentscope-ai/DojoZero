@@ -209,13 +209,20 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
             )
     else:
         base_url = None
+
     if model_type in "grok":
-        client_kwargs: dict[str, Any] = {"base_url": "https://api.x.ai/v1"}
+        grok_client_kwargs: dict[str, Any] = {"base_url": "https://api.x.ai/v1"}
+        return OpenAIChatModel(
+            model_name=model_name, api_key=api_key, client_kwargs=grok_client_kwargs
+        )
+    elif model_type == "openai":
+        if base_url:
+            client_kwargs: dict[str, Any] = {"base_url": base_url}
+        else:
+            client_kwargs = {}
         return OpenAIChatModel(
             model_name=model_name, api_key=api_key, client_kwargs=client_kwargs
         )
-    elif model_type == "openai":
-        return OpenAIChatModel(model_name=model_name, api_key=api_key)
     elif model_type == "dashscope":
         return DashScopeChatModel(model_name=model_name, api_key=api_key)
     elif model_type == "anthropic":
@@ -226,10 +233,13 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
         raise ValueError(f"Unknown model_type: {model_type}")
 
 
-def create_formatter(model_type: str) -> FormatterBase:
+def create_formatter(model_type: str, model_name: str) -> FormatterBase:
     """Create formatter matching model type."""
     if model_type == "openai":
-        return OpenAIChatFormatter()
+        if "grok" in model_name:
+            return GrokChatFormatter()
+        else:
+            return OpenAIChatFormatter()
     elif model_type == "grok":
         return GrokChatFormatter()
     elif model_type == "dashscope":
