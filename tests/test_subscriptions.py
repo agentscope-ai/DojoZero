@@ -89,7 +89,7 @@ class TestSubscription:
         """Test basic put and get operations."""
         event = MockDataEvent("event.test")
 
-        result = await subscription.put(event)
+        result = subscription.put(event)
         assert result is True
         assert subscription.buffer_depth == 1
 
@@ -103,7 +103,7 @@ class TestSubscription:
         subscription.filters = SubscriptionFilter.from_list(["event.nba_*"])
         event = MockDataEvent("event.nfl_play")
 
-        result = await subscription.put(event)
+        result = subscription.put(event)
         assert result is False
         assert subscription.buffer_depth == 0
 
@@ -113,7 +113,7 @@ class TestSubscription:
         # Fill buffer beyond threshold
         for i in range(15):
             event = MockDataEvent(f"event.test_{i}")
-            await subscription.put(event, priority=EventPriority.NORMAL)
+            subscription.put(event, priority=EventPriority.NORMAL)
 
         # Some events should have been dropped
         assert subscription.dropped_count > 0
@@ -124,13 +124,13 @@ class TestSubscription:
         # Fill buffer
         for i in range(15):
             event = MockDataEvent(f"event.test_{i}")
-            await subscription.put(event, priority=EventPriority.NORMAL)
+            subscription.put(event, priority=EventPriority.NORMAL)
 
         initial_dropped = subscription.dropped_count
 
         # Add critical event
         critical_event = MockDataEvent("event.critical")
-        result = await subscription.put(critical_event, priority=EventPriority.CRITICAL)
+        result = subscription.put(critical_event, priority=EventPriority.CRITICAL)
         assert result is True
 
         # Critical event should be in queue (dropped count shouldn't increase for it)
@@ -149,7 +149,7 @@ class TestSubscription:
         assert result is None
 
         event = MockDataEvent("event.test")
-        await subscription.put(event)
+        subscription.put(event)
 
         result = subscription.get_nowait()
         assert result is event
@@ -158,7 +158,7 @@ class TestSubscription:
     async def test_drain(self, subscription):
         """drain should return multiple events."""
         for i in range(5):
-            await subscription.put(MockDataEvent(f"event.test_{i}"))
+            subscription.put(MockDataEvent(f"event.test_{i}"))
 
         events = await subscription.drain(max_count=3)
         assert len(events) == 3

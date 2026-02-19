@@ -119,69 +119,15 @@ class Subscription:
         """Number of events dropped due to backpressure."""
         return self._dropped_count
 
-    async def put(
+    def put(
         self,
         event: "DataEvent",
         priority: EventPriority = EventPriority.NORMAL,
     ) -> bool:
         """Add event to queue with backpressure handling.
 
-        Args:
-            event: Event to add
-            priority: Event priority for backpressure decisions
-
-        Returns:
-            True if event was queued, False if dropped
-        """
-        if not self.filters.matches(event.event_type):
-            return False
-
-        depth = self.buffer_depth
-
-        # Never drop critical events
-        if priority == EventPriority.CRITICAL:
-            try:
-                self._queue.put_nowait(event)
-                self._last_event_at = datetime.now(timezone.utc)
-                return True
-            except asyncio.QueueFull:
-                # Force-add critical events by removing oldest
-                try:
-                    self._queue.get_nowait()
-                    self._queue.put_nowait(event)
-                    self._last_event_at = datetime.now(timezone.utc)
-                    return True
-                except Exception:
-                    return False
-
-        # Handle backpressure for non-critical events
-        if depth > self.options.buffer_threshold_drop:
-            self._dropped_count += 1
-            if self._dropped_count % 100 == 1:
-                logger.warning(
-                    "Subscription %s: dropped %d events (buffer depth: %d)",
-                    self.subscription_id,
-                    self._dropped_count,
-                    depth,
-                )
-            return False
-
-        try:
-            self._queue.put_nowait(event)
-            self._last_event_at = datetime.now(timezone.utc)
-            return True
-        except asyncio.QueueFull:
-            self._dropped_count += 1
-            return False
-
-    def put_sync(
-        self,
-        event: "DataEvent",
-        priority: EventPriority = EventPriority.NORMAL,
-    ) -> bool:
-        """Synchronous version of put for use from sync dispatch.
-
-        Same logic as put() but callable from synchronous code.
+        This method is synchronous since it only uses non-blocking
+        queue operations (put_nowait).
 
         Args:
             event: Event to add
@@ -440,9 +386,10 @@ class SubscriptionManager:
         event_type = event.event_type
 
         # Dispatch to Subscription queues (new pattern for external agents)
+        # Note: put() is synchronous (uses put_nowait), lock is for iteration safety
         async with self._lock:
             for subscription in self._subscriptions.values():
-                if await subscription.put(event, priority):
+                if subscription.put(event, priority):
                     delivered += 1
 
         # Dispatch to legacy callbacks (backward compatibility)
@@ -568,7 +515,7 @@ class SubscriptionManager:
 
         # Dispatch to Subscription queues (external agents via SSE/REST)
         for subscription in self._subscriptions.values():
-            if subscription.put_sync(event, priority):
+            if subscription.put(event, priority):
                 delivered += 1
 
         # Dispatch to legacy callbacks (internal agents)
