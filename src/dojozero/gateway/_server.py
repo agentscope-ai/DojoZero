@@ -260,10 +260,11 @@ def create_gateway_app(
         # Check for Last-Event-ID for reconnection
         last_event_id = request.headers.get("Last-Event-ID")
 
-        # Create SSE connection
+        # Create SSE connection with global sequence provider
         connection = SSEConnection(
             subscription=subscription,
             trial_id=state.trial_id,
+            get_global_sequence=lambda: state.data_hub.subscription_manager.global_sequence,
         )
 
         return create_sse_response(connection, last_event_id)

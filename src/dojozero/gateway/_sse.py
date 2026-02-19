@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator, Callable
 
 from starlette.responses import StreamingResponse
 
@@ -33,6 +33,7 @@ class SSEConnection:
         self,
         subscription: "Subscription",
         trial_id: str,
+        get_global_sequence: Callable[[], int],
         heartbeat_interval: float = 15.0,
     ):
         """Initialize SSE connection.
@@ -40,10 +41,12 @@ class SSEConnection:
         Args:
             subscription: Subscription to stream events from
             trial_id: Trial ID for event envelope
+            get_global_sequence: Callable returning current global sequence number
             heartbeat_interval: Seconds between heartbeat messages
         """
         self.subscription = subscription
         self.trial_id = trial_id
+        self.get_global_sequence = get_global_sequence
         self.heartbeat_interval = heartbeat_interval
         self._closed = False
 
@@ -79,8 +82,8 @@ class SSEConnection:
                     )
                     continue
 
-                # Get sequence number
-                sequence = self.subscription.get_next_sequence()
+                # Get global sequence number (for reference_sequence in bets)
+                sequence = self.get_global_sequence()
 
                 # Create envelope
                 envelope = EventEnvelope(
