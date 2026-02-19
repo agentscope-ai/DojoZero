@@ -92,7 +92,140 @@ dojo0 serve --enable-gateway --trace-backend jaeger
 
 Both topologies use the same API - only the URL prefix differs.
 
-### 2.3 Subscription Architecture
+### 2.3 Containerized Deployment
+
+For production, trials run in separate containers with Dashboard routing via HTTP proxy.
+
+```mermaid
+graph TB
+    subgraph External
+        EA["External Agent"]
+    end
+
+    subgraph Cluster["Kubernetes / Docker Network"]
+        ING["Ingress<br/>TLS termination"]
+
+        subgraph Dashboard["Dashboard Service (replicas)"]
+            DS1["Dashboard 1"]
+            DS2["Dashboard 2"]
+        end
+
+        subgraph Trials["Trial Pods (ClusterIP)"]
+            TA["Trial-NBA<br/>:8080"]
+            TB["Trial-NFL<br/>:8080"]
+            TC["Trial-MLB<br/>:8080"]
+        end
+    end
+
+    EA -->|HTTPS| ING
+    ING --> DS1
+    ING --> DS2
+    DS1 -->|HTTP internal| TA
+    DS1 -->|HTTP internal| TB
+    DS2 -->|HTTP internal| TC
+```
+
+#### Why Dashboard Routing (not per-trial Ingress)?
+
+| Concern | Per-Trial Ingress | Dashboard Routing |
+|---------|-------------------|-------------------|
+| Ingress rules | One per trial (churn) | Single rule (stable) |
+| TLS termination | Per trial or wildcard | Single cert |
+| Auth | Duplicated in each trial | Centralized |
+| Rate limiting | Duplicated in each trial | Centralized |
+| Agent onboarding | Multiple URLs | Single URL |
+| Trial exposure | External (NodePort/LB) | Internal only (ClusterIP) |
+
+#### Networking
+
+Trials are internal services only—no external port exposure needed:
+
+```yaml
+# Trial service - internal only
+apiVersion: v1
+kind: Service
+metadata:
+  name: trial-nba
+spec:
+  type: ClusterIP  # No external exposure
+  selector:
+    app: trial-nba
+  ports:
+  - port: 8080
+
+# Dashboard discovers trials via:
+# - Environment variables: TRIAL_NBA_URL=http://trial-nba:8080
+# - Kubernetes DNS: http://trial-nba.default.svc.cluster.local:8080
+# - ConfigMap with trial registry
+```
+
+Containers in the same cluster network can communicate via internal DNS, even across nodes.
+
+#### HTTP Proxy Overhead
+
+| Hop | Latency | Notes |
+|-----|---------|-------|
+| Agent → Ingress | ~1-5ms | External network |
+| Ingress → Dashboard | <1ms | Internal |
+| Dashboard → Trial | ~0.5-2ms | Internal HTTP proxy |
+| **Total overhead** | **~1-2ms** | Negligible vs LLM latency (500-5000ms) |
+
+SSE streaming works through the proxy—Dashboard pipes bytes through without buffering:
+
+```python
+async def proxy_sse(trial_url: str, request: Request):
+    async with httpx.stream("GET", f"{trial_url}/api/v1/events/stream") as resp:
+        async for chunk in resp.aiter_bytes():
+            yield chunk
+```
+
+#### Scaling
+
+**Trials per node:**
+| Resource | Per Trial | 32GB/8-core node |
+|----------|-----------|------------------|
+| Memory | 200-500MB | ~50-100 trials |
+| CPU (external LLM) | 0.1-0.2 cores | ~40-80 trials |
+| CPU (local LLM) | 1+ cores + GPU | 2-4 trials |
+| **Practical limit** | | **20-50 trials** |
+
+**Dashboard horizontal scaling:**
+- Dashboard is stateless for routing (any replica routes to any trial)
+- SSE reconnection handled by client SDK (`Last-Event-ID`)
+- Use standard load balancer in front of Dashboard replicas
+
+#### Docker Compose Example
+
+```yaml
+services:
+  dashboard:
+    image: dojozero-dashboard
+    ports:
+      - "8000:8000"
+    environment:
+      - TRIAL_NBA_URL=http://trial-nba:8080
+      - TRIAL_NFL_URL=http://trial-nfl:8080
+    command: ["--enable-gateway"]
+
+  trial-nba:
+    image: dojozero-trial
+    environment:
+      - GATEWAY_PORT=8080
+    # No ports exposed - internal only
+    command: ["--params", "/app/trial_params/nba.yaml"]
+
+  trial-nfl:
+    image: dojozero-trial
+    environment:
+      - GATEWAY_PORT=8080
+    command: ["--params", "/app/trial_params/nfl.yaml"]
+
+networks:
+  default:
+    driver: bridge
+```
+
+### 2.4 Subscription Architecture
 
 Shared `SubscriptionManager` with different transports:
 
@@ -122,7 +255,7 @@ class BettingAgent(Agent):
 # Same subscription logic, different transport
 ```
 
-### 2.4 Component Summary
+### 2.5 Component Summary
 
 | Component | Purpose | New/Existing |
 |-----------|---------|--------------|
