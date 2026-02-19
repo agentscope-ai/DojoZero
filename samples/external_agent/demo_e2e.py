@@ -40,8 +40,9 @@ logger = logging.getLogger(__name__)
 
 # Suppress noisy loggers
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("uvicorn").setLevel(logging.WARNING)
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
 
 
 async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Event]:
@@ -294,7 +295,7 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
         return {"status": "ok", "trial_id": "demo-trial"}
 
     # Create server
-    config = uvicorn.Config(app=app, host="127.0.0.1", port=port, log_level="warning")
+    config = uvicorn.Config(app=app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
 
     ready_event = asyncio.Event()
@@ -310,7 +311,7 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
         await serve_task
 
     task = asyncio.create_task(serve())
-    return task, ready_event
+    return task, ready_event, server
 
 
 async def run_demo_agent(gateway_url: str, agent_id: str):
@@ -407,7 +408,7 @@ async def main():
 
     # Start gateway
     logger.info("Starting mock gateway server...")
-    gateway_task, ready_event = await run_mock_gateway(port=gateway_port)
+    gateway_task, ready_event, server = await run_mock_gateway(port=gateway_port)
 
     try:
         # Wait for gateway to be ready
@@ -439,12 +440,17 @@ async def main():
     except KeyboardInterrupt:
         logger.info("Demo interrupted")
     finally:
-        # Cleanup
-        gateway_task.cancel()
+        # Graceful shutdown - signal server to stop
+        server.should_exit = True
+        # Wait for server to finish (with timeout)
         try:
-            await gateway_task
-        except asyncio.CancelledError:
-            pass
+            await asyncio.wait_for(gateway_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            gateway_task.cancel()
+            try:
+                await gateway_task
+            except asyncio.CancelledError:
+                pass
 
     print("\nDemo finished!")
 
