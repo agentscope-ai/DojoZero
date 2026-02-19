@@ -10,7 +10,7 @@
 Enable third-party agents to participate in DojoZero trials via HTTP APIs (REST + SSE). Trials remain isolated units with per-trial DataHub; agents can subscribe to multiple trials simultaneously.
 
 **Key decisions:**
-- Trial-level containerization (not per-agent)
+- Trial-level containerization
 - Gateway embedded in trial (process or container)
 - Per-trial DataHub (no centralized event bus)
 - Agents manage their own multi-trial state
@@ -22,7 +22,7 @@ Enable third-party agents to participate in DojoZero trials via HTTP APIs (REST 
 | Goal | Priority |
 |------|----------|
 | Third-party agents in any language | High |
-| Sub-100ms added latency for betting | High |
+| Low latency for betting | High |
 | Backwards compatibility with internal agents | High |
 | Clean trial lifecycle management | Medium |
 
@@ -34,7 +34,7 @@ Enable third-party agents to participate in DojoZero trials via HTTP APIs (REST 
 
 ### 2.1 Per-Trial Gateway
 
-Each trial runs its own Gateway, whether as a process or container:
+Each trial runs its own Gateway, whether as a process or container. Co-locating Gateway with DataHub minimizes latency (no extra network hop for events or bets).
 
 ```mermaid
 graph TB
@@ -304,7 +304,7 @@ API calls with Bearer token → Gateway validates
 
 ### 5.3 Rate Limiting
 
-Single default limit (tiers deferred until billing designed):
+Default limits:
 
 | Resource | Limit |
 |----------|-------|
@@ -558,7 +558,7 @@ dojo0 agent bet --trial lal-bos-2026 --market moneyline --amount 100
 | Gateway embedded in trial | Co-located with DataHub |
 | No aggregation gateway | Doesn't scale across hosts, SPOF |
 | Multi-trial DX via client SDK | Connection pooling in SDK |
-| Single rate limit (no tiers) | Defer tiers until billing designed |
+| Single rate limit | Simpler, add tiers later if needed |
 | Defer DojoAgent base class | Let API stabilize first |
 | Monorepo with separate packages | Client has minimal deps |
 
