@@ -94,7 +94,7 @@ class SimpleBettingAgent:
 
             # Get initial balance
             balance = await trial.get_balance()
-            logger.info("Starting balance: %.2f", balance.balance)
+            logger.info("Starting balance: %s", balance.balance)
 
             # Subscribe to events
             logger.info("Subscribing to events...")

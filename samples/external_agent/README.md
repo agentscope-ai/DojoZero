@@ -13,7 +13,7 @@ Sample code demonstrating how to build external agents that participate in DojoZ
 
 2. Start a trial with the gateway enabled:
    ```bash
-   dojo0 run --params configs/nba_trial.yaml --enable-gateway --gateway-port 8080
+   dojo0 run --params trial_params/nba-moneyline.yaml --enable-gateway --gateway-port 8080
    ```
 
 ## Examples

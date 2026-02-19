@@ -164,12 +164,17 @@ def create_gateway_app(
         state: GatewayState = Depends(get_gateway_state),
     ) -> AgentRegistrationResponse:
         """Register an external agent for this trial."""
+        # Convert initial_balance to string if it's a float
+        initial_balance: str | None = None
+        if request.initial_balance is not None:
+            initial_balance = str(request.initial_balance)
+
         try:
             return await state.adapter.register_agent(
                 agent_id=request.agent_id,
-                persona=request.persona,
-                model=request.model,
-                initial_balance=request.initial_balance,
+                persona=request.persona or "",
+                model=request.model or "",
+                initial_balance=initial_balance,
             )
         except ValueError as e:
             error_msg = str(e)

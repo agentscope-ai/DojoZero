@@ -23,9 +23,9 @@ class AgentRegistrationRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     agent_id: str = Field(alias="agentId")
-    persona: str = ""
-    model: str = ""
-    initial_balance: str | None = Field(default=None, alias="initialBalance")
+    persona: str | None = None
+    model: str | None = None
+    initial_balance: float | str | None = Field(default=None, alias="initialBalance")
 
 
 class AgentRegistrationResponse(BaseModel):
@@ -35,7 +35,7 @@ class AgentRegistrationResponse(BaseModel):
 
     agent_id: str = Field(serialization_alias="agentId")
     trial_id: str = Field(serialization_alias="trialId")
-    balance: str
+    balance: float | str
     registered_at: datetime = Field(serialization_alias="registeredAt")
 
 
