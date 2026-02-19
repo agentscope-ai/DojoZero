@@ -279,10 +279,11 @@ def create_gateway_app(
         event_types: str | None = Query(default=None),
         state: GatewayState = Depends(get_gateway_state),
     ) -> RecentEventsResponse:
-        """Get recent events (polling fallback)."""
-        # TODO: Use `since` parameter to filter events after a specific sequence
-        _ = since
+        """Get recent events (polling fallback).
 
+        When `since` is provided, only returns events with sequence > since.
+        This allows efficient polling by requesting only new events.
+        """
         if not state.adapter.is_registered(agent_id):
             raise HTTPException(status_code=403, detail="Agent not registered")
 
@@ -291,25 +292,38 @@ def create_gateway_app(
         if event_types:
             filter_types = [t.strip() for t in event_types.split(",")]
 
+        # Get current sequence first
+        current_sequence = state.data_hub.subscription_manager.global_sequence
+
+        # If since >= current_sequence, no new events
+        if since is not None and since >= current_sequence:
+            return RecentEventsResponse(
+                events=[],
+                current_sequence=current_sequence,
+            )
+
         # Get events from cache
         events = state.data_hub.get_recent_events(
             event_types=filter_types,
             limit=limit,
         )
 
-        # Get current sequence
-        current_sequence = state.data_hub.subscription_manager.global_sequence
-
-        # Build response with envelopes
-        envelopes = [
-            EventEnvelope(
-                trial_id=state.trial_id,
-                sequence=current_sequence - i,  # Approximate sequence
-                timestamp=e.timestamp,
-                payload=e.to_dict(),
+        # Build response with envelopes, filtering by since
+        envelopes = []
+        for i, e in enumerate(events):
+            # Events are newest-first, so sequence decreases with index
+            event_sequence = current_sequence - i
+            if since is not None and event_sequence <= since:
+                # Skip events at or before the since sequence
+                continue
+            envelopes.append(
+                EventEnvelope(
+                    trial_id=state.trial_id,
+                    sequence=event_sequence,
+                    timestamp=e.timestamp,
+                    payload=e.to_dict(),
+                )
             )
-            for i, e in enumerate(events)
-        ]
 
         return RecentEventsResponse(
             events=envelopes,
