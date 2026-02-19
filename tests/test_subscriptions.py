@@ -360,3 +360,49 @@ class TestSubscriptionManager:
         # Both callbacks should be called, despite first one raising
         callback1.assert_called_once()
         callback2.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_sync_delivers_to_subscriptions(self, manager):
+        """Test that dispatch_sync also delivers to subscription queues.
+
+        This is critical for external agents using SSE/REST polling.
+        """
+        # Create a subscription (like an external agent would)
+        sub = await manager.subscribe(
+            subscriber_id="external_agent",
+            filters=SubscriptionFilter.from_list(["event.*"]),
+        )
+
+        # Dispatch via sync method (like DataHub._dispatch_event does)
+        event = MockDataEvent("event.test")
+        delivered = manager.dispatch_sync(event)
+
+        # Event should be delivered to the subscription queue
+        assert delivered == 1
+        assert sub.buffer_depth == 1
+
+        # Should be retrievable from the queue
+        received = sub.get_nowait()
+        assert received is event
+
+    @pytest.mark.asyncio
+    async def test_dispatch_sync_updates_sequence(self, manager):
+        """Test that dispatch_sync increments global sequence."""
+        assert manager.global_sequence == 0
+
+        manager.dispatch_sync(MockDataEvent("event.test"))
+        assert manager.global_sequence == 1
+
+        manager.dispatch_sync(MockDataEvent("event.test"))
+        assert manager.global_sequence == 2
+
+    @pytest.mark.asyncio
+    async def test_dispatch_sync_caches_events(self, manager):
+        """Test that dispatch_sync caches events for late joiners."""
+        # Dispatch some events
+        manager.dispatch_sync(MockDataEvent("event.type_a"))
+        manager.dispatch_sync(MockDataEvent("event.type_b"))
+
+        # Should be cached
+        events = manager.get_recent_events(limit=10)
+        assert len(events) == 2

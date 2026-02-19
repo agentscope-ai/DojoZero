@@ -174,6 +174,63 @@ class Subscription:
             self._dropped_count += 1
             return False
 
+    def put_sync(
+        self,
+        event: "DataEvent",
+        priority: EventPriority = EventPriority.NORMAL,
+    ) -> bool:
+        """Synchronous version of put for use from sync dispatch.
+
+        Same logic as put() but callable from synchronous code.
+
+        Args:
+            event: Event to add
+            priority: Event priority for backpressure decisions
+
+        Returns:
+            True if event was queued, False if dropped
+        """
+        if not self.filters.matches(event.event_type):
+            return False
+
+        depth = self.buffer_depth
+
+        # Never drop critical events
+        if priority == EventPriority.CRITICAL:
+            try:
+                self._queue.put_nowait(event)
+                self._last_event_at = datetime.now(timezone.utc)
+                return True
+            except asyncio.QueueFull:
+                # Force-add critical events by removing oldest
+                try:
+                    self._queue.get_nowait()
+                    self._queue.put_nowait(event)
+                    self._last_event_at = datetime.now(timezone.utc)
+                    return True
+                except Exception:
+                    return False
+
+        # Handle backpressure for non-critical events
+        if depth > self.options.buffer_threshold_drop:
+            self._dropped_count += 1
+            if self._dropped_count % 100 == 1:
+                logger.warning(
+                    "Subscription %s: dropped %d events (buffer depth: %d)",
+                    self.subscription_id,
+                    self._dropped_count,
+                    depth,
+                )
+            return False
+
+        try:
+            self._queue.put_nowait(event)
+            self._last_event_at = datetime.now(timezone.utc)
+            return True
+        except asyncio.QueueFull:
+            self._dropped_count += 1
+            return False
+
     async def get(self, timeout: float | None = None) -> "DataEvent | None":
         """Get next event from queue.
 
@@ -481,20 +538,48 @@ class SubscriptionManager:
             event_types,
         )
 
-    def dispatch_sync(self, event: "DataEvent") -> None:
-        """Synchronous dispatch to legacy callbacks only.
+    def dispatch_sync(
+        self,
+        event: "DataEvent",
+        priority: EventPriority = EventPriority.NORMAL,
+    ) -> int:
+        """Synchronous dispatch to both subscription queues and legacy callbacks.
 
-        Used by DataHub._dispatch_event() for backward compatibility.
-        Does NOT dispatch to Subscription queues (those are handled async).
+        Used by DataHub._dispatch_event() for all event dispatch.
+        Dispatches to:
+        - Subscription queues (for external agents via SSE/REST)
+        - Legacy callbacks (for internal agents)
+
+        Args:
+            event: Event to dispatch
+            priority: Event priority for backpressure handling
+
+        Returns:
+            Number of subscriptions that received the event
         """
+        # Cache for late joiners
+        self._cache_event(event)
+
+        # Increment global sequence
+        self._global_sequence += 1
+
+        delivered = 0
         event_type = event.event_type
 
+        # Dispatch to Subscription queues (external agents via SSE/REST)
+        for subscription in self._subscriptions.values():
+            if subscription.put_sync(event, priority):
+                delivered += 1
+
+        # Dispatch to legacy callbacks (internal agents)
         if event_type in self._event_handlers:
             for handler in self._event_handlers[event_type]:
                 try:
                     handler(event)
                 except Exception as e:
                     logger.error("Error in event handler for %s: %s", event_type, e)
+
+        return delivered
 
 
 __all__ = [
