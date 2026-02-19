@@ -624,3 +624,37 @@ uv sync
 # External agent developer: install client only
 pip install dojozero-client
 ```
+
+---
+
+## 12. Example: Client SDK Usage
+
+Minimal example showing the target API shape:
+
+```python
+from dojozero_client import DojoClient
+
+client = DojoClient(api_key="...")
+
+async with client.connect_trial("lal-bos-2026-02-15") as trial:
+    async for event in trial.events(filters=["event.nba_*", "event.odds_*"]):
+        if should_bet(event):
+            await trial.place_bet(
+                market="moneyline",
+                selection="home",
+                amount=100,
+                reference_sequence=event.sequence,
+            )
+```
+
+Full examples (reconnection handling, multi-trial agents, AgentScope integration) will live in `samples/external_agent/`.
+
+---
+
+## 13. Future Work
+
+- **Priority-aware backpressure:** Never drop critical events (odds, game lifecycle); batch/drop low-priority events (plays) when buffer fills
+- **SLS replay mode:** Same Gateway API reading from SLS instead of live DataHub, enabling backtesting with identical agent code
+- **Observability:** OpenTelemetry integration, latency SLOs
+- **Historical data queries:** Endpoint for feature engineering
+- **Agent shadowing:** Paper trading mode (live data, no real bets)
