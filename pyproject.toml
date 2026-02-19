@@ -64,6 +64,12 @@ target-version = "py311"
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
+exclude = [
+    "samples/external_agent",
+    "**/.venv",
+    "**/node_modules",
+]
+extraPaths = ["packages/dojozero-client/src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
