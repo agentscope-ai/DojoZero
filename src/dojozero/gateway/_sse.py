@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, AsyncIterator, Callable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from starlette.responses import StreamingResponse
 
@@ -26,7 +26,7 @@ class SSEConnection:
     """Manages a single SSE connection for an external agent.
 
     Wraps a Subscription and converts events to SSE-formatted strings
-    for HTTP streaming.
+    for HTTP streaming. Supports reconnection replay via Last-Event-ID.
     """
 
     def __init__(
@@ -34,6 +34,7 @@ class SSEConnection:
         subscription: "Subscription",
         trial_id: str,
         get_global_sequence: Callable[[], int],
+        get_recent_events: Callable[[int], list[Any]],
         heartbeat_interval: float = 15.0,
     ):
         """Initialize SSE connection.
@@ -42,31 +43,47 @@ class SSEConnection:
             subscription: Subscription to stream events from
             trial_id: Trial ID for event envelope
             get_global_sequence: Callable returning current global sequence number
+            get_recent_events: Callable returning recent events (takes limit param)
             heartbeat_interval: Seconds between heartbeat messages
         """
         self.subscription = subscription
         self.trial_id = trial_id
         self.get_global_sequence = get_global_sequence
+        self.get_recent_events = get_recent_events
         self.heartbeat_interval = heartbeat_interval
         self._closed = False
 
-    async def event_stream(self) -> AsyncIterator[str]:
+    async def event_stream(
+        self,
+        last_event_id: int | None = None,
+    ) -> AsyncIterator[str]:
         """Generate SSE events from subscription queue.
 
-        Yields SSE-formatted strings including:
-        - Event messages with sequence IDs
-        - Heartbeat messages to keep connection alive
+        If last_event_id is provided, replays missed events first before
+        streaming live events. This enables reliable reconnection.
+
+        Args:
+            last_event_id: Last sequence seen by client (for reconnection replay)
 
         Yields:
-            SSE-formatted strings ready for HTTP streaming
+            SSE-formatted strings including:
+            - Replay events (if reconnecting)
+            - Live event messages with sequence IDs
+            - Heartbeat messages to keep connection alive
         """
         logger.info(
-            "SSE stream started: subscription=%s, trial=%s",
+            "SSE stream started: subscription=%s, trial=%s, last_event_id=%s",
             self.subscription.subscription_id,
             self.trial_id,
+            last_event_id,
         )
 
         try:
+            # Replay missed events on reconnection
+            if last_event_id is not None:
+                for sse_msg in self._replay_events(last_event_id):
+                    yield sse_msg
+
             while not self._closed:
                 # Wait for event with timeout for heartbeat
                 event = await self.subscription.get(timeout=self.heartbeat_interval)
@@ -119,6 +136,64 @@ class SSEConnection:
                 self.subscription.subscription_id,
             )
 
+    def _replay_events(self, last_event_id: int) -> list[str]:
+        """Replay events missed since last_event_id.
+
+        Args:
+            last_event_id: Last sequence seen by client
+
+        Returns:
+            List of SSE-formatted strings for missed events
+        """
+        current_sequence = self.get_global_sequence()
+
+        # No events to replay if client is caught up
+        if last_event_id >= current_sequence:
+            logger.debug(
+                "No replay needed: last_event_id=%d >= current=%d",
+                last_event_id,
+                current_sequence,
+            )
+            return []
+
+        # Get recent events from cache
+        # Request enough to cover the gap, capped at reasonable limit
+        gap = current_sequence - last_event_id
+        limit = min(gap, 100)
+        recent_events = self.get_recent_events(limit)
+
+        # Build replay messages (events are newest-first, we want oldest-first)
+        replay_messages = []
+        for i, event in enumerate(reversed(recent_events)):
+            # Calculate sequence (oldest event has lowest sequence)
+            event_sequence = current_sequence - (len(recent_events) - 1 - i)
+            if event_sequence <= last_event_id:
+                continue  # Skip events client already has
+
+            envelope = EventEnvelope(
+                trial_id=self.trial_id,
+                sequence=event_sequence,
+                timestamp=event.timestamp,
+                payload=event.to_dict(),
+            )
+
+            replay_messages.append(
+                self._format_sse(
+                    event="event",
+                    data=envelope.model_dump(mode="json", by_alias=True),
+                    id=str(event_sequence),
+                )
+            )
+
+        logger.info(
+            "Replaying %d events: last_event_id=%d, current=%d",
+            len(replay_messages),
+            last_event_id,
+            current_sequence,
+        )
+
+        return replay_messages
+
     def close(self) -> None:
         """Mark connection as closed."""
         self._closed = True
@@ -167,16 +242,21 @@ def create_sse_response(
 
     Args:
         connection: SSE connection to stream from
-        last_event_id: Last-Event-ID header for reconnection (future use)
+        last_event_id: Last-Event-ID header for reconnection replay
 
     Returns:
         Starlette StreamingResponse with SSE content type
     """
-    # TODO: Handle last_event_id for reconnection replay
-    _ = last_event_id
+    # Parse last_event_id as sequence number for replay
+    replay_from: int | None = None
+    if last_event_id is not None:
+        try:
+            replay_from = int(last_event_id)
+        except ValueError:
+            logger.warning("Invalid Last-Event-ID: %s", last_event_id)
 
     return StreamingResponse(
-        connection.event_stream(),
+        connection.event_stream(last_event_id=replay_from),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
