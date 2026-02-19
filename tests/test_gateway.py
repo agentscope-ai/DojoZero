@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from dojozero.gateway._models import (
@@ -24,6 +25,13 @@ from dojozero.gateway._models import (
     TotalLine,
 )
 from dojozero.gateway._adapter import ExternalAgentAdapter, ExternalAgentState
+from dojozero.gateway._auth import AgentCredentials, AuthConfig, AuthProvider
+from dojozero.gateway._rate_limit import (
+    RateLimitBucket,
+    RateLimitConfig,
+    RateLimiter,
+    RateLimitType,
+)
 from dojozero.gateway._sse import SSEConnection
 from dojozero.gateway._server import create_gateway_app
 
@@ -468,3 +476,230 @@ class TestGatewayServer:
             },
         )
         assert response.status_code == 401
+
+
+class TestAuthProvider:
+    """Tests for AuthProvider."""
+
+    def test_validate_header_auth(self):
+        """Test X-Agent-ID header authentication."""
+        provider = AuthProvider()
+        credentials = provider.validate_header_auth("agent1")
+
+        assert credentials.agent_id == "agent1"
+        assert not credentials.is_expired
+
+    def test_validate_header_auth_empty(self):
+        """Test empty agent ID raises 401."""
+        provider = AuthProvider()
+
+        with pytest.raises(HTTPException) as exc_info:
+            provider.validate_header_auth("")
+
+        assert exc_info.value.status_code == 401
+
+    def test_authenticate_with_header(self):
+        """Test authentication with X-Agent-ID header."""
+        provider = AuthProvider()
+        credentials = provider.authenticate(x_agent_id="agent1")
+
+        assert credentials.agent_id == "agent1"
+
+    def test_authenticate_no_credentials(self):
+        """Test authentication fails without credentials."""
+        provider = AuthProvider()
+
+        with pytest.raises(HTTPException) as exc_info:
+            provider.authenticate()
+
+        assert exc_info.value.status_code == 401
+
+    def test_register_unregister_agent(self):
+        """Test agent registration tracking."""
+        provider = AuthProvider()
+
+        assert not provider.is_registered("agent1")
+
+        provider.register_agent("agent1")
+        assert provider.is_registered("agent1")
+
+        provider.unregister_agent("agent1")
+        assert not provider.is_registered("agent1")
+
+    def test_agent_credentials_expiry(self):
+        """Test credential expiry check."""
+        # Non-expiring credentials
+        creds = AgentCredentials(agent_id="agent1")
+        assert not creds.is_expired
+
+        # Expired credentials
+        import time
+
+        creds_expired = AgentCredentials(
+            agent_id="agent1",
+            expires_at=time.time() - 100,
+        )
+        assert creds_expired.is_expired
+
+        # Future expiry
+        creds_future = AgentCredentials(
+            agent_id="agent1",
+            expires_at=time.time() + 3600,
+        )
+        assert not creds_future.is_expired
+
+    def test_auth_config_defaults(self):
+        """Test AuthConfig default values."""
+        config = AuthConfig()
+
+        assert config.jwt_secret is None
+        assert config.jwt_algorithm == "HS256"
+        assert config.require_registration is True
+        assert config.allow_header_auth is True
+
+
+class TestRateLimiter:
+    """Tests for RateLimiter."""
+
+    def test_rate_limit_bucket_consume(self):
+        """Test token bucket consumption."""
+        bucket = RateLimitBucket(tokens=10, capacity=10, refill_rate=1.0)
+
+        assert bucket.consume(5)
+        assert bucket.tokens == pytest.approx(5, abs=0.1)
+
+        assert bucket.consume(5)
+        assert bucket.tokens == pytest.approx(0, abs=0.1)
+
+        assert not bucket.consume(1)
+
+    def test_rate_limit_bucket_refill(self):
+        """Test token bucket refill."""
+        import time
+
+        bucket = RateLimitBucket(tokens=0, capacity=10, refill_rate=10.0)
+        bucket.last_refill = time.time() - 1  # 1 second ago
+
+        # Should refill 10 tokens (10/sec * 1 sec)
+        bucket._refill()
+        assert bucket.tokens == 10
+
+    def test_rate_limit_bucket_retry_after(self):
+        """Test retry_after calculation."""
+        bucket = RateLimitBucket(tokens=0, capacity=10, refill_rate=1.0)
+
+        # Need 1 token at 1 token/sec = 1 second
+        assert bucket.retry_after > 0
+        assert bucket.retry_after <= 1.0
+
+    def test_rate_limiter_check_general(self):
+        """Test general rate limiting."""
+        config = RateLimitConfig(general_rpm=5, window_seconds=60)
+        limiter = RateLimiter(config)
+
+        # Should allow first 5 requests
+        for _ in range(5):
+            limiter.check_rate_limit("agent1", RateLimitType.GENERAL)
+
+        # 6th request should be rate limited
+        with pytest.raises(HTTPException) as exc_info:
+            limiter.check_rate_limit("agent1", RateLimitType.GENERAL)
+
+        assert exc_info.value.status_code == 429
+
+    def test_rate_limiter_check_bet(self):
+        """Test bet rate limiting."""
+        config = RateLimitConfig(bet_rpm=2, window_seconds=60)
+        limiter = RateLimiter(config)
+
+        limiter.check_rate_limit("agent1", RateLimitType.BET)
+        limiter.check_rate_limit("agent1", RateLimitType.BET)
+
+        with pytest.raises(HTTPException) as exc_info:
+            limiter.check_rate_limit("agent1", RateLimitType.BET)
+
+        assert exc_info.value.status_code == 429
+
+    def test_rate_limiter_sse_connections(self):
+        """Test SSE connection limiting."""
+        config = RateLimitConfig(max_sse_connections=2)
+        limiter = RateLimiter(config)
+
+        limiter.acquire_sse_connection("agent1")
+        limiter.acquire_sse_connection("agent1")
+
+        with pytest.raises(HTTPException) as exc_info:
+            limiter.acquire_sse_connection("agent1")
+
+        assert exc_info.value.status_code == 429
+
+        # Release one and try again
+        limiter.release_sse_connection("agent1")
+        limiter.acquire_sse_connection("agent1")  # Should succeed
+
+    def test_rate_limiter_disabled(self):
+        """Test rate limiting can be disabled."""
+        config = RateLimitConfig(general_rpm=1, enabled=False)
+        limiter = RateLimiter(config)
+
+        # Should not raise even though limit is 1
+        for _ in range(100):
+            limiter.check_rate_limit("agent1", RateLimitType.GENERAL)
+
+    def test_rate_limiter_per_agent(self):
+        """Test rate limits are per-agent."""
+        config = RateLimitConfig(general_rpm=2, window_seconds=60)
+        limiter = RateLimiter(config)
+
+        # agent1 uses 2 requests
+        limiter.check_rate_limit("agent1", RateLimitType.GENERAL)
+        limiter.check_rate_limit("agent1", RateLimitType.GENERAL)
+
+        # agent2 should still have quota
+        limiter.check_rate_limit("agent2", RateLimitType.GENERAL)
+
+    def test_rate_limiter_stats(self):
+        """Test rate limit stats."""
+        config = RateLimitConfig(general_rpm=10, bet_rpm=5, max_sse_connections=3)
+        limiter = RateLimiter(config)
+
+        # New agent gets default stats
+        stats = limiter.get_stats("unknown")
+        assert stats["general_remaining"] == 10
+        assert stats["bet_remaining"] == 5
+        assert stats["sse_connections"] == 0
+
+        # Use some quota
+        limiter.check_rate_limit("agent1", RateLimitType.GENERAL)
+        limiter.acquire_sse_connection("agent1")
+
+        stats = limiter.get_stats("agent1")
+        assert stats["general_remaining"] == 9
+        assert stats["sse_connections"] == 1
+        assert stats["sse_remaining"] == 2
+
+    def test_rate_limiter_reset(self):
+        """Test rate limit reset."""
+        config = RateLimitConfig(general_rpm=2, window_seconds=60)
+        limiter = RateLimiter(config)
+
+        limiter.check_rate_limit("agent1", RateLimitType.GENERAL)
+        limiter.check_rate_limit("agent1", RateLimitType.GENERAL)
+
+        # Should be rate limited
+        with pytest.raises(HTTPException):
+            limiter.check_rate_limit("agent1", RateLimitType.GENERAL)
+
+        # Reset and try again
+        limiter.reset("agent1")
+        limiter.check_rate_limit("agent1", RateLimitType.GENERAL)  # Should succeed
+
+    def test_rate_limit_config_defaults(self):
+        """Test RateLimitConfig default values."""
+        config = RateLimitConfig()
+
+        assert config.general_rpm == 300
+        assert config.bet_rpm == 60
+        assert config.max_sse_connections == 5
+        assert config.window_seconds == 60
+        assert config.enabled is True
