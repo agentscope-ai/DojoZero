@@ -385,6 +385,7 @@ class GatewayInfo:
 
     trial_id: str
     endpoint: str
+    url: str | None = None  # Full URL for connection (set by discover_trials)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GatewayInfo":
@@ -392,6 +393,7 @@ class GatewayInfo:
         return cls(
             trial_id=data["trial_id"],
             endpoint=data["endpoint"],
+            url=data.get("url"),
         )
 
 
@@ -410,27 +412,87 @@ class DojoClient:
 
     Dashboard mode (dojo0 serve --enable-gateway):
         ```
-        # Discover available trials
-        gateways = await client.list_gateways("http://localhost:8000")
+        # Discover available trials (queries all configured dashboards)
+        gateways = await client.discover_trials()
 
-        # Build gateway URL and connect (same connect_trial method)
-        gateway_url = f"http://localhost:8000{gateways[0].endpoint}"
-        async with client.connect_trial(gateway_url, agent_id="my-agent") as trial:
+        # Connect using gateway info
+        async with client.connect_trial(
+            gateway_url=gateways[0].url,
+            agent_id="my-agent",
+        ) as trial:
             async for event in trial.events():
                 ...
         ```
+
+    Configuration (layered precedence):
+        1. Constructor arguments
+        2. Environment variables (DOJOZERO_GATEWAY_URL, DOJOZERO_DASHBOARD_URLS)
+        3. Config file (~/.dojozero/config.yaml)
+        4. Defaults (http://localhost:8000)
     """
 
     def __init__(
         self,
+        gateway_url: str | None = None,
+        dashboard_urls: list[str] | None = None,
         timeout: float = 30.0,
     ):
         """Initialize DojoZero client.
 
         Args:
+            gateway_url: Gateway URL (standalone mode)
+            dashboard_urls: List of dashboard URLs (sharded mode)
             timeout: Default request timeout in seconds
         """
-        self._timeout = timeout
+        from dojozero_client._config import load_config
+
+        self._config = load_config(
+            gateway_url=gateway_url,
+            dashboard_urls=dashboard_urls,
+            timeout=timeout,
+        )
+        self._timeout = self._config.timeout
+
+    async def discover_trials(self) -> list[GatewayInfo]:
+        """Discover all available trials across configured dashboards.
+
+        Queries all dashboard URLs from config and aggregates results.
+        Each GatewayInfo includes the full URL for connection.
+
+        Returns:
+            List of GatewayInfo with trial_id and full url
+
+        Raises:
+            ConnectionError: If all dashboards are unreachable
+        """
+        import asyncio
+
+        urls = self._config.get_discovery_urls()
+        tasks = [self.list_gateways(url) for url in urls]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_gateways: list[GatewayInfo] = []
+        error_count = 0
+
+        for url, result in zip(urls, results):
+            if isinstance(result, BaseException):
+                error_count += 1
+                logger.warning("Failed to query %s: %s", url, result)
+            else:
+                # Add full URL to each gateway
+                gateways: list[GatewayInfo] = result
+                for gw in gateways:
+                    gw_with_url = GatewayInfo(
+                        trial_id=gw.trial_id,
+                        endpoint=gw.endpoint,
+                        url=f"{url.rstrip('/')}{gw.endpoint}",
+                    )
+                    all_gateways.append(gw_with_url)
+
+        if not all_gateways and error_count > 0:
+            raise ConnectionError(f"All {error_count} dashboards unreachable")
+
+        return all_gateways
 
     async def list_gateways(self, dashboard_url: str) -> list[GatewayInfo]:
         """List available trial gateways from a dashboard server.

@@ -72,7 +72,7 @@ class SimpleBettingAgent:
         self,
         agent_id: str,
         gateway_url: str | None = None,
-        dashboard_url: str | None = None,
+        dashboard_urls: list[str] | None = None,
         trial_id: str | None = None,
     ):
         """Run the agent.
@@ -80,18 +80,22 @@ class SimpleBettingAgent:
         Args:
             agent_id: Unique agent identifier
             gateway_url: Gateway URL for standalone mode (e.g., "http://localhost:8080")
-            dashboard_url: Dashboard URL for dashboard mode (e.g., "http://localhost:8000")
-            trial_id: Trial ID for dashboard mode (auto-discovered if not provided)
+            dashboard_urls: Dashboard URLs for sharded mode (e.g., ["http://localhost:8000"])
+            trial_id: Trial ID (auto-discovered if not provided)
         """
-        client = DojoClient()
+        # Create client with config
+        client = DojoClient(
+            gateway_url=gateway_url,
+            dashboard_urls=dashboard_urls,
+        )
 
-        # Dashboard mode: discover trials, build gateway URL
-        if dashboard_url:
-            logger.info("Discovering trials from dashboard at %s", dashboard_url)
-            gateways = await client.list_gateways(dashboard_url)
+        # Discovery mode: find available trials
+        if dashboard_urls or (not gateway_url):
+            logger.info("Discovering available trials...")
+            gateways = await client.discover_trials()
 
             if not gateways:
-                logger.error("No trials available on dashboard")
+                logger.error("No trials available")
                 return
 
             # Use specified trial_id or pick first available
@@ -113,11 +117,11 @@ class SimpleBettingAgent:
                     len(gateways),
                 )
 
-            # Build full gateway URL
-            gateway_url = f"{dashboard_url.rstrip('/')}{selected.endpoint}"
+            # Use full URL from discovery
+            gateway_url = selected.url
 
         if not gateway_url:
-            raise ValueError("Either --gateway or --dashboard must be provided")
+            raise ValueError("No gateway URL available")
 
         logger.info("Connecting to %s as agent '%s'", gateway_url, agent_id)
 
@@ -221,11 +225,18 @@ Examples:
 
   Dashboard mode (specific trial):
     python simple_agent.py --dashboard http://localhost:8000 --trial-id abc123 --agent-id my-agent
+
+  Using environment variables:
+    export DOJOZERO_GATEWAY_URL=http://localhost:8080
+    python simple_agent.py --agent-id my-agent
+
+  Using config file (~/.dojozero/config.yaml):
+    gateway_url: http://localhost:8000
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Connection mode (mutually exclusive)
+    # Connection mode (mutually exclusive, optional if env/config set)
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "--gateway",
@@ -233,12 +244,12 @@ Examples:
     )
     mode_group.add_argument(
         "--dashboard",
-        help="Dashboard URL for dashboard mode (e.g., http://localhost:8000)",
+        help="Dashboard URL for sharded mode (e.g., http://localhost:8000)",
     )
 
     parser.add_argument(
         "--trial-id",
-        help="Trial ID (dashboard mode only, auto-discovered if not provided)",
+        help="Trial ID (auto-discovered if not provided)",
     )
     parser.add_argument(
         "--agent-id",
@@ -264,12 +275,8 @@ Examples:
     )
     args = parser.parse_args()
 
-    # Validate args
-    if not args.gateway and not args.dashboard:
-        parser.error("Either --gateway or --dashboard must be provided")
-
-    if args.trial_id and not args.dashboard:
-        parser.error("--trial-id can only be used with --dashboard")
+    # Note: --gateway/--dashboard not required if DOJOZERO_GATEWAY_URL env var
+    # or ~/.dojozero/config.yaml is configured
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -283,7 +290,7 @@ Examples:
         await agent.run(
             agent_id=args.agent_id,
             gateway_url=args.gateway,
-            dashboard_url=args.dashboard,
+            dashboard_urls=[args.dashboard] if args.dashboard else None,
             trial_id=args.trial_id,
         )
     except KeyboardInterrupt:

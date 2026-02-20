@@ -39,6 +39,10 @@ from dojozero_client._client import (
     TrialConnection,
     TrialMetadata,
 )
+from dojozero_client._config import (
+    ClientConfig,
+    load_config,
+)
 from dojozero_client._exceptions import (
     AuthenticationError,
     BetRejectedError,
@@ -67,6 +71,9 @@ __all__ = [
     "GatewayInfo",
     "Odds",
     "TrialMetadata",
+    # Config
+    "ClientConfig",
+    "load_config",
     # Transport (advanced use)
     "GatewayTransport",
     "SSEEvent",
