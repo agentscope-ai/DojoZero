@@ -92,138 +92,207 @@ dojo0 serve --enable-gateway --trace-backend jaeger
 
 Both topologies use the same API - only the URL prefix differs.
 
-### 2.3 Containerized Deployment
+### 2.3 Scaling and Isolation
 
-For production, trials run in separate containers with Dashboard routing via HTTP proxy.
+#### Primary Model: In-Process Trials with Sharded Dashboards
+
+Trials run in-process within Dashboard Server. For scaling and isolation, deploy multiple Dashboard instances (shards).
 
 ```mermaid
 graph TB
     subgraph External
-        EA["External Agent"]
+        EA["External Agents"]
     end
 
-    subgraph Cluster["Kubernetes / Docker Network"]
-        ING["Ingress<br/>TLS termination"]
+    LB["Load Balancer"]
 
-        subgraph Dashboard["Dashboard Service (replicas)"]
-            DS1["Dashboard 1"]
-            DS2["Dashboard 2"]
+    subgraph Cluster["Dashboard Shards"]
+        subgraph DA["Dashboard A"]
+            T1["Trial 1"]
+            T2["Trial 2"]
+            T3["Trial 3"]
         end
 
-        subgraph Trials["Trial Pods (ClusterIP)"]
-            TA["Trial-NBA<br/>:8080"]
-            TB["Trial-NFL<br/>:8080"]
-            TC["Trial-MLB<br/>:8080"]
+        subgraph DB["Dashboard B"]
+            T4["Trial 4"]
+            T5["Trial 5"]
+            T6["Trial 6"]
+        end
+
+        subgraph DC["Dashboard C"]
+            T7["Trial 7"]
+            T8["Trial 8"]
+            T9["Trial 9"]
         end
     end
 
-    EA -->|HTTPS| ING
-    ING --> DS1
-    ING --> DS2
-    DS1 -->|HTTP internal| TA
-    DS1 -->|HTTP internal| TB
-    DS2 -->|HTTP internal| TC
+    REG["Registry<br/>trial → shard"]
+
+    EA --> LB
+    LB --> DA
+    LB --> DB
+    LB --> DC
+    DA -.-> REG
+    DB -.-> REG
+    DC -.-> REG
 ```
 
-#### Why Dashboard Routing (not per-trial Ingress)?
+#### Why In-Process Over Containers?
 
-| Concern | Per-Trial Ingress | Dashboard Routing |
-|---------|-------------------|-------------------|
-| Ingress rules | One per trial (churn) | Single rule (stable) |
-| TLS termination | Per trial or wildcard | Single cert |
-| Auth | Duplicated in each trial | Centralized |
-| Rate limiting | Duplicated in each trial | Centralized |
-| Agent onboarding | Multiple URLs | Single URL |
-| Trial exposure | External (NodePort/LB) | Internal only (ClusterIP) |
+| Concern | In-Process | Containers |
+|---------|------------|------------|
+| SSE streaming | ✅ Zero latency (direct) | ⚠️ Proxy complexity |
+| Trial startup | ✅ ~10ms | ❌ 2-5 seconds |
+| Lifecycle management | ✅ Simple (async tasks) | ⚠️ Docker/K8s API |
+| Debugging | ✅ Single process | ⚠️ Distributed logs |
+| Operational complexity | ✅ Low | ⚠️ Higher |
+| Crash isolation | ⚠️ Per shard | ✅ Per trial |
+| Dependency isolation | ❌ Shared env | ✅ Per container |
 
-#### Networking
+**In-process wins** because:
+- All trials share the same DojoZero codebase (no dependency conflicts)
+- External agents connect via HTTP API (no code execution in trials)
+- SSE streaming is trivial (direct function calls)
+- Sharding provides sufficient isolation
 
-Trials are internal services only—no external port exposure needed:
+#### Isolation via Sharding
 
-```yaml
-# Trial service - internal only
-apiVersion: v1
-kind: Service
-metadata:
-  name: trial-nba
-spec:
-  type: ClusterIP  # No external exposure
-  selector:
-    app: trial-nba
-  ports:
-  - port: 8080
+```
+Dashboard A crashes
+├── Trial 1 ── affected
+├── Trial 2 ── affected
+└── Trial 3 ── affected
 
-# Dashboard discovers trials via:
-# - Environment variables: TRIAL_NBA_URL=http://trial-nba:8080
-# - Kubernetes DNS: http://trial-nba.default.svc.cluster.local:8080
-# - ConfigMap with trial registry
+Dashboard B (healthy)
+├── Trial 4 ── ✅ unaffected
+├── Trial 5 ── ✅ unaffected
+└── Trial 6 ── ✅ unaffected
 ```
 
-Containers in the same cluster network can communicate via internal DNS, even across nodes.
+**Blast radius:** 1/N of trials (where N = number of shards).
 
-#### HTTP Proxy Overhead
+#### Fault Tolerance
 
-| Hop | Latency | Notes |
-|-----|---------|-------|
-| Agent → Ingress | ~1-5ms | External network |
-| Ingress → Dashboard | <1ms | Internal |
-| Dashboard → Trial | ~0.5-2ms | Internal HTTP proxy |
-| **Total overhead** | **~1-2ms** | Negligible vs LLM latency (500-5000ms) |
+| Mechanism | Status | Description |
+|-----------|--------|-------------|
+| Checkpointing | ✅ Exists | Periodic save of actor state |
+| Event persistence | ✅ Exists | DataHub writes to JSONL |
+| Auto-resume | ✅ Exists | Dashboard resumes trials on restart |
+| Client reconnection | ✅ In SDK | `Last-Event-ID` for SSE resume |
 
-SSE streaming works through the proxy—Dashboard pipes bytes through without buffering:
+**Recovery flow:**
+1. Dashboard crashes
+2. Load balancer detects, routes to healthy shards
+3. Dashboard restarts, scans for interrupted trials
+4. Resumes from latest checkpoint
+5. External agents reconnect via SDK
 
-```python
-async def proxy_sse(trial_url: str, request: Request):
-    async with httpx.stream("GET", f"{trial_url}/api/v1/events/stream") as resp:
-        async for chunk in resp.aiter_bytes():
-            yield chunk
-```
+#### Capacity Planning
 
-#### Scaling
-
-**Trials per node:**
 | Resource | Per Trial | 32GB/8-core node |
 |----------|-----------|------------------|
 | Memory | 200-500MB | ~50-100 trials |
 | CPU (external LLM) | 0.1-0.2 cores | ~40-80 trials |
-| CPU (local LLM) | 1+ cores + GPU | 2-4 trials |
-| **Practical limit** | | **20-50 trials** |
+| **Practical limit** | | **20-50 trials per Dashboard** |
 
-**Dashboard horizontal scaling:**
-- Dashboard is stateless for routing (any replica routes to any trial)
-- SSE reconnection handled by client SDK (`Last-Event-ID`)
-- Use standard load balancer in front of Dashboard replicas
+**Scaling path:**
+```
+1 Dashboard  →  20-50 trials
+3 Dashboards →  60-150 trials
+N Dashboards →  N × 50 trials
+```
 
-#### Docker Compose Example
+#### Third-Party Agent Security
+
+External agents connect via HTTP API—they do NOT execute code inside trials.
+
+```
+┌─────────────────────────────────────┐
+│  External Agent (their infra)       │
+│  - Their code, their servers        │
+└─────────────────────────────────────┘
+                │
+                │ HTTP API (trust boundary)
+                ▼
+┌─────────────────────────────────────┐
+│  Trial (your infra)                 │
+│  - Validates requests               │
+│  - Rate limits                      │
+│  - Enforces business rules          │
+└─────────────────────────────────────┘
+```
+
+**Security is at the API layer**, not the process boundary. Containers don't add security for this threat model.
+
+| Threat | Mitigation | Container Helps? |
+|--------|------------|------------------|
+| API spam | Rate limiting | ❌ No |
+| Unauthorized access | JWT auth | ❌ No |
+| Data leakage | Access control | ❌ No |
+| Bet manipulation | Validation | ❌ No |
+
+#### When to Consider Containers
+
+Containers become necessary if:
+
+| Scenario | Why Containers |
+|----------|----------------|
+| Different dependencies per trial | Isolated Python environments |
+| Agents submit code to execute | Sandboxing required |
+| Per-trial resource metering | Container-level metrics |
+| Compliance/audit requirements | Stronger isolation boundary |
+| Zero-downtime trial deployments | Rolling updates per trial |
+
+**Current DojoZero:** None of these apply. In-process with sharding is sufficient.
+
+#### Alternative: Ray Runtime
+
+DojoZero supports Ray for distributed execution (`--runtime-provider ray`).
+
+| Aspect | Ray | In-Process |
+|--------|-----|------------|
+| Multi-host | ✅ Yes | ❌ No (use sharding) |
+| Process isolation | ✅ Yes | ❌ Shared process |
+| SSE streaming | ⚠️ Requires polling (~50-100ms latency) | ✅ Zero latency |
+| Complexity | Medium | Low |
+
+**Ray limitation:** Ray actors don't support native streaming. Dashboard must poll DataHub actor for events, adding latency.
+
+**Recommendation:** Use in-process for external agent trials (zero SSE latency). Consider Ray for compute-heavy internal trials without external agent access.
+
+#### Deployment Example
 
 ```yaml
+# docker-compose.yml - Sharded Dashboards
 services:
-  dashboard:
-    image: dojozero-dashboard
+  dashboard-a:
+    image: dojozero
+    command: ["dojo0", "serve", "--enable-gateway", "--port", "8000"]
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
-      - TRIAL_NBA_URL=http://trial-nba:8080
-      - TRIAL_NFL_URL=http://trial-nfl:8080
-    command: ["--enable-gateway"]
+      - SHARD_ID=a
 
-  trial-nba:
-    image: dojozero-trial
+  dashboard-b:
+    image: dojozero
+    command: ["dojo0", "serve", "--enable-gateway", "--port", "8000"]
+    ports:
+      - "8002:8000"
     environment:
-      - GATEWAY_PORT=8080
-    # No ports exposed - internal only
-    command: ["--params", "/app/trial_params/nba.yaml"]
+      - SHARD_ID=b
 
-  trial-nfl:
-    image: dojozero-trial
-    environment:
-      - GATEWAY_PORT=8080
-    command: ["--params", "/app/trial_params/nfl.yaml"]
-
-networks:
-  default:
-    driver: bridge
+  nginx:
+    image: nginx
+    ports:
+      - "8000:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - dashboard-a
+      - dashboard-b
 ```
+
+Each Dashboard runs trials in-process. Nginx routes by trial ID or round-robin.
 
 ### 2.4 Subscription Architecture
 
