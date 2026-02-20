@@ -11,10 +11,32 @@ Sample code demonstrating how to build external agents that participate in DojoZ
    pip install -e packages/dojozero-client
    ```
 
-2. Start a trial with the gateway enabled:
+2. Start DojoZero in one of two modes:
+
+   **Standalone mode** (single trial):
    ```bash
    dojo0 run --params trial_params/nba-moneyline.yaml --enable-gateway --gateway-port 8080
    ```
+
+   **Dashboard mode** (multiple trials):
+   ```bash
+   dojo0 serve --enable-gateway
+   ```
+
+## Connection Modes
+
+### Standalone Mode
+Agent connects directly to a single trial's gateway:
+```
+Agent → http://localhost:8080/api/v1/...
+```
+
+### Dashboard Mode
+Agent discovers trials from dashboard, then connects via routing:
+```
+Agent → GET http://localhost:8000/api/gateway        (discover trials)
+Agent → http://localhost:8000/api/gateway/{trial_id}/api/v1/...
+```
 
 ## Examples
 
@@ -46,6 +68,7 @@ python robust_agent.py --gateway http://localhost:8080 --agent-id robust-agent
 
 ### Connecting to a Trial
 
+**Standalone mode** (direct gateway connection):
 ```python
 from dojozero_client import DojoClient
 
@@ -58,6 +81,29 @@ async with client.connect_trial(
     initial_balance=1000.0,
 ) as trial:
     # Use trial connection
+    pass
+```
+
+**Dashboard mode** (discover and connect):
+```python
+from dojozero_client import DojoClient
+
+client = DojoClient()
+
+# Step 1: Discover available trials
+gateways = await client.list_gateways("http://localhost:8000")
+print(f"Found {len(gateways)} trials")
+for g in gateways:
+    print(f"  - {g.trial_id}: {g.endpoint}")
+
+# Step 2: Build URL and connect (same connect_trial method)
+gateway_url = f"http://localhost:8000{gateways[0].endpoint}"
+async with client.connect_trial(
+    gateway_url=gateway_url,
+    agent_id="my-agent",
+    initial_balance=1000.0,
+) as trial:
+    # Same API as standalone mode
     pass
 ```
 

@@ -379,30 +379,46 @@ class TrialConnection:
         return Balance.from_dict(response)
 
 
+@dataclass
+class GatewayInfo:
+    """Information about an available trial gateway."""
+
+    trial_id: str
+    endpoint: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GatewayInfo":
+        """Create from API response."""
+        return cls(
+            trial_id=data["trial_id"],
+            endpoint=data["endpoint"],
+        )
+
+
 class DojoClient:
     """DojoZero client for external agents.
 
-    Usage:
-        client = DojoClient()
-
+    Standalone mode (dojo0 run --enable-gateway):
+        ```
         async with client.connect_trial(
             gateway_url="http://localhost:8080",
             agent_id="my-agent",
-            persona="My betting agent",
         ) as trial:
-            # Stream and react to events
             async for event in trial.events():
-                odds = await trial.get_current_odds()
-                if should_bet(event, odds):
-                    await trial.place_bet(
-                        market="moneyline",
-                        selection="home",
-                        amount=100,
-                        reference_sequence=event.sequence,
-                    )
+                ...
+        ```
 
-            balance = await trial.get_balance()
-            print(f"Final balance: {balance.balance}")
+    Dashboard mode (dojo0 serve --enable-gateway):
+        ```
+        # Discover available trials
+        gateways = await client.list_gateways("http://localhost:8000")
+
+        # Build gateway URL and connect (same connect_trial method)
+        gateway_url = f"http://localhost:8000{gateways[0].endpoint}"
+        async with client.connect_trial(gateway_url, agent_id="my-agent") as trial:
+            async for event in trial.events():
+                ...
+        ```
     """
 
     def __init__(
@@ -415,6 +431,36 @@ class DojoClient:
             timeout: Default request timeout in seconds
         """
         self._timeout = timeout
+
+    async def list_gateways(self, dashboard_url: str) -> list[GatewayInfo]:
+        """List available trial gateways from a dashboard server.
+
+        Use this to discover which trials are available before connecting.
+
+        Args:
+            dashboard_url: Dashboard server URL (e.g., "http://localhost:8000")
+
+        Returns:
+            List of GatewayInfo with trial_id and endpoint for each
+
+        Raises:
+            ConnectionError: If dashboard is unreachable
+        """
+        import httpx
+
+        url = f"{dashboard_url.rstrip('/')}/api/gateway"
+
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(url)
+                if response.status_code != 200:
+                    raise ConnectionError(
+                        f"Failed to list gateways: {response.status_code}"
+                    )
+                data = response.json()
+                return [GatewayInfo.from_dict(g) for g in data.get("gateways", [])]
+        except httpx.ConnectError as e:
+            raise ConnectionError(f"Cannot connect to dashboard: {e}") from e
 
     @asynccontextmanager
     async def connect_trial(
@@ -508,6 +554,7 @@ __all__ = [
     "BetResult",
     "DojoClient",
     "EventEnvelope",
+    "GatewayInfo",
     "Odds",
     "TrialConnection",
     "TrialMetadata",

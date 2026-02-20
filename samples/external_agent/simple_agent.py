@@ -2,17 +2,19 @@
 """Simple external agent example using the dojozero-client SDK.
 
 This example demonstrates:
-- Connecting to a trial
+- Connecting to a trial (standalone or dashboard mode)
 - Subscribing to events via SSE
 - Placing bets based on events
 - Querying balance and odds
 
 Usage:
-    # First, start a trial with gateway enabled:
+    # Standalone mode (single trial):
     dojo0 run --params your_trial.yaml --enable-gateway --gateway-port 8080
-
-    # Then run this agent:
     python simple_agent.py --gateway http://localhost:8080 --agent-id my-agent
+
+    # Dashboard mode (multiple trials):
+    dojo0 serve --enable-gateway
+    python simple_agent.py --dashboard http://localhost:8000 --agent-id my-agent
 """
 
 import argparse
@@ -66,16 +68,58 @@ class SimpleBettingAgent:
             return True, "away"
         return False, ""
 
-    async def run(self, gateway_url: str, agent_id: str):
+    async def run(
+        self,
+        agent_id: str,
+        gateway_url: str | None = None,
+        dashboard_url: str | None = None,
+        trial_id: str | None = None,
+    ):
         """Run the agent.
 
         Args:
-            gateway_url: Gateway URL (e.g., "http://localhost:8080")
             agent_id: Unique agent identifier
+            gateway_url: Gateway URL for standalone mode (e.g., "http://localhost:8080")
+            dashboard_url: Dashboard URL for dashboard mode (e.g., "http://localhost:8000")
+            trial_id: Trial ID for dashboard mode (auto-discovered if not provided)
         """
         client = DojoClient()
 
-        logger.info("Connecting to trial at %s as agent '%s'", gateway_url, agent_id)
+        # Dashboard mode: discover trials, build gateway URL
+        if dashboard_url:
+            logger.info("Discovering trials from dashboard at %s", dashboard_url)
+            gateways = await client.list_gateways(dashboard_url)
+
+            if not gateways:
+                logger.error("No trials available on dashboard")
+                return
+
+            # Use specified trial_id or pick first available
+            if trial_id:
+                matching = [g for g in gateways if g.trial_id == trial_id]
+                if not matching:
+                    logger.error(
+                        "Trial '%s' not found. Available: %s",
+                        trial_id,
+                        [g.trial_id for g in gateways],
+                    )
+                    return
+                selected = matching[0]
+            else:
+                selected = gateways[0]
+                logger.info(
+                    "Auto-selected trial: %s (of %d available)",
+                    selected.trial_id,
+                    len(gateways),
+                )
+
+            # Build full gateway URL
+            gateway_url = f"{dashboard_url.rstrip('/')}{selected.endpoint}"
+
+        if not gateway_url:
+            raise ValueError("Either --gateway or --dashboard must be provided")
+
+        logger.info("Connecting to %s as agent '%s'", gateway_url, agent_id)
 
         async with client.connect_trial(
             gateway_url=gateway_url,
@@ -165,11 +209,36 @@ class SimpleBettingAgent:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Simple external betting agent")
-    parser.add_argument(
+    parser = argparse.ArgumentParser(
+        description="Simple external betting agent",
+        epilog="""
+Examples:
+  Standalone mode:
+    python simple_agent.py --gateway http://localhost:8080 --agent-id my-agent
+
+  Dashboard mode (auto-select trial):
+    python simple_agent.py --dashboard http://localhost:8000 --agent-id my-agent
+
+  Dashboard mode (specific trial):
+    python simple_agent.py --dashboard http://localhost:8000 --trial-id abc123 --agent-id my-agent
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Connection mode (mutually exclusive)
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--gateway",
-        default="http://localhost:8080",
-        help="Gateway URL (default: http://localhost:8080)",
+        help="Gateway URL for standalone mode (e.g., http://localhost:8080)",
+    )
+    mode_group.add_argument(
+        "--dashboard",
+        help="Dashboard URL for dashboard mode (e.g., http://localhost:8000)",
+    )
+
+    parser.add_argument(
+        "--trial-id",
+        help="Trial ID (dashboard mode only, auto-discovered if not provided)",
     )
     parser.add_argument(
         "--agent-id",
@@ -195,6 +264,13 @@ async def main():
     )
     args = parser.parse_args()
 
+    # Validate args
+    if not args.gateway and not args.dashboard:
+        parser.error("Either --gateway or --dashboard must be provided")
+
+    if args.trial_id and not args.dashboard:
+        parser.error("--trial-id can only be used with --dashboard")
+
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
@@ -204,7 +280,12 @@ async def main():
     )
 
     try:
-        await agent.run(args.gateway, args.agent_id)
+        await agent.run(
+            agent_id=args.agent_id,
+            gateway_url=args.gateway,
+            dashboard_url=args.dashboard,
+            trial_id=args.trial_id,
+        )
     except KeyboardInterrupt:
         logger.info("Agent stopped by user")
     except Exception as e:
