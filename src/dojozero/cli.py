@@ -372,6 +372,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
     )
+    serve_parser.add_argument(
+        "--enable-gateway",
+        dest="enable_gateway",
+        action="store_true",
+        help="Enable HTTP gateway for external agents. Routes /api/gateway/{trial_id}/* to trials.",
+    )
 
     # Arena Server command
     arena_parser = subparsers.add_parser(
@@ -1787,6 +1793,12 @@ async def _serve_command(args: argparse.Namespace) -> int:
     else:
         LOGGER.info("No trace backend configured - traces will not be exported")
 
+    enable_gateway = getattr(args, "enable_gateway", False)
+    if enable_gateway:
+        LOGGER.info(
+            "Gateway API enabled at http://%s:%d/api/gateway/{trial_id}/", host, port
+        )
+
     await run_dashboard_server(
         orchestrator=orchestrator,
         scheduler_store=scheduler_store,
@@ -1799,6 +1811,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         initial_trial_sources=initial_trial_sources if initial_trial_sources else None,
         auto_resume=auto_resume,
         stale_threshold_hours=stale_threshold_hours,
+        enable_gateway=enable_gateway,
     )
     return 0
 

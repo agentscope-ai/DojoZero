@@ -25,6 +25,10 @@ from ._scheduler import (
     TrialSourceConfig,
     TrialSourceStore,
 )
+from ._gateway_routing import (
+    GatewayRouter,
+    create_gateway_routes,
+)
 from ._server import (
     DashboardServerState,
     create_dashboard_app,
@@ -61,6 +65,9 @@ __all__ = [
     "run_dashboard_server",
     "DashboardServerState",
     "get_server_state",
+    # Gateway Routing
+    "GatewayRouter",
+    "create_gateway_routes",
     # Trial Manager
     "TrialManager",
     "QueuedTrial",
