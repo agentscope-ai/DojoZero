@@ -72,10 +72,12 @@ exclude = [
 extraPaths = ["packages/dojozero-client/src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "packages/dojozero-client/tests"]
+pythonpath = ["packages/dojozero-client/src"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+addopts = "--import-mode=importlib"
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
 ]
