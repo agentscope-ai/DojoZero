@@ -7,7 +7,11 @@ This script demonstrates the complete flow:
 3. Shows events flowing and bets being placed
 
 Usage:
+    # Standalone mode (direct gateway connection):
     python demo_e2e.py
+
+    # Dashboard mode (discovery + routing):
+    python demo_e2e.py --dashboard
 
     # If you have a proxy configured, bypass it for localhost:
     NO_PROXY=localhost,127.0.0.1 python demo_e2e.py
@@ -20,11 +24,15 @@ import os
 # Bypass proxy for localhost connections
 os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
 
+import argparse
 import asyncio
 import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 # Add the project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -45,21 +53,23 @@ logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
 logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
 
 
-async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Event]:
-    """Start a mock gateway server for demo purposes.
+def create_mock_gateway_app(trial_id: str = "demo-trial"):
+    """Create a mock gateway FastAPI app.
+
+    Args:
+        trial_id: Trial ID for this gateway
 
     Returns:
-        Tuple of (server_task, ready_event)
+        FastAPI app and state dict
     """
-    import uvicorn
     from fastapi import FastAPI, Request, HTTPException
     from fastapi.responses import StreamingResponse
-    import json
 
-    app = FastAPI(title="Demo Gateway")
+    app = FastAPI(title=f"Demo Gateway ({trial_id})")
 
     # Mock state
     state = {
+        "trial_id": trial_id,
         "agents": {},
         "sequence": 0,
         "betting_open": True,
@@ -77,13 +87,14 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
             "registered_at": datetime.now(timezone.utc).isoformat(),
         }
         logger.info(
-            "Agent '%s' registered with balance %.2f",
+            "[%s] Agent '%s' registered with balance %.2f",
+            trial_id,
             agent_id,
             state["agents"][agent_id]["balance"],
         )
         return {
             "agentId": agent_id,
-            "trialId": "demo-trial",
+            "trialId": trial_id,
             "balance": state["agents"][agent_id]["balance"],
             "registeredAt": state["agents"][agent_id]["registered_at"],
         }
@@ -91,10 +102,10 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
     @app.get("/api/v1/trial")
     async def get_trial():
         return {
-            "trialId": "demo-trial",
+            "trialId": trial_id,
             "phase": "running",
             "sportType": "nba",
-            "gameId": "demo-game",
+            "gameId": f"game-{trial_id}",
             "homeTeam": "Los Angeles Lakers",
             "awayTeam": "Boston Celtics",
             "gameTime": datetime.now(timezone.utc).isoformat(),
@@ -114,7 +125,7 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
                 },
             )
         return {
-            "eventId": "demo-game",
+            "eventId": f"game-{trial_id}",
             "homeProbability": state["home_prob"],
             "awayProbability": state["away_prob"],
             "bettingOpen": state["betting_open"],
@@ -170,7 +181,12 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
         }
         state["bets"].append(bet)
         logger.info(
-            "Bet placed: %s on %s for %.2f (prob=%.2f)", bet_id, selection, amount, prob
+            "[%s] Bet placed: %s on %s for %.2f (prob=%.2f)",
+            trial_id,
+            bet_id,
+            selection,
+            amount,
+            prob,
         )
         return bet
 
@@ -215,6 +231,8 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
 
         async def event_generator():
             """Generate mock events."""
+            import json
+
             events = [
                 {"event_type": "event.game_start", "description": "Game started"},
                 {
@@ -269,7 +287,7 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
                     state["away_prob"] = event_data["away_prob"]
 
                 envelope = {
-                    "trialId": "demo-trial",
+                    "trialId": trial_id,
                     "sequence": state["sequence"],
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "payload": event_data,
@@ -292,18 +310,28 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "trial_id": "demo-trial"}
+        return {"status": "ok", "trial_id": trial_id}
 
-    # Create server
+    return app, state
+
+
+async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Event, Any]:
+    """Start a mock gateway server for demo purposes (standalone mode).
+
+    Returns:
+        Tuple of (server_task, ready_event, server)
+    """
+    import uvicorn
+
+    app, _state = create_mock_gateway_app("demo-trial")
+
     config = uvicorn.Config(app=app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
 
     ready_event = asyncio.Event()
 
     async def serve():
-        # Start the server in background
         serve_task = asyncio.create_task(server.serve())
-        # Wait for server to start
         while not server.started:
             await asyncio.sleep(0.1)
         ready_event.set()
@@ -314,11 +342,179 @@ async def run_mock_gateway(port: int = 8080) -> tuple[asyncio.Task, asyncio.Even
     return task, ready_event, server
 
 
-async def run_demo_agent(gateway_url: str, agent_id: str):
-    """Run a demo agent that connects and places bets."""
+async def run_mock_dashboard(
+    port: int = 8000, trial_ids: list[str] | None = None
+) -> tuple[asyncio.Task, asyncio.Event, Any]:
+    """Start a mock dashboard server with gateway routing (dashboard mode).
+
+    This simulates `dojo0 serve --enable-gateway` by providing:
+    - GET /api/gateway - List available trials
+    - /api/gateway/{trial_id}/... - Route to trial's gateway
+
+    Returns:
+        Tuple of (server_task, ready_event, server)
+    """
+    import uvicorn
+    from fastapi import FastAPI, Request, HTTPException
+    from fastapi.responses import StreamingResponse, JSONResponse
+
+    if trial_ids is None:
+        trial_ids = ["trial-alpha", "trial-beta"]
+
+    # Create gateway apps for each trial
+    trial_apps: dict[str, tuple[FastAPI, dict]] = {}
+    for tid in trial_ids:
+        app, state = create_mock_gateway_app(tid)
+        trial_apps[tid] = (app, state)
+
+    # Main dashboard app
+    dashboard = FastAPI(title="Demo Dashboard")
+
+    @dashboard.get("/api/gateway")
+    async def list_gateways():
+        """List available trial gateways."""
+        gateways = [
+            {"trial_id": tid, "endpoint": f"/api/gateway/{tid}"} for tid in trial_ids
+        ]
+        return {"gateways": gateways, "count": len(gateways)}
+
+    @dashboard.api_route(
+        "/api/gateway/{trial_id}/{path:path}",
+        methods=["GET", "POST", "PUT", "DELETE"],
+    )
+    async def route_to_gateway(trial_id: str, path: str, request: Request):
+        """Route requests to the appropriate trial gateway."""
+        if trial_id not in trial_apps:
+            raise HTTPException(status_code=404, detail=f"Trial {trial_id} not found")
+
+        app, _state = trial_apps[trial_id]
+
+        # Build the internal path
+        internal_path = f"/{path}"
+        if request.query_params:
+            internal_path += f"?{request.query_params}"
+
+        # Handle the request through the trial's app using httpx ASGI transport
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            # Forward the request
+            body = await request.body()
+            headers = dict(request.headers)
+            headers.pop("host", None)
+
+            response = await client.request(
+                method=request.method,
+                url=internal_path,
+                headers=headers,
+                content=body,
+            )
+
+            # Check if it's an SSE stream
+            if "text/event-stream" in response.headers.get("content-type", ""):
+                # For SSE, we need to stream the response
+                async def stream_sse():
+                    async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=app), base_url="http://test"
+                    ) as stream_client:
+                        async with stream_client.stream(
+                            method=request.method,
+                            url=internal_path,
+                            headers=headers,
+                        ) as stream_response:
+                            async for chunk in stream_response.aiter_bytes():
+                                yield chunk
+
+                return StreamingResponse(
+                    stream_sse(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                    },
+                )
+
+            return JSONResponse(
+                content=response.json() if response.content else None,
+                status_code=response.status_code,
+            )
+
+    @dashboard.get("/health")
+    async def health():
+        return {"status": "ok", "mode": "dashboard", "trials": trial_ids}
+
+    config = uvicorn.Config(
+        app=dashboard, host="127.0.0.1", port=port, log_level="error"
+    )
+    server = uvicorn.Server(config)
+
+    ready_event = asyncio.Event()
+
+    async def serve():
+        serve_task = asyncio.create_task(server.serve())
+        while not server.started:
+            await asyncio.sleep(0.1)
+        ready_event.set()
+        logger.info(
+            "Dashboard started at http://127.0.0.1:%d with trials: %s", port, trial_ids
+        )
+        await serve_task
+
+    task = asyncio.create_task(serve())
+    return task, ready_event, server
+
+
+async def run_demo_agent_standalone(gateway_url: str, agent_id: str):
+    """Run a demo agent in standalone mode (direct gateway connection)."""
     from dojozero_client import DojoClient
 
     client = DojoClient()
+
+    logger.info("[Standalone] Agent connecting to %s...", gateway_url)
+    await _run_agent_session(client, gateway_url, agent_id)
+
+
+async def run_demo_agent_dashboard(dashboard_url: str, agent_id: str):
+    """Run a demo agent in dashboard mode (discovery + routing)."""
+    from dojozero_client import DojoClient
+
+    client = DojoClient(dashboard_urls=[dashboard_url])
+
+    # Step 1: Discover available trials
+    logger.info("[Dashboard] Discovering trials from %s...", dashboard_url)
+    gateways = await client.discover_trials()
+
+    print("\n" + "=" * 60)
+    print("TRIAL DISCOVERY")
+    print("=" * 60)
+    print(f"Found {len(gateways)} trial(s):")
+    for g in gateways:
+        print(f"  - {g.trial_id}: {g.url}")
+    print("=" * 60 + "\n")
+
+    if not gateways:
+        logger.error("No trials available")
+        return
+
+    # Step 2: Select a trial (pick first one for demo)
+    selected = gateways[0]
+    logger.info(
+        "[Dashboard] Selected trial: %s (of %d available)",
+        selected.trial_id,
+        len(gateways),
+    )
+
+    # Step 3: Connect using discovered URL
+    gateway_url = selected.url
+    if not gateway_url:
+        logger.error("Selected trial has no URL")
+        return
+    logger.info("[Dashboard] Connecting via %s...", gateway_url)
+    await _run_agent_session(client, gateway_url, agent_id)
+
+
+async def _run_agent_session(client: Any, gateway_url: str, agent_id: str):
+    """Common agent session logic for both modes."""
 
     logger.info("Agent connecting to %s...", gateway_url)
 
@@ -387,22 +583,22 @@ async def run_demo_agent(gateway_url: str, agent_id: str):
         print("=" * 60)
 
 
-async def main():
-    """Run the end-to-end demo."""
+async def main_standalone():
+    """Run standalone mode demo (direct gateway connection)."""
     print("=" * 60)
-    print("DojoZero External Agent API Demo")
+    print("DojoZero External Agent API Demo - STANDALONE MODE")
     print("=" * 60)
     print()
     print("This demo shows:")
     print("  1. Gateway server starting with mock trial")
-    print("  2. External agent connecting via SDK")
+    print("  2. External agent connecting directly via SDK")
     print("  3. Real-time event streaming (SSE)")
     print("  4. Agent placing bets based on events")
     print()
     print("=" * 60)
     print()
 
-    gateway_port = 18080  # Use higher port to avoid conflicts
+    gateway_port = 18080
     gateway_url = f"http://127.0.0.1:{gateway_port}"
     agent_id = "demo-agent"
 
@@ -411,38 +607,23 @@ async def main():
     gateway_task, ready_event, server = await run_mock_gateway(port=gateway_port)
 
     try:
-        # Wait for gateway to be ready
         await asyncio.wait_for(ready_event.wait(), timeout=5.0)
+        await asyncio.sleep(0.5)
 
-        # Give server a moment to fully initialize
-        await asyncio.sleep(1.0)
-
-        # Test health endpoint
-        import httpx
-
+        # Health check
         async with httpx.AsyncClient() as test_client:
-            try:
-                resp = await test_client.get(f"{gateway_url}/health")
-                logger.info(
-                    "Health check response: status=%d, body=%s",
-                    resp.status_code,
-                    resp.text,
-                )
-            except Exception as e:
-                logger.error("Health check failed: %s", e)
-                raise
+            resp = await test_client.get(f"{gateway_url}/health")
+            logger.info("Health check: %s", resp.json())
 
         # Run the agent
-        await run_demo_agent(gateway_url, agent_id)
+        await run_demo_agent_standalone(gateway_url, agent_id)
 
     except asyncio.TimeoutError:
         logger.error("Gateway failed to start")
     except KeyboardInterrupt:
         logger.info("Demo interrupted")
     finally:
-        # Graceful shutdown - signal server to stop
         server.should_exit = True
-        # Wait for server to finish (with timeout)
         try:
             await asyncio.wait_for(gateway_task, timeout=2.0)
         except asyncio.TimeoutError:
@@ -455,8 +636,91 @@ async def main():
     print("\nDemo finished!")
 
 
-if __name__ == "__main__":
+async def main_dashboard():
+    """Run dashboard mode demo (discovery + routing)."""
+    print("=" * 60)
+    print("DojoZero External Agent API Demo - DASHBOARD MODE")
+    print("=" * 60)
+    print()
+    print("This demo shows:")
+    print("  1. Dashboard server starting with multiple mock trials")
+    print("  2. External agent discovering trials via SDK")
+    print("  3. Agent connecting through dashboard routing")
+    print("  4. Real-time event streaming (SSE)")
+    print("  5. Agent placing bets based on events")
+    print()
+    print("=" * 60)
+    print()
+
+    dashboard_port = 18000
+    dashboard_url = f"http://127.0.0.1:{dashboard_port}"
+    agent_id = "demo-agent"
+
+    # Start dashboard with multiple trials
+    logger.info("Starting mock dashboard server with multiple trials...")
+    dashboard_task, ready_event, server = await run_mock_dashboard(
+        port=dashboard_port, trial_ids=["trial-alpha", "trial-beta"]
+    )
+
     try:
-        asyncio.run(main())
+        await asyncio.wait_for(ready_event.wait(), timeout=5.0)
+        await asyncio.sleep(0.5)
+
+        # Health check
+        async with httpx.AsyncClient() as test_client:
+            resp = await test_client.get(f"{dashboard_url}/health")
+            logger.info("Health check: %s", resp.json())
+
+        # Run the agent with discovery
+        await run_demo_agent_dashboard(dashboard_url, agent_id)
+
+    except asyncio.TimeoutError:
+        logger.error("Dashboard failed to start")
+    except KeyboardInterrupt:
+        logger.info("Demo interrupted")
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(dashboard_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            dashboard_task.cancel()
+            try:
+                await dashboard_task
+            except asyncio.CancelledError:
+                pass
+
+    print("\nDemo finished!")
+
+
+def main():
+    """Parse args and run the appropriate demo."""
+    parser = argparse.ArgumentParser(
+        description="End-to-end demo of the External Agent API",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Standalone mode (direct gateway connection):
+  python demo_e2e.py
+
+  # Dashboard mode (discovery + routing):
+  python demo_e2e.py --dashboard
+        """,
+    )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Run in dashboard mode (discovery + routing)",
+    )
+    args = parser.parse_args()
+
+    try:
+        if args.dashboard:
+            asyncio.run(main_dashboard())
+        else:
+            asyncio.run(main_standalone())
     except KeyboardInterrupt:
         print("\nInterrupted")
+
+
+if __name__ == "__main__":
+    main()
