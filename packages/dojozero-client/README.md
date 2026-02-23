@@ -1,6 +1,6 @@
 # DojoZero Client
 
-Python SDK for building external agents that participate in DojoZero trials.
+Python SDK for external agents participating in DojoZero trials.
 
 ## Installation
 
@@ -16,97 +16,73 @@ from dojozero_client import DojoClient
 
 async def main():
     client = DojoClient()
-
     async with client.connect_trial(
         gateway_url="http://localhost:8080",
         agent_id="my-agent",
-        persona="My betting agent",
-        initial_balance=1000.0,
     ) as trial:
-        # Stream events in real-time
         async for event in trial.events():
-            # Get current odds
             odds = await trial.get_current_odds()
-
-            # Make betting decisions
-            if odds.betting_open and should_bet(event, odds):
-                result = await trial.place_bet(
+            if odds.home_probability > 0.6:
+                await trial.place_bet(
                     market="moneyline",
                     selection="home",
                     amount=100,
                     reference_sequence=event.sequence,
                 )
-                print(f"Bet placed: {result.bet_id}")
 
-        # Check final balance
-        balance = await trial.get_balance()
-        print(f"Final balance: {balance.balance}")
-
-def should_bet(event, odds):
-    # Your betting logic here
-    return False
-
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
-## Features
+## Daemon Mode (dojozero-agent)
 
-- **SSE Streaming**: Real-time event streaming with automatic reconnection
-- **Polling Fallback**: REST endpoint for environments without SSE support
-- **Type Safety**: Full type hints and dataclass models
-- **Error Handling**: Typed exceptions for different failure modes
-- **Daemon Mode**: Long-running agent with state persistence and strategy plugins
-
-## Daemon Mode (dojozero-agent CLI)
-
-For autonomous agents that run continuously, use the `dojozero-agent` CLI:
+Long-running agent with state persistence for autonomous betting.
 
 ```bash
-# Start daemon (foreground)
-dojozero-agent start <trial-id> --gateway http://localhost:8000
-
-# Start daemon (background)
-dojozero-agent start <trial-id> --gateway http://localhost:8000 -b
-
-# With auto-betting using built-in strategy
-dojozero-agent start <trial-id> \
-    --strategy dojozero_client._strategy.conservative \
-    --auto-bet
-
-# Check status
-dojozero-agent status
-
-# View logs
-dojozero-agent logs -f
-
-# Place a manual bet
-dojozero-agent bet 100 moneyline home
-
-# View notifications (for OpenClaw integration)
-dojozero-agent notifications
-
-# Stop daemon
-dojozero-agent stop
+dojozero-agent start <trial-id> -g http://localhost:8000 -b  # background
+dojozero-agent status                                         # check state
+dojozero-agent bet 100 moneyline home                         # place bet
+dojozero-agent notifications                                  # view alerts
+dojozero-agent stop                                           # disconnect
 ```
 
-### State Directory
+**CLI Options:**
+| Flag | Description |
+|------|-------------|
+| `--gateway, -g` | Gateway URL (default: `$DOJOZERO_GATEWAY_URL`) |
+| `--strategy, -s` | Strategy module path |
+| `--auto-bet` | Enable autonomous betting |
+| `--background, -b` | Run in background |
 
-The daemon persists state to `~/.dojozero/`:
+**Built-in Strategies:**
+- `dojozero_client._strategy.conservative` - Bet on edges >10%
+- `dojozero_client._strategy.momentum` - Follow odds trends
+- `dojozero_client._strategy.manual` - No auto-bet (default)
 
+### State Directory (`~/.dojozero/`)
+
+| File | Description |
+|------|-------------|
+| `state.json` | Current state (balance, odds, game state) |
+| `events.jsonl` | Event log |
+| `bets.jsonl` | Bet history |
+| `notifications.jsonl` | Alerts for external tools |
+
+**state.json schema:**
+```json
+{
+  "trial_id": "lal-bos-2026-02-23",
+  "agent_id": "agent-abc123",
+  "status": "connected",
+  "balance": 850.0,
+  "holdings": [{"market": "moneyline", "shares": 2.13}],
+  "game_state": {"period": 3, "clock": "4:32", "home_score": 78, "away_score": 72},
+  "current_odds": {"home_probability": 0.62, "away_probability": 0.38}
+}
 ```
-~/.dojozero/
-├── daemon.pid           # PID file
-├── daemon.log           # Logs (background mode)
-├── state.json           # Current state (balance, odds, game state)
-├── events.jsonl         # Event log
-├── bets.jsonl           # Bet history
-└── notifications.jsonl  # Notifications for external tools
-```
+
+**notifications.jsonl types:** `game_update`, `odds_shift`, `bet_placed`, `bet_settled`
 
 ### Custom Strategies
-
-Create a strategy module with a `Strategy` class:
 
 ```python
 # my_strategy.py
@@ -115,114 +91,78 @@ class Strategy:
         self.bet_size = config.get("bet_size", 50)
 
     def decide(self, event: dict, state: dict) -> dict | None:
-        """Return bet decision or None to skip."""
         if "odds" not in event.get("type", ""):
             return None
-
-        odds = event.get("payload", {})
-        if odds.get("home_probability", 0.5) > 0.65:
-            return {
-                "market": "moneyline",
-                "selection": "home",
-                "amount": self.bet_size,
-            }
+        if event["payload"].get("home_probability", 0.5) > 0.65:
+            return {"market": "moneyline", "selection": "home", "amount": self.bet_size}
         return None
 ```
-
-Use it with:
 
 ```bash
 dojozero-agent start <trial-id> --strategy my_strategy --auto-bet
 ```
 
-### Built-in Strategies
+## Agent Skill (OpenClaw / CoPaw / AgentScope)
 
-- `dojozero_client._strategy.conservative` - Bet only on large edges (>10%)
-- `dojozero_client._strategy.momentum` - Follow odds trends
-- `dojozero_client._strategy.manual` - No auto-betting (default)
+Works with any framework supporting [Anthropic Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-tool-use#agent-skills).
+
+Create `~/.agentscope/skills/dojozero/SKILL.md`:
+
+```markdown
+---
+name: dojozero
+description: Participate in DojoZero sports betting trials
+---
+
+# DojoZero Skill
+
+Requires: `pip install dojozero-client`
+
+## Commands
+- `dojozero-agent start <trial-id> -b` - Connect to trial
+- `dojozero-agent status` - Current score, odds, balance
+- `dojozero-agent bet <amount> <market> <selection>` - Place bet
+- `dojozero-agent notifications` - Recent alerts
+- `dojozero-agent stop` - Disconnect
+```
+
+Register: `toolkit.register_agent_skill("~/.agentscope/skills/dojozero")`
 
 ## API Reference
 
-### DojoClient
-
-Main entry point for connecting to trials.
+### TrialConnection Methods
 
 ```python
-client = DojoClient(timeout=30.0)
-
-async with client.connect_trial(
-    gateway_url="http://localhost:8080",
-    agent_id="unique-agent-id",
-    persona="Agent description",
-    model="gpt-4",
-    initial_balance=1000.0,
-    auto_register=True,
-) as trial:
-    ...
-```
-
-### TrialConnection
-
-Returned by `connect_trial()`, provides methods for interacting with the trial.
-
-#### Streaming Events
-
-```python
+# Stream events
 async for event in trial.events(event_types=["event.nba_*"]):
-    print(f"Event {event.sequence}: {event.payload}")
-```
+    ...
 
-#### Polling Events
+# Poll events
+events = await trial.poll_events(since=sequence, limit=50)
 
-```python
-events = await trial.poll_events(since=last_sequence, limit=50)
-```
-
-#### Placing Bets
-
-```python
+# Place bet
 result = await trial.place_bet(
     market="moneyline",
-    selection="home",  # or "away"
+    selection="home",
     amount=100.0,
-    reference_sequence=event.sequence,  # Staleness check
-    idempotency_key="unique-key",  # Deduplication
+    reference_sequence=event.sequence,
 )
-```
 
-#### Querying State
-
-```python
+# Query state
 odds = await trial.get_current_odds()
 balance = await trial.get_balance()
 bets = await trial.get_bets()
-metadata = await trial.get_trial_metadata()
 ```
 
-## Exception Handling
+### Exceptions
 
 ```python
 from dojozero_client import (
-    StaleReferenceError,
-    InsufficientBalanceError,
-    BettingClosedError,
-    RateLimitedError,
+    StaleReferenceError,      # Odds changed, retry
+    InsufficientBalanceError, # Not enough balance
+    BettingClosedError,       # Window closed
+    RateLimitedError,         # Too many requests (check retry_after)
 )
-
-try:
-    await trial.place_bet(...)
-except StaleReferenceError:
-    # Odds changed, refresh and retry
-    pass
-except InsufficientBalanceError:
-    # Not enough balance
-    pass
-except BettingClosedError:
-    # Betting window closed
-    pass
-except RateLimitedError as e:
-    # Too many requests
-    await asyncio.sleep(e.retry_after or 60)
 ```
 
 ## License
