@@ -26,12 +26,16 @@ CONFIG_FILE_NAME = "config.yaml"
 CONFIG_DIR = Path.home() / ".dojozero"
 
 
+def _default_dashboard_urls() -> list[str]:
+    return []
+
+
 @dataclass
 class ClientConfig:
     """Configuration for DojoClient."""
 
     gateway_url: str = DEFAULT_GATEWAY_URL
-    dashboard_urls: list[str] = field(default_factory=list)
+    dashboard_urls: list[str] = field(default_factory=_default_dashboard_urls)
     timeout: float = 30.0
 
     @property

@@ -31,6 +31,11 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
 ]
+# Agent daemon mode (currently no extra deps, future-proofing)
+agent = []
+
+[project.scripts]
+dojozero-agent = "dojozero_client._cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dojozero_client"]

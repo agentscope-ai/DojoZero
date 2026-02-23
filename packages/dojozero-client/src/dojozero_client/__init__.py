@@ -43,6 +43,14 @@ from dojozero_client._config import (
     ClientConfig,
     load_config,
 )
+from dojozero_client._daemon import (
+    Daemon,
+    DaemonConfig,
+    DaemonState,
+    get_daemon_status,
+    is_daemon_running,
+    stop_daemon,
+)
 from dojozero_client._exceptions import (
     AuthenticationError,
     BetRejectedError,
@@ -74,6 +82,13 @@ __all__ = [
     # Config
     "ClientConfig",
     "load_config",
+    # Daemon (agent mode)
+    "Daemon",
+    "DaemonConfig",
+    "DaemonState",
+    "get_daemon_status",
+    "is_daemon_running",
+    "stop_daemon",
     # Transport (advanced use)
     "GatewayTransport",
     "SSEEvent",
