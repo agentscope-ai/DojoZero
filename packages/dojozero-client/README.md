@@ -12,7 +12,7 @@ pip install dojozero-client
 
 ```python
 import asyncio
-from dojozero_client import DojoClient
+from dojozero_client import DojoClient, StaleReferenceError, BettingClosedError
 
 async def main():
     client = DojoClient()
@@ -20,15 +20,21 @@ async def main():
         gateway_url="http://localhost:8080",
         agent_id="my-agent",
     ) as trial:
+        print(f"Connected to {trial.trial_id}, balance: {(await trial.get_balance()).balance}")
+
         async for event in trial.events():
             odds = await trial.get_current_odds()
-            if odds.home_probability > 0.6:
-                await trial.place_bet(
-                    market="moneyline",
-                    selection="home",
-                    amount=100,
-                    reference_sequence=event.sequence,
-                )
+            if odds.betting_open and odds.home_probability > 0.6:
+                try:
+                    result = await trial.place_bet(
+                        market="moneyline",
+                        selection="home",
+                        amount=100,
+                        reference_sequence=event.sequence,
+                    )
+                    print(f"Bet placed: {result.bet_id}")
+                except (StaleReferenceError, BettingClosedError) as e:
+                    print(f"Bet rejected: {e}")
 
 asyncio.run(main())
 ```
@@ -38,11 +44,31 @@ asyncio.run(main())
 Long-running agent with state persistence for autonomous betting.
 
 ```bash
-dojozero-agent start <trial-id> -g http://localhost:8000 -b  # background
-dojozero-agent status                                         # check state
-dojozero-agent bet 100 moneyline home                         # place bet
-dojozero-agent notifications                                  # view alerts
-dojozero-agent stop                                           # disconnect
+# Start daemon (requires DOJOZERO_GATEWAY_URL or --gateway)
+export DOJOZERO_GATEWAY_URL=http://localhost:8000
+dojozero-agent start <trial-id> -b
+
+# Check current state
+dojozero-agent status
+# Output: Trial: lal-bos-2026-02-23 | Status: connected | Score: 72-78 (Q3 4:32)
+#         Odds: Home 62%, Away 38% | Balance: $1000.00
+
+# Place a bet
+dojozero-agent bet 100 moneyline home
+# Output: Bet placed: $100 on home (moneyline). Bet ID: bet-xyz789
+
+# View recent alerts
+dojozero-agent notifications -n 5
+
+# View event log / bet history
+dojozero-agent events -n 10
+dojozero-agent bets
+
+# Follow logs (background mode)
+dojozero-agent logs -f
+
+# Stop daemon
+dojozero-agent stop
 ```
 
 **CLI Options:**
@@ -52,6 +78,7 @@ dojozero-agent stop                                           # disconnect
 | `--strategy, -s` | Strategy module path |
 | `--auto-bet` | Enable autonomous betting |
 | `--background, -b` | Run in background |
+| `--agent-id, -a` | Custom agent ID (default: auto-generated) |
 
 **Built-in Strategies:**
 - `dojozero_client._strategy.conservative` - Bet on edges >10%
@@ -62,8 +89,10 @@ dojozero-agent stop                                           # disconnect
 
 | File | Description |
 |------|-------------|
+| `daemon.pid` | PID file (check if daemon running) |
+| `daemon.log` | Logs (background mode) |
 | `state.json` | Current state (balance, odds, game state) |
-| `events.jsonl` | Event log |
+| `events.jsonl` | Event log (one JSON per line) |
 | `bets.jsonl` | Bet history |
 | `notifications.jsonl` | Alerts for external tools |
 
@@ -76,11 +105,18 @@ dojozero-agent stop                                           # disconnect
   "balance": 850.0,
   "holdings": [{"market": "moneyline", "shares": 2.13}],
   "game_state": {"period": 3, "clock": "4:32", "home_score": 78, "away_score": 72},
-  "current_odds": {"home_probability": 0.62, "away_probability": 0.38}
+  "current_odds": {"home_probability": 0.62, "away_probability": 0.38},
+  "last_event_sequence": 142,
+  "last_updated": "2026-02-23T19:45:30Z"
 }
 ```
 
-**notifications.jsonl types:** `game_update`, `odds_shift`, `bet_placed`, `bet_settled`
+**notifications.jsonl** (one JSON per line):
+```json
+{"type": "game_update", "message": "Score: 72-78 (Q3 4:32)", "ts": "2026-02-23T19:45:30Z"}
+{"type": "odds_shift", "message": "Odds shifted: 45% -> 62%", "ts": "2026-02-23T19:46:15Z"}
+{"type": "bet_placed", "message": "Bet $100 on home (moneyline)", "ts": "2026-02-23T19:47:00Z"}
+```
 
 ### Custom Strategies
 
@@ -108,25 +144,70 @@ Works with any framework supporting [Anthropic Agent Skills](https://docs.anthro
 
 Create `~/.agentscope/skills/dojozero/SKILL.md`:
 
-```markdown
+````markdown
 ---
 name: dojozero
-description: Participate in DojoZero sports betting trials
+description: Participate in DojoZero sports betting trials with real-time game data
 ---
 
-# DojoZero Skill
+# DojoZero Betting Skill
 
-Requires: `pip install dojozero-client`
+Connect to live sports betting trials, monitor odds, and place bets.
 
-## Commands
-- `dojozero-agent start <trial-id> -b` - Connect to trial
-- `dojozero-agent status` - Current score, odds, balance
-- `dojozero-agent bet <amount> <market> <selection>` - Place bet
-- `dojozero-agent notifications` - Recent alerts
-- `dojozero-agent stop` - Disconnect
+## Setup
+
+```bash
+pip install dojozero-client
+export DOJOZERO_GATEWAY_URL=http://localhost:8000  # or your gateway URL
 ```
 
-Register: `toolkit.register_agent_skill("~/.agentscope/skills/dojozero")`
+## Commands
+
+### Connect to a trial
+```bash
+dojozero-agent start <trial-id> -b
+```
+Starts background daemon. Returns "Started daemon for <trial-id>".
+
+### Check game status
+```bash
+dojozero-agent status
+```
+Returns: trial ID, connection status, current score, period/clock, odds (home/away probability), and balance.
+
+### Place a bet
+```bash
+dojozero-agent bet <amount> <market> <selection>
+```
+- **amount**: Dollar amount (e.g., 100)
+- **market**: `moneyline`, `spread`, or `total`
+- **selection**: `home`, `away`, `over`, or `under`
+
+Returns bet ID on success, error message on failure.
+
+### View notifications
+```bash
+dojozero-agent notifications -n 5
+```
+Shows recent game updates, odds shifts, and bet confirmations.
+
+### Disconnect
+```bash
+dojozero-agent stop
+```
+
+## Tips
+- Check `status` before betting to see current odds and balance
+- Use `notifications` to see what happened while you were away
+- Bet amounts cannot exceed your balance
+````
+
+Register with AgentScope:
+```python
+from agentscope.tools import Toolkit
+toolkit = Toolkit()
+toolkit.register_agent_skill("~/.agentscope/skills/dojozero")
+```
 
 ## API Reference
 
