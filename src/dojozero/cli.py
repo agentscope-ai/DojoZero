@@ -846,7 +846,8 @@ async def _start_gateway_server(
     from dojozero.gateway import create_gateway_app
     from dojozero.betting import BrokerOperator
 
-    # Get the trial runtime (access internal state)
+    # TODO: Refactor to use public API instead of accessing private members (_trials, _context).
+    # Add orchestrator.get_trial_context(trial_id) method to expose DataHub and BrokerOperator.
     runtime = orchestrator._trials.get(trial_id)
     if runtime is None:
         raise DojoZeroCLIError(f"Trial '{trial_id}' not found in orchestrator")
