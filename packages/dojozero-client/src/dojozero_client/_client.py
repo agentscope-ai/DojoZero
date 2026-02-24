@@ -14,6 +14,7 @@ from typing import Any, AsyncIterator
 from dojozero_client._exceptions import (
     ConnectionError,
     NotRegisteredError,
+    RegistrationError,
 )
 from dojozero_client._transport import GatewayTransport
 
@@ -579,15 +580,12 @@ class DojoClient:
                         agent_id,
                         trial_id,
                     )
-                except Exception as e:
-                    # Check if already registered (409)
-                    if "already" in str(e).lower():
-                        logger.info(
-                            "Agent %s already registered, continuing",
-                            agent_id,
-                        )
-                    else:
-                        raise
+                except RegistrationError:
+                    # 409 Conflict - agent already registered, continue
+                    logger.info(
+                        "Agent %s already registered, continuing",
+                        agent_id,
+                    )
 
             # Get trial info if not from registration
             if not trial_id:
