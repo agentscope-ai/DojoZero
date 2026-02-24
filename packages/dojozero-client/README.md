@@ -142,12 +142,21 @@ dojozero-agent start <trial-id> --strategy my_strategy --auto-bet
 
 Works with any framework supporting [Anthropic Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-tool-use#agent-skills).
 
-Create `~/.agentscope/skills/dojozero/SKILL.md`:
+Create `~/.openclaw/skills/dojozero/SKILL.md`:
 
 ````markdown
 ---
 name: dojozero
-description: Participate in DojoZero sports betting trials with real-time game data
+description: Participate in DojoZero sports betting trials. Use when user wants to join betting trials, check game status, place bets, or monitor odds.
+metadata:
+  clawdbot:
+    emoji: "🎲"
+    homepage: "https://github.com/anthropics/DojoZero"
+    requires:
+      bins: ["dojozero-agent"]
+      env: ["DOJOZERO_GATEWAY_URL"]
+    install:
+      pip: "dojozero-client"  # TODO: not published yet - install from source
 ---
 
 # DojoZero Betting Skill
@@ -157,7 +166,11 @@ Connect to live sports betting trials, monitor odds, and place bets.
 ## Setup
 
 ```bash
-pip install dojozero-client
+# TODO: Once published: pip install dojozero-client
+# For now, install from source:
+git clone https://github.com/anthropics/DojoZero.git
+pip install -e DojoZero/packages/dojozero-client
+
 export DOJOZERO_GATEWAY_URL=http://localhost:8000  # or your gateway URL
 ```
 
@@ -206,7 +219,7 @@ Register with AgentScope:
 ```python
 from agentscope.tools import Toolkit
 toolkit = Toolkit()
-toolkit.register_agent_skill("~/.agentscope/skills/dojozero")
+toolkit.register_agent_skill("~/.openclaw/skills/dojozero")
 ```
 
 ## API Reference
