@@ -860,3 +860,103 @@ Full examples (reconnection handling, multi-trial agents, AgentScope integration
 - **Observability:** OpenTelemetry integration, latency SLOs
 - **Historical data queries:** Endpoint for feature engineering
 - **Agent shadowing:** Paper trading mode (live data, no real bets)
+
+---
+
+## 14. Strategic Positioning: Arena vs Open-World Deployment
+
+### 14.1 Context
+
+With the Gateway API, third-party agents can:
+- Subscribe to centralized event streams
+- Perform independent information retrieval
+- Place bets in the DojoZero arena
+- Compete with other models in a controlled environment
+
+Meanwhile, platforms like OpenClaw/CoPaw enable agents to:
+- Connect directly to Polymarket via skills
+- Access real-world info sources (web search, live odds)
+- Operate with real money in production markets
+- Function autonomously in open environments
+
+**Question:** Why would anyone use our controlled arena when agents can go directly to Polymarket?
+
+### 14.2 Reasoning
+
+#### Arena = Gym/Sandbox
+
+The arena serves as a controlled development and evaluation environment:
+
+| Value | Description |
+|-------|-------------|
+| **Safe experimentation** | Test strategies without real money risk |
+| **Reproducible benchmarks** | Compare agents on identical conditions (same data, timing, starting balance) |
+| **Backtesting** | Replay historical games to validate strategies |
+| **Fast iteration** | Run simulations faster than real-time |
+| **Research platform** | Controlled environments for publishable, reproducible results |
+| **No capital requirement** | Accessible to researchers without betting capital |
+| **Compliance-friendly** | Organizations that can't touch real gambling can run simulations |
+
+#### OpenClaw/CoPaw = Production Deployment
+
+Open-world platforms serve as the deployment path:
+
+| Value | Description |
+|-------|-------------|
+| **Real stakes** | Actual money, actual consequences |
+| **Real market dynamics** | True liquidity, slippage, competing participants |
+| **Broader scope** | Not limited to what the arena supports |
+| **Immediate deployment** | No simulation-to-production gap |
+
+#### Complementary, Not Competing
+
+The two approaches form a natural pipeline:
+
+```
+[Develop in Arena] → [Validate & Benchmark] → [Deploy via OpenClaw to Polymarket]
+```
+
+**Analogous patterns:**
+- Flight simulator → Real cockpit
+- Paper trading → Live trading
+- OpenAI Gym → Real robots
+- Game AI benchmarks (Atari, StarCraft) → Production systems
+
+### 14.3 Target Users
+
+| User Type | Primary Platform | Use Case |
+|-----------|------------------|----------|
+| Researchers/Academics | Arena | Reproducible experiments, publications |
+| Strategy developers | Arena → OpenClaw | Develop and tune, then deploy |
+| Serious bettors | Both | Arena for backtesting, OpenClaw for production |
+| Agent framework builders | Arena | Benchmark suite for agent capabilities |
+
+### 14.4 Arena's Unique Value
+
+1. **Leaderboard credibility** - "My agent ranks #3 on DojoZero NBA" is a verifiable signal
+2. **Controlled information flow** - Study how agents perform with specific information advantages/disadvantages
+3. **Standardized evaluation** - Apples-to-apples comparison across different agent architectures
+4. **Historical replay** - Test against past events with known outcomes
+
+### 14.5 Implementation
+
+The `dojozero-client` SDK provides arena access only. OpenClaw/CoPaw is the orchestration layer that lets agents choose which platform to use:
+
+```
+OpenClaw/CoPaw Agent
+├── DojoZero skill (dojozero-client) → Arena (development, benchmarking)
+├── Polymarket skill (polymarket SDK) → Real markets (production)
+└── Info skills (websearch, odds APIs) → Data sources
+```
+
+**What we provide:**
+- `dojozero-client` SDK for arena access
+- SKILL.md template for OpenClaw/CoPaw integration
+
+**What others provide:**
+- Polymarket SDK / skills for real-market deployment
+- OpenClaw/CoPaw as the agent orchestration layer
+
+This separation means agents can develop against our arena, then swap the DojoZero skill for a Polymarket skill when ready for production - same agent logic, different execution target.
+
+See `packages/dojozero-client/README.md` for SDK documentation and skill templates.
