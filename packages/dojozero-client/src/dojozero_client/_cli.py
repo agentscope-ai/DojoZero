@@ -11,6 +11,11 @@ Usage:
 
 from __future__ import annotations
 
+import os
+
+# Ensure localhost connections bypass proxy
+os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
+
 import argparse
 import asyncio
 import json
@@ -56,16 +61,17 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     if args.background:
         # Start as background process
+        # Note: --state-dir is a global arg (before subcommand)
         cmd = [
             sys.executable,
             "-m",
             "dojozero_client._cli",
+            "--state-dir",
+            str(state_dir),
             "start",
             args.trial_id,
             "--gateway",
             config.gateway_url,
-            "--state-dir",
-            str(state_dir),
         ]
         if config.agent_id:
             cmd.extend(["--agent-id", config.agent_id])
@@ -78,6 +84,10 @@ def cmd_start(args: argparse.Namespace) -> int:
         state_dir.mkdir(parents=True, exist_ok=True)
         log_file = state_dir / "daemon.log"
 
+        # Inherit environment and ensure proxy bypass for localhost
+        env = os.environ.copy()
+        env.setdefault("NO_PROXY", "localhost,127.0.0.1")
+
         with open(log_file, "a") as f:
             subprocess.Popen(
                 cmd,
@@ -85,6 +95,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 stdout=f,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
+                env=env,
             )
         print(f"Started daemon for {args.trial_id} (background)")
         print(f"Logs: {log_file}")
@@ -208,8 +219,11 @@ def cmd_bet(args: argparse.Namespace) -> int:
         )
 
         if resp.status_code != 200:
-            error = resp.json().get("error", {})
-            print(f"Error: {error.get('message', resp.text)}", file=sys.stderr)
+            try:
+                error = resp.json().get("error", {})
+                print(f"Error: {error.get('message', resp.text)}", file=sys.stderr)
+            except Exception:
+                print(f"Error: {resp.status_code} - {resp.text}", file=sys.stderr)
             return 1
 
         data = resp.json()

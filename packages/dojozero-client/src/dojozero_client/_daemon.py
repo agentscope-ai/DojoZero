@@ -207,6 +207,7 @@ class Daemon:
             async with self.client.connect_trial(
                 gateway_url=self.config.gateway_url,
                 agent_id=self.config.agent_id,
+                initial_balance=1000.0,  # Default balance for new agents
             ) as trial:
                 # Initialize state
                 balance = await trial.get_balance()
