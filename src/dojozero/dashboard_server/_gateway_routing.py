@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
@@ -178,7 +179,7 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
 async def _forward_to_app(app: FastAPI, request: Request) -> Response:
     """Forward a request to a FastAPI app and return the response.
 
-    Handles both regular and streaming responses.
+    Uses httpx.ASGITransport for clean request forwarding.
 
     Args:
         app: Target FastAPI app
@@ -187,109 +188,64 @@ async def _forward_to_app(app: FastAPI, request: Request) -> Response:
     Returns:
         Response from the app
     """
+    # Build path with query string
+    path = request.scope["path"]
+    if request.query_params:
+        path = f"{path}?{request.query_params}"
 
-    # For SSE endpoints, we need to handle streaming differently
+    # Prepare headers (remove host to avoid conflicts)
+    headers = dict(request.headers)
+    headers.pop("host", None)
+
+    body = await request.body()
+
     # Check if this is an SSE request
     accept_header = request.headers.get("accept", "")
     is_sse = "text/event-stream" in accept_header
 
     if is_sse:
-        # Handle SSE streaming
-        return await _forward_sse_request(app, request)
+        # For SSE, stream the response
+        async def stream_sse():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),  # type: ignore[arg-type]
+                base_url="http://internal",
+            ) as client:
+                async with client.stream(
+                    method=request.method,
+                    url=path,
+                    headers=headers,
+                    content=body if body else None,
+                ) as response:
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
 
-    # For non-streaming requests, use the ASGI interface directly
-    response_started = False
-    response_headers: list[tuple[bytes, bytes]] = []
-    response_body: list[bytes] = []
-    status_code = 200
+        return StreamingResponse(
+            stream_sse(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
-    async def receive():
-        body = await request.body()
-        return {"type": "http.request", "body": body, "more_body": False}
+    # For regular requests, forward and return response
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),  # type: ignore[arg-type]
+        base_url="http://internal",
+    ) as client:
+        response = await client.request(
+            method=request.method,
+            url=path,
+            headers=headers,
+            content=body if body else None,
+        )
 
-    async def send(message):
-        nonlocal response_started, status_code, response_headers
-
-        if message["type"] == "http.response.start":
-            response_started = True
-            status_code = message["status"]
-            response_headers = message.get("headers", [])
-        elif message["type"] == "http.response.body":
-            body = message.get("body", b"")
-            if body:
-                response_body.append(body)
-
-    # Call the app
-    await app(request.scope, receive, send)
-
-    # Build response
-    headers = {k.decode(): v.decode() for k, v in response_headers if k and v}
-
-    return Response(
-        content=b"".join(response_body),
-        status_code=status_code,
-        headers=headers,
-    )
-
-
-async def _forward_sse_request(app: FastAPI, request: Request) -> StreamingResponse:
-    """Forward an SSE request and return a streaming response.
-
-    Args:
-        app: Target FastAPI app
-        request: SSE request to forward
-
-    Returns:
-        StreamingResponse that streams events
-    """
-    import asyncio
-
-    # Queue for collecting SSE events
-    event_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
-
-    async def receive():
-        body = await request.body()
-        return {"type": "http.request", "body": body, "more_body": False}
-
-    async def send(message):
-        if message["type"] == "http.response.start":
-            # We handle headers separately in StreamingResponse
-            pass
-        elif message["type"] == "http.response.body":
-            body = message.get("body", b"")
-            more_body = message.get("more_body", False)
-            if body:
-                await event_queue.put(body)
-            if not more_body:
-                await event_queue.put(None)  # Signal end of stream
-
-    async def stream_generator():
-        # Start the app in a background task
-        task = asyncio.create_task(app(request.scope, receive, send))
-
-        try:
-            while True:
-                chunk = await event_queue.get()
-                if chunk is None:
-                    break
-                yield chunk
-        finally:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-
-    return StreamingResponse(
-        stream_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            headers=dict(response.headers),
+        )
 
 
 __all__ = [

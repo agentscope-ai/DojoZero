@@ -1643,7 +1643,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
-def _list_builders_command(_args: argparse.Namespace) -> int:
+def _list_builders_command(_: argparse.Namespace) -> int:
     _import_modules(DEFAULT_IMPORTS)
 
     builders = list_trial_builders()
