@@ -142,7 +142,11 @@ dojozero-agent start <trial-id> --strategy my_strategy --auto-bet
 
 Works with any framework supporting [Anthropic Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-tool-use#agent-skills).
 
-Create `~/.openclaw/skills/dojozero/SKILL.md`:
+Create `SKILL.md` in your agent framework's skill directory:
+- **OpenClaw**: `~/.openclaw/skills/dojozero/SKILL.md`
+- **AgentScope/CoPaw**: `~/.agentscope/skills/dojozero/SKILL.md`
+
+(Both use the same SKILL.md format - just different paths)
 
 ````markdown
 ---
@@ -215,11 +219,14 @@ dojozero-agent stop
 - Bet amounts cannot exceed your balance
 ````
 
-Register with AgentScope:
+Register with your agent framework:
 ```python
+# AgentScope / CoPaw
 from agentscope.tools import Toolkit
 toolkit = Toolkit()
-toolkit.register_agent_skill("~/.openclaw/skills/dojozero")
+toolkit.register_agent_skill("~/.agentscope/skills/dojozero")
+
+# OpenClaw loads skills automatically from ~/.openclaw/skills/
 ```
 
 ## API Reference
