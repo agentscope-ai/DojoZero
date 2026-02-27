@@ -33,6 +33,53 @@ from typing import Any
 
 LOGGER = logging.getLogger("dojozero.sync_service.redis")
 
+
+def _make_json_serializable(obj: Any) -> Any:
+    """Recursively convert an object to JSON-serializable form.
+
+    Handles:
+    - Pydantic models (via model_dump)
+    - Objects with to_dict method
+    - Dataclasses (via __dict__)
+    - Nested dicts and lists
+    - Datetime objects
+    """
+    if obj is None:
+        return None
+
+    # Handle Pydantic models
+    if hasattr(obj, "model_dump"):
+        return _make_json_serializable(obj.model_dump())
+
+    # Handle objects with to_dict method
+    if hasattr(obj, "to_dict") and callable(obj.to_dict):
+        return _make_json_serializable(obj.to_dict())
+
+    # Handle dataclasses
+    if hasattr(obj, "__dataclass_fields__"):
+        return _make_json_serializable(
+            {k: getattr(obj, k) for k in obj.__dataclass_fields__}
+        )
+
+    # Handle datetime objects
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+
+    # Handle dicts - recursively process values
+    if isinstance(obj, dict):
+        return {k: _make_json_serializable(v) for k, v in obj.items()}
+
+    # Handle lists/tuples - recursively process items
+    if isinstance(obj, (list, tuple)):
+        return [_make_json_serializable(item) for item in obj]
+
+    # Handle sets
+    if isinstance(obj, set):
+        return [_make_json_serializable(item) for item in obj]
+
+    # Primitive types (str, int, float, bool, None) pass through
+    return obj
+
 # Default Redis URL
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
@@ -273,10 +320,11 @@ class RedisClient:
         if not self._connected:
             return
         try:
+            serializable_info = _make_json_serializable(info)
             await self._client.hset(
                 f"{self.prefix}trial_info",
                 trial_id,
-                json.dumps(info),
+                json.dumps(serializable_info),
             )
         except Exception as e:
             LOGGER.error("Failed to set trial info for %s: %s", trial_id, e)
@@ -294,7 +342,8 @@ class RedisClient:
             pipe = self._client.pipeline()
             pipe.delete(key)
             for tid, info in trial_info.items():
-                pipe.hset(key, tid, json.dumps(info))
+                serializable_info = _make_json_serializable(info)
+                pipe.hset(key, tid, json.dumps(serializable_info))
             pipe.expire(key, self.default_ttl)
             await pipe.execute()
         except Exception as e:
@@ -682,50 +731,53 @@ class RedisClient:
                 json.dumps(trials_list),
             )
 
-            # Trial info (hash)
+            # Trial info (hash) - ensure nested objects are serializable
             trial_info_key = f"{self.prefix}trial_info"
             pipe.delete(trial_info_key)
             for tid, info in trial_info.items():
-                pipe.hset(trial_info_key, tid, json.dumps(info))
+                serializable_info = _make_json_serializable(info)
+                pipe.hset(trial_info_key, tid, json.dumps(serializable_info))
             if trial_info:
                 pipe.expire(trial_info_key, self.default_ttl)
 
-            # Agent info (hash)
+            # Agent info (hash) - ensure nested objects are serializable
             agent_info_key = f"{self.prefix}agent_info"
             pipe.delete(agent_info_key)
             for aid, info in agent_info.items():
-                pipe.hset(agent_info_key, aid, json.dumps(info))
+                serializable_info = _make_json_serializable(info)
+                pipe.hset(agent_info_key, aid, json.dumps(serializable_info))
             if agent_info:
                 pipe.expire(agent_info_key, self.default_ttl)
 
-            # Spans (per trial)
+            # Spans (per trial) - ensure nested objects are serializable
             for tid, spans in spans_by_trial.items():
+                serializable_spans = _make_json_serializable(spans)
                 pipe.setex(
                     f"{self.prefix}spans:{tid}",
                     self.default_ttl,
-                    json.dumps(spans),
+                    json.dumps(serializable_spans),
                 )
 
-            # Hot data - global
+            # Hot data - global (ensure all nested objects are serializable)
             pipe.setex(
                 f"{self.prefix}hot:leaderboard",
                 self.default_ttl,
-                json.dumps(leaderboard),
+                json.dumps(_make_json_serializable(leaderboard)),
             )
             pipe.setex(
                 f"{self.prefix}hot:agent_actions",
                 self.default_ttl,
-                json.dumps(agent_actions),
+                json.dumps(_make_json_serializable(agent_actions)),
             )
             pipe.setex(
                 f"{self.prefix}hot:stats",
                 self.default_ttl,
-                json.dumps(stats),
+                json.dumps(_make_json_serializable(stats)),
             )
             pipe.setex(
                 f"{self.prefix}hot:games",
                 self.default_ttl,
-                json.dumps(games),
+                json.dumps(_make_json_serializable(games)),
             )
             pipe.setex(
                 f"{self.prefix}hot:live_trials",
@@ -733,30 +785,30 @@ class RedisClient:
                 json.dumps(live_trials),
             )
 
-            # Hot data - per league
+            # Hot data - per league (ensure all nested objects are serializable)
             for league, data in leaderboard_by_league.items():
                 pipe.setex(
                     f"{self.prefix}hot:leaderboard:{league}",
                     self.default_ttl,
-                    json.dumps(data),
+                    json.dumps(_make_json_serializable(data)),
                 )
             for league, data in agent_actions_by_league.items():
                 pipe.setex(
                     f"{self.prefix}hot:agent_actions:{league}",
                     self.default_ttl,
-                    json.dumps(data),
+                    json.dumps(_make_json_serializable(data)),
                 )
             for league, data in stats_by_league.items():
                 pipe.setex(
                     f"{self.prefix}hot:stats:{league}",
                     self.default_ttl,
-                    json.dumps(data),
+                    json.dumps(_make_json_serializable(data)),
                 )
             for league, data in games_by_league.items():
                 pipe.setex(
                     f"{self.prefix}hot:games:{league}",
                     self.default_ttl,
-                    json.dumps(data),
+                    json.dumps(_make_json_serializable(data)),
                 )
 
             # Increment version (this signals Arena Server to refresh)
