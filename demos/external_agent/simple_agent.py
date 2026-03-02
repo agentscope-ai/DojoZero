@@ -143,7 +143,18 @@ class SimpleBettingAgent:
 
             # Subscribe to events via SSE streaming
             logger.info("Subscribing to events (SSE streaming)...")
+            event_count = 0
             async for event in trial.events():
+                event_count += 1
+                event_type = event.payload.get("event_type", "unknown")
+                # Log first 10 events at INFO to show snapshot
+                if event_count <= 10:
+                    logger.info(
+                        "Event #%d [seq=%d]: %s",
+                        event_count,
+                        event.sequence,
+                        event_type,
+                    )
                 await self.handle_event(trial, event)
 
     async def handle_event(self, trial, event: EventEnvelope):
@@ -197,7 +208,7 @@ class SimpleBettingAgent:
 
             # Log updated balance
             balance = await trial.get_balance()
-            logger.info("Current balance: %.2f", balance.balance)
+            logger.info("Current balance: %s", balance.balance)
 
         except StaleReferenceError:
             logger.warning("Bet rejected: stale reference sequence")

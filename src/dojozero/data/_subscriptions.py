@@ -297,7 +297,54 @@ class SubscriptionManager:
                 filters,
             )
 
+            # Send snapshot of cached events if requested
+            if subscription.options.include_snapshot:
+                await self._send_snapshot(subscription)
+
             return subscription
+
+    async def _send_snapshot(self, subscription: Subscription) -> None:
+        """Send cached events to a new subscription as snapshot.
+
+        Args:
+            subscription: The subscription to send snapshot to
+        """
+        # Get all cached events that match subscription filters
+        # Convert frozenset to list if needed
+        event_types: list[str] | None = None
+        if subscription.filters.event_types:
+            event_types = list(subscription.filters.event_types)
+
+        snapshot_events = self.get_recent_events(
+            event_types=event_types,
+            limit=100,  # Send up to 100 events
+        )
+
+        if not snapshot_events:
+            logger.debug(
+                "No snapshot events for subscription %s",
+                subscription.subscription_id,
+            )
+            return
+
+        # Send events oldest-first (they're stored newest-first)
+        snapshot_events.reverse()
+
+        for event in snapshot_events:
+            try:
+                subscription._queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning(
+                    "Snapshot queue full for %s, skipping remaining events",
+                    subscription.subscription_id,
+                )
+                break
+
+        logger.info(
+            "Sent %d snapshot events to subscription %s",
+            len(snapshot_events),
+            subscription.subscription_id,
+        )
 
     async def unsubscribe(self, subscription_id: str) -> bool:
         """Remove a subscription.
