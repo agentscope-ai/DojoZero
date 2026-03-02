@@ -291,35 +291,5 @@ def _get_team_identity(tricode: str, league: str = "NBA") -> TeamIdentity:
     )
 
 
-# -------------------------------------------------------------------------
-# LLM CDN URL Migration: old_cdn_url -> cdn_url
-# Maps legacy 24x24 SVG icons to new 200x200 PNG icons
-# -------------------------------------------------------------------------
-_LLM_CDN_URL_MIGRATION: dict[str, str] = {
-    # Qwen
-    "https://img.alicdn.com/imgextra/i4/O1CN011RklS01Jiu8iNxiEc_!!6000000001063-55-tps-24-24.svg": "https://img.alicdn.com/imgextra/i2/O1CN01Aw7RHL1p4f2kNbTEg_!!6000000005307-2-tps-200-200.png",
-    # Deepseek
-    "https://img.alicdn.com/imgextra/i4/O1CN01wat3rK1Q9MiURXMTb_!!6000000001933-55-tps-24-24.svg": "https://img.alicdn.com/imgextra/i1/O1CN01q9usaf1KRKYhAZHXO_!!6000000001160-2-tps-200-200.png",
-    # Claude
-    "https://img.alicdn.com/imgextra/i2/O1CN01kiSypx1Oxcwxq1bPV_!!6000000001772-55-tps-24-24.svg": "https://img.alicdn.com/imgextra/i3/O1CN01bbhJZa1W0YnVufCiY_!!6000000002726-2-tps-200-200.png",
-    # Gemini
-    "https://img.alicdn.com/imgextra/i4/O1CN017FCueZ1iF0gKs1l3G_!!6000000004382-55-tps-24-24.svg": "https://img.alicdn.com/imgextra/i2/O1CN01fzpr3E1vL2uJ1WrCE_!!6000000006155-2-tps-200-200.png",
-    # OpenAI
-    "https://img.alicdn.com/imgextra/i1/O1CN01ESEMwe1ZfGqicfO7r_!!6000000003221-55-tps-24-24.svg": "https://img.alicdn.com/imgextra/i1/O1CN01UUzNlB1Di5k1MrgV8_!!6000000000249-2-tps-200-200.png",
-    # Grok
-    "https://img.alicdn.com/imgextra/i2/O1CN01msAuHH23CMJvdjF1u_!!6000000007219-55-tps-24-24.svg": "https://img.alicdn.com/imgextra/i4/O1CN016klbRN1YHcmmotXbI_!!6000000003034-2-tps-200-200.png",
-}
-
-
-def migrate_cdn_url(url: str | None) -> str | None:
-    """Migrate old CDN URL to new one if applicable.
-
-    Args:
-        url: The CDN URL to check and potentially migrate
-
-    Returns:
-        The migrated URL if found in migration map, otherwise the original URL
-    """
-    if url is None:
-        return None
-    return _LLM_CDN_URL_MIGRATION.get(url, url)
+# Super Bowl 60 game ID (used to pin this game in NFL live_games)
+SUPER_BOWL_GAME_ID = "nfl-game-401772988-superbowl60"

@@ -37,115 +37,6 @@ from dojozero.data import BaseGameUpdateEvent, GameInitializeEvent, TeamIdentity
 
 LOGGER = logging.getLogger("dojozero.arena_server.utils")
 
-
-async def _extract_trial_info_from_traces(
-    trace_reader: TraceReader,
-    trial_id: str,
-) -> dict[str, Any]:
-    """Extract trial phase and metadata from trace spans.
-
-    Uses filtered queries to only fetch relevant spans (trial lifecycle,
-    game_initialize, game_result, game_update) instead of all spans.
-
-    Returns:
-        dict with "phase", "metadata", and optional "game_init" extracted from spans
-    """
-    try:
-        # Only fetch spans needed for trial info extraction
-        spans = await trace_reader.get_spans(
-            trial_id,
-            operation_names=[
-                "trial.started",
-                "trial.stopped",
-                "trial.terminated",
-                "event.game_initialize",
-                "event.game_result",
-                "event.nba_game_update",
-                "event.nfl_game_update",
-            ],
-        )
-    except Exception as e:
-        LOGGER.warning("Failed to get spans for trial '%s': %s", trial_id, e)
-        return {"phase": "unknown", "metadata": {}}
-
-    has_started = False
-    has_stopped = False
-    has_game_result = False  # Indicates game has completed
-    latest_start_time = 0
-    latest_stop_time = 0
-
-    # Metadata to extract from spans
-    metadata: dict[str, Any] = {}
-    game_init: GameInitializeEvent | None = None
-    latest_game_update: BaseGameUpdateEvent | None = None
-    latest_game_update_time = 0
-
-    for span in spans:
-        typed = deserialize_span(span)
-
-        if isinstance(typed, TrialLifecycleSpan):
-            if typed.phase == "started":
-                has_started = True
-                if typed.start_time > latest_start_time:
-                    latest_start_time = typed.start_time
-                # Build metadata from typed fields
-                metadata.update(
-                    {
-                        "home_team_tricode": typed.home_team_tricode,
-                        "away_team_tricode": typed.away_team_tricode,
-                        "home_team_name": typed.home_team_name,
-                        "away_team_name": typed.away_team_name,
-                        "game_date": typed.game_date,
-                        "sport_type": typed.sport_type,
-                        "espn_game_id": typed.espn_game_id,
-                        **typed.extra_metadata,
-                    }
-                )
-            elif typed.phase in ("stopped", "terminated"):
-                has_stopped = True
-                if typed.start_time > latest_stop_time:
-                    latest_stop_time = typed.start_time
-
-        elif isinstance(typed, GameInitializeEvent):
-            game_init = typed
-
-        # Track latest game update event for live scores
-        elif isinstance(typed, BaseGameUpdateEvent):
-            # Use span timestamp to find the latest update
-            span_time = span.start_time
-            if span_time > latest_game_update_time:
-                latest_game_update_time = span_time
-                latest_game_update = typed
-
-        # Check for game completion spans (NBA/NFL game results)
-        elif "game_result" in span.operation_name:
-            has_game_result = True
-
-    # Add live scores to metadata if we have a game update
-    if latest_game_update is not None:
-        metadata["home_score"] = latest_game_update.home_score
-        metadata["away_score"] = latest_game_update.away_score
-        metadata["period"] = latest_game_update.period
-        metadata["game_clock"] = latest_game_update.game_clock
-
-    # Determine phase
-    if has_stopped and latest_stop_time >= latest_start_time:
-        phase = "stopped"
-    elif has_game_result:
-        # Game has concluded (game_result span found)
-        phase = "completed"
-    elif has_started and not has_stopped:
-        phase = "running"
-    elif has_stopped:
-        phase = "stopped"
-    elif spans:
-        phase = "running"
-    else:
-        phase = "unknown"
-
-    return {"phase": phase, "metadata": metadata, "game_init": game_init}
-
-
 # Operation names used for trial info extraction
 TRIAL_INFO_OPERATION_NAMES = [
     "trial.started",
@@ -156,6 +47,25 @@ TRIAL_INFO_OPERATION_NAMES = [
     "event.nba_game_update",
     "event.nfl_game_update",
 ]
+
+
+async def _extract_trial_info_from_traces(
+    trace_reader: TraceReader,
+    trial_id: str,
+) -> dict[str, Any]:
+    """Extract trial phase and metadata from trace spans.
+
+    Fetches relevant spans then delegates to _extract_trial_info_from_spans.
+    """
+    try:
+        spans = await trace_reader.get_spans(
+            trial_id,
+            operation_names=TRIAL_INFO_OPERATION_NAMES,
+        )
+    except Exception as e:
+        LOGGER.warning("Failed to get spans for trial '%s': %s", trial_id, e)
+        return {"phase": "unknown", "metadata": {}}
+    return _extract_trial_info_from_spans(spans)
 
 
 def _extract_trial_info_from_spans(spans: list[SpanData]) -> dict[str, Any]:
@@ -620,86 +530,29 @@ async def _extract_agent_actions(
     limit: int = 20,
     max_trials: int = 5,
 ) -> list[AgentAction]:
-    """Extract recent agent actions from trial spans (on-demand version).
+    """Extract recent agent actions (on-demand version).
 
-    This is the async version that fetches spans directly from trace_reader.
-    For batch operations, prefer _extract_agent_actions_from_spans with pre-fetched data.
-
-    Queries agent.response spans from recent games (both live and completed) and returns
-    AgentAction objects with agent info, response message, and timestamp.
-
-    Args:
-        trace_reader: TraceReader for querying SLS/Jaeger
-        trial_ids: List of trial IDs to check for actions
-        cache: Optional cache for agent info lookup
-        limit: Maximum number of actions to return
-        max_trials: Maximum number of trials to query (reduces SLS load)
-
-    Returns:
-        List of agent actions sorted by time (newest first)
+    Fetches spans then delegates to _extract_agent_actions_from_spans.
     """
-    all_actions: list[AgentAction] = []
-
-    # Check recent trials for agent actions (both live and completed games)
-    LOGGER.debug(
-        "Extracting agent actions from %d trials (limit=%d, max_trials=%d)",
-        min(len(trial_ids), max_trials),
-        limit,
-        max_trials,
-    )
-
+    spans_by_trial: dict[str, list[SpanData]] = {}
     for trial_id in trial_ids[:max_trials]:
         try:
-            # Get agent.response spans from the entire trial
-            # No time filter - we want recent actions from any games (live or completed)
             spans = await trace_reader.get_spans(
                 trial_id,
                 operation_names=["agent.response"],
             )
-            LOGGER.debug(
-                "Trial %s: fetched %d agent.response spans", trial_id, len(spans)
-            )
+            spans_by_trial[trial_id] = spans
         except Exception as e:
             LOGGER.warning("Failed to get spans for trial '%s': %s", trial_id, e)
-            continue
 
-        for span in spans:
-            typed = deserialize_span(span)
-            if not isinstance(typed, AgentResponseMessage):
-                continue
-
-            agent_id = typed.agent_id
-            if not agent_id:
-                continue
-
-            # Get agent info from cache
-            agent_info = cache.get_agent_info(agent_id) if cache else None
-            if agent_info is None:
-                # Fallback: create minimal AgentInfo
-                agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
-
-            all_actions.append(
-                AgentAction(
-                    agent=agent_info,
-                    response=typed,
-                    timestamp=span.start_time,
-                )
-            )
-
-        # Early exit if we have enough actions (optimization)
-        if len(all_actions) >= limit * 2:
-            LOGGER.debug("Early exit: collected %d actions", len(all_actions))
-            break
-
-    # Sort by timestamp (newest first) and limit
-    all_actions.sort(key=lambda x: x.timestamp, reverse=True)
-    result = all_actions[:limit]
-    LOGGER.debug(
-        "Returning %d actions (from %d total)",
-        len(result),
-        len(all_actions),
+    agent_info_cache = cache.get_all_agent_info() if cache else {}
+    return _extract_agent_actions_from_spans(
+        spans_by_trial,
+        agent_info_cache,
+        trial_ids,
+        limit=limit,
+        max_trials=max_trials,
     )
-    return result
 
 
 async def _compute_stats(
@@ -991,128 +844,32 @@ async def _compute_leaderboard(
     cache: "LandingPageCache | None" = None,
     limit: int = 20,
 ) -> list[LeaderboardEntry]:
-    """Compute agent leaderboard from trial results (on-demand version).
+    """Compute agent leaderboard (on-demand version).
 
-    This is the async version that fetches spans directly from trace_reader.
-    For batch operations, prefer _compute_leaderboard_from_spans with pre-fetched data.
-
-    Uses broker.final_stats spans when available for accurate statistics.
-    Falls back to counting agent.response spans if final_stats not found.
-
-    Args:
-        trace_reader: TraceReader for querying spans
-        trial_ids: List of trial IDs to process
-        cache: Optional cache for agent info lookup
-        limit: Maximum entries to return
-
-    Returns:
-        List of agents sorted by winnings (highest first)
+    Fetches spans then delegates to _compute_leaderboard_from_spans.
     """
-
-    # Accumulator for per-agent stats
-    @dataclass
-    class _AgentStats:
-        agent: AgentInfo
-        winnings: float = 0.0
-        wins: int = 0
-        total_bets: int = 0
-        total_wagered: float = 0.0
-
-    agent_stats: dict[str, _AgentStats] = {}
-
+    spans_by_trial: dict[str, list[SpanData]] = {}
     for trial_id in trial_ids:
         try:
-            # Try to get broker.final_stats first (most accurate)
             spans = await trace_reader.get_spans(
                 trial_id,
-                operation_names=["broker.final_stats"],
+                operation_names=["broker.final_stats", "agent.response"],
             )
-
-            if spans:
-                # Use final_stats if available
-                for span in spans:
-                    typed = deserialize_span(span)
-                    if isinstance(typed, BrokerFinalStats):
-                        for agent_id, stats in typed.statistics.items():
-                            agent_info = (
-                                cache.get_agent_info(agent_id) if cache else None
-                            )
-                            if agent_info is None:
-                                agent_info = AgentInfo(
-                                    agent_id=agent_id, persona=agent_id
-                                )
-
-                            if agent_id not in agent_stats:
-                                agent_stats[agent_id] = _AgentStats(agent=agent_info)
-
-                            acc = agent_stats[agent_id]
-                            acc.winnings += float(stats.net_profit)
-                            acc.wins += stats.wins
-                            acc.total_bets += stats.total_bets
-                            acc.total_wagered += float(stats.total_wagered)
-            else:
-                # Fallback: count from agent.response spans
-                response_spans = await trace_reader.get_spans(
-                    trial_id,
-                    operation_names=["agent.response"],
-                )
-
-                for span in response_spans:
-                    typed = deserialize_span(span)
-                    if not isinstance(typed, AgentResponseMessage):
-                        continue
-
-                    agent_id = typed.agent_id
-                    if not agent_id:
-                        continue
-
-                    if agent_id not in agent_stats:
-                        agent_info = cache.get_agent_info(agent_id) if cache else None
-                        if agent_info is None:
-                            agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
-                        agent_stats[agent_id] = _AgentStats(agent=agent_info)
-
-                    acc = agent_stats[agent_id]
-                    if typed.bet_amount:
-                        acc.total_bets += 1
-                        acc.total_wagered += typed.bet_amount
-
+            spans_by_trial[trial_id] = spans
         except Exception as e:
             LOGGER.warning(
                 "Failed to get spans for leaderboard from trial '%s': %s",
                 trial_id,
                 e,
             )
-            continue
 
-    # Convert to sorted list
-    leaderboard: list[LeaderboardEntry] = []
-    for stats in agent_stats.values():
-        win_rate = (stats.wins / stats.total_bets * 100) if stats.total_bets > 0 else 0
-        roi = (
-            (stats.winnings / stats.total_wagered * 100)
-            if stats.total_wagered > 0
-            else 0
-        )
-
-        leaderboard.append(
-            LeaderboardEntry(
-                agent=stats.agent,
-                winnings=round(stats.winnings, 2),
-                winRate=round(win_rate, 1),
-                totalBets=stats.total_bets,
-                roi=round(roi, 1),
-            )
-        )
-
-    # Sort by winnings (descending) and add rank
-    leaderboard.sort(key=lambda x: x.winnings, reverse=True)
-    ranked = [
-        entry.model_copy(update={"rank": i + 1})
-        for i, entry in enumerate(leaderboard[:limit])
-    ]
-
-    return ranked
+    agent_info_cache = cache.get_all_agent_info() if cache else {}
+    return _compute_leaderboard_from_spans(
+        spans_by_trial,
+        agent_info_cache,
+        trial_ids,
+        limit=limit,
+    )
 
 
 def _compute_replay_meta(

@@ -7,7 +7,6 @@ from dojozero.arena_server._models import StatsResponse, GamesResponse
 from dojozero.betting import AgentInfo, AgentList
 from dojozero.core import deserialize_span, LeaderboardEntry, AgentAction
 from dojozero.core._tracing import SpanData
-from dojozero.arena_server._constants import migrate_cdn_url
 
 LOGGER = logging.getLogger("dojozero.arena_server.cache")
 
@@ -273,12 +272,6 @@ class LandingPageCache:
             if isinstance(typed, AgentList):
                 for agent_info in typed.agents:
                     if agent_info.agent_id:
-                        # Migrate CDN URL if needed
-                        migrated_url = migrate_cdn_url(agent_info.cdn_url)
-                        if migrated_url != agent_info.cdn_url:
-                            agent_info = agent_info.model_copy(
-                                update={"cdn_url": migrated_url}
-                            )
                         is_new = agent_info.agent_id not in self._agent_info
                         self._agent_info[agent_info.agent_id] = agent_info
                         if is_new:

@@ -197,19 +197,14 @@ def register_rest_endpoints(app: FastAPI) -> None:
         all_games = games.live_games + games.upcoming_games + games.completed_games
         live_games = games.live_games
 
-        # special logic for Super Bowl
-        if league in ["NFL", "nfl"]:
-            from dojozero.arena_server._superbowl import (
-                SUPER_BOWL_GAME,
-                SUPER_BOWL_GAME_ID,
-            )
+        if league and league.upper() == "NFL":
+            from dojozero.arena_server._constants import SUPER_BOWL_GAME_ID
 
             superbowl_game = next(
                 (g for g in all_games if SUPER_BOWL_GAME_ID in g.id), None
             )
-            if not superbowl_game:
-                superbowl_game = GameCardData.model_validate(SUPER_BOWL_GAME)
-            live_games = [superbowl_game]
+            if superbowl_game and superbowl_game not in live_games:
+                live_games = [superbowl_game] + list(live_games)
 
         response = LandingResponse(
             stats=stats,
