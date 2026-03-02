@@ -148,7 +148,7 @@ class RobustBettingAgent:
             )
 
             balance = await trial.get_balance()
-            logger.info("Current balance: %.2f", balance.balance)
+            logger.info("Current balance: %s", balance.balance)
 
             # Try SSE streaming first, fall back to polling
             try:
@@ -206,6 +206,9 @@ class RobustBettingAgent:
             return
 
         # Simple betting logic: bet on favorite
+        # Skip if odds not available yet
+        if odds.home_probability is None or odds.away_probability is None:
+            return
         if odds.home_probability > 0.55:
             await self._place_bet_safe(trial, "home", event.sequence)
         elif odds.away_probability > 0.55:
