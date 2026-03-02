@@ -408,11 +408,17 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 - totalItems: Total number of items after filtering
         """
         state = get_server_state()
+        refresher = state.refresher
 
         cache_entry, error_reason = await _load_replay_data(
             state.trace_reader,
             state.replay_cache,
             trial_id,
+            redis_reader=(
+                refresher.redis_reader
+                if refresher is not None and refresher._use_redis
+                else None
+            ),
         )
 
         if cache_entry is None:
@@ -805,10 +811,16 @@ def register_websocket_endpoints(app: FastAPI) -> None:
         )
 
         # Load replay data (includes pre-computed meta)
+        refresher = state.refresher
         cache_entry, error_reason = await _load_replay_data(
             state.trace_reader,
             state.replay_cache,
             trial_id,
+            redis_reader=(
+                refresher.redis_reader
+                if refresher is not None and refresher._use_redis
+                else None
+            ),
         )
 
         if cache_entry is None:

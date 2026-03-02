@@ -431,6 +431,14 @@ class BackgroundRefresher:
                             "BackgroundRefresher: Loaded from Redis (fast startup)"
                         )
 
+                        # Preload trial_details and replay_cache for completed
+                        # trials from Redis in the background (non-blocking)
+                        self._tasks.append(
+                            asyncio.create_task(
+                                self._preload_completed_trials_from_redis()
+                            )
+                        )
+
                         # Start Redis refresh loop (checks version every second)
                         self._tasks.append(
                             asyncio.create_task(self._refresh_from_redis_loop())
@@ -1057,6 +1065,88 @@ class BackgroundRefresher:
             len(self.replay_cache._cache),
         )
 
+    async def _preload_completed_trials_from_redis(self) -> None:
+        """Preload trial_details and replay_cache for completed trials from Redis.
+
+        Called at startup in Redis mode. Loads spans from Redis (fast) and
+        processes them into trial_details cache and replay_cache so that
+        completed game pages load instantly without falling back to SLS.
+        """
+        if self.redis_reader is None:
+            return
+
+        reader = self.redis_reader
+
+        completed_ids = self.cache.get_completed_trial_ids()
+        if not completed_ids:
+            LOGGER.info(
+                "BackgroundRefresher: No completed trials to preload from Redis"
+            )
+            return
+
+        LOGGER.info(
+            "BackgroundRefresher: Preloading %d completed trials from Redis",
+            len(completed_ids),
+        )
+
+        semaphore = asyncio.Semaphore(16)
+        loaded_details = 0
+        loaded_replay = 0
+
+        async def preload_one(trial_id: str) -> tuple[bool, bool]:
+            nonlocal loaded_details, loaded_replay
+            async with semaphore:
+                detail_ok = False
+                replay_ok = False
+
+                # 1. Preload trial_details
+                if self.cache.get_trial_details(trial_id) is None:
+                    try:
+                        spans = await reader.load_spans_for_trial(trial_id)
+                        if spans:
+                            self._process_trial_details(trial_id, spans, [], 0)
+                            detail_ok = True
+                    except Exception as e:
+                        LOGGER.debug(
+                            "Failed to preload trial_details for %s: %s",
+                            trial_id,
+                            e,
+                        )
+
+                # 2. Preload replay_cache
+                if self.replay_cache.get(trial_id) is None:
+                    try:
+                        entry, _ = await _load_replay_data(
+                            self.trace_reader,
+                            self.replay_cache,
+                            trial_id,
+                            redis_reader=reader,
+                        )
+                        replay_ok = entry is not None
+                    except Exception as e:
+                        LOGGER.debug("Failed to preload replay for %s: %s", trial_id, e)
+
+                return detail_ok, replay_ok
+
+        results = await asyncio.gather(
+            *[preload_one(tid) for tid in completed_ids],
+            return_exceptions=True,
+        )
+
+        for r in results:
+            if isinstance(r, tuple):
+                if r[0]:
+                    loaded_details += 1
+                if r[1]:
+                    loaded_replay += 1
+
+        LOGGER.info(
+            "BackgroundRefresher: Preloaded from Redis: %d trial_details, %d replays (of %d completed)",
+            loaded_details,
+            loaded_replay,
+            len(completed_ids),
+        )
+
     async def _load_replay_for_trial(self, trial_id: str) -> None:
         """Load replay data for a single completed trial into replay_cache.
 
@@ -1073,11 +1163,11 @@ class BackgroundRefresher:
             return
 
         try:
-            # Use the existing _load_replay_data function
             cache_entry, error_reason = await _load_replay_data(
                 self.trace_reader,
                 self.replay_cache,
                 trial_id,
+                redis_reader=self.redis_reader if self._use_redis else None,
             )
 
             if cache_entry:
@@ -1113,9 +1203,25 @@ class BackgroundRefresher:
     async def refresh_trial_details_on_demand(
         self, trial_id: str
     ) -> list[dict[str, Any]]:
-        """Refresh trial_details for a specific trial (on-demand for cache miss)."""
-        # For on-demand single trial, fetch directly
-        spans = await self.trace_reader.get_spans(trial_id)
+        """Refresh trial_details for a specific trial (on-demand for cache miss).
+
+        When Redis is available, loads spans from Redis (~50-100ms) instead of
+        SLS (10-20s). Falls back to SLS if Redis has no data.
+        """
+        spans: list[SpanData] = []
+
+        # Try Redis first when available (fast path)
+        if self._use_redis and self.redis_reader is not None:
+            spans = await self.redis_reader.load_spans_for_trial(trial_id)
+            if spans:
+                LOGGER.debug(
+                    "Loaded %d spans from Redis for trial %s", len(spans), trial_id
+                )
+
+        # Fallback to SLS (slow path)
+        if not spans:
+            spans = await self.trace_reader.get_spans(trial_id)
+
         existing = self.cache.get_trial_details(trial_id)
 
         if existing is not None:

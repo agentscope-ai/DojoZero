@@ -80,6 +80,7 @@ def _make_json_serializable(obj: Any) -> Any:
     # Primitive types (str, int, float, bool, None) pass through
     return obj
 
+
 # Default Redis URL
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
