@@ -38,15 +38,26 @@ class BetResult:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BetResult":
         """Create from API response."""
+        # Server sends createdAt, handle both for compatibility
+        placed_at_str = data.get("placedAt") or data.get("createdAt")
+        placed_at = (
+            datetime.fromisoformat(placed_at_str.replace("Z", "+00:00"))
+            if placed_at_str
+            else datetime.now()
+        )
         return cls(
             bet_id=data["betId"],
             agent_id=data["agentId"],
             market=data["market"],
             selection=data["selection"],
-            amount=data["amount"],
-            probability=data["probability"],
+            amount=float(data["amount"])
+            if isinstance(data["amount"], str)
+            else data["amount"],
+            probability=float(data["probability"])
+            if isinstance(data["probability"], str)
+            else data["probability"],
             status=data["status"],
-            placed_at=datetime.fromisoformat(data["placedAt"].replace("Z", "+00:00")),
+            placed_at=placed_at,
             reference_sequence=data.get("referenceSequence", 0),
         )
 
