@@ -71,17 +71,17 @@ class SimpleBettingAgent:
     async def run(
         self,
         agent_id: str,
+        trial_id: str,
         gateway_url: str | None = None,
         dashboard_urls: list[str] | None = None,
-        trial_id: str | None = None,
     ):
         """Run the agent.
 
         Args:
             agent_id: Unique agent identifier
+            trial_id: Trial ID (required)
             gateway_url: Gateway URL for standalone mode (e.g., "http://localhost:8080")
             dashboard_urls: Dashboard URLs for sharded mode (e.g., ["http://localhost:8000"])
-            trial_id: Trial ID (auto-discovered if not provided)
         """
         # Create client with config
         client = DojoClient(
@@ -89,33 +89,24 @@ class SimpleBettingAgent:
             dashboard_urls=dashboard_urls,
         )
 
-        # Discovery mode: find available trials
+        # Discovery mode: find the specified trial
         if dashboard_urls or (not gateway_url):
-            logger.info("Discovering available trials...")
+            logger.info("Discovering trial '%s'...", trial_id)
             gateways = await client.discover_trials()
 
             if not gateways:
                 logger.error("No trials available")
                 return
 
-            # Use specified trial_id or pick first available
-            if trial_id:
-                matching = [g for g in gateways if g.trial_id == trial_id]
-                if not matching:
-                    logger.error(
-                        "Trial '%s' not found. Available: %s",
-                        trial_id,
-                        [g.trial_id for g in gateways],
-                    )
-                    return
-                selected = matching[0]
-            else:
-                selected = gateways[0]
-                logger.info(
-                    "Auto-selected trial: %s (of %d available)",
-                    selected.trial_id,
-                    len(gateways),
+            matching = [g for g in gateways if g.trial_id == trial_id]
+            if not matching:
+                logger.error(
+                    "Trial '%s' not found. Available: %s",
+                    trial_id,
+                    [g.trial_id for g in gateways],
                 )
+                return
+            selected = matching[0]
 
             # Use full URL from discovery
             gateway_url = selected.url
@@ -218,20 +209,10 @@ async def main():
         epilog="""
 Examples:
   Standalone mode:
-    python simple_agent.py --gateway http://localhost:8080 --agent-id my-agent
+    python simple_agent.py --gateway http://localhost:8080 --trial-id my-trial --agent-id my-agent
 
-  Dashboard mode (auto-select trial):
-    python simple_agent.py --dashboard http://localhost:8000 --agent-id my-agent
-
-  Dashboard mode (specific trial):
-    python simple_agent.py --dashboard http://localhost:8000 --trial-id abc123 --agent-id my-agent
-
-  Using environment variables:
-    export DOJOZERO_GATEWAY_URL=http://localhost:8080
-    python simple_agent.py --agent-id my-agent
-
-  Using config file (~/.dojozero/config.yaml):
-    gateway_url: http://localhost:8000
+  Dashboard mode:
+    python simple_agent.py --dashboard http://localhost:8000 --trial-id nba-game-401810734-xxx --agent-id my-agent
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -249,7 +230,8 @@ Examples:
 
     parser.add_argument(
         "--trial-id",
-        help="Trial ID (auto-discovered if not provided)",
+        required=True,
+        help="Trial ID (required)",
     )
     parser.add_argument(
         "--agent-id",
@@ -289,9 +271,9 @@ Examples:
     try:
         await agent.run(
             agent_id=args.agent_id,
+            trial_id=args.trial_id,
             gateway_url=args.gateway,
             dashboard_urls=[args.dashboard] if args.dashboard else None,
-            trial_id=args.trial_id,
         )
     except KeyboardInterrupt:
         logger.info("Agent stopped by user")
