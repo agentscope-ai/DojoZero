@@ -278,15 +278,23 @@ def create_dashboard_app(
         DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
 
+    # Create gateway router early so it can be passed to TrialManager
+    gateway_router = None
+    if enable_gateway:
+        from ._gateway_routing import GatewayRouter
+
+        gateway_router = GatewayRouter()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Create trial manager
+        # Create trial manager with gateway router if enabled
         trial_manager = TrialManager(
             orchestrator=orchestrator,
             max_concurrent=max_concurrent_trials,
             oss_backup=oss_backup,
             auto_resume=auto_resume,
             stale_threshold_hours=stale_threshold_hours,
+            gateway_router=gateway_router,
         )
 
         # Create schedule manager
@@ -1240,16 +1248,15 @@ def create_dashboard_app(
     # Gateway Routing (for external agents)
     # -------------------------------------------------------------------------
 
-    if enable_gateway:
-        from ._gateway_routing import GatewayRouter, create_gateway_routes
+    if enable_gateway and gateway_router is not None:
+        from ._gateway_routing import create_gateway_routes
 
-        gateway_router = GatewayRouter()
         gateway_routes_app = create_gateway_routes(gateway_router)
 
         # Mount the gateway routes
         app.mount("/", gateway_routes_app)
 
-        # Store gateway router on app.state for trial integration
+        # Store gateway router on app.state for reference
         app.state.gateway_router = gateway_router
         LOGGER.info("Gateway routing enabled at /api/gateway/{trial_id}/")
 

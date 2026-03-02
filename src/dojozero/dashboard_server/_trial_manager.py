@@ -12,6 +12,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
+from typing import TYPE_CHECKING
+
 from dojozero.core import (
     TrialOrchestrator,
     TrialExistsError,
@@ -21,6 +23,9 @@ from dojozero.core import (
     TrialSpec,
     TrialStatus,
 )
+
+if TYPE_CHECKING:
+    from ._gateway_routing import GatewayRouter
 
 LOGGER = logging.getLogger("dojozero.trial_manager")
 
@@ -76,6 +81,7 @@ class TrialManager:
         auto_resume: bool = True,
         stale_threshold_hours: float = 24.0,
         checkpoint_interval_seconds: float = 300.0,
+        gateway_router: "GatewayRouter | None" = None,
     ):
         """Initialize the TrialManager.
 
@@ -86,6 +92,7 @@ class TrialManager:
             auto_resume: Automatically resume interrupted trials on startup
             stale_threshold_hours: Skip resuming trials older than this (hours)
             checkpoint_interval_seconds: Interval for periodic checkpointing (default 5 min)
+            gateway_router: GatewayRouter instance for registering trial gateways
         """
         self._orchestrator = orchestrator
         self._max_concurrent = max_concurrent
@@ -93,6 +100,7 @@ class TrialManager:
         self._auto_resume = auto_resume
         self._stale_threshold_hours = stale_threshold_hours
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
+        self._gateway_router = gateway_router
 
         # Queue for pending trials
         self._pending: asyncio.Queue[QueuedTrial] = asyncio.Queue()
@@ -115,6 +123,116 @@ class TrialManager:
     def orchestrator(self) -> TrialOrchestrator:
         """Get the orchestrator instance."""
         return self._orchestrator
+
+    def _register_gateway(self, trial_id: str, spec: TrialSpec) -> bool:
+        """Create and register a gateway for a trial.
+
+        Args:
+            trial_id: Trial identifier
+            spec: Trial specification
+
+        Returns:
+            True if gateway was registered, False otherwise
+        """
+        if self._gateway_router is None:
+            return False
+
+        try:
+            from dojozero.gateway import create_gateway_app
+            from dojozero.betting import BrokerOperator
+
+            # Get trial runtime from orchestrator
+            runtime = self._orchestrator._trials.get(trial_id)
+            if runtime is None:
+                self._logger.warning(
+                    "Cannot register gateway: trial '%s' not found in orchestrator",
+                    trial_id,
+                )
+                return False
+
+            context = runtime._context
+            if context is None:
+                self._logger.warning(
+                    "Cannot register gateway: trial '%s' has no runtime context",
+                    trial_id,
+                )
+                return False
+
+            # Get DataHub from context
+            if not context.data_hubs:
+                self._logger.warning(
+                    "Cannot register gateway: trial '%s' has no DataHubs",
+                    trial_id,
+                )
+                return False
+
+            # Get the first DataHub
+            hub_id = next(iter(context.data_hubs.keys()))
+            data_hub = context.data_hubs[hub_id]
+
+            # Find BrokerOperator from running actors
+            broker: BrokerOperator | None = None
+            for actor_runtime in runtime.actors.values():
+                actor = actor_runtime.instance
+                if isinstance(actor, BrokerOperator):
+                    broker = actor
+                    break
+
+            if broker is None:
+                self._logger.warning(
+                    "Cannot register gateway: trial '%s' has no BrokerOperator",
+                    trial_id,
+                )
+                return False
+
+            # Get metadata for the gateway
+            metadata: dict[str, Any] = {}
+            if isinstance(spec.metadata, dict):
+                metadata = spec.metadata
+            elif hasattr(spec.metadata, "model_dump"):
+                metadata = spec.metadata.model_dump()
+
+            # Create gateway app
+            app = create_gateway_app(
+                trial_id=trial_id,
+                data_hub=data_hub,
+                broker=broker,
+                metadata=metadata,
+            )
+
+            # Get gateway state from app
+            gateway_state = app.state.gateway_state
+
+            # Register with router
+            self._gateway_router.register_gateway(trial_id, app, gateway_state)
+            self._logger.info("Registered gateway for trial '%s'", trial_id)
+            return True
+
+        except Exception as e:
+            self._logger.error(
+                "Failed to register gateway for trial '%s': %s",
+                trial_id,
+                e,
+                exc_info=True,
+            )
+            return False
+
+    def _unregister_gateway(self, trial_id: str) -> bool:
+        """Unregister a gateway for a trial.
+
+        Args:
+            trial_id: Trial identifier
+
+        Returns:
+            True if gateway was unregistered, False otherwise
+        """
+        if self._gateway_router is None:
+            return False
+
+        if self._gateway_router.unregister_gateway(trial_id):
+            self._logger.info("Unregistered gateway for trial '%s'", trial_id)
+            return True
+        return False
 
     async def start(self) -> None:
         """Start the background worker and optionally resume interrupted trials."""
@@ -587,6 +705,7 @@ class TrialManager:
         trial_id = queued.trial_id
         self._logger.info("Starting trial: %s", trial_id)
         queued.phase = QueuedTrialPhase.STARTING
+        gateway_registered = False
 
         try:
             # Launch via custom factory or default
@@ -597,6 +716,10 @@ class TrialManager:
 
             queued.phase = QueuedTrialPhase.RUNNING
             self._logger.info("Trial '%s' is now running", trial_id)
+
+            # Register gateway if router is available
+            if self._gateway_router is not None:
+                gateway_registered = self._register_gateway(trial_id, queued.spec)
 
             # Wait for trial to complete by monitoring dashboard status
             while True:
@@ -636,6 +759,10 @@ class TrialManager:
             queued.phase = QueuedTrialPhase.FAILED
             queued.error = str(e)
             self._logger.error("Trial '%s' failed: %s", trial_id, e, exc_info=True)
+        finally:
+            # Always unregister gateway when trial finishes
+            if gateway_registered:
+                self._unregister_gateway(trial_id)
 
     def _upload_to_oss(self, trial_id: str, spec: TrialSpec) -> None:
         """Upload trial data to OSS if configured."""
