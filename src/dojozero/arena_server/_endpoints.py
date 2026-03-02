@@ -157,7 +157,25 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 )
 
         response = TrialDetailResponse(trial_id=trial_id, items=items)
-        return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
+        return JSONResponse(
+            content=response.model_dump(
+                by_alias=state.by_alias,
+                exclude={
+                    "live_games": {
+                        "__all__": {
+                            "home_team": {"players"},
+                            "away_team": {"players"},
+                        }
+                    },
+                    "all_games": {
+                        "__all__": {
+                            "home_team": {"players"},
+                            "away_team": {"players"},
+                        }
+                    },
+                },
+            )
+        )
 
     @app.get("/api/landing")
     async def get_landing_data(
