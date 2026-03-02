@@ -423,6 +423,85 @@ def create_gateway_app(
             raise HTTPException(status_code=404, detail=error_str)
 
     # =========================================================================
+    # Agent List
+    # =========================================================================
+
+    @app.get("/api/v1/agents")
+    async def list_agents(
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> dict[str, Any]:
+        """List all registered external agents."""
+        agents = []
+        for agent_id, agent_state in state.adapter._agents.items():
+            # Get balance from broker if account exists
+            balance = None
+            if agent_id in state.broker._accounts:
+                balance = str(state.broker._accounts[agent_id].balance)
+
+            agents.append(
+                {
+                    "agent_id": agent_id,
+                    "registered_at": agent_state.registered_at.isoformat(),
+                    "last_activity_at": agent_state.last_activity_at.isoformat()
+                    if agent_state.last_activity_at
+                    else None,
+                    "balance": balance,
+                }
+            )
+        return {
+            "agents": agents,
+            "count": len(agents),
+        }
+
+    # =========================================================================
+    # Leaderboard / All Agents Statistics
+    # =========================================================================
+
+    @app.get("/api/v1/leaderboard")
+    async def get_leaderboard(
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> dict[str, Any]:
+        """Get leaderboard showing all agents' balances and statistics.
+
+        Includes both internal AI agents and external agents.
+        """
+        leaderboard = []
+
+        # Get all accounts from broker
+        for agent_id, account in state.broker._accounts.items():
+            # Get statistics for this agent
+            stats = await state.broker.get_statistics(agent_id)
+
+            # Check if this is an external agent
+            is_external = agent_id in state.adapter._agents
+
+            leaderboard.append(
+                {
+                    "agent_id": agent_id,
+                    "is_external": is_external,
+                    "balance": str(account.balance),
+                    "total_bets": stats.total_bets,
+                    "total_wagered": str(stats.total_wagered),
+                    "wins": stats.wins,
+                    "losses": stats.losses,
+                    "win_rate": round(stats.win_rate, 4),
+                    "net_profit": str(stats.net_profit),
+                    "roi": round(stats.roi, 4),
+                }
+            )
+
+        # Sort by balance descending
+        leaderboard.sort(key=lambda x: float(x["balance"]), reverse=True)
+
+        return {
+            "trial_id": state.trial_id,
+            "leaderboard": leaderboard,
+            "total_agents": len(leaderboard),
+            "external_agents": sum(1 for a in leaderboard if a["is_external"]),
+            "internal_agents": sum(1 for a in leaderboard if not a["is_external"]),
+        }
+
+    # =========================================================================
     # Health Check
     # =========================================================================
 

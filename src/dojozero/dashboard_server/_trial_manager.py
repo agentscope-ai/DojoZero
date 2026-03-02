@@ -138,7 +138,8 @@ class TrialManager:
             return False
 
         try:
-            from dojozero.gateway import create_gateway_app
+            from dojozero.gateway import create_gateway_app, GatewayState
+            from dojozero.gateway._adapter import ExternalAgentAdapter
             from dojozero.betting import BrokerOperator
 
             # Get trial runtime from orchestrator
@@ -192,7 +193,7 @@ class TrialManager:
             elif hasattr(spec.metadata, "model_dump"):
                 metadata = spec.metadata.model_dump()
 
-            # Create gateway app
+            # Create gateway app (note: lifespan won't run since we're not using uvicorn)
             app = create_gateway_app(
                 trial_id=trial_id,
                 data_hub=data_hub,
@@ -200,8 +201,22 @@ class TrialManager:
                 metadata=metadata,
             )
 
-            # Get gateway state from app
-            gateway_state = app.state.gateway_state
+            # Create adapter and state manually since lifespan doesn't run for in-process routing
+            adapter = ExternalAgentAdapter(
+                data_hub=data_hub,
+                broker=broker,
+                trial_id=trial_id,
+            )
+            gateway_state = GatewayState(
+                trial_id=trial_id,
+                data_hub=data_hub,
+                broker=broker,
+                adapter=adapter,
+                metadata=metadata,
+            )
+
+            # Set state on app for request handlers to access
+            app.state.gateway_state = gateway_state
 
             # Register with router
             self._gateway_router.register_gateway(trial_id, app, gateway_state)
