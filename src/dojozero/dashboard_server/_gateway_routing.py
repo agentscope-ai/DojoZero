@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Header name for agent ID
+AGENT_ID_HEADER = "X-Agent-ID"
+
 
 class GatewayRouter:
     """Routes requests to per-trial gateway apps.
@@ -152,6 +155,26 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
                 },
             )
 
+        # Check if this is an SSE request to the events stream endpoint
+        accept_header = request.headers.get("accept", "")
+        is_sse = "text/event-stream" in accept_header
+        is_events_stream = path == "api/v1/events/stream"
+
+        if is_sse and is_events_stream:
+            # Handle SSE directly without httpx (httpx doesn't handle async streaming well)
+            gateway_state = router.get_gateway_state(trial_id)
+            if gateway_state is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": {
+                            "code": "INTERNAL_ERROR",
+                            "message": "Gateway state not found",
+                        }
+                    },
+                )
+            return await _handle_sse_directly(request, gateway_state)
+
         # Rewrite the path to remove /api/gateway/{trial_id} prefix
         # Original: /api/gateway/{trial_id}/api/v1/events/stream
         # Rewritten: /api/v1/events/stream
@@ -169,11 +192,88 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
         # Create a new request with modified scope
         new_request = Request(scope, request.receive, request._send)
 
-        # Route through the gateway app
+        # Route through the gateway app (non-SSE requests)
         response = await _forward_to_app(gateway, new_request)
         return response
 
     return app
+
+
+async def _handle_sse_directly(
+    request: Request,
+    gateway_state: "GatewayState",
+) -> StreamingResponse:
+    """Handle SSE events stream directly without httpx.
+
+    This bypasses httpx.ASGITransport which doesn't properly handle
+    async generators that block on asyncio operations.
+
+    Args:
+        request: The incoming request
+        gateway_state: Gateway state with adapter and data_hub
+
+    Returns:
+        StreamingResponse with SSE events
+    """
+    from dojozero.gateway._sse import SSEConnection, create_sse_response
+
+    # Get agent ID from header
+    agent_id = request.headers.get(AGENT_ID_HEADER)
+    if not agent_id:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "X-Agent-ID header required",
+                }
+            },
+        )
+
+    # Check if agent is registered
+    if not gateway_state.adapter.is_registered(agent_id):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": {"code": "NOT_REGISTERED", "message": "Agent not registered"}
+            },
+        )
+
+    # Parse event types filter from query params
+    event_types_param = request.query_params.get("event_types")
+    filter_types = None
+    if event_types_param:
+        filter_types = [t.strip() for t in event_types_param.split(",")]
+
+    # Get or create subscription
+    subscription = await gateway_state.adapter.subscribe(
+        agent_id=agent_id,
+        event_types=filter_types,
+        include_snapshot=True,
+    )
+
+    # Check for Last-Event-ID for reconnection
+    last_event_id = request.headers.get("Last-Event-ID")
+
+    # Create SSE connection with global sequence and event replay providers
+    connection = SSEConnection(
+        subscription=subscription,
+        trial_id=gateway_state.trial_id,
+        get_global_sequence=lambda: (
+            gateway_state.data_hub.subscription_manager.global_sequence
+        ),
+        get_recent_events=lambda limit: gateway_state.data_hub.get_recent_events(
+            limit=limit
+        ),
+    )
+
+    logger.info(
+        "SSE stream started via direct proxy: trial=%s, agent=%s",
+        gateway_state.trial_id,
+        agent_id,
+    )
+
+    return create_sse_response(connection, last_event_id)
 
 
 async def _forward_to_app(app: FastAPI, request: Request) -> Response:

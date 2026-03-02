@@ -196,6 +196,7 @@ class GatewayTransport:
         """
         client = self._get_client()
         headers = self._auth_headers().copy()
+        headers["Accept"] = "text/event-stream"
 
         # Include Last-Event-ID for reconnection
         if self._last_event_id:

@@ -50,16 +50,22 @@ class SimpleBettingAgent:
         self.bet_threshold = bet_threshold
         self.bets_placed = 0
 
-    def should_bet(self, event: EventEnvelope, home_prob: float) -> tuple[bool, str]:
+    def should_bet(
+        self, event: EventEnvelope, home_prob: float | None
+    ) -> tuple[bool, str]:
         """Decide whether to place a bet based on event and odds.
 
         Args:
             event: The event that triggered this decision
-            home_prob: Current home team win probability
+            home_prob: Current home team win probability (may be None if not set)
 
         Returns:
             Tuple of (should_bet, selection)
         """
+        # Skip if odds not available
+        if home_prob is None:
+            return False, ""
+
         # Simple strategy: bet on the team with higher probability
         # Only bet if probability exceeds threshold
         if home_prob >= self.bet_threshold:
@@ -135,8 +141,8 @@ class SimpleBettingAgent:
             balance = await trial.get_balance()
             logger.info("Starting balance: %s", balance.balance)
 
-            # Subscribe to events
-            logger.info("Subscribing to events...")
+            # Subscribe to events via SSE streaming
+            logger.info("Subscribing to events (SSE streaming)...")
             async for event in trial.events():
                 await self.handle_event(trial, event)
 

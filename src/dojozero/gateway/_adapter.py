@@ -238,11 +238,13 @@ class ExternalAgentAdapter:
     def get_current_odds(self) -> CurrentOddsResponse:
         """Get current betting odds from broker."""
         event = self._broker._event
+        current_sequence = self._data_hub.subscription_manager.global_sequence
 
         if event is None:
             return CurrentOddsResponse(
                 event_id="",
                 betting_open=False,
+                sequence=current_sequence,
             )
 
         # Convert spread lines
@@ -273,6 +275,7 @@ class ExternalAgentAdapter:
             total_lines=total_lines,
             last_update=event.last_odds_update,
             betting_open=event.can_bet,  # type: ignore[arg-type]
+            sequence=current_sequence,
         )
 
     # =========================================================================

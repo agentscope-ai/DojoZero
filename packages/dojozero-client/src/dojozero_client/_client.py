@@ -345,7 +345,7 @@ class TrialConnection:
         body: dict[str, Any] = {
             "market": market,
             "selection": selection,
-            "amount": amount,
+            "amount": str(amount),  # Server expects string for decimal precision
         }
 
         if reference_sequence is not None:

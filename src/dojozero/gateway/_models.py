@@ -130,6 +130,7 @@ class CurrentOddsResponse(BaseModel):
     )
     last_update: datetime | None = Field(default=None, serialization_alias="lastUpdate")
     betting_open: bool = Field(default=False, serialization_alias="bettingOpen")
+    sequence: int = Field(default=0, description="Current global event sequence")
 
 
 # ============================================================================
