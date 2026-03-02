@@ -463,19 +463,29 @@ def _extract_agent_actions_from_spans(
     """
     all_actions: list[AgentAction] = []
 
+    def _latest_span_time(spans: list[SpanData]) -> int:
+        return max((span.start_time for span in spans), default=0)
+
     # Filter to requested trials or use all
     trials_to_process = (
         trial_ids if trial_ids is not None else list(spans_by_trial.keys())
     )
+    # Process most recently active trials first so max_trials does not bias toward
+    # stale trial_ids ordering from upstream trace backends.
+    sorted_trials = sorted(
+        trials_to_process,
+        key=lambda trial_id: _latest_span_time(spans_by_trial.get(trial_id, [])),
+        reverse=True,
+    )
 
     LOGGER.debug(
         "Extracting agent actions from %d trials (limit=%d, max_trials=%d)",
-        min(len(trials_to_process), max_trials),
+        min(len(sorted_trials), max_trials),
         limit,
         max_trials,
     )
 
-    for trial_id in trials_to_process[:max_trials]:
+    for trial_id in sorted_trials[:max_trials]:
         spans = spans_by_trial.get(trial_id, [])
 
         # Filter to agent.response spans
