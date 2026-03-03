@@ -15,6 +15,7 @@ from dojozero_client._exceptions import (
     ConnectionError,
     NotRegisteredError,
     RegistrationError,
+    TrialEndedError,
 )
 from dojozero_client._transport import GatewayTransport
 
@@ -159,6 +160,81 @@ class EventEnvelope:
         )
 
 
+@dataclass
+class AgentResult:
+    """Final results for a single agent."""
+
+    agent_id: str
+    final_balance: float
+    net_profit: float
+    total_bets: int
+    win_rate: float
+    roi: float
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AgentResult":
+        """Create from API response."""
+        return cls(
+            agent_id=data["agentId"],
+            final_balance=float(data["finalBalance"]),
+            net_profit=float(data["netProfit"]),
+            total_bets=data["totalBets"],
+            win_rate=data["winRate"],
+            roi=data["roi"],
+        )
+
+
+@dataclass
+class TrialEndedEvent:
+    """Trial ended notification received via SSE.
+
+    This event signals that the trial has ended and provides final results.
+    After receiving this event, the SSE stream will close.
+    """
+
+    trial_id: str
+    reason: str  # "completed", "cancelled", "failed"
+    timestamp: datetime
+    final_results: list[AgentResult]
+    message: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TrialEndedEvent":
+        """Create from SSE event data."""
+        return cls(
+            trial_id=data["trialId"],
+            reason=data["reason"],
+            timestamp=datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00")),
+            final_results=[
+                AgentResult.from_dict(r) for r in data.get("finalResults", [])
+            ],
+            message=data.get("message", ""),
+        )
+
+
+@dataclass
+class TrialResults:
+    """Trial results from results endpoint."""
+
+    trial_id: str
+    status: str  # "running", "completed", "cancelled", "failed"
+    results: list[AgentResult]
+    ended_at: datetime | None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TrialResults":
+        """Create from API response."""
+        ended_at = None
+        if data.get("endedAt"):
+            ended_at = datetime.fromisoformat(data["endedAt"].replace("Z", "+00:00"))
+        return cls(
+            trial_id=data["trialId"],
+            status=data["status"],
+            results=[AgentResult.from_dict(r) for r in data.get("results", [])],
+            ended_at=ended_at,
+        )
+
+
 class TrialConnection:
     """Connection to a specific trial.
 
@@ -197,6 +273,7 @@ class TrialConnection:
         self._agent_id = agent_id
         self._trial_id = trial_id
         self._last_sequence: int = 0
+        self._trial_ended: TrialEndedEvent | None = None
 
     @property
     def agent_id(self) -> str:
@@ -213,6 +290,11 @@ class TrialConnection:
         """Get last seen sequence number."""
         return self._last_sequence
 
+    @property
+    def trial_ended(self) -> TrialEndedEvent | None:
+        """Get trial ended event if trial has ended via SSE."""
+        return self._trial_ended
+
     async def get_trial_metadata(self) -> TrialMetadata:
         """Get trial metadata."""
         response = await self._transport.request("GET", "/api/v1/trial")
@@ -221,17 +303,21 @@ class TrialConnection:
     async def events(
         self,
         event_types: list[str] | None = None,
+        raise_on_trial_end: bool = True,
     ) -> AsyncIterator[EventEnvelope]:
         """Stream events via SSE.
 
         Args:
             event_types: Optional list of event types to filter
+            raise_on_trial_end: If True (default), raises TrialEndedError when
+                trial_ended event is received. If False, logs and returns normally.
 
         Yields:
             EventEnvelope objects as they arrive
 
         Raises:
-            StreamDisconnectedError: If stream disconnects
+            StreamDisconnectedError: If stream disconnects unexpectedly
+            TrialEndedError: If trial ends (when raise_on_trial_end=True)
         """
         async for sse_event in self._transport.stream_events():
             if sse_event.event == "event":
@@ -255,6 +341,36 @@ class TrialConnection:
                 except Exception as e:
                     logger.warning("Failed to parse event: %s", e)
                     continue
+
+            elif sse_event.event == "trial_ended":
+                # Trial has ended - parse the event
+                try:
+                    data = sse_event.json()
+                    trial_ended = TrialEndedEvent.from_dict(data)
+                    self._trial_ended = trial_ended
+
+                    logger.info(
+                        "Trial %s ended: reason=%s, agents=%d",
+                        trial_ended.trial_id,
+                        trial_ended.reason,
+                        len(trial_ended.final_results),
+                    )
+
+                    if raise_on_trial_end:
+                        raise TrialEndedError(
+                            f"Trial {trial_ended.trial_id} has {trial_ended.reason}",
+                            reason=trial_ended.reason,
+                            final_results=trial_ended.final_results,
+                        )
+                    else:
+                        # Return normally - stream will end
+                        return
+
+                except TrialEndedError:
+                    raise
+                except Exception as e:
+                    logger.warning("Failed to parse trial_ended event: %s", e)
+                    return
 
             elif sse_event.event == "heartbeat":
                 # Update sequence from heartbeat
@@ -389,6 +505,21 @@ class TrialConnection:
         """
         response = await self._transport.request("GET", "/api/v1/balance")
         return Balance.from_dict(response)
+
+    async def get_results(self) -> TrialResults:
+        """Get current or final trial results.
+
+        Can be called during a running trial to get current standings,
+        or after trial ends to get final results.
+
+        This is useful if you missed the trial_ended SSE event or want
+        to verify the final results.
+
+        Returns:
+            TrialResults with status and all agent results
+        """
+        response = await self._transport.request("GET", "/api/v1/trial/results")
+        return TrialResults.from_dict(response)
 
 
 @dataclass
@@ -621,6 +752,7 @@ class DojoClient:
 
 
 __all__ = [
+    "AgentResult",
     "Balance",
     "BetResult",
     "DojoClient",
@@ -628,5 +760,7 @@ __all__ = [
     "GatewayInfo",
     "Odds",
     "TrialConnection",
+    "TrialEndedEvent",
     "TrialMetadata",
+    "TrialResults",
 ]
