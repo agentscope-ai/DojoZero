@@ -82,6 +82,7 @@ class TrialManager:
         stale_threshold_hours: float = 24.0,
         checkpoint_interval_seconds: float = 300.0,
         gateway_router: "GatewayRouter | None" = None,
+        gateway_grace_period: float = 5.0,
     ):
         """Initialize the TrialManager.
 
@@ -93,6 +94,10 @@ class TrialManager:
             stale_threshold_hours: Skip resuming trials older than this (hours)
             checkpoint_interval_seconds: Interval for periodic checkpointing (default 5 min)
             gateway_router: GatewayRouter instance for registering trial gateways
+            gateway_grace_period: Seconds to wait after trial_ended before unregistering
+                                  gateway (default 5s). This gives external agents time
+                                  to receive the trial_ended SSE event and make final
+                                  API calls (e.g., get_results).
         """
         self._orchestrator = orchestrator
         self._max_concurrent = max_concurrent
@@ -101,6 +106,7 @@ class TrialManager:
         self._stale_threshold_hours = stale_threshold_hours
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
         self._gateway_router = gateway_router
+        self._gateway_grace_period = gateway_grace_period
 
         # Queue for pending trials
         self._pending: asyncio.Queue[QueuedTrial] = asyncio.Queue()
@@ -283,13 +289,16 @@ class TrialManager:
                 message=f"Trial {trial_id} has {reason}",
             )
             self._logger.info(
-                "Signaled trial_ended for trial '%s' (reason=%s)",
+                "Signaled trial_ended for trial '%s' (reason=%s), "
+                "waiting %.1fs grace period",
                 trial_id,
                 reason,
+                self._gateway_grace_period,
             )
 
-            # Brief delay to allow SSE clients to receive the message
-            await asyncio.sleep(0.5)
+            # Grace period to allow SSE clients to receive the message
+            # and make final API calls (e.g., get_results)
+            await asyncio.sleep(self._gateway_grace_period)
 
         except Exception as e:
             self._logger.warning(
