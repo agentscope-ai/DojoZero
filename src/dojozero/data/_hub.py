@@ -133,6 +133,18 @@ class DataHub:
         # Pregame callbacks: invoked after GameInitializeEvent with stores paused
         self._on_game_initialized_callbacks: list[Callable[[str], Awaitable[None]]] = []
 
+        # Deduplication: track event keys to prevent duplicate events on resume
+        self._dedup_keys: set[str] = set()
+
+    def load_dedup_keys(self, keys: set[str]) -> None:
+        """Load deduplication keys from JSONL on resume.
+
+        Args:
+            keys: Set of dedup keys extracted from JSONL file
+        """
+        self._dedup_keys = keys.copy()
+        logger.info("DataHub loaded %d dedup keys for resume", len(self._dedup_keys))
+
     def subscribe_agent(
         self,
         agent_id: str,
@@ -201,6 +213,12 @@ class DataHub:
             game_id: Game ID from the source store's poll_identifier (authoritative)
             game_date: Game date from the source store's poll_identifier (YYYY-MM-DD)
         """
+        # Check deduplication: skip events we've already processed
+        dedup_key = event.get_dedup_key()
+        if dedup_key and dedup_key in self._dedup_keys:
+            logger.debug("Skipping duplicate event: %s", dedup_key)
+            return
+
         # Cache event for late-joining subscribers (arrival order, always)
         self._cache_event(event)
 
@@ -215,6 +233,10 @@ class DataHub:
 
         # Gate controls persistence, trace emission, and dispatch ordering
         await self._gated_dispatch(envelope)
+
+        # Track dedup key after successful processing
+        if dedup_key:
+            self._dedup_keys.add(dedup_key)
 
     # Class-level counters for progress logging
     _sls_emit_count: int = 0

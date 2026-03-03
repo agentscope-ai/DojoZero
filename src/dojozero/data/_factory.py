@@ -23,12 +23,13 @@ Usage:
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.core._types import RuntimeContext
 from dojozero.data._hub import DataHub
-from dojozero.data._stores import DataStore
+from dojozero.data._stores import DataStore, extract_dedup_keys_from_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,18 @@ def build_runtime_context(
         trial_id=trial_id,
     )
     data_hubs[hub_id] = hub
+
+    # Load dedup keys if persistence file exists (resume case)
+    # This ensures events already persisted are not re-emitted
+    persistence_path = Path(persistence_file)
+    if persistence_path.exists() and persistence_path.stat().st_size > 0:
+        dedup_keys = extract_dedup_keys_from_jsonl(persistence_path)
+        hub.load_dedup_keys(dedup_keys)
+        logger.info(
+            "Loaded %d dedup keys from existing JSONL for hub '%s'",
+            len(dedup_keys),
+            hub_id,
+        )
 
     # Create stores using registered factories
     for store_type in store_types:

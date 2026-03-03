@@ -425,6 +425,10 @@ class TrialManager:
                 )
                 self._trials[trial_id] = queued
 
+                # Register gateway for resumed trial
+                if self._gateway_router is not None:
+                    self._register_gateway(trial_id, record.spec)
+
                 resumed_count += 1
                 self._logger.info(
                     "Successfully resumed interrupted trial '%s'",
