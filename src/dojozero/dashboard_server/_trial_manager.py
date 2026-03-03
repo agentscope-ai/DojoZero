@@ -249,6 +249,58 @@ class TrialManager:
             return True
         return False
 
+    async def _signal_trial_ended_and_cleanup(
+        self, trial_id: str, final_phase: QueuedTrialPhase
+    ) -> None:
+        """Signal trial ended to SSE clients and then unregister gateway.
+
+        This gives connected agents time to receive the trial_ended event
+        before the gateway is removed.
+
+        Args:
+            trial_id: Trial identifier
+            final_phase: Final phase of the trial
+        """
+        if self._gateway_router is None:
+            return
+
+        gateway_state = self._gateway_router.get_gateway_state(trial_id)
+        if gateway_state is None:
+            return
+
+        # Map QueuedTrialPhase to reason string
+        reason_map = {
+            QueuedTrialPhase.COMPLETED: "completed",
+            QueuedTrialPhase.CANCELLED: "cancelled",
+            QueuedTrialPhase.FAILED: "failed",
+        }
+        reason = reason_map.get(final_phase, "completed")
+
+        # Signal trial ended
+        try:
+            await gateway_state.adapter.signal_trial_ended(
+                reason=reason,
+                message=f"Trial {trial_id} has {reason}",
+            )
+            self._logger.info(
+                "Signaled trial_ended for trial '%s' (reason=%s)",
+                trial_id,
+                reason,
+            )
+
+            # Brief delay to allow SSE clients to receive the message
+            await asyncio.sleep(0.5)
+
+        except Exception as e:
+            self._logger.warning(
+                "Failed to signal trial_ended for trial '%s': %s",
+                trial_id,
+                e,
+            )
+
+        # Now unregister the gateway
+        self._unregister_gateway(trial_id)
+
     async def start(self) -> None:
         """Start the background worker and optionally resume interrupted trials."""
         if self._worker_task is not None:
@@ -775,9 +827,9 @@ class TrialManager:
             queued.error = str(e)
             self._logger.error("Trial '%s' failed: %s", trial_id, e, exc_info=True)
         finally:
-            # Always unregister gateway when trial finishes
+            # Signal trial ended and unregister gateway
             if gateway_registered:
-                self._unregister_gateway(trial_id)
+                await self._signal_trial_ended_and_cleanup(trial_id, queued.phase)
 
     def _upload_to_oss(self, trial_id: str, spec: TrialSpec) -> None:
         """Upload trial data to OSS if configured."""

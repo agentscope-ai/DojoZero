@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from starlette.responses import StreamingResponse
 
-from dojozero.gateway._models import EventEnvelope, HeartbeatMessage
+from dojozero.gateway._models import EventEnvelope, HeartbeatMessage, TrialEndedMessage
 
 if TYPE_CHECKING:
     from dojozero.data._subscriptions import Subscription
@@ -36,6 +36,8 @@ class SSEConnection:
         get_global_sequence: Callable[[], int],
         get_recent_events: Callable[[int], list[Any]],
         heartbeat_interval: float = 15.0,
+        trial_ended_event: asyncio.Event | None = None,
+        get_trial_ended_message: Callable[[], TrialEndedMessage | None] | None = None,
     ):
         """Initialize SSE connection.
 
@@ -45,12 +47,16 @@ class SSEConnection:
             get_global_sequence: Callable returning current global sequence number
             get_recent_events: Callable returning recent events (takes limit param)
             heartbeat_interval: Seconds between heartbeat messages
+            trial_ended_event: Optional event to signal trial has ended
+            get_trial_ended_message: Optional callable to get the trial ended message
         """
         self.subscription = subscription
         self.trial_id = trial_id
         self.get_global_sequence = get_global_sequence
         self.get_recent_events = get_recent_events
         self.heartbeat_interval = heartbeat_interval
+        self._trial_ended_event = trial_ended_event
+        self._get_trial_ended_message = get_trial_ended_message
         self._closed = False
 
     async def event_stream(
@@ -70,6 +76,7 @@ class SSEConnection:
             - Replay events (if reconnecting)
             - Live event messages with sequence IDs
             - Heartbeat messages to keep connection alive
+            - trial_ended message when trial completes
         """
         logger.info(
             "SSE stream started: subscription=%s, trial=%s, last_event_id=%s",
@@ -85,11 +92,36 @@ class SSEConnection:
                     yield sse_msg
 
             while not self._closed:
+                # Check if trial has ended
+                if (
+                    self._trial_ended_event is not None
+                    and self._trial_ended_event.is_set()
+                ):
+                    # Send trial_ended message and close
+                    if self._get_trial_ended_message is not None:
+                        ended_msg = self._get_trial_ended_message()
+                        if ended_msg is not None:
+                            yield self._format_sse(
+                                event="trial_ended",
+                                data=ended_msg.model_dump(mode="json", by_alias=True),
+                            )
+                    logger.info(
+                        "SSE stream sending trial_ended: subscription=%s",
+                        self.subscription.subscription_id,
+                    )
+                    break
+
                 # Wait for event with timeout for heartbeat
                 event = await self.subscription.get(timeout=self.heartbeat_interval)
 
                 if event is None:
-                    # Timeout - send heartbeat
+                    # Timeout - check trial ended again before sending heartbeat
+                    if (
+                        self._trial_ended_event is not None
+                        and self._trial_ended_event.is_set()
+                    ):
+                        continue  # Will be caught at top of loop
+                    # Send heartbeat
                     heartbeat = HeartbeatMessage(
                         timestamp=datetime.now(timezone.utc),
                     )

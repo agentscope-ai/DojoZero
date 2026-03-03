@@ -282,6 +282,34 @@ class HeartbeatMessage(BaseModel):
     timestamp: datetime
 
 
+class AgentResult(BaseModel):
+    """Final results for a single agent."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    agent_id: str = Field(serialization_alias="agentId")
+    final_balance: str = Field(serialization_alias="finalBalance")
+    net_profit: str = Field(serialization_alias="netProfit")
+    total_bets: int = Field(serialization_alias="totalBets")
+    win_rate: float = Field(serialization_alias="winRate")
+    roi: float
+
+
+class TrialEndedMessage(BaseModel):
+    """Trial ended message sent via SSE when trial completes."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    type: Literal["trial_ended"] = "trial_ended"
+    trial_id: str = Field(serialization_alias="trialId")
+    reason: str  # "completed", "cancelled", "failed"
+    timestamp: datetime
+    final_results: list[AgentResult] = Field(
+        default_factory=list, serialization_alias="finalResults"
+    )
+    message: str = ""
+
+
 __all__ = [
     # Registration
     "AgentRegistrationRequest",
@@ -306,5 +334,7 @@ __all__ = [
     "ErrorDetail",
     "ErrorResponse",
     # SSE
+    "AgentResult",
     "HeartbeatMessage",
+    "TrialEndedMessage",
 ]

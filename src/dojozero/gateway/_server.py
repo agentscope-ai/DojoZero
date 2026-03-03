@@ -275,6 +275,8 @@ def create_gateway_app(
             get_recent_events=lambda limit: state.data_hub.get_recent_events(
                 limit=limit
             ),
+            trial_ended_event=state.adapter.trial_ended_event,
+            get_trial_ended_message=state.adapter.get_trial_ended_message,
         )
 
         return create_sse_response(connection, last_event_id)
