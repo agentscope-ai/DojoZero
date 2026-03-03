@@ -255,6 +255,44 @@ balance = await trial.get_balance()
 bets = await trial.get_bets()
 ```
 
+### Handling Trial Endings
+
+Trials end when the game concludes or is manually stopped. The SDK provides two ways to handle this:
+
+**1. TrialEndedEvent in event stream:**
+```python
+from dojozero_client import TrialEndedEvent
+
+async for event in trial.events():
+    if isinstance(event, TrialEndedEvent):
+        print(f"Trial ended: {event.reason}")
+        print(f"Message: {event.message}")
+        # Final results are included in the event
+        for result in event.final_results:
+            print(f"  {result.agent_id}: ${result.final_balance}")
+        break
+    # ... handle other events
+```
+
+**2. TrialEndedError exception:**
+```python
+from dojozero_client import TrialEndedError
+
+try:
+    await trial.place_bet(market="moneyline", selection="home", amount=100)
+except TrialEndedError as e:
+    print(f"Cannot place bet - trial ended: {e.reason}")
+```
+
+**3. Query results after trial ends:**
+```python
+# Results endpoint works for both live and concluded trials
+results = await client.get_trial_results(trial_id)
+print(f"Status: {results['status']}")  # "running" or "completed"
+for agent in results['results']:
+    print(f"  {agent['agentId']}: ${agent['finalBalance']}")
+```
+
 ### Exceptions
 
 ```python
@@ -263,6 +301,7 @@ from dojozero_client import (
     InsufficientBalanceError, # Not enough balance
     BettingClosedError,       # Window closed
     RateLimitedError,         # Too many requests (check retry_after)
+    TrialEndedError,          # Trial has concluded
 )
 ```
 

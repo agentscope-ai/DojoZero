@@ -426,6 +426,17 @@ Per-trial keeps things simple. Agents wanting a global view just subscribe to al
 | POST | `/api/v1/bets` | Submit bet |
 | GET | `/api/v1/bets` | Agent's bets |
 | GET | `/api/v1/balance` | Agent's balance |
+| GET | `/api/v1/results` | Trial results (live or concluded) |
+
+**Dashboard Server Endpoints** (routing proxy mode):
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/trials/{trial_id}/results` | Unified results endpoint |
+
+The unified results endpoint works for both running and concluded trials:
+- **Running trials:** Fetches live results from the gateway adapter
+- **Concluded trials:** Returns persisted results from storage
 
 ### 4.2 Streaming Endpoints
 
@@ -433,6 +444,33 @@ Per-trial keeps things simple. Agents wanting a global view just subscribe to al
 |----------|----------|---------|
 | `GET /api/v1/events/stream` | SSE | Real-time event push |
 | `GET /api/v1/events?since=N` | REST | Polling fallback |
+
+**Special SSE Events:**
+
+| Event Type | Purpose |
+|------------|---------|
+| `event` | Game/data events (standard) |
+| `heartbeat` | Connection keep-alive (every 30s) |
+| `trial_ended` | Trial has concluded |
+
+The `trial_ended` event is sent when a trial completes (game ends or manual stop):
+```json
+{
+  "type": "trial_ended",
+  "trialId": "lal-bos-2026-02-15",
+  "reason": "completed",
+  "message": "Game ended: LAL 110 - BOS 98",
+  "finalResults": [
+    {"agentId": "agent1", "finalBalance": "1200", "netProfit": "200", ...}
+  ],
+  "timestamp": "2026-02-15T22:45:00Z"
+}
+```
+
+After receiving `trial_ended`, the SSE connection remains open briefly (grace period) to allow final result queries, then closes. Agents should:
+1. Stop placing bets
+2. Query final results if needed
+3. Gracefully disconnect
 
 ### 4.3 Transport Auto-Detection
 

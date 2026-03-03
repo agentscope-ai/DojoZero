@@ -703,3 +703,128 @@ class TestRateLimiter:
         assert config.max_sse_connections == 5
         assert config.window_seconds == 60
         assert config.enabled is True
+
+
+class TestTrialResults:
+    """Tests for trial results and trial_ended features."""
+
+    @pytest.fixture
+    def mock_data_hub(self):
+        """Create mock DataHub."""
+        hub = MagicMock()
+        hub.subscription_manager = MagicMock()
+        hub.subscription_manager.global_sequence = 100
+        hub.subscription_manager.subscribe = AsyncMock()
+        hub.subscription_manager.broadcast = AsyncMock()
+        return hub
+
+    @pytest.fixture
+    def mock_broker(self):
+        """Create mock BrokerOperator with accounts."""
+        broker = MagicMock()
+        broker.initial_balance = "1000"
+        broker.create_account = AsyncMock()
+        broker._event = None
+        # Mock accounts with balances
+        broker._accounts = {
+            "agent1": MagicMock(balance=Decimal("1200")),
+            "agent2": MagicMock(balance=Decimal("800")),
+        }
+
+        # Mock get_statistics to return proper stats
+        async def mock_get_stats(agent_id):
+            stats = MagicMock()
+            if agent_id == "agent1":
+                stats.net_profit = Decimal("200")
+                stats.total_bets = 2
+                stats.win_rate = 0.5
+                stats.roi = 0.2
+            else:
+                stats.net_profit = Decimal("-200")
+                stats.total_bets = 1
+                stats.win_rate = 0.0
+                stats.roi = -0.2
+            return stats
+
+        broker.get_statistics = mock_get_stats
+        return broker
+
+    @pytest.fixture
+    def adapter(self, mock_data_hub, mock_broker):
+        """Create adapter with mocks."""
+        adapter = ExternalAgentAdapter(
+            data_hub=mock_data_hub,
+            broker=mock_broker,
+            trial_id="trial123",
+        )
+        # Pre-register agents by adding to _agents dict
+        adapter._agents["agent1"] = MagicMock()
+        adapter._agents["agent2"] = MagicMock()
+        return adapter
+
+    @pytest.mark.asyncio
+    async def test_get_results_running_trial(self, adapter):
+        """Test get_results returns running status when trial not ended."""
+        results = await adapter.get_results()
+
+        assert results.trial_id == "trial123"
+        assert results.status == "running"
+        assert results.ended_at is None
+        assert len(results.results) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_results_after_trial_ended(self, adapter):
+        """Test get_results returns correct status after signal_trial_ended."""
+        await adapter.signal_trial_ended(reason="completed", message="Game over")
+
+        results = await adapter.get_results()
+
+        assert results.trial_id == "trial123"
+        assert results.status == "completed"
+        assert results.ended_at is not None
+        assert len(results.results) == 2
+
+    @pytest.mark.asyncio
+    async def test_signal_trial_ended_sets_event_and_message(self, adapter):
+        """Test signal_trial_ended sets the event and stores the message."""
+        assert not adapter._trial_ended_event.is_set()
+        assert adapter._trial_ended_message is None
+
+        await adapter.signal_trial_ended(reason="completed", message="Game finished")
+
+        # Verify event is set and message is stored
+        assert adapter._trial_ended_event.is_set()
+        assert adapter._trial_ended_message is not None
+        assert adapter._trial_ended_message.type == "trial_ended"
+        assert adapter._trial_ended_message.trial_id == "trial123"
+        assert adapter._trial_ended_message.reason == "completed"
+        assert adapter._trial_ended_message.message == "Game finished"
+        assert len(adapter._trial_ended_message.final_results) == 2
+
+    @pytest.mark.asyncio
+    async def test_signal_trial_ended_only_once(self, adapter):
+        """Test signal_trial_ended can only be called once."""
+        await adapter.signal_trial_ended(reason="completed", message="First")
+        first_message = adapter._trial_ended_message
+
+        await adapter.signal_trial_ended(reason="failed", message="Second")
+
+        # Message should not change after second call
+        assert adapter._trial_ended_message is first_message
+        assert adapter._trial_ended_message.reason == "completed"
+
+    @pytest.mark.asyncio
+    async def test_results_include_agent_stats(self, adapter):
+        """Test results include proper agent statistics."""
+        results = await adapter.get_results()
+
+        # Find agent1 results (should be first due to higher balance)
+        agent1_result = next(r for r in results.results if r.agent_id == "agent1")
+        assert agent1_result.final_balance == "1200"
+        assert agent1_result.total_bets == 2
+        assert agent1_result.win_rate == 0.5
+
+        # Find agent2 results
+        agent2_result = next(r for r in results.results if r.agent_id == "agent2")
+        assert agent2_result.final_balance == "800"
+        assert agent2_result.total_bets == 1

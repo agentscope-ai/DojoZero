@@ -20,6 +20,7 @@ from dojozero.core import (
     OperatorSpec,
     StreamEvent,
     TrialPhase,
+    TrialRecord,
     TrialSpec,
 )
 from dojozero.dashboard_server._trial_manager import (
@@ -1020,3 +1021,95 @@ async def test_integration_complete_trial_already_stopped(tmp_path) -> None:
 
     # Clean up
     await trial_manager.stop()
+
+
+# =============================================================================
+# Trial Results Persistence Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_results_persistence() -> None:
+    """Test InMemoryOrchestratorStore trial results persistence."""
+    store = InMemoryOrchestratorStore()
+
+    # No results initially
+    assert store.get_trial_results("trial-001") is None
+
+    # Save results
+    results = {
+        "trialId": "trial-001",
+        "status": "completed",
+        "endedAt": "2024-01-01T12:00:00Z",
+        "results": [{"agentId": "agent1", "finalBalance": "1200", "netProfit": "200"}],
+    }
+    store.save_trial_results("trial-001", results)
+
+    # Retrieve results
+    loaded = store.get_trial_results("trial-001")
+    assert loaded is not None
+    assert loaded["trialId"] == "trial-001"
+    assert loaded["status"] == "completed"
+    assert len(loaded["results"]) == 1
+    assert loaded["results"][0]["agentId"] == "agent1"
+
+
+@pytest.mark.asyncio
+async def test_filesystem_store_results_persistence(tmp_path) -> None:
+    """Test FileSystemOrchestratorStore trial results persistence."""
+    store = FileSystemOrchestratorStore(tmp_path)
+
+    # Create a trial first (results.json needs the trial directory)
+    spec = _build_trial_spec("trial-results-test")
+    store.upsert_trial_record(TrialRecord(spec=spec, last_status=None))
+
+    # No results initially
+    assert store.get_trial_results("trial-results-test") is None
+
+    # Save results
+    results = {
+        "trialId": "trial-results-test",
+        "status": "completed",
+        "endedAt": "2024-01-01T12:00:00Z",
+        "results": [
+            {"agentId": "agent1", "finalBalance": "1200", "netProfit": "200"},
+            {"agentId": "agent2", "finalBalance": "800", "netProfit": "-200"},
+        ],
+    }
+    store.save_trial_results("trial-results-test", results)
+
+    # Retrieve results
+    loaded = store.get_trial_results("trial-results-test")
+    assert loaded is not None
+    assert loaded["trialId"] == "trial-results-test"
+    assert loaded["status"] == "completed"
+    assert len(loaded["results"]) == 2
+
+    # Verify file was created
+    results_path = tmp_path / "trials" / "trial-results-test" / "results.json"
+    assert results_path.exists()
+
+    # Verify results survive store recreation (persistence)
+    new_store = FileSystemOrchestratorStore(tmp_path)
+    reloaded = new_store.get_trial_results("trial-results-test")
+    assert reloaded is not None
+    assert reloaded["trialId"] == "trial-results-test"
+
+
+@pytest.mark.asyncio
+async def test_results_persistence_without_trial_record(tmp_path) -> None:
+    """Test that results can be saved even without an existing trial record."""
+    store = FileSystemOrchestratorStore(tmp_path)
+
+    # Save results without creating a trial record first
+    results = {
+        "trialId": "orphan-trial",
+        "status": "completed",
+        "results": [],
+    }
+    store.save_trial_results("orphan-trial", results)
+
+    # Results should be retrievable
+    loaded = store.get_trial_results("orphan-trial")
+    assert loaded is not None
+    assert loaded["trialId"] == "orphan-trial"
