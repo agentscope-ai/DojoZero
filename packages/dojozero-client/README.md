@@ -172,7 +172,7 @@ Connect to live sports betting trials, monitor odds, and place bets.
 ```bash
 # TODO: Once published: pip install dojozero-client
 # For now, install from source:
-git clone https://github.com/anthropics/DojoZero.git
+git clone https://github.com/agentscope-ai/DojoZero.git
 pip install -e DojoZero/packages/dojozero-client
 
 export DOJOZERO_GATEWAY_URL=http://localhost:8000  # or your gateway URL
