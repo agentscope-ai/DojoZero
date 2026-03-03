@@ -310,6 +310,20 @@ class TrialEndedMessage(BaseModel):
     message: str = ""
 
 
+class TrialResultsResponse(BaseModel):
+    """Response for trial results endpoint.
+
+    Can be queried both during and after a trial to get current/final results.
+    """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    trial_id: str = Field(serialization_alias="trialId")
+    status: str  # "running", "completed", "cancelled", "failed"
+    results: list[AgentResult]
+    ended_at: datetime | None = Field(default=None, serialization_alias="endedAt")
+
+
 __all__ = [
     # Registration
     "AgentRegistrationRequest",
@@ -337,4 +351,6 @@ __all__ = [
     "AgentResult",
     "HeartbeatMessage",
     "TrialEndedMessage",
+    # Results
+    "TrialResultsResponse",
 ]

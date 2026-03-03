@@ -35,6 +35,7 @@ from dojozero.gateway._models import (
     SpreadLine,
     TotalLine,
     TrialEndedMessage,
+    TrialResultsResponse,
 )
 
 if TYPE_CHECKING:
@@ -587,6 +588,31 @@ class ExternalAgentAdapter:
         # Sort by balance descending
         results.sort(key=lambda r: float(r.final_balance), reverse=True)
         return results
+
+    async def get_results(self) -> TrialResultsResponse:
+        """Get current or final trial results.
+
+        Can be called during or after a trial to get agent results.
+
+        Returns:
+            TrialResultsResponse with current results
+        """
+        # Determine status
+        if self._trial_ended_message is not None:
+            status = self._trial_ended_message.reason
+            ended_at = self._trial_ended_message.timestamp
+            results = list(self._trial_ended_message.final_results)
+        else:
+            status = "running"
+            ended_at = None
+            results = await self._build_final_results()
+
+        return TrialResultsResponse(
+            trial_id=self._trial_id,
+            status=status,
+            results=results,
+            ended_at=ended_at,
+        )
 
 
 __all__ = [

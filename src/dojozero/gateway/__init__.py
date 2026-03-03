@@ -30,6 +30,7 @@ from dojozero.gateway._models import (
     TotalLine,
     TrialEndedMessage,
     TrialMetadataResponse,
+    TrialResultsResponse,
 )
 from dojozero.gateway._rate_limit import (
     RateLimitConfig,
@@ -73,6 +74,7 @@ __all__ = [
     "HeartbeatMessage",
     "RecentEventsResponse",
     "TrialEndedMessage",
+    "TrialResultsResponse",
     # Models - Odds
     "CurrentOddsResponse",
     "SpreadLine",
