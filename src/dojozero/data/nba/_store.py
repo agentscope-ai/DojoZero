@@ -778,31 +778,35 @@ class NBAStore(DataStore):
     async def load_state(
         self,
         state: dict[str, Any],
-        dedup_event_ids: set[str] | None = None,
-        dedup_play_ids: set[str] | None = None,
+        dedup_keys: set[str] | None = None,
     ) -> None:
         """Load store state from checkpoint.
 
         Args:
             state: Dictionary from save_state()
-            dedup_event_ids: Optional set of event IDs to rebuild deduplication.
-                            These should be extracted from JSONL by the caller.
-                            Format: "{game_id}_pbp_{action_number}"
-            dedup_play_ids: Optional set of play IDs for base tracker deduplication.
-                           Format: "{game_id}_play_{play_id}"
+            dedup_keys: Optional set of deduplication keys extracted from JSONL.
+                       Keys are filtered internally by format:
+                       - "{game_id}_pbp_{action_number}" for NBA play-by-play
+                       - "{game_id}_play_{play_id}" for ESPN plays
         """
-        await super().load_state(state)
+        await super().load_state(state, dedup_keys)
 
         # Restore state tracker
         tracker_data = state.get("state_tracker")
         if tracker_data:
             self._state.load_from_dict(tracker_data)
 
-        # Rebuild deduplication sets from provided IDs (extracted from JSONL)
-        if dedup_event_ids is not None:
-            self._state.rebuild_dedup_from_event_ids(dedup_event_ids)
-        if dedup_play_ids is not None:
-            self._state.rebuild_dedup_from_play_ids(dedup_play_ids)
+        # Rebuild deduplication sets by filtering keys based on format
+        if dedup_keys is not None:
+            # NBA play-by-play events: {game_id}_pbp_{action_number}
+            event_ids = {k for k in dedup_keys if "_pbp_" in k}
+            if event_ids:
+                self._state.rebuild_dedup_from_event_ids(event_ids)
+
+            # ESPN-style plays: {game_id}_play_{play_id}
+            play_ids = {k for k in dedup_keys if "_play_" in k}
+            if play_ids:
+                self._state.rebuild_dedup_from_play_ids(play_ids)
 
         # Restore poll profile
         poll_profile_value = state.get("current_poll_profile")

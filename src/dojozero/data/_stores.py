@@ -522,7 +522,11 @@ class DataStore(ABC):
             "poll_identifier": self._poll_identifier,
         }
 
-    async def load_state(self, state: dict[str, Any]) -> None:
+    async def load_state(
+        self,
+        state: dict[str, Any],
+        dedup_keys: set[str] | None = None,
+    ) -> None:
         """Load store state from checkpoint.
 
         Subclasses should override this to restore their internal state.
@@ -530,6 +534,8 @@ class DataStore(ABC):
 
         Args:
             state: Dictionary containing previously saved state
+            dedup_keys: Optional set of deduplication keys extracted from JSONL.
+                       Subclasses filter these internally based on key format.
         """
         # Restore poll times
         last_poll_times = state.get("last_poll_times", {})
@@ -543,3 +549,5 @@ class DataStore(ABC):
         poll_identifier = state.get("poll_identifier")
         if poll_identifier:
             self._poll_identifier = poll_identifier
+
+        # Base class ignores dedup_keys; subclasses filter and use as needed
