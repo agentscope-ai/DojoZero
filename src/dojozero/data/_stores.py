@@ -1,16 +1,117 @@
 """DataStore: Manages external APIs, polling, and event emission."""
 
 import asyncio
+import json
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from collections.abc import Awaitable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from dojozero.data._models import DataEvent
+from dojozero.data._models import DataEvent, extract_game_id
 from dojozero.data._processors import DataProcessor
 
 logger = logging.getLogger(__name__)
+
+
+def extract_dedup_keys_from_jsonl(
+    jsonl_path: str | Path,
+    game_id: str | None = None,
+) -> set[str]:
+    """Extract deduplication keys from a JSONL event file.
+
+    Uses the generic get_dedup_key() method on each event to extract its
+    deduplication key. This is fully extensible - adding new event types
+    with get_dedup_key() implementations requires no changes here.
+
+    Args:
+        jsonl_path: Path to the JSONL event file
+        game_id: Optional game ID to filter events (if None, extracts all)
+
+    Returns:
+        Set of deduplication keys from all events
+    """
+    # Lazy import to avoid circular dependency
+    from dojozero.data import deserialize_data_event
+
+    dedup_keys: set[str] = set()
+
+    path = Path(jsonl_path)
+    if not path.exists():
+        logger.warning("JSONL file not found for dedup rebuild: %s", jsonl_path)
+        return dedup_keys
+
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+
+                    # Filter by game_id if provided (uses shared extraction logic)
+                    if game_id:
+                        evt_game_id = extract_game_id(data)
+                        if evt_game_id != game_id:
+                            continue
+
+                    # Deserialize to typed event and get dedup key
+                    event = deserialize_data_event(data)
+                    if event:
+                        key = event.get_dedup_key()
+                        if key:
+                            dedup_keys.add(key)
+
+                except json.JSONDecodeError:
+                    continue  # Skip malformed lines
+
+    except Exception as e:
+        logger.error("Error reading JSONL for dedup rebuild: %s", e)
+
+    logger.info(
+        "Rebuilt dedup state from JSONL: %d dedup keys",
+        len(dedup_keys),
+    )
+    return dedup_keys
+
+
+# Legacy function for backward compatibility
+def extract_dedup_ids_from_jsonl(
+    jsonl_path: str | Path,
+    game_id: str | None = None,
+) -> tuple[set[str], set[str], set[str]]:
+    """Extract deduplication IDs from a JSONL event file (legacy).
+
+    DEPRECATED: Use extract_dedup_keys_from_jsonl() instead.
+
+    This function maintains backward compatibility by categorizing keys
+    into separate sets based on their format.
+
+    Args:
+        jsonl_path: Path to the JSONL event file
+        game_id: Optional game ID to filter events (if None, extracts all)
+
+    Returns:
+        Tuple of (event_ids, play_ids, drive_ids) sets
+    """
+    all_keys = extract_dedup_keys_from_jsonl(jsonl_path, game_id)
+
+    # Categorize keys by their format
+    event_ids: set[str] = set()
+    play_ids: set[str] = set()
+    drive_ids: set[str] = set()
+
+    for key in all_keys:
+        if "_pbp_" in key:
+            event_ids.add(key)
+        elif "_play_" in key:
+            play_ids.add(key)
+        elif "_drive_" in key:
+            drive_ids.add(key)
+        # Other keys (e.g., pregame events) are not categorized in legacy format
+
+    return event_ids, play_ids, drive_ids
 
 
 if TYPE_CHECKING:
@@ -395,3 +496,58 @@ class DataStore(ABC):
             Sequence of DataEvents
         """
         ...
+
+    # =========================================================================
+    # State Persistence (for checkpoint/resume)
+    # =========================================================================
+
+    async def save_state(self) -> dict[str, Any]:
+        """Save store state for checkpointing.
+
+        Subclasses should override this to persist their internal state
+        (e.g., deduplication tracking, game lifecycle status).
+
+        The default implementation returns minimal state. Subclasses should
+        call super().save_state() and extend the returned dict.
+
+        Returns:
+            Dictionary containing serializable state
+        """
+        return {
+            "store_id": self.store_id,
+            "last_poll_times": {
+                endpoint: ts.isoformat()
+                for endpoint, ts in self._last_poll_times.items()
+            },
+            "poll_identifier": self._poll_identifier,
+        }
+
+    async def load_state(
+        self,
+        state: dict[str, Any],
+        dedup_keys: set[str] | None = None,
+    ) -> None:
+        """Load store state from checkpoint.
+
+        Subclasses should override this to restore their internal state.
+        The default implementation restores basic polling state.
+
+        Args:
+            state: Dictionary containing previously saved state
+            dedup_keys: Optional set of deduplication keys extracted from JSONL.
+                       Subclasses filter these internally based on key format.
+        """
+        # Restore poll times
+        last_poll_times = state.get("last_poll_times", {})
+        for endpoint, ts_str in last_poll_times.items():
+            try:
+                self._last_poll_times[endpoint] = datetime.fromisoformat(ts_str)
+            except (ValueError, TypeError):
+                pass
+
+        # Restore poll identifier
+        poll_identifier = state.get("poll_identifier")
+        if poll_identifier:
+            self._poll_identifier = poll_identifier
+
+        # Base class ignores dedup_keys; subclasses filter and use as needed

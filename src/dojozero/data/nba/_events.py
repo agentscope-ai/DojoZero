@@ -81,6 +81,12 @@ class NBAPlayEvent(BasePlayEvent):
     event_id: str = ""  # Was: {game_id}_pbp_{action_number}
     action_number: int = 0
 
+    def get_dedup_key(self) -> str | None:
+        """Return dedup key for NBA play-by-play events."""
+        if self.game_id and self.action_number:
+            return f"{self.game_id}_pbp_{self.action_number}"
+        return None
+
 
 # =============================================================================
 # Tier 3: Snapshot — NBAGameUpdateEvent

@@ -104,3 +104,50 @@ class NFLGameStateTracker(BaseGameStateTracker):
                 new_drives.append(drive)
                 self.mark_drive_seen(full_drive_id)
         return new_drives
+
+    # -- Serialization (for checkpoint/resume) --------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize state tracker to dictionary for checkpointing.
+
+        Extends base class serialization with NFL-specific state.
+        Deduplication sets (_seen_drive_ids) are NOT saved - rebuilt from JSONL.
+
+        Returns:
+            Dictionary containing serializable state.
+        """
+        base_state = super().to_dict()
+        base_state.update(
+            {
+                # NFL-specific lifecycle state
+                "current_drive": dict(self._current_drive),
+                "last_valid_clock": dict(self._last_valid_clock),
+                # Note: _seen_drive_ids is NOT saved - rebuilt from JSONL on resume
+                # Note: _starters can be re-fetched from API
+            }
+        )
+        return base_state
+
+    def load_from_dict(self, data: dict[str, Any]) -> None:
+        """Restore state tracker from dictionary.
+
+        Args:
+            data: Dictionary from to_dict()
+        """
+        super().load_from_dict(data)
+        # NFL-specific state
+        self._current_drive = dict(data.get("current_drive", {}))
+        self._last_valid_clock = dict(data.get("last_valid_clock", {}))
+        # _seen_drive_ids left empty - will be rebuilt from JSONL
+        # _starters left empty - will be re-fetched from API
+
+    def rebuild_dedup_from_drive_ids(self, drive_ids: set[str]) -> None:
+        """Rebuild NFL-specific deduplication set from drive IDs.
+
+        Called during resume to restore deduplication state from JSONL events.
+
+        Args:
+            drive_ids: Set of drive IDs (e.g., "{event_id}_drive_{drive_id}")
+                      that have already been processed.
+        """
+        self._seen_drive_ids = drive_ids
