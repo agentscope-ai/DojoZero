@@ -230,7 +230,25 @@ def register_rest_endpoints(app: FastAPI) -> None:
             all_games=all_games,
             live_agent_actions=agent_actions,
         )
-        return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
+        return JSONResponse(
+            content=response.model_dump(
+                by_alias=state.by_alias,
+                exclude={
+                    "live_games": {
+                        "__all__": {
+                            "home_team": {"players"},
+                            "away_team": {"players"},
+                        }
+                    },
+                    "all_games": {
+                        "__all__": {
+                            "home_team": {"players"},
+                            "away_team": {"players"},
+                        }
+                    },
+                },
+            )
+        )
 
     @app.get("/api/stats")
     async def get_stats(

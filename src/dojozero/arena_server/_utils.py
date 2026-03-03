@@ -545,7 +545,7 @@ async def _extract_agent_actions(
     Fetches spans then delegates to _extract_agent_actions_from_spans.
     """
     spans_by_trial: dict[str, list[SpanData]] = {}
-    for trial_id in trial_ids[:max_trials]:
+    for trial_id in trial_ids:
         try:
             spans = await trace_reader.get_spans(
                 trial_id,
