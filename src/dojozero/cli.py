@@ -6,6 +6,7 @@ import importlib
 import logging
 import signal
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
@@ -148,6 +149,25 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="ray_config",
         type=Path,
         help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
+    )
+    run_parser.add_argument(
+        "--enable-gateway",
+        dest="enable_gateway",
+        action="store_true",
+        help="Enable HTTP gateway for external agents to participate in the trial.",
+    )
+    run_parser.add_argument(
+        "--gateway-port",
+        dest="gateway_port",
+        type=int,
+        default=8080,
+        help="Port for the HTTP gateway (default: 8080). Only used with --enable-gateway.",
+    )
+    run_parser.add_argument(
+        "--gateway-host",
+        dest="gateway_host",
+        default="127.0.0.1",
+        help="Host for the HTTP gateway (default: 127.0.0.1). Only used with --enable-gateway.",
     )
 
     subparsers.add_parser(
@@ -351,6 +371,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="ray_config",
         type=Path,
         help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
+    )
+    serve_parser.add_argument(
+        "--enable-gateway",
+        dest="enable_gateway",
+        action="store_true",
+        help="Enable HTTP gateway for external agents. Routes /api/gateway/{trial_id}/* to trials.",
     )
 
     # Arena Server command
@@ -798,14 +824,138 @@ def _write_yaml_file(path: Path, payload: Mapping[str, Any]) -> None:
         yaml.safe_dump(payload, handle, sort_keys=False)
 
 
+async def _start_gateway_server(
+    orchestrator: TrialOrchestrator,
+    trial_id: str,
+    host: str,
+    port: int,
+) -> asyncio.Task[None]:
+    """Start the gateway server for a running trial.
+
+    Args:
+        orchestrator: The trial orchestrator
+        trial_id: The trial ID
+        host: Gateway host address
+        port: Gateway port
+
+    Returns:
+        The asyncio task running the gateway server
+    """
+    import uvicorn
+
+    from dojozero.gateway import create_gateway_app
+    from dojozero.betting import BrokerOperator
+
+    # TODO: Refactor to use public API instead of accessing private members (_trials, _context).
+    # Add orchestrator.get_trial_context(trial_id) method to expose DataHub and BrokerOperator.
+    runtime = orchestrator._trials.get(trial_id)
+    if runtime is None:
+        raise DojoZeroCLIError(f"Trial '{trial_id}' not found in orchestrator")
+
+    context = runtime._context
+    if context is None:
+        raise DojoZeroCLIError(f"Trial '{trial_id}' has no runtime context")
+
+    # Get DataHub from context
+    if not context.data_hubs:
+        raise DojoZeroCLIError(f"Trial '{trial_id}' has no DataHubs")
+
+    # Get the first DataHub (most trials have one)
+    hub_id = next(iter(context.data_hubs.keys()))
+    data_hub = context.data_hubs[hub_id]
+
+    # Find BrokerOperator from running actors
+    broker: BrokerOperator | None = None
+    for actor_runtime in runtime.actors.values():
+        actor = actor_runtime.instance
+        if isinstance(actor, BrokerOperator):
+            broker = actor
+            break
+
+    if broker is None:
+        raise DojoZeroCLIError(
+            f"Trial '{trial_id}' has no BrokerOperator. "
+            "Gateway requires a trial with betting functionality."
+        )
+
+    # Get metadata for the gateway
+    metadata: dict[str, Any] = {}
+    if hasattr(runtime.spec.metadata, "__dict__"):
+        metadata = {
+            k: v
+            for k, v in vars(runtime.spec.metadata).items()
+            if not k.startswith("_")
+        }
+    elif hasattr(runtime.spec.metadata, "model_dump"):
+        metadata = runtime.spec.metadata.model_dump()
+
+    # Create gateway app
+    app = create_gateway_app(
+        trial_id=trial_id,
+        data_hub=data_hub,
+        broker=broker,
+        metadata=metadata,
+    )
+
+    # Create uvicorn config
+    config = uvicorn.Config(
+        app=app,
+        host=host,
+        port=port,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+
+    LOGGER.info("Starting Gateway server at http://%s:%d", host, port)
+    LOGGER.info("  Registration: POST http://%s:%d/api/v1/register", host, port)
+    LOGGER.info("  Events stream: GET http://%s:%d/api/v1/events/stream", host, port)
+    LOGGER.info("  Place bet: POST http://%s:%d/api/v1/bets", host, port)
+
+    # Run server as a background task
+    async def run_server() -> None:
+        try:
+            await server.serve()
+        except asyncio.CancelledError:
+            LOGGER.info("Gateway server shutting down")
+            await server.shutdown()
+
+    task = asyncio.create_task(run_server())
+    return task
+
+
+@dataclass
+class GatewayConfig:
+    """Configuration for the HTTP gateway."""
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8080
+
+
 async def _run_trial_and_monitor(
     *,
     orchestrator: TrialOrchestrator,
     trial_id: str,
     start_fn: Callable[[], Awaitable["TrialStatus"]],
+    gateway_config: GatewayConfig | None = None,
 ) -> None:
     status = await start_fn()
     LOGGER.info("trial '%s' is %s", trial_id, status.phase.value)
+
+    # Start gateway if enabled
+    gateway_task: asyncio.Task[None] | None = None
+    if gateway_config and gateway_config.enabled:
+        try:
+            gateway_task = await _start_gateway_server(
+                orchestrator=orchestrator,
+                trial_id=trial_id,
+                host=gateway_config.host,
+                port=gateway_config.port,
+            )
+        except Exception as e:
+            LOGGER.error("Failed to start gateway: %s", e)
+            LOGGER.warning("Trial will continue without gateway")
+
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     shutting_down = {"started": False}
@@ -830,6 +980,16 @@ async def _run_trial_and_monitor(
 
     async def _graceful_shutdown() -> None:
         try:
+            # Stop gateway first if running
+            if gateway_task is not None and not gateway_task.done():
+                LOGGER.info("stopping gateway server")
+                gateway_task.cancel()
+                try:
+                    await gateway_task
+                except asyncio.CancelledError:
+                    pass
+                LOGGER.info("gateway server stopped")
+
             await _capture_checkpoint()
             LOGGER.info("stopping trial '%s'", trial_id)
             await orchestrator.stop_trial(trial_id)
@@ -1026,12 +1186,25 @@ async def _run_command(args: argparse.Namespace) -> int:
                 "--trial-id is required when resuming without a params file"
             )
 
+    # Create gateway config if enabled
+    gateway_config: GatewayConfig | None = None
+    if getattr(args, "enable_gateway", False):
+        gateway_config = GatewayConfig(
+            enabled=True,
+            host=getattr(args, "gateway_host", "127.0.0.1"),
+            port=getattr(args, "gateway_port", 8080),
+        )
+        LOGGER.info(
+            "Gateway enabled at http://%s:%d", gateway_config.host, gateway_config.port
+        )
+
     try:
         if spec is not None:
             await _run_trial_and_monitor(
                 orchestrator=orchestrator,
                 trial_id=trial_id,
                 start_fn=lambda: orchestrator.launch_trial(spec),
+                gateway_config=gateway_config,
             )
         else:
             resume_checkpoint = checkpoint_id if checkpoint_id else None
@@ -1039,6 +1212,7 @@ async def _run_command(args: argparse.Namespace) -> int:
                 orchestrator=orchestrator,
                 trial_id=trial_id,
                 start_fn=lambda: orchestrator.resume_trial(trial_id, resume_checkpoint),
+                gateway_config=gateway_config,
             )
     finally:
         # Clean up exporters if configured
@@ -1469,7 +1643,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
-def _list_builders_command(_args: argparse.Namespace) -> int:
+def _list_builders_command(_: argparse.Namespace) -> int:
     _import_modules(DEFAULT_IMPORTS)
 
     builders = list_trial_builders()
@@ -1620,6 +1794,12 @@ async def _serve_command(args: argparse.Namespace) -> int:
     else:
         LOGGER.info("No trace backend configured - traces will not be exported")
 
+    enable_gateway = getattr(args, "enable_gateway", False)
+    if enable_gateway:
+        LOGGER.info(
+            "Gateway API enabled at http://%s:%d/api/gateway/{trial_id}/", host, port
+        )
+
     await run_dashboard_server(
         orchestrator=orchestrator,
         scheduler_store=scheduler_store,
@@ -1632,6 +1812,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         initial_trial_sources=initial_trial_sources if initial_trial_sources else None,
         auto_resume=auto_resume,
         stale_threshold_hours=stale_threshold_hours,
+        enable_gateway=enable_gateway,
     )
     return 0
 

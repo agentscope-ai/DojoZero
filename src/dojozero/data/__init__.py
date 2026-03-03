@@ -38,6 +38,13 @@ from dojozero.data._processors import CompositeProcessor, DataProcessor
 from dojozero.data._backtest import BacktestCoordinator, ReplayCoordinator
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data._hub import DataHub
+from dojozero.data._subscriptions import (
+    EventPriority,
+    Subscription,
+    SubscriptionFilter,
+    SubscriptionManager,
+    SubscriptionOptions,
+)
 from dojozero.data._streams import (
     DataHubDataStream,
     DataHubDataStreamConfig,
@@ -169,6 +176,12 @@ __all__ = [
     "ReplayCoordinator",
     "DataHubDataStream",
     "DataHubDataStreamConfig",
+    # Subscription infrastructure
+    "EventPriority",
+    "Subscription",
+    "SubscriptionFilter",
+    "SubscriptionManager",
+    "SubscriptionOptions",
     # Factory infrastructure
     "StoreFactory",
     "register_store_factory",

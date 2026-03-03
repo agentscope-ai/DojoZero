@@ -255,6 +255,7 @@ def create_dashboard_app(
     initial_trial_sources: list[InitialTrialSourceDict] | None = None,
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
+    enable_gateway: bool = False,
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
@@ -269,6 +270,7 @@ def create_dashboard_app(
         initial_trial_sources: List of trial source configurations to register on startup
         auto_resume: Automatically resume interrupted trials on startup (default True)
         stale_threshold_hours: Skip resuming trials older than this many hours (default 24)
+        enable_gateway: Enable HTTP gateway routing for external agents
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
@@ -276,15 +278,23 @@ def create_dashboard_app(
         DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
 
+    # Create gateway router early so it can be passed to TrialManager
+    gateway_router = None
+    if enable_gateway:
+        from ._gateway_routing import GatewayRouter
+
+        gateway_router = GatewayRouter()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Create trial manager
+        # Create trial manager with gateway router if enabled
         trial_manager = TrialManager(
             orchestrator=orchestrator,
             max_concurrent=max_concurrent_trials,
             oss_backup=oss_backup,
             auto_resume=auto_resume,
             stale_threshold_hours=stale_threshold_hours,
+            gateway_router=gateway_router,
         )
 
         # Create schedule manager
@@ -1231,7 +1241,24 @@ def create_dashboard_app(
                 "running": state.trial_manager.running_count,
             },
             "scheduling_enabled": state.schedule_manager is not None,
+            "gateway_enabled": enable_gateway,
         }
+
+    # -------------------------------------------------------------------------
+    # Gateway Routing (for external agents)
+    # -------------------------------------------------------------------------
+
+    if enable_gateway and gateway_router is not None:
+        from ._gateway_routing import create_gateway_routes
+
+        gateway_routes_app = create_gateway_routes(gateway_router)
+
+        # Mount the gateway routes
+        app.mount("/", gateway_routes_app)
+
+        # Store gateway router on app.state for reference
+        app.state.gateway_router = gateway_router
+        LOGGER.info("Gateway routing enabled at /api/gateway/{trial_id}/")
 
     return app
 
@@ -1249,6 +1276,7 @@ async def run_dashboard_server(
     initial_trial_sources: list[InitialTrialSourceDict] | None = None,
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
+    enable_gateway: bool = False,
 ) -> None:
     """Run the Dashboard Server.
 
@@ -1265,6 +1293,7 @@ async def run_dashboard_server(
         initial_trial_sources: List of trial source configurations to register on startup
         auto_resume: Automatically resume interrupted trials on startup (default True)
         stale_threshold_hours: Skip resuming trials older than this many hours (default 24)
+        enable_gateway: Enable HTTP gateway routing for external agents
     """
     import uvicorn
 
@@ -1279,6 +1308,7 @@ async def run_dashboard_server(
         initial_trial_sources=initial_trial_sources,
         auto_resume=auto_resume,
         stale_threshold_hours=stale_threshold_hours,
+        enable_gateway=enable_gateway,
     )
 
     config = uvicorn.Config(

@@ -19,6 +19,9 @@ from dojozero.data._models import (
     PreGameInsightEvent,
     extract_game_id,
 )
+from dojozero.data._subscriptions import (
+    SubscriptionManager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,13 +97,17 @@ class DataHub:
         # Ensure persistence directory exists
         self.persistence_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # Agent subscriptions: agent_id -> list of stream_ids or event_types
+        # Subscription manager handles all subscription logic
+        self._subscription_manager = SubscriptionManager(
+            max_recent_events_per_type=100,
+        )
+
+        # Backward compatibility: maintain the original _agent_subscriptions structure
+        # Maps agent_id -> set of event_types (for code that reads this directly)
         self._agent_subscriptions: dict[str, set[str]] = defaultdict(set)
 
-        # Event handlers: event_type -> list of callbacks
-        self._event_handlers: dict[str, list[Callable[[DataEvent], None]]] = (
-            defaultdict(list)
-        )
+        # Point to subscription manager's event handlers for direct access
+        self._event_handlers = self._subscription_manager._event_handlers
 
         # Backtest mode
         self._backtest_mode = False
@@ -112,10 +119,8 @@ class DataHub:
         # Track connected stores for lifecycle management
         self._connected_stores: list["DataStore"] = []
 
-        # Cache recent events for late-joining subscribers
-        # Key: event_type, Value: list of recent events (newest first)
-        self._recent_events: dict[str, list[DataEvent]] = defaultdict(list)
-        self._max_recent_events_per_type = 100  # Keep last 100 events per type
+        # Recent events cache - delegate to subscription manager
+        self._recent_events = self._subscription_manager._recent_events
 
         # Track sequence numbers per event type for trace emission
         self._event_sequences: dict[str, int] = defaultdict(int)
@@ -139,27 +144,45 @@ class DataHub:
 
         Args:
             agent_id: Agent identifier
-            stream_ids: List of stream IDs to subscribe to
+            stream_ids: List of stream IDs to subscribe to (legacy, kept for compatibility)
             event_types: List of event types to subscribe to
             callback: Callback function to receive events
         """
+        # Maintain backward-compatible _agent_subscriptions structure
         if stream_ids:
             self._agent_subscriptions[agent_id].update(stream_ids)
         if event_types:
             self._agent_subscriptions[agent_id].update(event_types)
-        if callback:
-            # Register callback for all subscribed types
-            for event_type in event_types or []:
-                self._event_handlers[event_type].append(callback)
+
+        # Delegate callback registration to subscription manager
+        self._subscription_manager.subscribe_agent_legacy(
+            agent_id=agent_id,
+            stream_ids=stream_ids,
+            event_types=event_types,
+            callback=callback,
+        )
 
     def unsubscribe_agent(self, agent_id: str) -> None:
-        """Unsubscribe an agent.
+        """Unsubscribe an agent and clean up all callbacks.
+
+        Note: This now properly cleans up callbacks, fixing the original bug
+        where callbacks were not removed on unsubscribe.
 
         Args:
             agent_id: Agent identifier
         """
+        # Clean up backward-compatible _agent_subscriptions
         if agent_id in self._agent_subscriptions:
             del self._agent_subscriptions[agent_id]
+
+        # Use asyncio to run the async cleanup for subscription manager
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._subscription_manager.unsubscribe_all(agent_id))
+        except RuntimeError:
+            # No event loop running - use sync cleanup
+            # This handles cases where unsubscribe is called outside async context
+            asyncio.run(self._subscription_manager.unsubscribe_all(agent_id))
 
     async def receive_event(
         self,
@@ -472,15 +495,11 @@ class DataHub:
             await self._flush_pending_dispatch(game_id)
 
     def _cache_event(self, event: DataEvent) -> None:
-        """Cache event for late-joining subscribers."""
-        event_type = event.event_type
-        events_list = self._recent_events[event_type]
-        events_list.insert(0, event)  # Newest first
-        # Trim to max size
-        if len(events_list) > self._max_recent_events_per_type:
-            self._recent_events[event_type] = events_list[
-                : self._max_recent_events_per_type
-            ]
+        """Cache event for late-joining subscribers.
+
+        Delegates to SubscriptionManager for consistent caching.
+        """
+        self._subscription_manager._cache_event(event)
 
     def get_recent_events(
         self,
@@ -489,6 +508,8 @@ class DataHub:
     ) -> list[DataEvent]:
         """Get recent events from the cache.
 
+        Delegates to SubscriptionManager for consistent event retrieval.
+
         Args:
             event_types: Filter by event types (None = all types)
             limit: Maximum number of events to return
@@ -496,23 +517,7 @@ class DataHub:
         Returns:
             List of recent events (newest first)
         """
-        if event_types is None:
-            # Get all recent events across all types
-            all_events: list[DataEvent] = []
-            for events_list in self._recent_events.values():
-                all_events.extend(events_list)
-            # Sort by timestamp (newest first) and limit
-            all_events.sort(key=lambda e: e.timestamp, reverse=True)
-            return all_events[:limit]
-        else:
-            # Get events for specific types
-            result: list[DataEvent] = []
-            for event_type in event_types:
-                if event_type in self._recent_events:
-                    result.extend(self._recent_events[event_type])
-            # Sort by timestamp (newest first) and limit
-            result.sort(key=lambda e: e.timestamp, reverse=True)
-            return result[:limit]
+        return self._subscription_manager.get_recent_events(event_types, limit)
 
     async def _persist_event(self, event: DataEvent) -> None:
         """Persist event to file.
@@ -537,31 +542,25 @@ class DataHub:
     async def _dispatch_event(self, event: DataEvent) -> None:
         """Dispatch event to subscribed agents.
 
+        Delegates to SubscriptionManager for both:
+        - Legacy callback handlers (synchronous)
+        - New Subscription queues (for external agents)
+
         Args:
             event: Event to dispatch
         """
         event_type = event.event_type
 
-        # Dispatch to handlers for this event type
+        # Log dispatch for debugging
         if event_type in self._event_handlers:
             logger.debug(
                 "Dispatching %s to %d handler(s)",
                 event_type,
                 len(self._event_handlers[event_type]),
             )
-            for handler in self._event_handlers[event_type]:
-                try:
-                    handler(event)
-                    logger.debug("Handler %s called for %s", handler, event_type)
-                except Exception as e:
-                    logger.error("Error in event handler for %s: %s", event_type, e)
 
-        # Dispatch to agents subscribed to this event type
-        for agent_id, subscriptions in self._agent_subscriptions.items():
-            if event_type in subscriptions:
-                # Agent is subscribed to this event type
-                # In a real implementation, this would call agent's receive method
-                pass
+        # Delegate to subscription manager for both sync callbacks and async queues
+        self._subscription_manager.dispatch_sync(event)
 
     def connect_store(self, store: "DataStore") -> None:
         """Connect a DataStore to this hub.
@@ -791,3 +790,14 @@ class DataHub:
         """Stop all connected stores (stop polling)."""
         for store in self._connected_stores:
             await store.stop_polling()
+
+    @property
+    def subscription_manager(self) -> SubscriptionManager:
+        """Access the subscription manager for external agent integration.
+
+        The SubscriptionManager handles:
+        - Event subscriptions with filtering and backpressure
+        - Recent event caching for late-joining subscribers
+        - Both legacy callback-based and new queue-based subscriptions
+        """
+        return self._subscription_manager
