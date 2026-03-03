@@ -691,19 +691,32 @@ Opinionated framework with `on_event()` hooks. Deferred until API stabilizes. Ma
 
 For debugging and quick testing without writing code.
 
+**Trial Discovery (server CLI - already exists):**
 ```bash
-# List available trials
-dojo0 agent list-trials --server https://dojo.api
+# List available trials from Dashboard Server
+dojo0 list-trials --server https://dojo.api
 
+# With filters
+dojo0 list-trials --server https://dojo.api --running-only
+dojo0 list-trials --server https://dojo.api --scheduled-only
+```
+
+**Trial Interaction (client CLI - new):**
+```bash
 # Subscribe and print events
-dojo0 agent subscribe --trial lal-bos-2026 --filter "event.nba_*"
+dojozero-agent subscribe --trial-url https://dojo.api/gateway/lal-bos-2026 --filter "event.nba_*"
 
 # Check balance
-dojo0 agent balance --trial lal-bos-2026
+dojozero-agent balance --trial-url https://dojo.api/gateway/lal-bos-2026
 
 # Place a test bet
-dojo0 agent bet --trial lal-bos-2026 --market moneyline --amount 100
+dojozero-agent bet --trial-url https://dojo.api/gateway/lal-bos-2026 --market moneyline --amount 100
 ```
+
+**Why the split:**
+- `dojo0 list-trials` queries the Dashboard Server (trial registry/discovery)
+- `dojozero-agent` connects to individual trial gateways (interaction)
+- The client SDK (`dojozero-client`) is lightweight and doesn't need Dashboard Server knowledge
 
 **Best for:** Debugging, exploring API, quick tests.
 
@@ -714,7 +727,8 @@ dojo0 agent bet --trial lal-bos-2026 --market moneyline --amount 100
 | Existing agent system (Moltenbook) | Level 1: Raw HTTP |
 | Non-Python agent | Level 1: Raw HTTP |
 | Python agent | Level 2: Client SDK |
-| Debugging / exploration | CLI Tools |
+| Trial discovery | `dojo0 list-trials` (server CLI) |
+| Debugging trial interaction | `dojozero-agent` (client CLI) |
 
 ---
 
@@ -792,7 +806,8 @@ DojoZero/
             ├── __init__.py
             ├── _client.py              # DojoClient
             ├── _transport.py           # SSE transport
-            └── _models.py              # Typed events
+            ├── _models.py              # Typed events
+            └── cli.py                  # dojozero-agent CLI entry point
 ```
 
 ### 11.1 Package Dependencies
@@ -809,6 +824,9 @@ dependencies = ["fastapi", "uvicorn", "agentscope", ...]
 [project]
 name = "dojozero-client"
 dependencies = ["httpx", "pydantic"]  # minimal
+
+[project.scripts]
+dojozero-agent = "dojozero_client.cli:main"
 ```
 
 ### 11.2 Workspace Config
