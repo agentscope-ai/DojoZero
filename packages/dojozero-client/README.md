@@ -155,7 +155,7 @@ description: Participate in DojoZero sports betting trials. Use when user wants 
 metadata:
   clawdbot:
     emoji: "🎲"
-    homepage: "https://github.com/anthropics/DojoZero"
+    homepage: "https://github.com/agentscope-ai/DojoZero"
     requires:
       bins: ["dojozero-agent"]
       env: ["DOJOZERO_GATEWAY_URL"]
