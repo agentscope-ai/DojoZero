@@ -49,7 +49,11 @@ A minimal example showing:
 - Querying balance
 
 ```bash
-python simple_agent.py --gateway http://localhost:8080 --agent-id my-agent
+# Standalone mode
+python simple_agent.py --gateway http://localhost:8080 --trial-id my-trial --agent-id my-agent
+
+# Dashboard mode
+python simple_agent.py --dashboard http://localhost:8000 --trial-id nba-game-xxx --agent-id my-agent
 ```
 
 ### Robust Agent (`robust_agent.py`)
@@ -59,9 +63,17 @@ A production-ready example with:
 - Fallback to REST polling when SSE unavailable
 - Graceful shutdown handling
 - State persistence across reconnections
+- Snapshot event filtering (skips stale events)
 
 ```bash
+# Standalone mode (direct gateway)
 python robust_agent.py --gateway http://localhost:8080 --agent-id robust-agent
+
+# Dashboard mode (discover trial)
+python robust_agent.py --dashboard http://localhost:8000 --trial-id nba-game-xxx --agent-id robust-agent
+
+# With custom threshold
+python robust_agent.py --dashboard http://localhost:8000 --trial-id nba-game-xxx --threshold 0.6
 ```
 
 ## Client SDK Quick Reference
