@@ -52,6 +52,45 @@ class AgentState:
     start_time: datetime = field(default_factory=datetime.now)
 
 
+async def discover_gateway(
+    dashboard_urls: list[str] | None, trial_id: str
+) -> str | None:
+    """Discover gateway URL for a trial from dashboard servers.
+
+    Args:
+        dashboard_urls: List of dashboard server URLs (None = use config/env defaults)
+        trial_id: Trial ID to find
+
+    Returns:
+        Gateway URL or None if not found
+    """
+    client = DojoClient(dashboard_urls=dashboard_urls)
+    url_count = len(dashboard_urls) if dashboard_urls else "config"
+    logger.info("Discovering trial '%s' from %s dashboard(s)...", trial_id, url_count)
+
+    try:
+        gateways = await client.discover_trials()
+        if not gateways:
+            logger.error("No trials available")
+            return None
+
+        matching = [g for g in gateways if g.trial_id == trial_id]
+        if not matching:
+            logger.error(
+                "Trial '%s' not found. Available: %s",
+                trial_id,
+                [g.trial_id for g in gateways],
+            )
+            return None
+
+        gateway_url = matching[0].url
+        logger.info("Found gateway: %s", gateway_url)
+        return gateway_url
+    except Exception as e:
+        logger.error("Discovery failed: %s", e)
+        return None
+
+
 class RobustBettingAgent:
     """A robust agent with reconnection handling."""
 
@@ -60,6 +99,7 @@ class RobustBettingAgent:
         gateway_url: str,
         agent_id: str,
         bet_amount: float = 10.0,
+        bet_threshold: float = 0.55,
         max_reconnect_attempts: int = 10,
         reconnect_delay: float = 5.0,
         poll_interval: float = 2.0,
@@ -70,6 +110,7 @@ class RobustBettingAgent:
             gateway_url: Gateway URL
             agent_id: Unique agent identifier
             bet_amount: Amount to bet each time
+            bet_threshold: Probability threshold for betting
             max_reconnect_attempts: Max consecutive reconnection attempts
             reconnect_delay: Delay between reconnection attempts (seconds)
             poll_interval: Polling interval when SSE unavailable (seconds)
@@ -77,6 +118,7 @@ class RobustBettingAgent:
         self.gateway_url = gateway_url
         self.agent_id = agent_id
         self.bet_amount = bet_amount
+        self.bet_threshold = bet_threshold
         self.max_reconnect_attempts = max_reconnect_attempts
         self.reconnect_delay = reconnect_delay
         self.poll_interval = poll_interval
@@ -161,9 +203,20 @@ class RobustBettingAgent:
     async def _stream_events(self, trial: TrialConnection):
         """Stream events via SSE."""
         logger.info("Starting SSE event stream...")
+        event_count = 0
         async for event in trial.events():
             if not self._running:
                 break
+            event_count += 1
+            event_type = event.payload.get("event_type", "unknown")
+            # Log first 10 events at INFO to show snapshot
+            if event_count <= 10:
+                logger.info(
+                    "Event #%d [seq=%d]: %s",
+                    event_count,
+                    event.sequence,
+                    event_type,
+                )
             await self._handle_event(trial, event)
 
     async def _poll_events(self, trial: TrialConnection):
@@ -205,13 +258,24 @@ class RobustBettingAgent:
         if odds is None or not odds.betting_open:
             return
 
+        # Skip if event sequence is too stale (likely snapshot replay)
+        # The server rejects bets with reference_sequence more than 10 behind current
+        current_seq = getattr(odds, "sequence", None)
+        if current_seq is not None and event.sequence < current_seq - 10:
+            logger.debug(
+                "Skipping stale event (seq=%d, current=%d)",
+                event.sequence,
+                current_seq,
+            )
+            return
+
         # Simple betting logic: bet on favorite
         # Skip if odds not available yet
         if odds.home_probability is None or odds.away_probability is None:
             return
-        if odds.home_probability > 0.55:
+        if odds.home_probability > self.bet_threshold:
             await self._place_bet_safe(trial, "home", event.sequence)
-        elif odds.away_probability > 0.55:
+        elif odds.away_probability > self.bet_threshold:
             await self._place_bet_safe(trial, "away", event.sequence)
 
     async def _get_odds_safe(self, trial: TrialConnection):
@@ -277,11 +341,41 @@ class RobustBettingAgent:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Robust external betting agent")
-    parser.add_argument(
+    parser = argparse.ArgumentParser(
+        description="Robust external betting agent",
+        epilog="""
+Examples:
+  Standalone mode:
+    python robust_agent.py --gateway http://localhost:8080 --agent-id my-agent
+
+  Dashboard mode (explicit):
+    python robust_agent.py --dashboard http://localhost:8000 --trial-id nba-game-xxx --agent-id my-agent
+
+  Dashboard mode (from config/env):
+    # Set DOJOZERO_DASHBOARD_URLS=http://dash1:8000,http://dash2:8000
+    # Or configure ~/.dojozero/config.yaml with dashboard_urls
+    python robust_agent.py --trial-id nba-game-xxx --agent-id my-agent
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Connection mode
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--gateway",
-        default="http://localhost:8080",
-        help="Gateway URL (default: http://localhost:8080)",
+        help="Gateway URL for standalone mode (e.g., http://localhost:8080)",
+    )
+    mode_group.add_argument(
+        "--dashboard",
+        action="append",
+        dest="dashboards",
+        metavar="URL",
+        help="Dashboard URL(s) for sharded mode. Can be specified multiple times.",
+    )
+
+    parser.add_argument(
+        "--trial-id",
+        help="Trial ID (required for dashboard mode)",
     )
     parser.add_argument(
         "--agent-id",
@@ -293,6 +387,12 @@ async def main():
         type=float,
         default=10.0,
         help="Bet amount (default: 10.0)",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.55,
+        help="Probability threshold for betting (default: 0.55)",
     )
     parser.add_argument(
         "--max-reconnects",
@@ -310,22 +410,49 @@ async def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    # Resolve gateway URL
+    gateway_url = args.gateway
+    if args.dashboards:
+        # Explicit --dashboard flag(s)
+        if not args.trial_id:
+            parser.error("--trial-id is required when using --dashboard")
+        gateway_url = await discover_gateway(args.dashboards, args.trial_id)
+        if not gateway_url:
+            logger.error("Failed to discover gateway for trial %s", args.trial_id)
+            return
+    elif not gateway_url and args.trial_id:
+        # No --gateway or --dashboard, but --trial-id provided
+        # Use DojoClient's default config (env vars / config file)
+        gateway_url = await discover_gateway(None, args.trial_id)
+        if not gateway_url:
+            logger.error("Failed to discover gateway for trial %s", args.trial_id)
+            return
+
+    if not gateway_url:
+        parser.error(
+            "Either --gateway or (--dashboard/config + --trial-id) is required"
+        )
+
     agent = RobustBettingAgent(
-        gateway_url=args.gateway,
+        gateway_url=gateway_url,
         agent_id=args.agent_id,
         bet_amount=args.bet_amount,
+        bet_threshold=args.threshold,
         max_reconnect_attempts=args.max_reconnects,
     )
 
-    # Handle Ctrl+C gracefully
-    loop = asyncio.get_event_loop()
+    # Handle Ctrl+C gracefully by cancelling the task
+    main_task = asyncio.current_task()
 
     def signal_handler():
         agent.stop()
+        if main_task:
+            main_task.cancel()
 
     try:
         import signal
 
+        loop = asyncio.get_event_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, signal_handler)
     except (NotImplementedError, AttributeError):
@@ -333,6 +460,8 @@ async def main():
 
     try:
         await agent.run()
+    except asyncio.CancelledError:
+        logger.info("Agent cancelled")
     except KeyboardInterrupt:
         agent.stop()
 
