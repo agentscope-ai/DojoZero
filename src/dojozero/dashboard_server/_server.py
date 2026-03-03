@@ -794,28 +794,48 @@ def create_dashboard_app(
 
     @app.get("/api/trials/{trial_id}/results")
     async def get_trial_results(
+        request: Request,
         trial_id: str,
         state: DashboardServerState = Depends(get_server_state),
     ) -> JSONResponse:
-        """Get final results for a concluded trial.
+        """Get results for a trial (live or concluded).
 
-        Results are persisted when a trial ends and can be queried after
-        the gateway has been unregistered.
+        This unified endpoint works for both running and concluded trials:
+        - Running trials: fetches live results from the gateway adapter
+        - Concluded trials: returns persisted results from storage
 
-        For active trials with a gateway, use the gateway endpoint instead:
-        GET /api/gateway/{trial_id}/api/v1/trial/results
+        Returns 404 if trial not found or results not available.
         """
+        # Try live gateway first (for running trials)
+        gateway_router = getattr(request.app.state, "gateway_router", None)
+        if gateway_router is not None:
+            gateway_state = gateway_router.get_gateway_state(trial_id)
+            if gateway_state is not None:
+                try:
+                    results = await gateway_state.adapter.get_results()
+                    return JSONResponse(
+                        content=results.model_dump(mode="json", by_alias=True)
+                    )
+                except Exception as e:
+                    LOGGER.warning(
+                        "Failed to get live results for trial '%s': %s",
+                        trial_id,
+                        e,
+                    )
+
+        # Fall back to persisted results (for concluded trials)
         results = state.orchestrator.store.get_trial_results(trial_id)
-        if results is None:
-            return JSONResponse(
-                content={
-                    "error": f"Results not found for trial '{trial_id}'",
-                    "hint": "Results are only available after a trial has concluded. "
-                    "For running trials, use GET /api/gateway/{trial_id}/api/v1/trial/results",
-                },
-                status_code=404,
-            )
-        return JSONResponse(content=results)
+        if results is not None:
+            return JSONResponse(content=results)
+
+        # No results available
+        return JSONResponse(
+            content={
+                "error": f"Results not found for trial '{trial_id}'",
+                "hint": "Trial may not exist or has not concluded yet.",
+            },
+            status_code=404,
+        )
 
     @app.post("/api/trials/{trial_id}/stop")
     async def stop_trial(
