@@ -36,7 +36,7 @@ from dojozero.data._models import (
 from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data._processors import CompositeProcessor, DataProcessor
 from dojozero.data._backtest import BacktestCoordinator, ReplayCoordinator
-from dojozero.data._stores import DataStore, ExternalAPI
+from dojozero.data._stores import DataStore, ExternalAPI, extract_dedup_ids_from_jsonl
 from dojozero.data._hub import DataHub
 from dojozero.data._subscriptions import (
     EventPriority,
@@ -169,6 +169,7 @@ __all__ = [
     # Infrastructure
     "DataStore",
     "ExternalAPI",
+    "extract_dedup_ids_from_jsonl",
     "DataProcessor",
     "CompositeProcessor",
     "DataHub",

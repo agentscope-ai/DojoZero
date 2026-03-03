@@ -206,5 +206,56 @@ class BaseGameStateTracker:
                 self._seen_play_ids.add(full_play_id)
         return new_plays
 
+    # -- Serialization (for checkpoint/resume) --------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize state tracker to dictionary for checkpointing.
+
+        Only saves critical lifecycle state. Deduplication sets can be
+        rebuilt from JSONL on resume.
+
+        Returns:
+            Dictionary containing serializable state.
+        """
+        return {
+            "previous_game_status": dict(self._previous_game_status),
+            "initialized_games": list(self._initialized_games),
+            "final_update_emitted": list(self._final_update_emitted),
+            "game_started": list(self._game_started),
+            "current_period": dict(self._current_period),
+            "current_home_score": dict(self._current_home_score),
+            "current_away_score": dict(self._current_away_score),
+            "last_emitted_home_score": dict(self._last_emitted_home_score),
+            "last_emitted_away_score": dict(self._last_emitted_away_score),
+            # Note: _seen_play_ids is NOT saved - rebuilt from JSONL on resume
+        }
+
+    def load_from_dict(self, data: dict[str, Any]) -> None:
+        """Restore state tracker from dictionary.
+
+        Args:
+            data: Dictionary from to_dict()
+        """
+        self._previous_game_status = dict(data.get("previous_game_status", {}))
+        self._initialized_games = set(data.get("initialized_games", []))
+        self._final_update_emitted = set(data.get("final_update_emitted", []))
+        self._game_started = set(data.get("game_started", []))
+        self._current_period = dict(data.get("current_period", {}))
+        self._current_home_score = dict(data.get("current_home_score", {}))
+        self._current_away_score = dict(data.get("current_away_score", {}))
+        self._last_emitted_home_score = dict(data.get("last_emitted_home_score", {}))
+        self._last_emitted_away_score = dict(data.get("last_emitted_away_score", {}))
+        # _seen_play_ids left empty - will be rebuilt from JSONL
+
+    def rebuild_dedup_from_play_ids(self, play_ids: set[str]) -> None:
+        """Rebuild deduplication set from a collection of play IDs.
+
+        Called during resume to restore deduplication state from JSONL events.
+
+        Args:
+            play_ids: Set of play IDs that have already been processed.
+        """
+        self._seen_play_ids = play_ids
+
 
 __all__: list[str] = ["BaseGameStateTracker"]

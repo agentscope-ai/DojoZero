@@ -152,3 +152,54 @@ class GameStateTracker(BaseGameStateTracker):
                 new_actions.append(action)
                 self.mark_event_seen(pbp_event_id)
         return new_actions
+
+    # -- Serialization (for checkpoint/resume) --------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize state tracker to dictionary for checkpointing.
+
+        Extends base class serialization with NBA-specific state.
+        Deduplication sets (_seen_event_ids) are NOT saved - rebuilt from JSONL.
+
+        Returns:
+            Dictionary containing serializable state.
+        """
+        base_state = super().to_dict()
+        base_state.update(
+            {
+                # NBA-specific lifecycle state
+                "pbp_available": list(self._pbp_available),
+                "current_clock": dict(self._current_clock),
+                "home_team_id": dict(self._home_team_id),
+                "away_team_id": dict(self._away_team_id),
+                # Note: Lookup maps and caches are NOT saved - can be re-fetched
+                # Note: _seen_event_ids is NOT saved - rebuilt from JSONL on resume
+            }
+        )
+        return base_state
+
+    def load_from_dict(self, data: dict[str, Any]) -> None:
+        """Restore state tracker from dictionary.
+
+        Args:
+            data: Dictionary from to_dict()
+        """
+        super().load_from_dict(data)
+        # NBA-specific state
+        self._pbp_available = set(data.get("pbp_available", []))
+        self._current_clock = dict(data.get("current_clock", {}))
+        self._home_team_id = dict(data.get("home_team_id", {}))
+        self._away_team_id = dict(data.get("away_team_id", {}))
+        # Lookup maps and caches left empty - will be re-fetched from API
+        # _seen_event_ids left empty - will be rebuilt from JSONL
+
+    def rebuild_dedup_from_event_ids(self, event_ids: set[str]) -> None:
+        """Rebuild NBA-specific deduplication set from event IDs.
+
+        Called during resume to restore deduplication state from JSONL events.
+
+        Args:
+            event_ids: Set of event IDs (e.g., "{game_id}_pbp_{action_number}")
+                      that have already been processed.
+        """
+        self._seen_event_ids = event_ids

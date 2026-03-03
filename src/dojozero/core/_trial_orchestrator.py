@@ -1076,7 +1076,22 @@ class TrialOrchestrator:
                 async def _delayed_stop() -> None:
                     await asyncio.sleep(10)
                     if runtime.phase == TrialPhase.RUNNING:
-                        LOGGER.info("Executing self-stop for trial '%s'", trial_id)
+                        LOGGER.info(
+                            "Executing self-stop for trial '%s' (checkpoint + stop)",
+                            trial_id,
+                        )
+                        try:
+                            # Checkpoint before stopping to preserve final state
+                            LOGGER.info(
+                                "Creating final checkpoint for trial '%s'", trial_id
+                            )
+                            await self.checkpoint_trial(trial_id)
+                        except Exception as exc:
+                            LOGGER.warning(
+                                "Final checkpoint failed for trial '%s': %s",
+                                trial_id,
+                                exc,
+                            )
                         try:
                             await self.stop_trial(trial_id)
                         except Exception as exc:
