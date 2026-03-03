@@ -139,11 +139,29 @@ class DataHub:
     def load_dedup_keys(self, keys: set[str]) -> None:
         """Load deduplication keys from JSONL on resume.
 
+        Also restores game phases based on which lifecycle events have been seen.
+        This ensures the gate doesn't block events after resume.
+
         Args:
             keys: Set of dedup keys extracted from JSONL file
         """
         self._dedup_keys = keys.copy()
         logger.info("DataHub loaded %d dedup keys for resume", len(self._dedup_keys))
+
+        # Restore game phases from dedup keys
+        # Key format: "{game_id}_{event_type}"
+        for key in keys:
+            if "_event.game_start" in key:
+                # Game has started - set to LIVE
+                game_id = key.replace("_event.game_start", "")
+                self._game_phases[game_id] = _GamePhase.LIVE
+                logger.info("Restored game phase LIVE for game_id=%s", game_id)
+            elif "_event.game_initialize" in key:
+                # Game initialized but not started - set to PREGAME (unless already LIVE)
+                game_id = key.replace("_event.game_initialize", "")
+                if game_id not in self._game_phases:
+                    self._game_phases[game_id] = _GamePhase.PREGAME
+                    logger.info("Restored game phase PREGAME for game_id=%s", game_id)
 
     def subscribe_agent(
         self,
@@ -805,8 +823,15 @@ class DataHub:
         This should be called after all stores are connected and configured
         (e.g., after poll identifiers are set).
         """
+        logger.info(
+            "DataHub '%s' starting %d connected stores",
+            self.hub_id,
+            len(self._connected_stores),
+        )
         for store in self._connected_stores:
+            logger.info("DataHub starting store: %s", store.store_id)
             await store.start_polling()
+        logger.info("DataHub '%s' all stores started", self.hub_id)
 
     async def stop(self) -> None:
         """Stop all connected stores (stop polling)."""
