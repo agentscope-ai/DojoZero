@@ -431,7 +431,11 @@ def convert_datetime_to_iso(obj: Any) -> Any:
 def extract_game_id(event_dict: dict[str, Any]) -> str:
     """Extract game_id from an event dictionary.
 
-    Tries 'game_id' field first, then falls back to 'event_id'.
+    Tries multiple field names (snake_case and camelCase) for compatibility
+    with both Python model dumps and JSON API responses:
+    - game_id / gameId
+    - event_id / eventId (fallback)
+
     Handles event_id formats like "0022400608_pbp_188" by extracting
     the first segment (the actual game_id).
 
@@ -441,7 +445,13 @@ def extract_game_id(event_dict: dict[str, Any]) -> str:
     Returns:
         Extracted game_id string, or empty string if not found
     """
-    raw_id = event_dict.get("game_id") or event_dict.get("event_id", "")
+    # Try game_id variants first, then event_id variants
+    raw_id = (
+        event_dict.get("game_id")
+        or event_dict.get("gameId")
+        or event_dict.get("event_id")
+        or event_dict.get("eventId", "")
+    )
     if not raw_id:
         return ""
 

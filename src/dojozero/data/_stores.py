@@ -9,7 +9,7 @@ from collections.abc import Awaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from dojozero.data._models import DataEvent
+from dojozero.data._models import DataEvent, extract_game_id
 from dojozero.data._processors import DataProcessor
 
 logger = logging.getLogger(__name__)
@@ -50,9 +50,9 @@ def extract_dedup_keys_from_jsonl(
                 try:
                     data = json.loads(line)
 
-                    # Filter by game_id if provided
+                    # Filter by game_id if provided (uses shared extraction logic)
                     if game_id:
-                        evt_game_id = data.get("gameId", data.get("game_id", ""))
+                        evt_game_id = extract_game_id(data)
                         if evt_game_id != game_id:
                             continue
 
