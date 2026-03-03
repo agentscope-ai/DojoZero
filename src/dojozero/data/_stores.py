@@ -15,35 +15,32 @@ from dojozero.data._processors import DataProcessor
 logger = logging.getLogger(__name__)
 
 
-def extract_dedup_ids_from_jsonl(
+def extract_dedup_keys_from_jsonl(
     jsonl_path: str | Path,
     game_id: str | None = None,
-) -> tuple[set[str], set[str], set[str]]:
-    """Extract deduplication IDs from a JSONL event file.
+) -> set[str]:
+    """Extract deduplication keys from a JSONL event file.
 
-    Scans the JSONL file and extracts:
-    - NBA-style event IDs: "{game_id}_pbp_{action_number}" from nba_play events
-    - ESPN-style play IDs: "{game_id}_play_{play_id}" from play events
-    - NFL-style drive IDs: "{game_id}_drive_{drive_id}" from nfl_drive events
-
-    This is used during resume to rebuild deduplication state without
-    storing all IDs in the checkpoint.
+    Uses the generic get_dedup_key() method on each event to extract its
+    deduplication key. This is fully extensible - adding new event types
+    with get_dedup_key() implementations requires no changes here.
 
     Args:
         jsonl_path: Path to the JSONL event file
         game_id: Optional game ID to filter events (if None, extracts all)
 
     Returns:
-        Tuple of (event_ids, play_ids, drive_ids) sets
+        Set of deduplication keys from all events
     """
-    event_ids: set[str] = set()
-    play_ids: set[str] = set()
-    drive_ids: set[str] = set()
+    # Lazy import to avoid circular dependency
+    from dojozero.data import deserialize_data_event
+
+    dedup_keys: set[str] = set()
 
     path = Path(jsonl_path)
     if not path.exists():
         logger.warning("JSONL file not found for dedup rebuild: %s", jsonl_path)
-        return event_ids, play_ids, drive_ids
+        return dedup_keys
 
     try:
         with open(path, "r") as f:
@@ -51,32 +48,20 @@ def extract_dedup_ids_from_jsonl(
                 if not line.strip():
                     continue
                 try:
-                    event = json.loads(line)
-                    event_type = event.get("eventType", event.get("event_type", ""))
-                    evt_game_id = event.get("gameId", event.get("game_id", ""))
+                    data = json.loads(line)
 
                     # Filter by game_id if provided
-                    if game_id and evt_game_id != game_id:
-                        continue
+                    if game_id:
+                        evt_game_id = data.get("gameId", data.get("game_id", ""))
+                        if evt_game_id != game_id:
+                            continue
 
-                    # NBA play-by-play events (actionNumber-based dedup)
-                    if "nba_play" in event_type:
-                        action_number = event.get(
-                            "actionNumber", event.get("action_number")
-                        )
-                        if action_number is not None and evt_game_id:
-                            event_ids.add(f"{evt_game_id}_pbp_{action_number}")
-
-                    # Generic ESPN play events (play_id-based dedup)
-                    play_id = event.get("playId", event.get("play_id"))
-                    if play_id and evt_game_id:
-                        play_ids.add(f"{evt_game_id}_play_{play_id}")
-
-                    # NFL drive events (drive_id-based dedup)
-                    if "nfl_drive" in event_type:
-                        drive_id = event.get("driveId", event.get("drive_id"))
-                        if drive_id and evt_game_id:
-                            drive_ids.add(f"{evt_game_id}_drive_{drive_id}")
+                    # Deserialize to typed event and get dedup key
+                    event = deserialize_data_event(data)
+                    if event:
+                        key = event.get_dedup_key()
+                        if key:
+                            dedup_keys.add(key)
 
                 except json.JSONDecodeError:
                     continue  # Skip malformed lines
@@ -85,11 +70,47 @@ def extract_dedup_ids_from_jsonl(
         logger.error("Error reading JSONL for dedup rebuild: %s", e)
 
     logger.info(
-        "Rebuilt dedup state from JSONL: %d event_ids, %d play_ids, %d drive_ids",
-        len(event_ids),
-        len(play_ids),
-        len(drive_ids),
+        "Rebuilt dedup state from JSONL: %d dedup keys",
+        len(dedup_keys),
     )
+    return dedup_keys
+
+
+# Legacy function for backward compatibility
+def extract_dedup_ids_from_jsonl(
+    jsonl_path: str | Path,
+    game_id: str | None = None,
+) -> tuple[set[str], set[str], set[str]]:
+    """Extract deduplication IDs from a JSONL event file (legacy).
+
+    DEPRECATED: Use extract_dedup_keys_from_jsonl() instead.
+
+    This function maintains backward compatibility by categorizing keys
+    into separate sets based on their format.
+
+    Args:
+        jsonl_path: Path to the JSONL event file
+        game_id: Optional game ID to filter events (if None, extracts all)
+
+    Returns:
+        Tuple of (event_ids, play_ids, drive_ids) sets
+    """
+    all_keys = extract_dedup_keys_from_jsonl(jsonl_path, game_id)
+
+    # Categorize keys by their format
+    event_ids: set[str] = set()
+    play_ids: set[str] = set()
+    drive_ids: set[str] = set()
+
+    for key in all_keys:
+        if "_pbp_" in key:
+            event_ids.add(key)
+        elif "_play_" in key:
+            play_ids.add(key)
+        elif "_drive_" in key:
+            drive_ids.add(key)
+        # Other keys (e.g., pregame events) are not categorized in legacy format
+
     return event_ids, play_ids, drive_ids
 
 

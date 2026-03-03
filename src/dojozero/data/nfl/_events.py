@@ -198,6 +198,12 @@ class NFLPlayEvent(BasePlayEvent):
     # NFL uses team_abbreviation instead of team_tricode
     team_abbreviation: str = ""
 
+    def get_dedup_key(self) -> str | None:
+        """Return dedup key for NFL play-by-play events."""
+        if self.game_id and self.play_id:
+            return f"{self.game_id}_play_{self.play_id}"
+        return None
+
 
 # =============================================================================
 # Tier 2: Segment — NFLDriveEvent
@@ -221,6 +227,12 @@ class NFLDriveEvent(BaseSegmentEvent):
     # Drive start/end yard lines
     start_yard_line: int = 0
     end_yard_line: int = 0
+
+    def get_dedup_key(self) -> str | None:
+        """Return dedup key for NFL drive events."""
+        if self.game_id and self.drive_id:
+            return f"{self.game_id}_drive_{self.drive_id}"
+        return None
 
 
 # =============================================================================

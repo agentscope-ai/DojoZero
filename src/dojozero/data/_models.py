@@ -499,6 +499,20 @@ class DataEvent(BaseModel, ABC):
         event_data = {k: v for k, v in data.items() if k in field_names}
         return cls.model_validate(event_data)
 
+    def get_dedup_key(self) -> str | None:
+        """Return deduplication key for this event, or None if not deduplicated.
+
+        Override in subclasses to define deduplication behavior:
+        - Return None: Event is not deduplicated (default)
+        - Return a unique key: Event is deduplicated by this key
+
+        The key should be unique within the scope of the event type.
+        Common patterns:
+        - One-shot events: "{game_id}_{event_type}"
+        - Continuous events: "{game_id}_{event_type}_{unique_id}"
+        """
+        return None
+
 
 # =============================================================================
 # Sport Event (common base for game + intel events)
@@ -740,11 +754,20 @@ class PreGameInsightEvent(SportEvent):
 
     Concrete (non-abstract) so it can be used as a generic insight event.
     Subclasses override event_type for specific event identification.
+
+    Pregame events are one-shot (fetched once per game), so dedup key is
+    "{game_id}_{event_type}" to prevent re-fetching on resume.
     """
 
     source: str = ""  # e.g., "websearch", "espn_stats", "twitter", "news"
 
     event_type: Literal["event.pre_game_insight"] = "event.pre_game_insight"
+
+    def get_dedup_key(self) -> str | None:
+        """Return dedup key for one-shot pregame events."""
+        if self.game_id:
+            return f"{self.game_id}_{self.event_type}"
+        return None
 
 
 class WebSearchInsightEvent(PreGameInsightEvent):
