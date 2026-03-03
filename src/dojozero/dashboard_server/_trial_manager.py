@@ -296,6 +296,23 @@ class TrialManager:
                 self._gateway_grace_period,
             )
 
+            # Persist final results before gateway is unregistered
+            try:
+                results = await gateway_state.adapter.get_results()
+                results_dict = results.model_dump(mode="json", by_alias=True)
+                self._orchestrator.store.save_trial_results(trial_id, results_dict)
+                self._logger.info(
+                    "Persisted final results for trial '%s' (%d agents)",
+                    trial_id,
+                    len(results.results),
+                )
+            except Exception as e:
+                self._logger.warning(
+                    "Failed to persist results for trial '%s': %s",
+                    trial_id,
+                    e,
+                )
+
             # Grace period to allow SSE clients to receive the message
             # and make final API calls (e.g., get_results)
             await asyncio.sleep(self._gateway_grace_period)

@@ -312,6 +312,10 @@ class OrchestratorStore(Protocol):
 
     def list_checkpoints(self, trial_id: str) -> Sequence[CheckpointSummary]: ...
 
+    def save_trial_results(self, trial_id: str, results: Dict[str, Any]) -> None: ...
+
+    def get_trial_results(self, trial_id: str) -> Dict[str, Any] | None: ...
+
 
 class InMemoryOrchestratorStore(OrchestratorStore):
     """Simple :class:`OrchestratorStore` implementation backed by local dictionaries."""
@@ -320,6 +324,7 @@ class InMemoryOrchestratorStore(OrchestratorStore):
         self._records: Dict[str, TrialRecord] = {}
         self._checkpoints: Dict[str, TrialCheckpoint] = {}
         self._checkpoint_index: Dict[str, list[str]] = {}
+        self._results: Dict[str, Dict[str, Any]] = {}
 
     def list_trial_records(self) -> Sequence[TrialRecord]:
         return tuple(
@@ -378,6 +383,12 @@ class InMemoryOrchestratorStore(OrchestratorStore):
             )
             for checkpoint_id in checkpoint_ids
         )
+
+    def save_trial_results(self, trial_id: str, results: Dict[str, Any]) -> None:
+        self._results[trial_id] = results
+
+    def get_trial_results(self, trial_id: str) -> Dict[str, Any] | None:
+        return self._results.get(trial_id)
 
 
 class TrialOrchestrator:

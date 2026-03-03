@@ -40,6 +40,7 @@ class FileSystemOrchestratorStore(OrchestratorStore):
 
     SPEC_FILE = "spec.json"
     STATUS_FILE = "status.json"
+    RESULTS_FILE = "results.json"
     CHECKPOINT_DIR = "checkpoints"
     CHECKPOINT_INDEX = "checkpoint_index.json"
     TRIAL_INDEX = "trials_index.json"
@@ -103,6 +104,32 @@ class FileSystemOrchestratorStore(OrchestratorStore):
             shutil.rmtree(trial_dir)
         trial_ids = [tid for tid in self._load_trial_ids() if tid != trial_id]
         self._write_json(self._index_file, {"trials": trial_ids})
+
+    def save_trial_results(self, trial_id: str, results: dict[str, Any]) -> None:
+        """Save final trial results to disk.
+
+        Args:
+            trial_id: Trial identifier
+            results: Results dict (should match TrialResultsResponse schema)
+        """
+        trial_dir = self._trial_dir(trial_id)
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        self._write_json(trial_dir / self.RESULTS_FILE, results)
+
+    def get_trial_results(self, trial_id: str) -> dict[str, Any] | None:
+        """Get saved trial results.
+
+        Args:
+            trial_id: Trial identifier
+
+        Returns:
+            Results dict or None if not found
+        """
+        trial_dir = self._trial_dir(trial_id)
+        results_path = trial_dir / self.RESULTS_FILE
+        if not results_path.exists():
+            return None
+        return self._read_json(results_path)
 
     def save_checkpoint(self, checkpoint: TrialCheckpoint) -> TrialCheckpoint:
         checkpoint_id = checkpoint.checkpoint_id or self._generate_checkpoint_id()

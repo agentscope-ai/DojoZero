@@ -792,6 +792,31 @@ def create_dashboard_app(
             }
         )
 
+    @app.get("/api/trials/{trial_id}/results")
+    async def get_trial_results(
+        trial_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Get final results for a concluded trial.
+
+        Results are persisted when a trial ends and can be queried after
+        the gateway has been unregistered.
+
+        For active trials with a gateway, use the gateway endpoint instead:
+        GET /api/gateway/{trial_id}/api/v1/trial/results
+        """
+        results = state.orchestrator.store.get_trial_results(trial_id)
+        if results is None:
+            return JSONResponse(
+                content={
+                    "error": f"Results not found for trial '{trial_id}'",
+                    "hint": "Results are only available after a trial has concluded. "
+                    "For running trials, use GET /api/gateway/{trial_id}/api/v1/trial/results",
+                },
+                status_code=404,
+            )
+        return JSONResponse(content=results)
+
     @app.post("/api/trials/{trial_id}/stop")
     async def stop_trial(
         trial_id: str,
