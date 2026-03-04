@@ -18,11 +18,25 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentRegistrationRequest(BaseModel):
-    """Request body for agent registration."""
+    """Request body for agent registration.
+
+    Authentication flow:
+    1. If api_key is provided, it's validated against the identity service
+       - agent_id is set from the verified identity (request agent_id ignored)
+       - display_name can override the identity service's display name
+    2. If no api_key, falls back to trusting request agent_id (dev mode)
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    agent_id: str = Field(alias="agentId")
+    # Authentication (optional for backwards compatibility)
+    api_key: str | None = Field(default=None, alias="apiKey")
+
+    # Agent identification
+    agent_id: str = Field(alias="agentId")  # Used if no api_key, else ignored
+    display_name: str | None = Field(default=None, alias="displayName")  # Override
+
+    # Agent metadata
     persona: str | None = None
     model: str | None = None
     initial_balance: float | str | None = Field(default=None, alias="initialBalance")
@@ -33,10 +47,12 @@ class AgentRegistrationResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    agent_id: str = Field(serialization_alias="agentId")
+    agent_id: str = Field(serialization_alias="agentId")  # Verified/canonical ID
+    display_name: str | None = Field(default=None, serialization_alias="displayName")
     trial_id: str = Field(serialization_alias="trialId")
     balance: float | str
     registered_at: datetime = Field(serialization_alias="registeredAt")
+    authenticated: bool = False  # True if api_key was validated
 
 
 # ============================================================================
@@ -287,7 +303,11 @@ class AgentResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    agent_id: str = Field(serialization_alias="agentId")
+    agent_id: str = Field(
+        serialization_alias="agentId"
+    )  # Canonical ID (verified if authenticated)
+    display_name: str | None = Field(default=None, serialization_alias="displayName")
+    authenticated: bool = False  # True if agent was authenticated via API key
     final_balance: str = Field(serialization_alias="finalBalance")
     net_profit: str = Field(serialization_alias="netProfit")
     total_bets: int = Field(serialization_alias="totalBets")

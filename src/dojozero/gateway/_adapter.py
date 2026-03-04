@@ -49,7 +49,9 @@ logger = logging.getLogger(__name__)
 class ExternalAgentState:
     """State for a registered external agent."""
 
-    agent_id: str
+    agent_id: str  # Canonical ID (verified if authenticated)
+    display_name: str | None = None  # Human-readable name for this trial
+    authenticated: bool = False  # True if registered with valid API key
     subscription: Subscription | None = None
     registered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_activity_at: datetime = field(
@@ -118,16 +120,20 @@ class ExternalAgentAdapter:
         persona: str = "",
         model: str = "",
         initial_balance: str | None = None,
+        display_name: str | None = None,
+        authenticated: bool = False,
     ) -> AgentRegistrationResponse:
         """Register an external agent.
 
         Creates account in broker and prepares for subscription.
 
         Args:
-            agent_id: Unique agent identifier
+            agent_id: Unique agent identifier (canonical ID if authenticated)
             persona: Agent persona description
             model: Model name/version (stored for future use)
             initial_balance: Starting balance (uses broker default if None)
+            display_name: Human-readable name for this trial
+            authenticated: Whether agent was authenticated via API key
 
         Returns:
             Registration response with agent details
@@ -148,21 +154,29 @@ class ExternalAgentAdapter:
         await self._broker.create_account(agent_id, Decimal(balance))
 
         # Create agent state
-        state = ExternalAgentState(agent_id=agent_id)
+        state = ExternalAgentState(
+            agent_id=agent_id,
+            display_name=display_name,
+            authenticated=authenticated,
+        )
         self._agents[agent_id] = state
 
+        auth_status = "authenticated" if authenticated else "unauthenticated"
         logger.info(
-            "Registered external agent: agent_id=%s, balance=%s, persona=%s",
+            "Registered external agent: agent_id=%s, display_name=%s, balance=%s, %s",
             agent_id,
+            display_name or agent_id,
             balance,
-            persona,
+            auth_status,
         )
 
         return AgentRegistrationResponse(
             agent_id=agent_id,
+            display_name=display_name,
             trial_id=self._trial_id,
             balance=balance,
             registered_at=state.registered_at,
+            authenticated=authenticated,
         )
 
     async def unregister_agent(self, agent_id: str) -> bool:
@@ -572,9 +586,16 @@ class ExternalAgentAdapter:
                 if account is None:
                     continue
 
+                # Get agent state for display_name and authenticated status
+                agent_state = self._agents.get(agent_id)
+                display_name = agent_state.display_name if agent_state else None
+                authenticated = agent_state.authenticated if agent_state else False
+
                 results.append(
                     AgentResult(
                         agent_id=agent_id,
+                        display_name=display_name,
+                        authenticated=authenticated,
                         final_balance=str(account.balance),
                         net_profit=str(stats.net_profit),
                         total_bets=stats.total_bets,

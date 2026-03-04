@@ -1,8 +1,13 @@
 """Authentication for Agent Gateway.
 
-Provides JWT-based authentication for external agents.
-Phase 1-2: Simple X-Agent-ID header
-Phase 3: Full JWT validation with RSA-256
+Provides authentication for external agents:
+- API key validation against external identity service (or local config)
+- JWT-based authentication
+- Simple X-Agent-ID header (development/testing)
+
+The AgentAuthenticator protocol allows plugging in different backends:
+- LocalAgentAuthenticator: File/config-based for development
+- ExternalAgentAuthenticator: Calls external identity service (future)
 """
 
 from __future__ import annotations
@@ -10,8 +15,10 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
 
+import yaml
 from fastapi import Header, HTTPException
 
 from dojozero.gateway._models import ErrorCodes, ErrorDetail, ErrorResponse
@@ -20,6 +27,178 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Agent Identity (returned by authenticators)
+# =============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class AgentIdentity:
+    """Verified agent identity from authentication.
+
+    This is returned by AgentAuthenticator.validate() and represents
+    the canonical identity for cross-trial aggregation.
+    """
+
+    agent_id: str  # Canonical ID for aggregation (from identity service)
+    display_name: str | None = None  # Human-readable name
+    metadata: dict[str, Any] | None = None  # Additional info (org, tier, etc.)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "agentId": self.agent_id,
+            "displayName": self.display_name,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AgentIdentity:
+        """Create from dictionary."""
+        return cls(
+            agent_id=data.get("agentId") or data.get("agent_id", ""),
+            display_name=data.get("displayName") or data.get("display_name"),
+            metadata=data.get("metadata"),
+        )
+
+
+# =============================================================================
+# Authenticator Protocol
+# =============================================================================
+
+
+class AgentAuthenticator(Protocol):
+    """Protocol for agent authentication.
+
+    Implementations validate API keys and return verified agent identity.
+    This allows swapping between local config and external identity service.
+    """
+
+    async def validate(self, api_key: str) -> AgentIdentity | None:
+        """Validate API key and return agent identity.
+
+        Args:
+            api_key: The API key to validate
+
+        Returns:
+            AgentIdentity if valid, None if invalid/unknown key
+        """
+        ...
+
+    def is_enabled(self) -> bool:
+        """Check if this authenticator is enabled/configured."""
+        ...
+
+
+# =============================================================================
+# Local Authenticator (for development)
+# =============================================================================
+
+
+class LocalAgentAuthenticator:
+    """Simple file/config-based authenticator for development.
+
+    Reads agent keys from a YAML config file:
+    ```yaml
+    agents:
+      sk-agent-abc123:
+        agent_id: agent_alice
+        display_name: Alice's Agent
+        metadata:
+          org: team-alpha
+      sk-agent-def456:
+        agent_id: agent_bob
+        display_name: Bob's Agent
+    ```
+    """
+
+    def __init__(
+        self,
+        keys: dict[str, AgentIdentity] | None = None,
+        config_path: Path | str | None = None,
+    ):
+        """Initialize local authenticator.
+
+        Args:
+            keys: Direct mapping of api_key -> AgentIdentity
+            config_path: Path to YAML config file
+        """
+        self._keys: dict[str, AgentIdentity] = keys or {}
+        self._config_path = Path(config_path) if config_path else None
+
+        if self._config_path and self._config_path.exists():
+            self._load_from_file()
+
+        logger.info("LocalAgentAuthenticator initialized with %d keys", len(self._keys))
+
+    def _load_from_file(self) -> None:
+        """Load keys from YAML config file."""
+        if not self._config_path or not self._config_path.exists():
+            return
+
+        try:
+            with open(self._config_path) as f:
+                config = yaml.safe_load(f)
+
+            agents = config.get("agents", {})
+            for api_key, agent_data in agents.items():
+                if isinstance(agent_data, dict):
+                    self._keys[api_key] = AgentIdentity(
+                        agent_id=agent_data.get("agent_id", api_key),
+                        display_name=agent_data.get("display_name"),
+                        metadata=agent_data.get("metadata"),
+                    )
+                elif isinstance(agent_data, str):
+                    # Simple format: api_key: agent_id
+                    self._keys[api_key] = AgentIdentity(agent_id=agent_data)
+
+            logger.info(
+                "Loaded %d agent keys from %s", len(self._keys), self._config_path
+            )
+        except Exception as e:
+            logger.error("Failed to load agent keys from %s: %s", self._config_path, e)
+
+    async def validate(self, api_key: str) -> AgentIdentity | None:
+        """Validate API key and return agent identity."""
+        return self._keys.get(api_key)
+
+    def is_enabled(self) -> bool:
+        """Check if authenticator has any keys configured."""
+        return len(self._keys) > 0
+
+    def add_key(self, api_key: str, identity: AgentIdentity) -> None:
+        """Add a key (for testing)."""
+        self._keys[api_key] = identity
+
+    def remove_key(self, api_key: str) -> bool:
+        """Remove a key."""
+        if api_key in self._keys:
+            del self._keys[api_key]
+            return True
+        return False
+
+
+# =============================================================================
+# No-op Authenticator (allows all, for backwards compatibility)
+# =============================================================================
+
+
+class NoOpAuthenticator:
+    """Authenticator that allows any agent ID (no API key required).
+
+    Used when authentication is disabled for backwards compatibility.
+    The agent_id from the request is trusted as-is.
+    """
+
+    async def validate(self, api_key: str) -> AgentIdentity | None:  # noqa: ARG002
+        """Always returns None (no validation)."""
+        return None
+
+    def is_enabled(self) -> bool:
+        """Always returns False."""
+        return False
 
 
 @dataclass
@@ -296,7 +475,11 @@ def create_auth_dependency(auth_provider: AuthProvider):
 
 __all__ = [
     "AgentCredentials",
+    "AgentIdentity",
+    "AgentAuthenticator",
     "AuthConfig",
     "AuthProvider",
+    "LocalAgentAuthenticator",
+    "NoOpAuthenticator",
     "create_auth_dependency",
 ]

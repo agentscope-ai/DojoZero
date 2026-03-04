@@ -302,6 +302,13 @@ class TrialManager:
                 )
                 return False
 
+            # Try to get gateway adapter for external agent info (display_name, authenticated)
+            gateway_adapter = None
+            if self._gateway_router is not None:
+                gateway_state = self._gateway_router.get_gateway_state(trial_id)
+                if gateway_state is not None:
+                    gateway_adapter = gateway_state.adapter
+
             # Build results from broker (same logic as gateway adapter)
             agent_results: list[AgentResult] = []
             for agent_id in broker._accounts:
@@ -311,9 +318,20 @@ class TrialManager:
                     if account is None:
                         continue
 
+                    # Get display_name and authenticated from gateway if available
+                    display_name = None
+                    authenticated = False
+                    if gateway_adapter is not None:
+                        agent_state = gateway_adapter._agents.get(agent_id)
+                        if agent_state is not None:
+                            display_name = agent_state.display_name
+                            authenticated = agent_state.authenticated
+
                     agent_results.append(
                         AgentResult(
                             agent_id=agent_id,
+                            display_name=display_name,
+                            authenticated=authenticated,
                             final_balance=str(account.balance),
                             net_profit=str(stats.net_profit),
                             total_bets=stats.total_bets,

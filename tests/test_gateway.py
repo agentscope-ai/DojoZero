@@ -757,9 +757,17 @@ class TestTrialResults:
             broker=mock_broker,
             trial_id="trial123",
         )
-        # Pre-register agents by adding to _agents dict
-        adapter._agents["agent1"] = MagicMock()
-        adapter._agents["agent2"] = MagicMock()
+        # Pre-register agents by adding to _agents dict with proper state objects
+        adapter._agents["agent1"] = ExternalAgentState(
+            agent_id="agent1",
+            display_name="Agent One",
+            authenticated=True,
+        )
+        adapter._agents["agent2"] = ExternalAgentState(
+            agent_id="agent2",
+            display_name=None,
+            authenticated=False,
+        )
         return adapter
 
     @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from dojozero.gateway._adapter import ExternalAgentAdapter
+from dojozero.gateway._auth import AgentAuthenticator, NoOpAuthenticator
 from dojozero.gateway._models import (
     AgentRegistrationRequest,
     AgentRegistrationResponse,
@@ -48,6 +49,7 @@ class GatewayState:
     data_hub: "DataHub"
     broker: "BrokerOperator"
     adapter: ExternalAgentAdapter
+    authenticator: AgentAuthenticator = field(default_factory=NoOpAuthenticator)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -102,6 +104,7 @@ def create_gateway_app(
     data_hub: "DataHub",
     broker: "BrokerOperator",
     metadata: dict[str, Any] | None = None,
+    authenticator: AgentAuthenticator | None = None,
 ) -> FastAPI:
     """Create the Agent Gateway FastAPI application.
 
@@ -110,10 +113,14 @@ def create_gateway_app(
         data_hub: DataHub instance for event subscriptions
         broker: BrokerOperator for betting operations
         metadata: Trial metadata
+        authenticator: Optional authenticator for API key validation.
+            If None, uses NoOpAuthenticator (allows any agent_id).
 
     Returns:
         FastAPI application
     """
+    # Use NoOpAuthenticator if none provided (backwards compatible)
+    auth = authenticator or NoOpAuthenticator()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -129,11 +136,13 @@ def create_gateway_app(
             data_hub=data_hub,
             broker=broker,
             adapter=adapter,
+            authenticator=auth,
             metadata=metadata or {},
         )
 
         app.state.gateway_state = state
-        logger.info("Gateway started for trial %s", trial_id)
+        auth_status = "enabled" if auth.is_enabled() else "disabled"
+        logger.info("Gateway started for trial %s (auth: %s)", trial_id, auth_status)
 
         yield
 
@@ -164,18 +173,72 @@ def create_gateway_app(
         request: AgentRegistrationRequest,
         state: GatewayState = Depends(get_gateway_state),
     ) -> AgentRegistrationResponse:
-        """Register an external agent for this trial."""
+        """Register an external agent for this trial.
+
+        If api_key is provided, validates against the authenticator:
+        - On success: uses verified agent_id from identity service
+        - On failure: returns 401 Unauthorized
+
+        If no api_key and authenticator is enabled: returns 401
+        If no api_key and authenticator is disabled: trusts request agent_id
+        """
         # Convert initial_balance to string if it's a float
         initial_balance: str | None = None
         if request.initial_balance is not None:
             initial_balance = str(request.initial_balance)
 
+        # Determine agent identity via authentication
+        agent_id: str
+        display_name: str | None = request.display_name
+        authenticated = False
+
+        if request.api_key:
+            # Validate API key
+            identity = await state.authenticator.validate(request.api_key)
+            if identity is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.INVALID_TOKEN,
+                            message="Invalid API key",
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            # Use verified identity
+            agent_id = identity.agent_id
+            authenticated = True
+            # Use request display_name if provided, else identity's display_name
+            if display_name is None:
+                display_name = identity.display_name
+            logger.info(
+                "Agent authenticated: api_key=***%s, agent_id=%s",
+                request.api_key[-4:] if len(request.api_key) > 4 else "****",
+                agent_id,
+            )
+        elif state.authenticator.is_enabled():
+            # Auth is enabled but no API key provided
+            raise HTTPException(
+                status_code=401,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.AUTH_REQUIRED,
+                        message="API key required (apiKey field)",
+                    )
+                ).model_dump(by_alias=True),
+            )
+        else:
+            # Auth disabled - trust request agent_id (backwards compatible)
+            agent_id = request.agent_id
+
         try:
             return await state.adapter.register_agent(
-                agent_id=request.agent_id,
+                agent_id=agent_id,
                 persona=request.persona or "",
                 model=request.model or "",
                 initial_balance=initial_balance,
+                display_name=display_name,
+                authenticated=authenticated,
             )
         except ValueError as e:
             error_msg = str(e)

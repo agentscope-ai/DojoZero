@@ -5,9 +5,13 @@ Provides HTTP API (REST + SSE) for third-party agents to participate in trials.
 
 from dojozero.gateway._adapter import ExternalAgentAdapter, ExternalAgentState
 from dojozero.gateway._auth import (
+    AgentAuthenticator,
     AgentCredentials,
+    AgentIdentity,
     AuthConfig,
     AuthProvider,
+    LocalAgentAuthenticator,
+    NoOpAuthenticator,
     create_auth_dependency,
 )
 from dojozero.gateway._models import (
@@ -50,9 +54,13 @@ __all__ = [
     "ExternalAgentAdapter",
     "ExternalAgentState",
     # Auth
+    "AgentAuthenticator",
     "AgentCredentials",
+    "AgentIdentity",
     "AuthConfig",
     "AuthProvider",
+    "LocalAgentAuthenticator",
+    "NoOpAuthenticator",
     "create_auth_dependency",
     # Rate Limiting
     "RateLimitConfig",
