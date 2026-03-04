@@ -536,6 +536,11 @@ class TrialManager:
                 if self._gateway_router is not None:
                     self._register_gateway(trial_id, record.spec)
 
+                # Create monitoring task for resumed trial
+                # This ensures results.json is saved when trial completes
+                task = asyncio.create_task(self._monitor_resumed_trial(queued))
+                self._running_tasks[trial_id] = task
+
                 resumed_count += 1
                 self._logger.info(
                     "Successfully resumed interrupted trial '%s'",
@@ -909,6 +914,131 @@ class TrialManager:
                 self._max_concurrent,
             )
 
+    async def _monitor_resumed_trial(self, queued: QueuedTrial) -> None:
+        """Monitor a resumed trial until completion.
+
+        This is similar to the monitoring loop in _run_trial, but for trials
+        that were resumed from checkpoint (already running in orchestrator).
+        """
+        trial_id = queued.trial_id
+        self._logger.info("Monitoring resumed trial: %s", trial_id)
+
+        try:
+            # Wait for trial to complete by monitoring orchestrator status
+            last_health_warning: datetime | None = None
+            game_result_detected_at: datetime | None = None
+
+            while True:
+                await asyncio.sleep(2.0)
+                try:
+                    status = self._orchestrator.get_trial_status(trial_id)
+                    if status.phase.value in ("completed", "stopped", "failed"):
+                        break
+
+                    # Get JSONL path for backup checks
+                    jsonl_path = self._get_jsonl_path(trial_id)
+
+                    # Backup: check JSONL for game_result
+                    if jsonl_path and extract_game_result_from_jsonl(jsonl_path):
+                        now = datetime.now(timezone.utc)
+                        if game_result_detected_at is None:
+                            game_result_detected_at = now
+                            self._logger.info(
+                                "Game result detected in JSONL for resumed trial '%s', "
+                                "waiting for normal self-stop mechanism (10s grace period)",
+                                trial_id,
+                            )
+                        elif (now - game_result_detected_at) > timedelta(seconds=10):
+                            self._logger.info(
+                                "Resumed trial '%s' still running 10s after game_result, "
+                                "stopping via JSONL backup mechanism",
+                                trial_id,
+                            )
+                            await self._orchestrator.stop_trial(trial_id)
+                            break
+
+                    # Health check: warn if no events for 10 minutes
+                    if jsonl_path:
+                        last_modified = get_jsonl_last_modified(jsonl_path)
+                        if last_modified:
+                            stale_duration = datetime.now(timezone.utc) - last_modified
+                            if stale_duration > timedelta(minutes=10):
+                                now = datetime.now(timezone.utc)
+                                if last_health_warning is None or (
+                                    now - last_health_warning
+                                ) > timedelta(minutes=10):
+                                    self._logger.warning(
+                                        "Resumed trial '%s' may be stuck "
+                                        "(no new events for %.1f min)",
+                                        trial_id,
+                                        stale_duration.total_seconds() / 60,
+                                    )
+                                    last_health_warning = now
+                except TrialNotFoundError:
+                    break
+                except Exception as e:
+                    self._logger.warning(
+                        "Error in monitoring loop for resumed trial '%s': %s",
+                        trial_id,
+                        e,
+                    )
+
+            # Check final status
+            try:
+                status = self._orchestrator.get_trial_status(trial_id)
+                if status.phase.value == "failed":
+                    queued.phase = QueuedTrialPhase.FAILED
+                    queued.error = status.last_error
+                else:
+                    queued.phase = QueuedTrialPhase.COMPLETED
+            except TrialNotFoundError:
+                queued.phase = QueuedTrialPhase.COMPLETED
+
+            self._logger.info(
+                "Resumed trial '%s' finished with phase: %s",
+                trial_id,
+                queued.phase.value,
+            )
+
+        except asyncio.CancelledError:
+            # Check if trial is still running in orchestrator
+            # If so, this is likely a server shutdown - don't finalize results
+            # Let the restarted server's monitoring task handle it
+            try:
+                status = self._orchestrator.get_trial_status(trial_id)
+                if status.phase == TrialPhase.RUNNING:
+                    self._logger.info(
+                        "Monitoring task cancelled but trial '%s' still running - "
+                        "skipping results finalization (will be handled on resume)",
+                        trial_id,
+                    )
+                    raise  # Don't save results, just propagate cancellation
+            except TrialNotFoundError:
+                pass  # Trial gone, continue with cancellation handling
+            except Exception:
+                pass  # Error checking status, continue with cancellation handling
+
+            queued.phase = QueuedTrialPhase.CANCELLED
+            self._logger.info("Resumed trial '%s' was cancelled", trial_id)
+            raise
+        except Exception as e:
+            queued.phase = QueuedTrialPhase.FAILED
+            queued.error = str(e)
+            self._logger.error(
+                "Resumed trial '%s' failed: %s", trial_id, e, exc_info=True
+            )
+        finally:
+            # Only save results if we have a final phase set
+            # (cancelled trials that are still running won't have phase updated)
+            if queued.phase != QueuedTrialPhase.RUNNING:
+                await self._save_trial_results(trial_id, queued.phase)
+
+            # Clean up gateway if registered
+            if self._gateway_router is not None:
+                gateway_state = self._gateway_router.get_gateway_state(trial_id)
+                if gateway_state is not None:
+                    await self._signal_trial_ended_and_cleanup(trial_id, queued.phase)
+
     async def _run_trial(self, queued: QueuedTrial) -> None:
         """Run a single trial."""
         trial_id = queued.trial_id
@@ -1032,6 +1162,23 @@ class TrialManager:
             )
 
         except asyncio.CancelledError:
+            # Check if trial is still running in orchestrator
+            # If so, this is likely a server shutdown - don't finalize results
+            # Let the restarted server's monitoring task handle it
+            try:
+                status = self._orchestrator.get_trial_status(trial_id)
+                if status.phase == TrialPhase.RUNNING:
+                    self._logger.info(
+                        "Monitoring task cancelled but trial '%s' still running - "
+                        "skipping results finalization (will be handled on resume)",
+                        trial_id,
+                    )
+                    raise  # Don't save results, just propagate cancellation
+            except TrialNotFoundError:
+                pass  # Trial gone, continue with cancellation handling
+            except Exception:
+                pass  # Error checking status, continue with cancellation handling
+
             queued.phase = QueuedTrialPhase.CANCELLED
             self._logger.info("Trial '%s' was cancelled", trial_id)
             raise
@@ -1040,9 +1187,12 @@ class TrialManager:
             queued.error = str(e)
             self._logger.error("Trial '%s' failed: %s", trial_id, e, exc_info=True)
         finally:
-            # Save trial results (for ALL trials, not just gateway)
-            # Must happen BEFORE gateway cleanup since we need access to broker
-            await self._save_trial_results(trial_id, queued.phase)
+            # Only save results if we have a final phase set
+            # (cancelled trials that are still running won't have phase updated)
+            if queued.phase != QueuedTrialPhase.RUNNING:
+                # Save trial results (for ALL trials, not just gateway)
+                # Must happen BEFORE gateway cleanup since we need access to broker
+                await self._save_trial_results(trial_id, queued.phase)
 
             # Signal trial ended and unregister gateway (gateway-specific cleanup)
             if gateway_registered:
