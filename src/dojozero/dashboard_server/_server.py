@@ -68,9 +68,13 @@ class ResumeConfig(BaseModel):
 
 
 class BacktestConfig(BaseModel):
-    """Backtest configuration for trial submission."""
+    """Backtest configuration for trial submission.
 
-    file: str  # Path to event file (must be accessible on server)
+    For security, file paths are not accepted via REST API.
+    Use trial_id to reference a previous trial's event file.
+    """
+
+    trial_id: str  # Reference a previous trial to replay its events
     speed: float = 1.0
     max_sleep: float = 20.0
     emit_traces: bool = False  # Emit data events to SLS with rebased timestamps
@@ -130,6 +134,7 @@ class DashboardServerState:
     schedule_manager: Any | None = None  # ScheduleManager, lazy import
     trace_backend: str | None = None
     oss_backup: bool = False
+    data_dir: Path | None = None  # Base directory for trial data files
     imported_modules: set[str] = field(default_factory=set)
     import_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -256,6 +261,7 @@ def create_dashboard_app(
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
     enable_gateway: bool = False,
+    data_dir: str | Path | None = None,
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
@@ -271,6 +277,8 @@ def create_dashboard_app(
         auto_resume: Automatically resume interrupted trials on startup (default True)
         stale_threshold_hours: Skip resuming trials older than this many hours (default 24)
         enable_gateway: Enable HTTP gateway routing for external agents
+        data_dir: Base directory for trial data files (persistence_file will be generated
+            under this directory). If None, trials must provide their own persistence_file.
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
@@ -312,6 +320,7 @@ def create_dashboard_app(
             schedule_manager=schedule_manager,
             trace_backend=trace_backend,
             oss_backup=oss_backup,
+            data_dir=Path(data_dir).resolve() if data_dir else None,
         )
 
         # Start trial manager worker
@@ -573,7 +582,7 @@ def create_dashboard_app(
             },
             "metadata": {...},
             "resume": {"checkpoint_id": "...", "latest": false},
-            "backtest": {"file": "/path/to/events.jsonl", "speed": 1.0, "max_sleep": 20.0}
+            "backtest": {"trial_id": "source-trial-id", "speed": 1.0, "max_sleep": 20.0}
         }
 
         Request body (option 2 - params):
@@ -648,11 +657,32 @@ def create_dashboard_app(
                 status_code=400,
             )
 
+        # Prepare config with server-generated persistence_file for security
+        # User-provided persistence_file paths are NOT trusted (path traversal risk)
+        builder_config = dict(scenario.config or scenario_config)
+        if state.data_dir:
+            # Generate safe persistence_file path based on trial_id
+            from datetime import date
+
+            date_str = date.today().isoformat()
+            safe_persistence_file = (
+                state.data_dir / scenario.name / date_str / f"{trial_id}.jsonl"
+            )
+            safe_persistence_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Inject into hub config (override any user-provided value)
+            if "hub" not in builder_config:
+                builder_config["hub"] = {}
+            builder_config["hub"]["persistence_file"] = str(safe_persistence_file)
+            LOGGER.debug(
+                "Generated persistence_file for trial %s: %s",
+                trial_id,
+                safe_persistence_file,
+            )
+
         # Build the trial spec - uses build_async which handles both sync and async builders
         try:
-            spec = await definition.build_async(
-                trial_id, scenario.config or scenario_config
-            )
+            spec = await definition.build_async(trial_id, builder_config)
         except ValidationError as e:
             return JSONResponse(
                 content={"error": f"Invalid config for builder '{scenario.name}': {e}"},
@@ -673,10 +703,33 @@ def create_dashboard_app(
         # Handle backtest configuration
         launch_coro_factory = None
         if request.backtest:
-            event_file = Path(request.backtest.file)
+            # Look up the source trial's persistence file
+            source_trial_id = request.backtest.trial_id
+            source_record = state.orchestrator.store.get_trial_record(source_trial_id)
+            if source_record is None:
+                return JSONResponse(
+                    content={"error": f"Source trial not found: {source_trial_id}"},
+                    status_code=404,
+                )
+
+            # Get persistence_file from source trial's metadata
+            source_persistence_file = source_record.spec.metadata.get(
+                "persistence_file"
+            )
+            if not source_persistence_file:
+                return JSONResponse(
+                    content={
+                        "error": f"Source trial '{source_trial_id}' has no persistence_file"
+                    },
+                    status_code=400,
+                )
+
+            event_file = Path(source_persistence_file)
             if not event_file.exists():
                 return JSONResponse(
-                    content={"error": f"Event file not found: {event_file}"},
+                    content={
+                        "error": f"Event file not found for trial '{source_trial_id}': {event_file}"
+                    },
                     status_code=400,
                 )
             # Capture backtest settings (for closure below)
@@ -1322,6 +1375,7 @@ async def run_dashboard_server(
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
     enable_gateway: bool = False,
+    data_dir: str | Path | None = None,
 ) -> None:
     """Run the Dashboard Server.
 
@@ -1339,6 +1393,8 @@ async def run_dashboard_server(
         auto_resume: Automatically resume interrupted trials on startup (default True)
         stale_threshold_hours: Skip resuming trials older than this many hours (default 24)
         enable_gateway: Enable HTTP gateway routing for external agents
+        data_dir: Base directory for trial data files (persistence_file will be generated
+            under this directory). If None, trials must provide their own persistence_file.
     """
     import uvicorn
 
@@ -1354,6 +1410,7 @@ async def run_dashboard_server(
         auto_resume=auto_resume,
         stale_threshold_hours=stale_threshold_hours,
         enable_gateway=enable_gateway,
+        data_dir=data_dir,
     )
 
     config = uvicorn.Config(

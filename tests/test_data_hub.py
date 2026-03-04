@@ -1129,3 +1129,43 @@ class TestDataHubDedupAndRestore:
         # The event's dedup key should now be in the set
         expected_key = f"{self.GAME_ID}_event.game_initialize"
         assert expected_key in hub_with_dedup._dedup_keys
+
+
+class TestPersistencePathValidation:
+    """Tests for persistence file path validation (security).
+
+    Note: The primary protection against path traversal attacks is server-side
+    path generation in the REST API. This validation is defense-in-depth.
+    """
+
+    def test_valid_path_accepted(self, tmp_path):
+        """Test that valid paths are accepted."""
+        from dojozero.data._factory import _validate_persistence_path
+
+        valid_path = tmp_path / "data" / "events.jsonl"
+        result = _validate_persistence_path(str(valid_path))
+        assert result == valid_path.resolve()
+
+    def test_path_traversal_rejected(self):
+        """Test that path traversal sequences are rejected."""
+        from dojozero.data._factory import _validate_persistence_path
+
+        with pytest.raises(ValueError, match="path traversal not allowed"):
+            _validate_persistence_path("data/../../../etc/passwd.jsonl")
+
+    def test_path_traversal_in_middle_rejected(self):
+        """Test that path traversal in the middle of path is rejected."""
+        from dojozero.data._factory import _validate_persistence_path
+
+        with pytest.raises(ValueError, match="path traversal not allowed"):
+            _validate_persistence_path("data/foo/../../../etc/passwd.jsonl")
+
+    def test_non_jsonl_extension_rejected(self):
+        """Test that non-.jsonl extensions are rejected."""
+        from dojozero.data._factory import _validate_persistence_path
+
+        with pytest.raises(ValueError, match="must end with .jsonl"):
+            _validate_persistence_path("data/events.json")
+
+        with pytest.raises(ValueError, match="must end with .jsonl"):
+            _validate_persistence_path("data/events.txt")
