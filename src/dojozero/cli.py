@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import importlib
 import logging
+import os
 import signal
 import sys
 from dataclasses import dataclass
@@ -430,6 +431,48 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to built static assets to serve (optional).",
     )
+    arena_parser.add_argument(
+        "--redis-url",
+        dest="redis_url",
+        default=None,
+        help="Redis URL for fast startup (e.g., redis://host:6379/0). "
+        "Can also be set via DOJOZERO_REDIS_URL env var.",
+    )
+
+    # Sync Service command
+    sync_parser = subparsers.add_parser(
+        "sync-service",
+        help="Start the SLS to Redis sync service",
+        description="Launch the Sync Service that continuously syncs data from SLS to Redis. "
+        "Arena Server can then use Redis for fast startup.",
+    )
+    sync_parser.add_argument(
+        "--redis-url",
+        dest="redis_url",
+        default=None,
+        help="Redis URL (e.g., redis://host:6379/0). Required if DOJOZERO_REDIS_URL not set.",
+    )
+    sync_parser.add_argument(
+        "--sync-interval",
+        dest="sync_interval",
+        type=float,
+        default=5.0,
+        help="Sync interval in seconds (default: 5.0).",
+    )
+    sync_parser.add_argument(
+        "--lookback-days",
+        dest="lookback_days",
+        type=int,
+        default=90,
+        help="Lookback period in days for trial data (default: 90).",
+    )
+    sync_parser.add_argument(
+        "--service-name",
+        dest="service_name",
+        default="dojozero",
+        help="Service name for SLS queries (default: dojozero).",
+    )
+
     # List trials command
     list_trials_parser = subparsers.add_parser(
         "list-trials",
@@ -2251,6 +2294,7 @@ async def _arena_command(args: argparse.Namespace) -> int:
     trace_query_endpoint = args.trace_query_endpoint
     static_dir = getattr(args, "static_dir", None)
     service_name = args.service_name
+    redis_url = getattr(args, "redis_url", None)
 
     LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
     if trace_backend == "sls":
@@ -2260,6 +2304,8 @@ async def _arena_command(args: argparse.Namespace) -> int:
     LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
     if static_dir:
         LOGGER.info("Static files: %s", static_dir)
+    if redis_url or os.getenv("DOJOZERO_REDIS_URL"):
+        LOGGER.info("Redis: enabled (fast startup)")
 
     await run_arena_server(
         config=config,
@@ -2269,7 +2315,54 @@ async def _arena_command(args: argparse.Namespace) -> int:
         trace_query_endpoint=trace_query_endpoint,
         static_dir=static_dir,
         service_name=service_name,
+        redis_url=redis_url,
     )
+    return 0
+
+
+async def _sync_service_command(args: argparse.Namespace) -> int:
+    """Handle sync-service command - start SLS to Redis sync service."""
+    from dojozero.sync_service import SyncService
+    from dojozero.sync_service._redis_client import RedisClient
+    from dojozero.arena_server._cache import CacheConfig
+    from dojozero.core._tracing import create_trace_reader
+
+    # Get Redis URL (required)
+    redis_url = args.redis_url or os.getenv("DOJOZERO_REDIS_URL")
+    if not redis_url:
+        raise DojoZeroCLIError(
+            "Redis URL is required. Provide via --redis-url or DOJOZERO_REDIS_URL env var."
+        )
+
+    # Create trace reader (always SLS for sync service)
+    trace_reader = create_trace_reader(
+        backend="sls",
+        service_name=args.service_name,
+    )
+
+    # Create Redis client
+    redis_client = RedisClient(redis_url=redis_url)
+
+    # Create config
+    config = CacheConfig(
+        refresh_interval=args.sync_interval,
+        trials_lookback_days=args.lookback_days,
+    )
+
+    # Create and start sync service
+    service = SyncService(
+        trace_reader=trace_reader,
+        redis_client=redis_client,
+        config=config,
+    )
+
+    safe_url = redis_url.split("@")[-1] if "@" in redis_url else redis_url
+    LOGGER.info("Starting Sync Service")
+    LOGGER.info("Redis URL: %s", safe_url)
+    LOGGER.info("Sync interval: %s seconds", args.sync_interval)
+    LOGGER.info("Lookback days: %s", args.lookback_days)
+
+    await service.start()
     return 0
 
 
@@ -2291,6 +2384,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(_serve_command(args))
         if args.command == "arena":
             return asyncio.run(_arena_command(args))
+        if args.command == "sync-service":
+            return asyncio.run(_sync_service_command(args))
         if args.command == "list-trials":
             return asyncio.run(_list_trials_command(args))
         if args.command == "list-sources":

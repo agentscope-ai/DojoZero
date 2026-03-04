@@ -146,11 +146,20 @@ _INTERNAL_TAG_PREFIXES = ("otel.", "dojozero.", "service.", "telemetry.")
 
 def _json_parse(value: Any) -> Any:
     """Try to JSON-parse a string value; return as-is on failure."""
-    if isinstance(value, str) and value.startswith(("{", "[")):
-        try:
-            return json.loads(value)
-        except (json.JSONDecodeError, ValueError):
-            pass
+    if isinstance(value, str):
+        # Handle JSON primitives
+        if value == "null":
+            return None
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        # Handle JSON objects/arrays
+        if value.startswith(("{", "[")):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                pass
     return value
 
 

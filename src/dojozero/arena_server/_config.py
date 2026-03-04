@@ -20,16 +20,16 @@ class CacheConfig(BaseModel):
 
     # Time range
     trials_lookback_days: int = Field(
-        default=7, description="Days to look back for trials"
+        default=90, description="Days to look back for trials"
     )
     trials_limit: int = Field(default=500, description="Max trials to fetch per query")
 
     # TTL
     max_cache_ttl: float = Field(
-        default=30 * 24 * 3600.0, description="Max TTL for cache entries (seconds)"
+        default=90 * 24 * 3600.0, description="Max TTL for cache entries (seconds)"
     )
     completed_trial_ttl: float = Field(
-        default=30 * 24 * 3600.0, description="TTL for completed trial entries"
+        default=90 * 24 * 3600.0, description="TTL for completed trial entries"
     )
 
 
@@ -37,7 +37,7 @@ class ReplayCacheConfig(BaseModel):
     """Replay cache configuration."""
 
     ttl: float = Field(
-        default=7 * 24 * 3600.0, description="TTL for replay cache entries"
+        default=90 * 24 * 3600.0, description="TTL for replay cache entries"
     )
     max_entries: int = Field(default=100, description="Max trials to cache for replay")
     core_categories: list[str] = Field(

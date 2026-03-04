@@ -102,6 +102,7 @@ from dojozero.core._tracing import (
     TraceReader,
     create_trace_reader,
 )
+from dojozero.arena_server._redis_reader import RedisReader
 
 # Rebuild Pydantic models to resolve forward references
 # This must happen after imports to avoid circular import issues
@@ -372,15 +373,24 @@ class BackgroundRefresher:
     - replay_cache: Preloaded at startup; refreshed on trial completion detection
 
     Startup:
-    - Performs initial full refresh of all caches
+    - If Redis is available, loads from Redis (fast, ~1-2 seconds)
+    - Otherwise, performs initial full refresh from SLS
     - Preloads replay data for completed trials
     - Blocks until complete (with timeout)
+
+    Redis Mode:
+    - When redis_reader is provided and connected, refreshes from Redis instead of SLS
+    - Checks Redis version every second, refreshes on change
+    - Falls back to SLS mode if Redis becomes unavailable
     """
 
     trace_reader: TraceReader
     cache: LandingPageCache
     replay_cache: ReplayCache
     config: CacheConfig = field(default_factory=lambda: DEFAULT_CACHE_CONFIG)
+
+    # Redis reader for fast startup (optional)
+    redis_reader: RedisReader | None = None
 
     # Background tasks
     _tasks: list[asyncio.Task[None]] = field(default_factory=list)
@@ -394,10 +404,14 @@ class BackgroundRefresher:
     _spans_by_trial: dict[str, list[SpanData]] = field(default_factory=dict)
     _last_span_fetch_time: datetime | None = None
 
+    # Redis mode flag
+    _use_redis: bool = False
+
     async def start(self) -> None:
         """Start background refresh tasks.
 
-        Performs initial refresh and then starts periodic refresh loops.
+        If Redis is available, loads from Redis (fast startup).
+        Otherwise, performs initial refresh from SLS.
         """
         if self._running:
             return
@@ -405,11 +419,50 @@ class BackgroundRefresher:
         self._running = True
         LOGGER.info("BackgroundRefresher: Starting...")
 
-        # Perform initial refresh (blocking)
+        # Try Redis mode first (fast startup)
+        if self.redis_reader is not None:
+            try:
+                if await self.redis_reader.connect():
+                    # Load initial data from Redis
+                    if await self.redis_reader.load_all():
+                        self._use_redis = True
+                        self._initial_refresh_done.set()
+                        LOGGER.info(
+                            "BackgroundRefresher: Loaded from Redis (fast startup)"
+                        )
+
+                        # Preload trial_details and replay_cache for completed
+                        # trials from Redis in the background (non-blocking)
+                        self._tasks.append(
+                            asyncio.create_task(
+                                self._preload_completed_trials_from_redis()
+                            )
+                        )
+
+                        # Start Redis refresh loop (checks version every second)
+                        self._tasks.append(
+                            asyncio.create_task(self._refresh_from_redis_loop())
+                        )
+                        LOGGER.info("BackgroundRefresher: Started Redis refresh loop")
+                        return
+                    else:
+                        LOGGER.warning(
+                            "BackgroundRefresher: Redis load failed, falling back to SLS"
+                        )
+                else:
+                    LOGGER.warning(
+                        "BackgroundRefresher: Redis connection failed, falling back to SLS"
+                    )
+            except Exception as e:
+                LOGGER.warning(
+                    "BackgroundRefresher: Redis error: %s, falling back to SLS", e
+                )
+
+        # Fallback: SLS mode (original logic)
         try:
             await self._refresh_all()
             self._initial_refresh_done.set()
-            LOGGER.info("BackgroundRefresher: Initial refresh complete")
+            LOGGER.info("BackgroundRefresher: Initial refresh complete (SLS mode)")
         except Exception as e:
             LOGGER.error("BackgroundRefresher: Initial refresh failed: %s", e)
             self._initial_refresh_done.set()  # Still set to unblock startup
@@ -444,7 +497,44 @@ class BackgroundRefresher:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
         self._tasks.clear()
+
+        # Close Redis connection if used
+        if self.redis_reader is not None:
+            await self.redis_reader.close()
+
         LOGGER.info("BackgroundRefresher: Stopped")
+
+    async def _refresh_from_redis_loop(self) -> None:
+        """Refresh loop for Redis mode.
+
+        Checks Redis version every second, refreshes hot data on change.
+        """
+        LOGGER.info("BackgroundRefresher: Redis refresh loop started")
+
+        while self._running:
+            try:
+                await asyncio.sleep(1.0)  # Check every second
+                if not self._running:
+                    break
+
+                if self.redis_reader is None or not self.redis_reader.is_connected:
+                    LOGGER.warning(
+                        "BackgroundRefresher: Redis disconnected, attempting reconnect"
+                    )
+                    if self.redis_reader is not None:
+                        await self.redis_reader.connect()
+                    continue
+
+                # Check for updates (O(1) version check)
+                if await self.redis_reader.has_updates():
+                    # Version changed, refresh hot data
+                    await self.redis_reader.load_hot_data()
+                    LOGGER.debug("BackgroundRefresher: Refreshed hot data from Redis")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                LOGGER.warning("BackgroundRefresher: Redis refresh error: %s", e)
 
     async def wait_for_ready(self, timeout: float | None = None) -> None:
         """Wait for initial refresh to complete.
@@ -958,8 +1048,8 @@ class BackgroundRefresher:
             len(completed_trial_ids),
         )
 
-        # Use semaphore to limit concurrency
-        semaphore = asyncio.Semaphore(5)
+        # Limit concurrency (16 for 16-core server, balances parallelism vs memory)
+        semaphore = asyncio.Semaphore(16)
 
         async def load_with_semaphore(trial_id: str) -> None:
             async with semaphore:
@@ -975,6 +1065,88 @@ class BackgroundRefresher:
             len(self.replay_cache._cache),
         )
 
+    async def _preload_completed_trials_from_redis(self) -> None:
+        """Preload trial_details and replay_cache for completed trials from Redis.
+
+        Called at startup in Redis mode. Loads spans from Redis (fast) and
+        processes them into trial_details cache and replay_cache so that
+        completed game pages load instantly without falling back to SLS.
+        """
+        if self.redis_reader is None:
+            return
+
+        reader = self.redis_reader
+
+        completed_ids = self.cache.get_completed_trial_ids()
+        if not completed_ids:
+            LOGGER.info(
+                "BackgroundRefresher: No completed trials to preload from Redis"
+            )
+            return
+
+        LOGGER.info(
+            "BackgroundRefresher: Preloading %d completed trials from Redis",
+            len(completed_ids),
+        )
+
+        semaphore = asyncio.Semaphore(16)
+        loaded_details = 0
+        loaded_replay = 0
+
+        async def preload_one(trial_id: str) -> tuple[bool, bool]:
+            nonlocal loaded_details, loaded_replay
+            async with semaphore:
+                detail_ok = False
+                replay_ok = False
+
+                # 1. Preload trial_details
+                if self.cache.get_trial_details(trial_id) is None:
+                    try:
+                        spans = await reader.load_spans_for_trial(trial_id)
+                        if spans:
+                            self._process_trial_details(trial_id, spans, [], 0)
+                            detail_ok = True
+                    except Exception as e:
+                        LOGGER.debug(
+                            "Failed to preload trial_details for %s: %s",
+                            trial_id,
+                            e,
+                        )
+
+                # 2. Preload replay_cache
+                if self.replay_cache.get(trial_id) is None:
+                    try:
+                        entry, _ = await _load_replay_data(
+                            self.trace_reader,
+                            self.replay_cache,
+                            trial_id,
+                            redis_reader=reader,
+                        )
+                        replay_ok = entry is not None
+                    except Exception as e:
+                        LOGGER.debug("Failed to preload replay for %s: %s", trial_id, e)
+
+                return detail_ok, replay_ok
+
+        results = await asyncio.gather(
+            *[preload_one(tid) for tid in completed_ids],
+            return_exceptions=True,
+        )
+
+        for r in results:
+            if isinstance(r, tuple):
+                if r[0]:
+                    loaded_details += 1
+                if r[1]:
+                    loaded_replay += 1
+
+        LOGGER.info(
+            "BackgroundRefresher: Preloaded from Redis: %d trial_details, %d replays (of %d completed)",
+            loaded_details,
+            loaded_replay,
+            len(completed_ids),
+        )
+
     async def _load_replay_for_trial(self, trial_id: str) -> None:
         """Load replay data for a single completed trial into replay_cache.
 
@@ -983,7 +1155,7 @@ class BackgroundRefresher:
         - When a live trial transitions to completed
         """
         # Check if already cached
-        cached = await self.replay_cache.get(trial_id)
+        cached = self.replay_cache.get(trial_id)
         if cached:
             LOGGER.debug(
                 "BackgroundRefresher: Replay for %s already cached, skipping", trial_id
@@ -991,11 +1163,11 @@ class BackgroundRefresher:
             return
 
         try:
-            # Use the existing _load_replay_data function
             cache_entry, error_reason = await _load_replay_data(
                 self.trace_reader,
                 self.replay_cache,
                 trial_id,
+                redis_reader=self.redis_reader if self._use_redis else None,
             )
 
             if cache_entry:
@@ -1031,9 +1203,25 @@ class BackgroundRefresher:
     async def refresh_trial_details_on_demand(
         self, trial_id: str
     ) -> list[dict[str, Any]]:
-        """Refresh trial_details for a specific trial (on-demand for cache miss)."""
-        # For on-demand single trial, fetch directly
-        spans = await self.trace_reader.get_spans(trial_id)
+        """Refresh trial_details for a specific trial (on-demand for cache miss).
+
+        When Redis is available, loads spans from Redis (~50-100ms) instead of
+        SLS (10-20s). Falls back to SLS if Redis has no data.
+        """
+        spans: list[SpanData] = []
+
+        # Try Redis first when available (fast path)
+        if self._use_redis and self.redis_reader is not None:
+            spans = await self.redis_reader.load_spans_for_trial(trial_id)
+            if spans:
+                LOGGER.debug(
+                    "Loaded %d spans from Redis for trial %s", len(spans), trial_id
+                )
+
+        # Fallback to SLS (slow path)
+        if not spans:
+            spans = await self.trace_reader.get_spans(trial_id)
+
         existing = self.cache.get_trial_details(trial_id)
 
         if existing is not None:
@@ -1332,6 +1520,7 @@ def create_arena_app(
     poll_interval: float = 1.0,
     service_name: str = "dojozero",
     by_alias: bool = False,
+    redis_url: str | None = None,
 ) -> FastAPI:
     """Create the Arena Server FastAPI application.
 
@@ -1343,16 +1532,26 @@ def create_arena_app(
         poll_interval: Interval for polling new spans
         service_name: Service name for trace backend
         by_alias: Use serialization aliases (camelCase) in REST JSON responses.
+        redis_url: Redis connection URL for fast startup. If provided, loads from Redis
+                   instead of SLS on startup. Can also be set via DOJOZERO_REDIS_URL env var.
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
         DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
         DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
+
+    For Redis fast startup:
+        DOJOZERO_REDIS_URL: Redis connection URL (e.g., redis://host:6379/0)
     """
+    import os
     from dojozero.arena_server._config import DEFAULT_CONFIG
+    from dojozero.sync_service._redis_client import RedisClient
 
     # Use provided config or default for cache/query settings
     resolved_config = config if config is not None else DEFAULT_CONFIG
+
+    # Get Redis URL from parameter or environment
+    effective_redis_url = redis_url or os.getenv("DOJOZERO_REDIS_URL")
 
     # Create trace reader using CLI args
     trace_reader = create_trace_reader(
@@ -1372,11 +1571,20 @@ def create_arena_app(
         # Create cache and refresher using config
         cache = LandingPageCache(config=cache_config)
         replay_cache = ReplayCache.from_arena_config(resolved_config)
+
+        # Create Redis reader if URL is provided
+        redis_reader: RedisReader | None = None
+        if effective_redis_url:
+            redis_client = RedisClient(redis_url=effective_redis_url)
+            redis_reader = RedisReader(redis_client=redis_client, cache=cache)
+            LOGGER.info("Arena Server: Redis URL configured, will use fast startup")
+
         refresher = BackgroundRefresher(
             trace_reader=trace_reader,
             cache=cache,
             replay_cache=replay_cache,
             config=cache_config,
+            redis_reader=redis_reader,
         )
 
         _server_state = ArenaServerState(
@@ -1397,10 +1605,11 @@ def create_arena_app(
         await refresher.wait_for_ready()
 
         LOGGER.info(
-            "Arena Server ready (trace backend: %s, static_dir: %s, service_name: %s)",
+            "Arena Server ready (trace backend: %s, static_dir: %s, service_name: %s, redis: %s)",
             trace_backend,
             static_dir,
             service_name,
+            "enabled" if refresher._use_redis else "disabled",
         )
         yield
 
@@ -1456,6 +1665,7 @@ async def run_arena_server(
     static_dir: Path | None = None,
     service_name: str = "dojozero",
     by_alias: bool = False,
+    redis_url: str | None = None,
 ) -> None:
     """Run the Arena Server.
 
@@ -1468,11 +1678,15 @@ async def run_arena_server(
         static_dir: Path to static files (React build output)
         service_name: Service name for Jaeger or SLS trace backend
         by_alias: Use serialization aliases (camelCase) in REST JSON responses.
+        redis_url: Redis connection URL for fast startup.
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
         DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
         DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
+
+    For Redis fast startup:
+        DOJOZERO_REDIS_URL: Redis connection URL
     """
     import uvicorn
 
@@ -1483,6 +1697,7 @@ async def run_arena_server(
         static_dir=static_dir,
         service_name=service_name,
         by_alias=by_alias,
+        redis_url=redis_url,
     )
 
     uvicorn_config = uvicorn.Config(

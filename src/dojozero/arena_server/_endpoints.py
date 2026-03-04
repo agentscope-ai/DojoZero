@@ -157,7 +157,25 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 )
 
         response = TrialDetailResponse(trial_id=trial_id, items=items)
-        return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
+        return JSONResponse(
+            content=response.model_dump(
+                by_alias=state.by_alias,
+                exclude={
+                    "live_games": {
+                        "__all__": {
+                            "home_team": {"players"},
+                            "away_team": {"players"},
+                        }
+                    },
+                    "all_games": {
+                        "__all__": {
+                            "home_team": {"players"},
+                            "away_team": {"players"},
+                        }
+                    },
+                },
+            )
+        )
 
     @app.get("/api/landing")
     async def get_landing_data(
@@ -195,15 +213,46 @@ def register_rest_endpoints(app: FastAPI) -> None:
             )
 
         all_games = games.live_games + games.upcoming_games + games.completed_games
-        # NOTE! Fallback: use all_games if live_games is empty! For temporary use
-        live_games = games.live_games if games.live_games else all_games
+        live_games = games.live_games
+
+        if league and league.upper() == "NFL":
+            from dojozero.arena_server._constants import SUPER_BOWL_GAME_ID
+
+            superbowl_game = next(
+                (g for g in all_games if SUPER_BOWL_GAME_ID in g.id), None
+            )
+            if superbowl_game and superbowl_game not in live_games:
+                live_games = [superbowl_game] + list(live_games)
+
+        # only for mock test
+        if league and league.upper() == "NBA" and not live_games:
+            live_games = list(all_games[:10])
+
         response = LandingResponse(
             stats=stats,
             live_games=live_games,
             all_games=all_games,
             live_agent_actions=agent_actions,
         )
-        return JSONResponse(content=response.model_dump(by_alias=state.by_alias))
+        return JSONResponse(
+            content=response.model_dump(
+                by_alias=state.by_alias,
+                exclude={
+                    "live_games": {
+                        "__all__": {
+                            "home_team": {"players"},
+                            "away_team": {"players"},
+                        }
+                    },
+                    "all_games": {
+                        "__all__": {
+                            "home_team": {"players"},
+                            "away_team": {"players"},
+                        }
+                    },
+                },
+            )
+        )
 
     @app.get("/api/stats")
     async def get_stats(
@@ -394,11 +443,17 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 - totalItems: Total number of items after filtering
         """
         state = get_server_state()
+        refresher = state.refresher
 
         cache_entry, error_reason = await _load_replay_data(
             state.trace_reader,
             state.replay_cache,
             trial_id,
+            redis_reader=(
+                refresher.redis_reader
+                if refresher is not None and refresher._use_redis
+                else None
+            ),
         )
 
         if cache_entry is None:
@@ -514,6 +569,7 @@ def register_websocket_endpoints(app: FastAPI) -> None:
             {"command": "status"}  - Get current stream status
             {"command": "filter", "categories": [...], "mode": "include"}
                                    - Update category filter dynamically
+            {"command": "disconnect"} - Close connection gracefully
         """
         state = get_server_state()
         refresher = state.refresher
@@ -648,6 +704,13 @@ def register_websocket_endpoints(app: FastAPI) -> None:
                             )
                             await websocket.send_text(status_msg.model_dump_json())
 
+                        elif command == "disconnect":
+                            LOGGER.info(
+                                "Stream: Client requested disconnect for trial '%s'",
+                                trial_id,
+                            )
+                            return
+
                     except json.JSONDecodeError:
                         LOGGER.warning("Invalid JSON command: %s", msg_text)
 
@@ -762,6 +825,7 @@ def register_websocket_endpoints(app: FastAPI) -> None:
             {"command": "status"}                    - Get current status
             {"command": "filter", "categories": [...], "mode": "include"}
                                                      - Update category filter dynamically
+            {"command": "disconnect"}                - Close connection gracefully
 
         Server messages:
             {"type": "replay_meta_info", ...}       - Metadata (sent first, always)
@@ -782,10 +846,16 @@ def register_websocket_endpoints(app: FastAPI) -> None:
         )
 
         # Load replay data (includes pre-computed meta)
+        refresher = state.refresher
         cache_entry, error_reason = await _load_replay_data(
             state.trace_reader,
             state.replay_cache,
             trial_id,
+            redis_reader=(
+                refresher.redis_reader
+                if refresher is not None and refresher._use_redis
+                else None
+            ),
         )
 
         if cache_entry is None:
@@ -952,6 +1022,12 @@ def register_websocket_endpoints(app: FastAPI) -> None:
                             )
                         elif command == "status":
                             pass  # Just send status below
+                        elif command == "disconnect":
+                            LOGGER.info(
+                                "Replay: Client requested disconnect for trial '%s'",
+                                trial_id,
+                            )
+                            return
                         else:
                             LOGGER.warning("Unknown replay command: %s", command)
                             continue

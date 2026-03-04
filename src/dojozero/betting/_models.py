@@ -4,13 +4,14 @@ Extracted from ``_broker.py`` so that consumers can import lightweight data
 contracts without pulling in the full broker operator implementation.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_serializer
 
 
 # =============================================================================
@@ -415,6 +416,16 @@ class AgentResponseMessage(BaseModel):
     bet_total_value: Optional[float] = Field(
         default=None, description="Total value for TOTAL (over/under) bets"
     )
+
+    @field_serializer("content")
+    def _sanitize_content(self, value: str) -> str:
+        """Sanitize content for compliance and UI copy."""
+        sanitized = value.replace("$", "")
+        sanitized = re.sub(r"\bBet\b", "Play", sanitized)
+        sanitized = re.sub(r"\bbet\b", "play", sanitized)
+        sanitized = re.sub(r"\bbets\b", "plays", sanitized)
+        sanitized = re.sub(r"\bbetting\b", "playing", sanitized)
+        return sanitized
 
 
 class AgentInfo(BaseModel):

@@ -289,3 +289,7 @@ def _get_team_identity(tricode: str, league: str = "NBA") -> TeamIdentity:
         color=_DEFAULT_TEAM_COLOR,
         logo_url=logo_url,
     )
+
+
+# Super Bowl 60 game ID (used to pin this game in NFL live_games)
+SUPER_BOWL_GAME_ID = "nfl-game-401772988-superbowl60"

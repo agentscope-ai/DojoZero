@@ -1,8 +1,7 @@
-import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
-import logging
 from dojozero.arena_server._models import StatsResponse, GamesResponse
 
 from dojozero.betting import AgentInfo, AgentList
@@ -28,8 +27,8 @@ class CacheConfig:
     refresh_interval: float = 5.0
 
     # Cache TTL
-    max_cache_ttl: float = 30 * 24 * 3600.0  # 30 days
-    completed_trial_ttl: float = 30 * 24 * 3600.0  # 30 days
+    max_cache_ttl: float = 90 * 24 * 3600.0  # 90 days
+    completed_trial_ttl: float = 90 * 24 * 3600.0  # 90 days
 
     # Startup
     startup_timeout: float = 30.0
@@ -41,7 +40,7 @@ class CacheConfig:
     trials_limit: int = 500
 
     # Time range
-    trials_lookback_days: int = 7
+    trials_lookback_days: int = 90
 
     @classmethod
     def from_arena_config(cls, config: "ArenaServerConfig") -> "CacheConfig":
@@ -256,13 +255,14 @@ class LandingPageCache:
         """Extract and merge agent info from spans.
 
         Looks for agent.agent_initialize spans containing AgentList payloads.
-        New agents are added to cache; existing agents are not overwritten.
+        New agents are added to cache; existing agents are updated with newer info.
+        CDN URLs are migrated from old format to new format.
 
         Args:
             spans: List of spans to extract from
 
         Returns:
-            Number of new agents added
+            Number of new agents added (not counting updates)
         """
         added = 0
         for span in spans:
@@ -271,13 +271,14 @@ class LandingPageCache:
             typed = deserialize_span(span)
             if isinstance(typed, AgentList):
                 for agent_info in typed.agents:
-                    if (
-                        agent_info.agent_id
-                        and agent_info.agent_id not in self._agent_info
-                    ):
+                    if agent_info.agent_id:
+                        is_new = agent_info.agent_id not in self._agent_info
                         self._agent_info[agent_info.agent_id] = agent_info
-                        added += 1
-                        LOGGER.debug("Cached agent: %s", agent_info.agent_id)
+                        if is_new:
+                            added += 1
+                            LOGGER.debug("Cached new agent: %s", agent_info.agent_id)
+                        else:
+                            LOGGER.debug("Updated agent: %s", agent_info.agent_id)
         return added
 
     def clear_agent_info(self) -> None:
@@ -532,17 +533,12 @@ class ReplayCache:
     The cache stores both the serialized items and pre-computed metadata
     (play indices, period info) to enable efficient seek operations.
 
-    Replay data is preloaded at startup and refreshed when:
-    - A new trial completion is detected
-    - User requests trigger on-demand loading
-
-    TTL matches trials_lookback_days (7 days) - after this, trials are no longer
-    in the trials_list anyway, so replay data can be evicted.
+    Note: No lock needed - Python dict operations are atomic and this cache
+    is tolerant of brief over-capacity during concurrent writes.
     """
 
     _cache: dict[str, ReplayCacheEntry] = field(default_factory=dict)
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    ttl: float = 7 * 24 * 3600.0  # 7 days
+    ttl: float = 90 * 24 * 3600.0  # 90 days
     max_entries: int = 100  # Max trials to cache
     core_categories: list[str] = field(default_factory=lambda: ["play", "game_update"])
 
@@ -555,52 +551,45 @@ class ReplayCache:
             core_categories=list(config.replay_cache.core_categories),
         )
 
-    async def get(self, trial_id: str) -> ReplayCacheEntry | None:
+    def get(self, trial_id: str) -> ReplayCacheEntry | None:
         """Get cached replay entry, or None if not cached/expired."""
-        async with self._lock:
-            entry = self._cache.get(trial_id)
-            if entry and entry.is_valid():
-                LOGGER.debug(
-                    "ReplayCache HIT: %s (%d items, %d plays)",
-                    trial_id,
-                    len(entry.items),
-                    entry.meta.total_play_count,
-                )
-                return entry
-            elif entry:
-                # Expired, remove it
-                del self._cache[trial_id]
-                LOGGER.debug("ReplayCache EXPIRED: %s", trial_id)
-            return None
+        entry = self._cache.get(trial_id)
+        if entry and entry.is_valid():
+            LOGGER.debug(
+                "ReplayCache HIT: %s (%d items, %d plays)",
+                trial_id,
+                len(entry.items),
+                entry.meta.total_play_count,
+            )
+            return entry
+        return None
 
-    async def set(
+    def set(
         self, trial_id: str, items: list[dict[str, Any]], meta: ReplayMetaInfo
     ) -> None:
         """Cache replay data for a completed trial."""
-        async with self._lock:
-            # Evict oldest if at capacity
-            if len(self._cache) >= self.max_entries:
-                oldest = min(self._cache.items(), key=lambda x: x[1].created_at)
-                del self._cache[oldest[0]]
-                LOGGER.debug("ReplayCache evicted: %s", oldest[0])
+        # Evict oldest if at capacity
+        if len(self._cache) >= self.max_entries:
+            oldest = min(self._cache.items(), key=lambda x: x[1].created_at)
+            self._cache.pop(oldest[0], None)
+            LOGGER.debug("ReplayCache evicted: %s", oldest[0])
 
-            self._cache[trial_id] = ReplayCacheEntry(
-                items=items,
-                meta=meta,
-                ttl=self.ttl,
-            )
-            LOGGER.info(
-                "ReplayCache SET: %s (%d items, %d plays, %d periods)",
-                trial_id,
-                len(items),
-                meta.total_play_count,
-                len(meta.periods),
-            )
+        self._cache[trial_id] = ReplayCacheEntry(
+            items=items,
+            meta=meta,
+            ttl=self.ttl,
+        )
+        LOGGER.info(
+            "ReplayCache SET: %s (%d items, %d plays, %d periods)",
+            trial_id,
+            len(items),
+            meta.total_play_count,
+            len(meta.periods),
+        )
 
     def invalidate(self, trial_id: str) -> None:
         """Remove a trial from cache."""
-        if trial_id in self._cache:
-            del self._cache[trial_id]
+        self._cache.pop(trial_id, None)
 
     def get_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
