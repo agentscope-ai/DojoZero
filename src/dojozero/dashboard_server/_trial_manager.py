@@ -754,7 +754,12 @@ class TrialManager:
         queued = self.get_status(trial_id)
         if not queued or not queued.spec:
             return None
-        persistence_file = queued.spec.metadata.get("persistence_file")
+        metadata = queued.spec.metadata
+        # Handle both dict and Pydantic model metadata
+        if isinstance(metadata, dict):
+            persistence_file = metadata.get("persistence_file")
+        else:
+            persistence_file = getattr(metadata, "persistence_file", None)
         if persistence_file:
             return Path(persistence_file)
         return None
@@ -927,6 +932,9 @@ class TrialManager:
 
             # Wait for trial to complete by monitoring dashboard status
             last_health_warning: datetime | None = None  # Track when we last warned
+            game_result_detected_at: datetime | None = (
+                None  # Track when game_result first seen
+            )
             while True:
                 await asyncio.sleep(2.0)
                 try:
@@ -938,13 +946,27 @@ class TrialManager:
                     jsonl_path = self._get_jsonl_path(trial_id)
 
                     # Backup: check JSONL for game_result (in case callback chain failed)
+                    # Use a delay similar to the normal self-stop mechanism (10s for broker settlement)
                     if jsonl_path and extract_game_result_from_jsonl(jsonl_path):
-                        self._logger.info(
-                            "Game result detected in JSONL, stopping trial '%s'",
-                            trial_id,
-                        )
-                        await self._orchestrator.stop_trial(trial_id)
-                        break
+                        now = datetime.now(timezone.utc)
+                        if game_result_detected_at is None:
+                            # First time seeing game_result - record timestamp, don't stop yet
+                            game_result_detected_at = now
+                            self._logger.info(
+                                "Game result detected in JSONL for trial '%s', "
+                                "waiting for normal self-stop mechanism (10s grace period)",
+                                trial_id,
+                            )
+                        elif (now - game_result_detected_at) > timedelta(seconds=10):
+                            # Game result was detected 10+ seconds ago but trial still running
+                            # This means callback chain failed - stop as backup
+                            self._logger.info(
+                                "Trial '%s' still running 10s after game_result detected, "
+                                "stopping via JSONL backup mechanism",
+                                trial_id,
+                            )
+                            await self._orchestrator.stop_trial(trial_id)
+                            break
 
                     # Health check: warn if no events for 10 minutes
                     if jsonl_path:
@@ -966,6 +988,14 @@ class TrialManager:
                 except TrialNotFoundError:
                     # Trial removed from dashboard
                     break
+                except Exception as e:
+                    # Log but continue monitoring - don't crash the loop
+                    # This makes the monitoring loop resilient to transient errors
+                    self._logger.warning(
+                        "Error in monitoring loop for trial '%s': %s",
+                        trial_id,
+                        e,
+                    )
 
             # Check final status
             try:

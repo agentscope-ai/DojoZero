@@ -299,9 +299,15 @@ class NBAStore(DataStore):
                         game_id, self._state.STATUS_FINAL
                     )  # STATUS_FINAL
 
-                # Emit GameResultEvent if not already emitted
-                # (Prevents race condition where PBP "End of Game" comes after boxscore STATUS_FINAL)
-                if not self._state.has_game_result_emitted(game_id) and has_team_data:
+                # Emit GameResultEvent if not already emitted AND PBP has been processed
+                # For concluded games, we wait for PBP to process plays first so events
+                # are ordered correctly (plays before game_result).
+                # For live games, PBP is already available when STATUS_FINAL is detected.
+                if (
+                    not self._state.has_game_result_emitted(game_id)
+                    and has_team_data
+                    and self._state.is_pbp_available(game_id)
+                ):
                     home_stats = home_team_data.get("statistics", {})
                     away_stats = away_team_data.get("statistics", {})
                     home_score = home_stats.get("points", 0) or 0
