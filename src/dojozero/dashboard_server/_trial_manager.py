@@ -30,6 +30,7 @@ from dojozero.dashboard_server._jsonl_utils import (
 
 if TYPE_CHECKING:
     from ._gateway_routing import GatewayRouter
+    from dojozero.gateway import AgentAuthenticator
 
 LOGGER = logging.getLogger("dojozero.trial_manager")
 
@@ -87,6 +88,7 @@ class TrialManager:
         checkpoint_interval_seconds: float = 300.0,
         gateway_router: "GatewayRouter | None" = None,
         gateway_grace_period: float = 5.0,
+        authenticator: "AgentAuthenticator | None" = None,
     ):
         """Initialize the TrialManager.
 
@@ -102,6 +104,8 @@ class TrialManager:
                                   gateway (default 5s). This gives external agents time
                                   to receive the trial_ended SSE event and make final
                                   API calls (e.g., get_results).
+            authenticator: AgentAuthenticator for validating agent API keys.
+                          If None, uses NoOpAuthenticator (no auth).
         """
         self._orchestrator = orchestrator
         self._max_concurrent = max_concurrent
@@ -111,6 +115,7 @@ class TrialManager:
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
         self._gateway_router = gateway_router
         self._gateway_grace_period = gateway_grace_period
+        self._authenticator = authenticator
 
         # Queue for pending trials
         self._pending: asyncio.Queue[QueuedTrial] = asyncio.Queue()
@@ -209,6 +214,7 @@ class TrialManager:
                 data_hub=data_hub,
                 broker=broker,
                 metadata=metadata,
+                authenticator=self._authenticator,
             )
 
             # Create adapter and state manually since lifespan doesn't run for in-process routing
@@ -217,11 +223,16 @@ class TrialManager:
                 broker=broker,
                 trial_id=trial_id,
             )
+
+            # Import authenticator types
+            from dojozero.gateway import NoOpAuthenticator
+
             gateway_state = GatewayState(
                 trial_id=trial_id,
                 data_hub=data_hub,
                 broker=broker,
                 adapter=adapter,
+                authenticator=self._authenticator or NoOpAuthenticator(),
                 metadata=metadata,
             )
 
