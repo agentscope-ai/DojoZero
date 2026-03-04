@@ -27,6 +27,7 @@ from dojozero.dashboard_server._jsonl_utils import (
     extract_game_result_from_jsonl,
     get_jsonl_last_modified,
 )
+from dojozero.gateway import NoOpAuthenticator
 
 if TYPE_CHECKING:
     from ._gateway_routing import GatewayRouter
@@ -223,9 +224,6 @@ class TrialManager:
                 broker=broker,
                 trial_id=trial_id,
             )
-
-            # Import authenticator types
-            from dojozero.gateway import NoOpAuthenticator
 
             gateway_state = GatewayState(
                 trial_id=trial_id,
