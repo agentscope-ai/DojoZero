@@ -926,6 +926,21 @@ class TrialManager:
             queued.phase = QueuedTrialPhase.RUNNING
             self._logger.info("Trial '%s' is now running", trial_id)
 
+            # Create initial checkpoint immediately so trial can always be resumed
+            try:
+                checkpoint_id = await self._orchestrator.checkpoint_trial(trial_id)
+                self._logger.info(
+                    "Initial checkpoint created for trial '%s': %s",
+                    trial_id,
+                    checkpoint_id,
+                )
+            except Exception as e:
+                self._logger.warning(
+                    "Failed to create initial checkpoint for trial '%s': %s",
+                    trial_id,
+                    e,
+                )
+
             # Register gateway if router is available
             if self._gateway_router is not None:
                 gateway_registered = self._register_gateway(trial_id, queued.spec)
