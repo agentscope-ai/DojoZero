@@ -23,6 +23,10 @@ from dojozero.core import (
     TrialSpec,
     TrialStatus,
 )
+from dojozero.dashboard_server._jsonl_utils import (
+    extract_game_result_from_jsonl,
+    get_jsonl_last_modified,
+)
 
 if TYPE_CHECKING:
     from ._gateway_routing import GatewayRouter
@@ -255,6 +259,106 @@ class TrialManager:
             return True
         return False
 
+    async def _save_trial_results(
+        self, trial_id: str, final_phase: QueuedTrialPhase
+    ) -> bool:
+        """Save trial results by querying the broker directly.
+
+        This method works for ALL trials, regardless of whether gateway is used.
+        It queries the broker operator for agent balances and statistics,
+        then persists results.json to the trial directory.
+
+        Args:
+            trial_id: Trial identifier
+            final_phase: Final phase of the trial
+
+        Returns:
+            True if results were saved successfully, False otherwise
+        """
+        # Import here to avoid circular imports
+        from dojozero.betting import BrokerOperator
+        from dojozero.gateway._models import AgentResult, TrialResultsResponse
+
+        try:
+            # Get the runtime to access actors
+            runtime = self._orchestrator._trials.get(trial_id)
+            if runtime is None:
+                self._logger.warning(
+                    "Cannot save results: trial '%s' runtime not found", trial_id
+                )
+                return False
+
+            # Find BrokerOperator from running actors
+            broker: BrokerOperator | None = None
+            for actor_runtime in runtime.actors.values():
+                actor = actor_runtime.instance
+                if isinstance(actor, BrokerOperator):
+                    broker = actor
+                    break
+
+            if broker is None:
+                self._logger.warning(
+                    "Cannot save results: trial '%s' has no BrokerOperator", trial_id
+                )
+                return False
+
+            # Build results from broker (same logic as gateway adapter)
+            agent_results: list[AgentResult] = []
+            for agent_id in broker._accounts:
+                try:
+                    stats = await broker.get_statistics(agent_id)
+                    account = broker._accounts.get(agent_id)
+                    if account is None:
+                        continue
+
+                    agent_results.append(
+                        AgentResult(
+                            agent_id=agent_id,
+                            final_balance=str(account.balance),
+                            net_profit=str(stats.net_profit),
+                            total_bets=stats.total_bets,
+                            win_rate=round(stats.win_rate, 4),
+                            roi=round(stats.roi, 4),
+                        )
+                    )
+                except Exception as e:
+                    self._logger.warning(
+                        "Failed to get results for agent %s: %s", agent_id, e
+                    )
+
+            # Sort by balance descending
+            agent_results.sort(key=lambda r: float(r.final_balance), reverse=True)
+
+            # Map phase to status string
+            status_map = {
+                QueuedTrialPhase.COMPLETED: "completed",
+                QueuedTrialPhase.CANCELLED: "cancelled",
+                QueuedTrialPhase.FAILED: "failed",
+            }
+            status = status_map.get(final_phase, "completed")
+
+            # Build response
+            results_response = TrialResultsResponse(
+                trial_id=trial_id,
+                status=status,
+                results=agent_results,
+                ended_at=datetime.now(timezone.utc),
+            )
+
+            # Save to store
+            results_dict = results_response.model_dump(mode="json", by_alias=True)
+            self._orchestrator.store.save_trial_results(trial_id, results_dict)
+            self._logger.info(
+                "Saved trial results for '%s' (%d agents)", trial_id, len(agent_results)
+            )
+            return True
+
+        except Exception as e:
+            self._logger.error(
+                "Failed to save results for trial '%s': %s", trial_id, e, exc_info=True
+            )
+            return False
+
     async def _signal_trial_ended_and_cleanup(
         self, trial_id: str, final_phase: QueuedTrialPhase
     ) -> None:
@@ -296,22 +400,8 @@ class TrialManager:
                 self._gateway_grace_period,
             )
 
-            # Persist final results before gateway is unregistered
-            try:
-                results = await gateway_state.adapter.get_results()
-                results_dict = results.model_dump(mode="json", by_alias=True)
-                self._orchestrator.store.save_trial_results(trial_id, results_dict)
-                self._logger.info(
-                    "Persisted final results for trial '%s' (%d agents)",
-                    trial_id,
-                    len(results.results),
-                )
-            except Exception as e:
-                self._logger.warning(
-                    "Failed to persist results for trial '%s': %s",
-                    trial_id,
-                    e,
-                )
+            # Note: Results are saved by _save_trial_results() which is called
+            # for ALL trials (not just gateway ones) before this cleanup runs.
 
             # Grace period to allow SSE clients to receive the message
             # and make final API calls (e.g., get_results)
@@ -652,6 +742,23 @@ class TrialManager:
         """List all trials tracked by the manager."""
         return list(self._trials.values())
 
+    def _get_jsonl_path(self, trial_id: str) -> Path | None:
+        """Get JSONL persistence file path from trial spec metadata.
+
+        Args:
+            trial_id: Trial identifier
+
+        Returns:
+            Path to JSONL file, or None if not found/configured
+        """
+        queued = self.get_status(trial_id)
+        if not queued or not queued.spec:
+            return None
+        persistence_file = queued.spec.metadata.get("persistence_file")
+        if persistence_file:
+            return Path(persistence_file)
+        return None
+
     async def cancel(self, trial_id: str) -> bool:
         """Cancel a pending or running trial (marks as CANCELLED).
 
@@ -819,12 +926,43 @@ class TrialManager:
                 gateway_registered = self._register_gateway(trial_id, queued.spec)
 
             # Wait for trial to complete by monitoring dashboard status
+            last_health_warning: datetime | None = None  # Track when we last warned
             while True:
                 await asyncio.sleep(2.0)
                 try:
                     status = self._orchestrator.get_trial_status(trial_id)
                     if status.phase.value in ("completed", "stopped", "failed"):
                         break
+
+                    # Get JSONL path for backup checks
+                    jsonl_path = self._get_jsonl_path(trial_id)
+
+                    # Backup: check JSONL for game_result (in case callback chain failed)
+                    if jsonl_path and extract_game_result_from_jsonl(jsonl_path):
+                        self._logger.info(
+                            "Game result detected in JSONL, stopping trial '%s'",
+                            trial_id,
+                        )
+                        await self._orchestrator.stop_trial(trial_id)
+                        break
+
+                    # Health check: warn if no events for 10 minutes
+                    if jsonl_path:
+                        last_modified = get_jsonl_last_modified(jsonl_path)
+                        if last_modified:
+                            stale_duration = datetime.now(timezone.utc) - last_modified
+                            if stale_duration > timedelta(minutes=10):
+                                # Only warn once per 10-minute window
+                                now = datetime.now(timezone.utc)
+                                if last_health_warning is None or (
+                                    now - last_health_warning
+                                ) > timedelta(minutes=10):
+                                    self._logger.warning(
+                                        "Trial '%s' may be stuck (no new events for %.1f min)",
+                                        trial_id,
+                                        stale_duration.total_seconds() / 60,
+                                    )
+                                    last_health_warning = now
                 except TrialNotFoundError:
                     # Trial removed from dashboard
                     break
@@ -857,7 +995,11 @@ class TrialManager:
             queued.error = str(e)
             self._logger.error("Trial '%s' failed: %s", trial_id, e, exc_info=True)
         finally:
-            # Signal trial ended and unregister gateway
+            # Save trial results (for ALL trials, not just gateway)
+            # Must happen BEFORE gateway cleanup since we need access to broker
+            await self._save_trial_results(trial_id, queued.phase)
+
+            # Signal trial ended and unregister gateway (gateway-specific cleanup)
             if gateway_registered:
                 await self._signal_trial_ended_and_cleanup(trial_id, queued.phase)
 

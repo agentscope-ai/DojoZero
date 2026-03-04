@@ -299,6 +299,47 @@ class NBAStore(DataStore):
                         game_id, self._state.STATUS_FINAL
                     )  # STATUS_FINAL
 
+                # Emit GameResultEvent if not already emitted
+                # (Prevents race condition where PBP "End of Game" comes after boxscore STATUS_FINAL)
+                if not self._state.has_game_result_emitted(game_id) and has_team_data:
+                    home_stats = home_team_data.get("statistics", {})
+                    away_stats = away_team_data.get("statistics", {})
+                    home_score = home_stats.get("points", 0) or 0
+                    away_score = away_stats.get("points", 0) or 0
+                    winner = (
+                        "home"
+                        if home_score > away_score
+                        else "away"
+                        if away_score > home_score
+                        else ""
+                    )
+                    home_tid = self._state.get_home_team_id(game_id)
+                    away_tid = self._state.get_away_team_id(game_id)
+                    events.append(
+                        GameResultEvent(
+                            timestamp=datetime.now(timezone.utc),
+                            game_id=game_id,
+                            sport="nba",
+                            winner=winner,
+                            home_score=home_score,
+                            away_score=away_score,
+                            home_team_name=self._state.get_team_name(home_tid),
+                            away_team_name=self._state.get_team_name(away_tid),
+                            home_team_id=home_tid,
+                            away_team_id=away_tid,
+                        )
+                    )
+                    self._state.mark_game_result_emitted(game_id)
+                    logger.info(
+                        "GameResultEvent emitted from boxscore (STATUS_FINAL): "
+                        "game_id=%s, %s %d - %s %d",
+                        game_id,
+                        self._state.get_team_name(home_tid),
+                        home_score,
+                        self._state.get_team_name(away_tid),
+                        away_score,
+                    )
+
             # Skip emitting game updates if game is concluded and we've already emitted the final update
             game_concluded = self._state.is_game_concluded(game_id)
             final_update_emitted = self._state.has_final_update_emitted(game_id)
@@ -555,8 +596,9 @@ class NBAStore(DataStore):
                     and "end" in last_action.get("description", "").lower()
                     and "game" in last_action.get("description", "").lower()
                 ):
-                    previous_status = self._state.get_previous_status(game_id)
-                    if previous_status != 3:
+                    # Use game_result_emitted flag instead of previous_status
+                    # to avoid race condition with boxscore STATUS_FINAL detection
+                    if not self._state.has_game_result_emitted(game_id):
                         game_ended = True
 
             # Deduplication: filter out actions we've already processed using event_id
@@ -631,8 +673,11 @@ class NBAStore(DataStore):
                 )
 
                 # Emit immediate game update after scoring plays for real-time score tracking
-                if is_scoring_play and self._state.score_changed(
-                    game_id, home_score, away_score
+                # Skip if game result already emitted (backtest replay scenario)
+                if (
+                    is_scoring_play
+                    and self._state.score_changed(game_id, home_score, away_score)
+                    and not self._state.has_game_result_emitted(game_id)
                 ):
                     logger.info(
                         "Score change detected for game %s: %d-%d (scoring play)",
@@ -685,7 +730,17 @@ class NBAStore(DataStore):
                         away_team_id=away_tid,
                     )
                 )
+                self._state.mark_game_result_emitted(game_id)
                 self._state.set_previous_status(game_id, 3)  # Finished
+                logger.info(
+                    "GameResultEvent emitted from PBP (End of Game): "
+                    "game_id=%s, %s %d - %s %d",
+                    game_id,
+                    self._state.get_team_name(home_tid),
+                    home_score,
+                    self._state.get_team_name(away_tid),
+                    away_score,
+                )
 
         # Check if poll profile needs to change
         new_profile = self._state.get_poll_profile(game_id)
