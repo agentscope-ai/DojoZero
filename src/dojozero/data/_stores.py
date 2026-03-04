@@ -259,10 +259,17 @@ class DataStore(ABC):
     async def start_polling(self) -> None:
         """Start polling the API for updates."""
         if not self._api:
+            logger.warning("Store '%s' has no API, skipping polling", self.store_id)
             return
 
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
+        logger.info(
+            "Store '%s' polling started (interval=%.1fs, identifier=%s)",
+            self.store_id,
+            self.poll_interval_seconds,
+            self._poll_identifier,
+        )
 
     def pause_polling(self) -> None:
         """Pause polling without stopping the task.
@@ -413,7 +420,13 @@ class DataStore(ABC):
 
             try:
                 # Poll for updates (pass poll identifier)
+                logger.debug("Store '%s' polling...", self.store_id)
                 raw_events = await self._poll_api(identifier=self._poll_identifier)
+                logger.info(
+                    "Store '%s' poll complete: %d events",
+                    self.store_id,
+                    len(raw_events),
+                )
 
                 # Process raw events through registered streams
                 for raw_event in raw_events:

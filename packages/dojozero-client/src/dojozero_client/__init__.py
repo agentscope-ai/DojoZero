@@ -30,6 +30,7 @@ Dashboard mode (dojo0 serve --enable-gateway):
 """
 
 from dojozero_client._client import (
+    AgentResult,
     Balance,
     BetResult,
     DojoClient,
@@ -37,7 +38,9 @@ from dojozero_client._client import (
     GatewayInfo,
     Odds,
     TrialConnection,
+    TrialEndedEvent,
     TrialMetadata,
+    TrialResults,
 )
 from dojozero_client._config import (
     ClientConfig,
@@ -63,6 +66,7 @@ from dojozero_client._exceptions import (
     RegistrationError,
     StaleReferenceError,
     StreamDisconnectedError,
+    TrialEndedError,
 )
 from dojozero_client._transport import GatewayTransport, SSEEvent
 
@@ -73,12 +77,15 @@ __all__ = [
     "DojoClient",
     "TrialConnection",
     # Data classes
+    "AgentResult",
     "Balance",
     "BetResult",
     "EventEnvelope",
     "GatewayInfo",
     "Odds",
+    "TrialEndedEvent",
     "TrialMetadata",
+    "TrialResults",
     # Config
     "ClientConfig",
     "load_config",
@@ -104,4 +111,5 @@ __all__ = [
     "BettingClosedError",
     "RateLimitedError",
     "StreamDisconnectedError",
+    "TrialEndedError",
 ]

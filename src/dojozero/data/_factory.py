@@ -23,14 +23,48 @@ Usage:
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from dojozero.betting._metadata import BettingTrialMetadata
 from dojozero.core._types import RuntimeContext
 from dojozero.data._hub import DataHub
-from dojozero.data._stores import DataStore
+from dojozero.data._stores import DataStore, extract_dedup_keys_from_jsonl
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_persistence_path(persistence_file: str) -> Path:
+    """Validate persistence file path for security.
+
+    Rejects paths with path traversal sequences (..). This is defense-in-depth;
+    the primary protection is server-side path generation in the REST API.
+
+    Args:
+        persistence_file: Path to validate
+
+    Returns:
+        Resolved Path object
+
+    Raises:
+        ValueError: If path contains suspicious patterns
+    """
+    # Check for path traversal sequences
+    if ".." in persistence_file:
+        raise ValueError(
+            f"Invalid persistence_file: path traversal not allowed: {persistence_file}"
+        )
+
+    # Resolve to absolute path
+    path = Path(persistence_file).resolve()
+
+    # Must end with .jsonl
+    if not str(path).endswith(".jsonl"):
+        raise ValueError(
+            f"Invalid persistence_file: must end with .jsonl: {persistence_file}"
+        )
+
+    return path
 
 
 class StoreFactory(ABC):
@@ -140,18 +174,33 @@ def build_runtime_context(
         RuntimeContext with trial_id, data_hubs, stores, startup, and cleanup callbacks
 
     Raises:
-        ValueError: If a requested store type has no registered factory
+        ValueError: If a requested store type has no registered factory,
+            or if persistence_file path is invalid (security validation)
     """
+    # Validate persistence_file path for security (defense-in-depth)
+    persistence_path = _validate_persistence_path(persistence_file)
+
     data_hubs: dict[str, DataHub] = {}
     stores: dict[str, DataStore] = {}
 
     # Create DataHub with trial_id for trace emission
     hub = DataHub(
         hub_id=hub_id,
-        persistence_file=persistence_file,
+        persistence_file=str(persistence_path),
         trial_id=trial_id,
     )
     data_hubs[hub_id] = hub
+
+    # Load dedup keys if persistence file exists (resume case)
+    # This ensures events already persisted are not re-emitted
+    if persistence_path.exists() and persistence_path.stat().st_size > 0:
+        dedup_keys = extract_dedup_keys_from_jsonl(persistence_path)
+        hub.load_dedup_keys(dedup_keys)
+        logger.info(
+            "Loaded %d dedup keys from existing JSONL for hub '%s'",
+            len(dedup_keys),
+            hub_id,
+        )
 
     # Create stores using registered factories
     for store_type in store_types:

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from dojozero_client._client import AgentResult
 
 
 class DojoClientError(Exception):
@@ -81,6 +84,24 @@ class StreamDisconnectedError(DojoClientError):
     pass
 
 
+class TrialEndedError(DojoClientError):
+    """Trial has ended.
+
+    This is raised when a trial_ended SSE event is received.
+    The final_results attribute contains the trial results.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        reason: str = "completed",
+        final_results: list["AgentResult"] | None = None,
+    ):
+        super().__init__(message)
+        self.reason = reason
+        self.final_results: list["AgentResult"] = final_results or []
+
+
 __all__ = [
     "DojoClientError",
     "ConnectionError",
@@ -93,4 +114,5 @@ __all__ = [
     "BettingClosedError",
     "RateLimitedError",
     "StreamDisconnectedError",
+    "TrialEndedError",
 ]

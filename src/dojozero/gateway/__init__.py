@@ -13,6 +13,7 @@ from dojozero.gateway._auth import (
 from dojozero.gateway._models import (
     AgentRegistrationRequest,
     AgentRegistrationResponse,
+    AgentResult,
     BalanceResponse,
     BetRequest,
     BetResponse,
@@ -27,7 +28,9 @@ from dojozero.gateway._models import (
     RecentEventsResponse,
     SpreadLine,
     TotalLine,
+    TrialEndedMessage,
     TrialMetadataResponse,
+    TrialResultsResponse,
 )
 from dojozero.gateway._rate_limit import (
     RateLimitConfig,
@@ -66,9 +69,12 @@ __all__ = [
     # Models - Trial
     "TrialMetadataResponse",
     # Models - Events
+    "AgentResult",
     "EventEnvelope",
-    "RecentEventsResponse",
     "HeartbeatMessage",
+    "RecentEventsResponse",
+    "TrialEndedMessage",
+    "TrialResultsResponse",
     # Models - Odds
     "CurrentOddsResponse",
     "SpreadLine",

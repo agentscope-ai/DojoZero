@@ -303,47 +303,32 @@ class PolymarketStore(DataStore):
                         )
                         self.update_poll_interval("odds", 5.0)
                         self._game_started = True
-                elif event_type == "event.game_result":
-                    # Game ended: stop odds polling (no more updates needed)
-                    logger.info("Game ended, stopping odds polling")
-                    # Stop polling by setting _running to False
-                    # This will cause the _poll_loop to exit on next iteration
-                    self._running = False
+                # Note: game_result is NOT handled here - orchestrator handles stopping
+                # via RuntimeContext.cleanup to ensure proper session cleanup
 
             self._data_hub.subscribe_agent(
                 agent_id=f"{self.store_id}_game_status_monitor",
-                event_types=[
-                    "event.game_start",
-                    "event.game_result",
-                ],
+                event_types=["event.game_start"],
                 callback=game_status_callback,
             )
             logger.info(
-                "PolymarketStore subscribed to game status events for dynamic polling interval adjustment"
+                "PolymarketStore subscribed to game_start event for dynamic polling interval adjustment"
             )
 
-            # Check if game has already started/ended by looking at hub's recent events
+            # Check if game has already started by looking at hub's recent events
             # This handles the case where events were emitted before we subscribed
-            recent_results = self._data_hub.get_recent_events(
-                event_types=["event.game_result"], limit=1
+            # Note: We don't check for game_result - orchestrator handles stopping
+            recent_events = self._data_hub.get_recent_events(
+                event_types=["event.game_start"], limit=10
             )
-            if recent_results:
+            if recent_events:
                 logger.info(
-                    "Game already ended (found game_result event), stopping odds polling"
+                    "Game already started (found %d game_start events), "
+                    "switching to in-game polling (5s)",
+                    len(recent_events),
                 )
-                self._running = False
-            else:
-                recent_events = self._data_hub.get_recent_events(
-                    event_types=["event.game_start"], limit=10
-                )
-                if recent_events:
-                    logger.info(
-                        "Game already started (found %d game_start events), "
-                        "switching to in-game polling (5s)",
-                        len(recent_events),
-                    )
-                    self.update_poll_interval("odds", 5.0)
-                    self._game_started = True
+                self.update_poll_interval("odds", 5.0)
+                self._game_started = True
 
         # Call parent start_polling
         await super().start_polling()

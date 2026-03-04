@@ -29,6 +29,7 @@ from dojozero.gateway._models import (
     EventEnvelope,
     RecentEventsResponse,
     TrialMetadataResponse,
+    TrialResultsResponse,
 )
 from dojozero.gateway._sse import SSEConnection, create_sse_response
 
@@ -224,6 +225,30 @@ def create_gateway_app(
             metadata=state.metadata,
         )
 
+    @app.get("/api/v1/trial/results", response_model=TrialResultsResponse)
+    async def get_trial_results(
+        agent_id: str = Depends(get_agent_id),
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> TrialResultsResponse:
+        """Get current or final trial results.
+
+        Returns the current standings during a trial, or final results after
+        the trial has ended. This endpoint can be used to verify results
+        if the trial_ended SSE event was missed.
+        """
+        if not state.adapter.is_registered(agent_id):
+            raise HTTPException(
+                status_code=403,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.NOT_REGISTERED,
+                        message="Agent not registered",
+                    )
+                ).model_dump(by_alias=True),
+            )
+
+        return await state.adapter.get_results()
+
     # =========================================================================
     # Event Streaming
     # =========================================================================
@@ -275,6 +300,8 @@ def create_gateway_app(
             get_recent_events=lambda limit: state.data_hub.get_recent_events(
                 limit=limit
             ),
+            trial_ended_event=state.adapter.trial_ended_event,
+            get_trial_ended_message=state.adapter.get_trial_ended_message,
         )
 
         return create_sse_response(connection, last_event_id)

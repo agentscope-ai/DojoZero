@@ -133,6 +133,36 @@ class DataHub:
         # Pregame callbacks: invoked after GameInitializeEvent with stores paused
         self._on_game_initialized_callbacks: list[Callable[[str], Awaitable[None]]] = []
 
+        # Deduplication: track event keys to prevent duplicate events on resume
+        self._dedup_keys: set[str] = set()
+
+    def load_dedup_keys(self, keys: set[str]) -> None:
+        """Load deduplication keys from JSONL on resume.
+
+        Also restores game phases based on which lifecycle events have been seen.
+        This ensures the gate doesn't block events after resume.
+
+        Args:
+            keys: Set of dedup keys extracted from JSONL file
+        """
+        self._dedup_keys = keys.copy()
+        logger.info("DataHub loaded %d dedup keys for resume", len(self._dedup_keys))
+
+        # Restore game phases from dedup keys
+        # Key format: "{game_id}_{event_type}"
+        for key in keys:
+            if "_event.game_start" in key:
+                # Game has started - set to LIVE
+                game_id = key.replace("_event.game_start", "")
+                self._game_phases[game_id] = _GamePhase.LIVE
+                logger.info("Restored game phase LIVE for game_id=%s", game_id)
+            elif "_event.game_initialize" in key:
+                # Game initialized but not started - set to PREGAME (unless already LIVE)
+                game_id = key.replace("_event.game_initialize", "")
+                if game_id not in self._game_phases:
+                    self._game_phases[game_id] = _GamePhase.PREGAME
+                    logger.info("Restored game phase PREGAME for game_id=%s", game_id)
+
     def subscribe_agent(
         self,
         agent_id: str,
@@ -201,6 +231,12 @@ class DataHub:
             game_id: Game ID from the source store's poll_identifier (authoritative)
             game_date: Game date from the source store's poll_identifier (YYYY-MM-DD)
         """
+        # Check deduplication: skip events we've already processed
+        dedup_key = event.get_dedup_key()
+        if dedup_key and dedup_key in self._dedup_keys:
+            logger.debug("Skipping duplicate event: %s", dedup_key)
+            return
+
         # Cache event for late-joining subscribers (arrival order, always)
         self._cache_event(event)
 
@@ -215,6 +251,10 @@ class DataHub:
 
         # Gate controls persistence, trace emission, and dispatch ordering
         await self._gated_dispatch(envelope)
+
+        # Track dedup key after successful processing
+        if dedup_key:
+            self._dedup_keys.add(dedup_key)
 
     # Class-level counters for progress logging
     _sls_emit_count: int = 0
@@ -783,8 +823,15 @@ class DataHub:
         This should be called after all stores are connected and configured
         (e.g., after poll identifiers are set).
         """
+        logger.info(
+            "DataHub '%s' starting %d connected stores",
+            self.hub_id,
+            len(self._connected_stores),
+        )
         for store in self._connected_stores:
+            logger.info("DataHub starting store: %s", store.store_id)
             await store.start_polling()
+        logger.info("DataHub '%s' all stores started", self.hub_id)
 
     async def stop(self) -> None:
         """Stop all connected stores (stop polling)."""

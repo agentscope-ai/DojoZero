@@ -6,6 +6,7 @@ HTTP Gateway and the internal DataHub + BrokerOperator infrastructure.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ from dojozero.data._subscriptions import (
 )
 from dojozero.gateway._models import (
     AgentRegistrationResponse,
+    AgentResult,
     BalanceResponse,
     BetRequest,
     BetResponse,
@@ -32,6 +34,8 @@ from dojozero.gateway._models import (
     HoldingResponse,
     SpreadLine,
     TotalLine,
+    TrialEndedMessage,
+    TrialResultsResponse,
 )
 
 if TYPE_CHECKING:
@@ -92,6 +96,10 @@ class ExternalAgentAdapter:
 
         # Idempotency tracking for bet deduplication
         self._idempotency_keys: dict[str, str] = {}  # key -> bet_id
+
+        # Trial ended signaling for SSE connections
+        self._trial_ended_event = asyncio.Event()
+        self._trial_ended_message: TrialEndedMessage | None = None
 
         logger.info("ExternalAgentAdapter initialized for trial %s", trial_id)
 
@@ -500,6 +508,111 @@ class ExternalAgentAdapter:
 
         bets = self._get_agent_bets_internal(agent_id)
         return [self._bet_to_response(bet) for bet in bets]
+
+    # =========================================================================
+    # Trial End Signaling
+    # =========================================================================
+
+    @property
+    def trial_ended_event(self) -> asyncio.Event:
+        """Get the trial ended event for SSE connections."""
+        return self._trial_ended_event
+
+    def get_trial_ended_message(self) -> TrialEndedMessage | None:
+        """Get the trial ended message (if trial has ended)."""
+        return self._trial_ended_message
+
+    async def signal_trial_ended(
+        self,
+        reason: str = "completed",
+        message: str = "",
+    ) -> None:
+        """Signal that the trial has ended.
+
+        This sets the trial_ended_event which will cause all SSE connections
+        to send a trial_ended message and close gracefully.
+
+        Args:
+            reason: Reason for trial ending ("completed", "cancelled", "failed")
+            message: Optional human-readable message
+        """
+        if self._trial_ended_event.is_set():
+            logger.warning("Trial %s already ended, ignoring signal", self._trial_id)
+            return
+
+        # Build final results from broker
+        final_results = await self._build_final_results()
+
+        self._trial_ended_message = TrialEndedMessage(
+            trial_id=self._trial_id,
+            reason=reason,
+            timestamp=datetime.now(timezone.utc),
+            final_results=final_results,
+            message=message,
+        )
+
+        # Signal all SSE connections
+        self._trial_ended_event.set()
+
+        logger.info(
+            "Trial %s ended: reason=%s, agents=%d",
+            self._trial_id,
+            reason,
+            len(final_results),
+        )
+
+    async def _build_final_results(self) -> list[AgentResult]:
+        """Build final results for all agents from broker."""
+        results = []
+
+        for agent_id in self._broker._accounts:
+            try:
+                stats = await self._broker.get_statistics(agent_id)
+                account = self._broker._accounts.get(agent_id)
+                if account is None:
+                    continue
+
+                results.append(
+                    AgentResult(
+                        agent_id=agent_id,
+                        final_balance=str(account.balance),
+                        net_profit=str(stats.net_profit),
+                        total_bets=stats.total_bets,
+                        win_rate=round(stats.win_rate, 4),
+                        roi=round(stats.roi, 4),
+                    )
+                )
+            except Exception as e:
+                logger.warning("Failed to get results for agent %s: %s", agent_id, e)
+
+        # Sort by balance descending
+        results.sort(key=lambda r: float(r.final_balance), reverse=True)
+        return results
+
+    async def get_results(self) -> TrialResultsResponse:
+        """Get current or final trial results.
+
+        Can be called during or after a trial to get agent results.
+
+        Returns:
+            TrialResultsResponse with current results
+        """
+        # Determine status
+        if self._trial_ended_message is not None:
+            status = self._trial_ended_message.reason
+            ended_at = self._trial_ended_message.timestamp
+            results = list(self._trial_ended_message.final_results)
+        else:
+            status = "running"
+            ended_at = None
+            results = await self._build_final_results()
+
+        return TrialResultsResponse(
+            trial_id=self._trial_id,
+            status=status,
+            results=results,
+            ended_at=ended_at,
+        )
 
 
 __all__ = [

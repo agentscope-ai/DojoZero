@@ -48,6 +48,7 @@ class BaseGameStateTracker:
         self._previous_game_status: dict[str, int] = {}
         self._initialized_games: set[str] = set()
         self._final_update_emitted: set[str] = set()
+        self._game_result_emitted: set[str] = set()
         self._current_period: dict[str, int] = {}
         self._current_home_score: dict[str, int] = {}
         self._current_away_score: dict[str, int] = {}
@@ -92,6 +93,16 @@ class BaseGameStateTracker:
     def mark_final_update_emitted(self, event_id: str) -> None:
         """Mark that final game update event has been emitted."""
         self._final_update_emitted.add(event_id)
+
+    # -- Game result tracking -------------------------------------------------
+
+    def has_game_result_emitted(self, event_id: str) -> bool:
+        """Check if GameResultEvent has been emitted for this game."""
+        return event_id in self._game_result_emitted
+
+    def mark_game_result_emitted(self, event_id: str) -> None:
+        """Mark that GameResultEvent has been emitted for this game."""
+        self._game_result_emitted.add(event_id)
 
     # -- Initialization tracking ----------------------------------------------
 
@@ -221,6 +232,7 @@ class BaseGameStateTracker:
             "previous_game_status": dict(self._previous_game_status),
             "initialized_games": list(self._initialized_games),
             "final_update_emitted": list(self._final_update_emitted),
+            "game_result_emitted": list(self._game_result_emitted),
             "game_started": list(self._game_started),
             "current_period": dict(self._current_period),
             "current_home_score": dict(self._current_home_score),
@@ -239,6 +251,7 @@ class BaseGameStateTracker:
         self._previous_game_status = dict(data.get("previous_game_status", {}))
         self._initialized_games = set(data.get("initialized_games", []))
         self._final_update_emitted = set(data.get("final_update_emitted", []))
+        self._game_result_emitted = set(data.get("game_result_emitted", []))
         self._game_started = set(data.get("game_started", []))
         self._current_period = dict(data.get("current_period", {}))
         self._current_home_score = dict(data.get("current_home_score", {}))

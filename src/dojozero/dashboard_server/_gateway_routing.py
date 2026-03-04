@@ -265,6 +265,8 @@ async def _handle_sse_directly(
         get_recent_events=lambda limit: gateway_state.data_hub.get_recent_events(
             limit=limit
         ),
+        trial_ended_event=gateway_state.adapter.trial_ended_event,
+        get_trial_ended_message=gateway_state.adapter.get_trial_ended_message,
     )
 
     logger.info(

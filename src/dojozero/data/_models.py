@@ -578,6 +578,12 @@ class GameInitializeEvent(GameEvent):
 
     event_type: Literal["event.game_initialize"] = "event.game_initialize"
 
+    def get_dedup_key(self) -> str | None:
+        """Return dedup key for one-shot game initialize event."""
+        if self.game_id:
+            return f"{self.game_id}_{self.event_type}"
+        return None
+
 
 @register_event
 class GameStartEvent(GameEvent):
@@ -587,6 +593,12 @@ class GameStartEvent(GameEvent):
     away_starters: list[PlayerIdentity] = Field(default_factory=list)
 
     event_type: Literal["event.game_start"] = "event.game_start"
+
+    def get_dedup_key(self) -> str | None:
+        """Return dedup key for one-shot game start event."""
+        if self.game_id:
+            return f"{self.game_id}_{self.event_type}"
+        return None
 
 
 @register_event
@@ -620,6 +632,12 @@ class GameResultEvent(GameEvent):
         return {"home": self.home_score, "away": self.away_score}
 
     event_type: Literal["event.game_result"] = "event.game_result"
+
+    def get_dedup_key(self) -> str | None:
+        """Return dedup key for one-shot game result event."""
+        if self.game_id:
+            return f"{self.game_id}_{self.event_type}"
+        return None
 
 
 # =============================================================================

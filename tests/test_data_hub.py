@@ -971,3 +971,201 @@ class TestDataHubLifecycleGate:
         assert event_types.index("event.game_initialize") < event_types.index(
             "event.game_start"
         )
+
+
+class TestDataHubDedupAndRestore:
+    """Tests for deduplication and game phase restoration on resume."""
+
+    GAME_ID = "401810490"
+
+    @pytest.fixture
+    def hub_with_dedup(self, temp_persistence_file):
+        """Create a DataHub for testing dedup functionality."""
+        return DataHub(
+            hub_id="test_hub",
+            persistence_file=temp_persistence_file,
+        )
+
+    def test_load_dedup_keys_stores_keys(self, hub_with_dedup):
+        """Test that load_dedup_keys stores the dedup keys."""
+        keys = {"key1", "key2", "key3"}
+        hub_with_dedup.load_dedup_keys(keys)
+
+        assert hub_with_dedup._dedup_keys == keys
+
+    def test_load_dedup_keys_restores_pregame_phase(self, hub_with_dedup):
+        """Test that load_dedup_keys restores PREGAME phase from game_initialize key."""
+        # Simulate resume with only game_initialize event
+        keys = {f"{self.GAME_ID}_event.game_initialize"}
+        hub_with_dedup.load_dedup_keys(keys)
+
+        assert hub_with_dedup._game_phases[self.GAME_ID] == _GamePhase.PREGAME
+
+    def test_load_dedup_keys_restores_live_phase(self, hub_with_dedup):
+        """Test that load_dedup_keys restores LIVE phase from game_start key."""
+        # Simulate resume with both initialize and start events
+        keys = {
+            f"{self.GAME_ID}_event.game_initialize",
+            f"{self.GAME_ID}_event.game_start",
+        }
+        hub_with_dedup.load_dedup_keys(keys)
+
+        # game_start should set phase to LIVE (overriding PREGAME)
+        assert hub_with_dedup._game_phases[self.GAME_ID] == _GamePhase.LIVE
+
+    def test_load_dedup_keys_multiple_games(self, hub_with_dedup):
+        """Test that load_dedup_keys handles multiple games."""
+        game_a = "game_a"
+        game_b = "game_b"
+        keys = {
+            f"{game_a}_event.game_initialize",
+            f"{game_a}_event.game_start",  # game_a is LIVE
+            f"{game_b}_event.game_initialize",  # game_b is PREGAME only
+        }
+        hub_with_dedup.load_dedup_keys(keys)
+
+        assert hub_with_dedup._game_phases[game_a] == _GamePhase.LIVE
+        assert hub_with_dedup._game_phases[game_b] == _GamePhase.PREGAME
+
+    @pytest.mark.asyncio
+    async def test_receive_event_skips_duplicate(self, hub_with_dedup):
+        """Test that receive_event skips events with known dedup keys."""
+        # Pre-load dedup key
+        hub_with_dedup.load_dedup_keys({f"{self.GAME_ID}_event.game_initialize"})
+
+        # Try to receive the same event
+        callback = MagicMock()
+        hub_with_dedup.subscribe_agent(
+            agent_id="agent1",
+            event_types=["event.game_initialize"],
+            callback=callback,
+        )
+
+        event = GameInitializeEvent(game_id=self.GAME_ID, sport="nba")
+        await hub_with_dedup.receive_event(event)
+
+        # Callback should NOT be called - event was deduplicated
+        callback.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_receive_event_allows_new_event(self, hub_with_dedup):
+        """Test that receive_event allows events with new dedup keys."""
+        # Pre-load a different key
+        hub_with_dedup.load_dedup_keys({"other_game_event.game_initialize"})
+        # Pre-set game phase to PREGAME so OddsUpdateEvent can dispatch
+        hub_with_dedup._game_phases[self.GAME_ID] = _GamePhase.PREGAME
+
+        callback = MagicMock()
+        hub_with_dedup.subscribe_agent(
+            agent_id="agent1",
+            event_types=["event.odds_update"],
+            callback=callback,
+        )
+
+        # OddsUpdateEvent has no dedup key by default, so it should pass through
+        event = OddsUpdateEvent(game_id=self.GAME_ID, sport="nba")
+        await hub_with_dedup.receive_event(event)
+
+        callback.assert_called_once_with(event)
+
+    @pytest.mark.asyncio
+    async def test_dedup_allows_events_not_in_loaded_keys(self, hub_with_dedup):
+        """Test that dedup keys don't block unrelated events."""
+        # Load keys for a different game
+        hub_with_dedup.load_dedup_keys({"other_game_event.game_initialize"})
+
+        callback = MagicMock()
+        hub_with_dedup.subscribe_agent(
+            agent_id="agent1",
+            event_types=["event.game_initialize"],
+            callback=callback,
+        )
+
+        # This game's initialize event should be allowed
+        event = GameInitializeEvent(game_id=self.GAME_ID, sport="nba")
+        await hub_with_dedup.receive_event(event)
+
+        callback.assert_called_once_with(event)
+
+    @pytest.mark.asyncio
+    async def test_phase_restoration_allows_live_events_on_resume(self, hub_with_dedup):
+        """Test that restored LIVE phase allows live events immediately."""
+        # Restore LIVE phase from dedup keys
+        hub_with_dedup.load_dedup_keys(
+            {
+                f"{self.GAME_ID}_event.game_initialize",
+                f"{self.GAME_ID}_event.game_start",
+            }
+        )
+
+        callback = MagicMock()
+        hub_with_dedup.subscribe_agent(
+            agent_id="agent1",
+            event_types=["event.game_result"],
+            callback=callback,
+        )
+
+        # After restore, game_result should dispatch immediately (LIVE phase)
+        result = GameResultEvent(
+            game_id=self.GAME_ID,
+            sport="nba",
+            winner="home",
+            home_score=110,
+            away_score=98,
+        )
+        await hub_with_dedup.receive_event(result)
+
+        callback.assert_called_once_with(result)
+
+    @pytest.mark.asyncio
+    async def test_dedup_persists_new_keys(self, hub_with_dedup):
+        """Test that newly received events add their dedup keys."""
+        # Start with empty dedup keys
+        hub_with_dedup.load_dedup_keys(set())
+
+        event = GameInitializeEvent(game_id=self.GAME_ID, sport="nba")
+        await hub_with_dedup.receive_event(event)
+
+        # The event's dedup key should now be in the set
+        expected_key = f"{self.GAME_ID}_event.game_initialize"
+        assert expected_key in hub_with_dedup._dedup_keys
+
+
+class TestPersistencePathValidation:
+    """Tests for persistence file path validation (security).
+
+    Note: The primary protection against path traversal attacks is server-side
+    path generation in the REST API. This validation is defense-in-depth.
+    """
+
+    def test_valid_path_accepted(self, tmp_path):
+        """Test that valid paths are accepted."""
+        from dojozero.data._factory import _validate_persistence_path
+
+        valid_path = tmp_path / "data" / "events.jsonl"
+        result = _validate_persistence_path(str(valid_path))
+        assert result == valid_path.resolve()
+
+    def test_path_traversal_rejected(self):
+        """Test that path traversal sequences are rejected."""
+        from dojozero.data._factory import _validate_persistence_path
+
+        with pytest.raises(ValueError, match="path traversal not allowed"):
+            _validate_persistence_path("data/../../../etc/passwd.jsonl")
+
+    def test_path_traversal_in_middle_rejected(self):
+        """Test that path traversal in the middle of path is rejected."""
+        from dojozero.data._factory import _validate_persistence_path
+
+        with pytest.raises(ValueError, match="path traversal not allowed"):
+            _validate_persistence_path("data/foo/../../../etc/passwd.jsonl")
+
+    def test_non_jsonl_extension_rejected(self):
+        """Test that non-.jsonl extensions are rejected."""
+        from dojozero.data._factory import _validate_persistence_path
+
+        with pytest.raises(ValueError, match="must end with .jsonl"):
+            _validate_persistence_path("data/events.json")
+
+        with pytest.raises(ValueError, match="must end with .jsonl"):
+            _validate_persistence_path("data/events.txt")
