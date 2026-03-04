@@ -1197,7 +1197,35 @@ def main() -> int:
             return 0
 
         except KeyboardInterrupt:
-            logger.info("Interrupted by user")
+            logger.info("Interrupted by user, cleaning up local processes...")
+            # Only clean up local subprocesses - let server trials continue
+            for manager in managers:
+                if manager.process and manager.process.poll() is None:
+                    try:
+                        manager.process.terminate()
+                        manager.process.wait(timeout=5)
+                        logger.info(
+                            "Terminated local process for game %s (PID: %d)",
+                            manager.game_id,
+                            manager.process.pid,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Error terminating process for game %s: %s",
+                            manager.game_id,
+                            e,
+                        )
+                # Close log file handle
+                if manager._log_file_handle:
+                    try:
+                        manager._log_file_handle.close()
+                    except Exception:
+                        pass
+            if any(m.server for m in managers):
+                logger.info(
+                    "Server trials will continue running. "
+                    "Use 'POST /api/trials/{trial_id}/stop' to stop them."
+                )
             return 130
         except Exception as e:
             logger.error("Fatal error: %s", e, exc_info=True)
