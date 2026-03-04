@@ -3,9 +3,10 @@
 
 Usage:
     # Run directly
-    python -m dojozero.sync_service.main
+    dojo0 sync-service
+    (uv run dojo0 sync-service)
 
-    # Or using uv
+    # Or using python command
     uv run python -m dojozero.sync_service.main
 
 Environment variables:

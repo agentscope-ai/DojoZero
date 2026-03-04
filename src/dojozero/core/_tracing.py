@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 from uuid import uuid4
+import asyncio
 
 import httpx
 
@@ -326,7 +327,6 @@ class JaegerTraceReader:
         Returns:
             List of SpanData from all trials in the time range.
         """
-        import asyncio
 
         now = datetime.now(timezone.utc)
         if end_time is None:
@@ -819,7 +819,6 @@ class SLSTraceReader:
         Returns:
             List of SpanData from all trials in the time range.
         """
-        import asyncio
 
         now = datetime.now(timezone.utc)
         if end_time is None:
