@@ -2451,67 +2451,33 @@ async def _sync_service_command(args: argparse.Namespace) -> int:
 
 def _agents_command(args: argparse.Namespace) -> int:
     """Handle agents command - manage agent API keys."""
-    import secrets
     import json as json_module
     from pathlib import Path
 
+    from dojozero.gateway._auth import AgentKeyManager
+
     store_dir = Path(args.store)
     keys_file = store_dir / "agent_keys.yaml"
-
-    def load_keys() -> dict:
-        """Load agent keys from YAML file."""
-        if not keys_file.exists():
-            return {"agents": {}}
-        with open(keys_file, "r") as f:
-            data = yaml.safe_load(f) or {}
-        if "agents" not in data:
-            data["agents"] = {}
-        return data
-
-    def save_keys(data: dict) -> None:
-        """Save agent keys to YAML file."""
-        store_dir.mkdir(parents=True, exist_ok=True)
-        with open(keys_file, "w") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    key_manager = AgentKeyManager(keys_file)
 
     if args.agents_command == "add":
         agent_id = args.id
         display_name = args.name
 
-        # Load existing keys
-        data = load_keys()
-
         # Check if agent_id already exists
-        for api_key, agent_data in data["agents"].items():
-            existing_id = (
-                agent_data
-                if isinstance(agent_data, str)
-                else agent_data.get("agent_id")
+        existing = key_manager.find_by_agent_id(agent_id)
+        if existing:
+            LOGGER.error(
+                "Agent '%s' already exists with key: %s...%s",
+                agent_id,
+                existing.api_key[:12],
+                existing.api_key[-4:],
             )
-            if existing_id == agent_id:
-                LOGGER.error(
-                    "Agent '%s' already exists with key: %s...%s",
-                    agent_id,
-                    api_key[:12],
-                    api_key[-4:],
-                )
-                return 1
+            return 1
 
-        # Generate new API key
-        api_key = f"sk-agent-{secrets.token_hex(16)}"
-
-        # Add to config
-        agent_entry: dict | str
-        if display_name:
-            agent_entry = {
-                "agent_id": agent_id,
-                "display_name": display_name,
-            }
-        else:
-            agent_entry = {"agent_id": agent_id}
-
-        data["agents"][api_key] = agent_entry
-        save_keys(data)
+        # Generate new API key and add
+        api_key = AgentKeyManager.generate_api_key()
+        key_manager.add(api_key, agent_id, display_name=display_name)
 
         print(f"Created agent '{agent_id}'")
         if display_name:
@@ -2521,66 +2487,43 @@ def _agents_command(args: argparse.Namespace) -> int:
         return 0
 
     elif args.agents_command == "list":
-        data = load_keys()
-        agents = data.get("agents", {})
+        entries = key_manager.list_all()
 
-        if not agents:
+        if not entries:
             print("No agents registered.")
             print("\nUse 'dojo agents add --id <agent_id>' to register an agent.")
             return 0
 
         if args.json:
             # JSON output (without exposing full keys)
-            output = []
-            for api_key, agent_data in agents.items():
-                if isinstance(agent_data, str):
-                    agent_id = agent_data
-                    display_name = None
-                else:
-                    agent_id = agent_data.get("agent_id", "")
-                    display_name = agent_data.get("display_name")
-                output.append(
-                    {
-                        "agentId": agent_id,
-                        "displayName": display_name,
-                        "keyPrefix": api_key[:12] + "...",
-                    }
-                )
+            output = [
+                {
+                    "agentId": entry.identity.agent_id,
+                    "displayName": entry.identity.display_name,
+                    "keyPrefix": entry.api_key[:12] + "...",
+                }
+                for entry in entries
+            ]
             print(json_module.dumps(output, indent=2))
         else:
             # Table output
             print(f"{'AGENT_ID':<20} {'DISPLAY_NAME':<25} {'KEY_PREFIX':<20}")
             print("-" * 65)
-            for api_key, agent_data in agents.items():
-                if isinstance(agent_data, str):
-                    agent_id = agent_data
-                    display_name = "-"
-                else:
-                    agent_id = agent_data.get("agent_id", "")
-                    display_name = agent_data.get("display_name", "-") or "-"
-                key_prefix = api_key[:12] + "..." + api_key[-4:]
+            for entry in entries:
+                agent_id = entry.identity.agent_id
+                display_name = entry.identity.display_name or "-"
+                key_prefix = entry.api_key[:12] + "..." + entry.api_key[-4:]
                 print(f"{agent_id:<20} {display_name:<25} {key_prefix:<20}")
-            print(f"\nTotal: {len(agents)} agent(s)")
+            print(f"\nTotal: {len(entries)} agent(s)")
             print(f"Keys file: {keys_file}")
         return 0
 
     elif args.agents_command == "remove":
         agent_id = args.agent_id
-        data = load_keys()
 
         # Find the agent
-        key_to_remove = None
-        for api_key, agent_data in data["agents"].items():
-            existing_id = (
-                agent_data
-                if isinstance(agent_data, str)
-                else agent_data.get("agent_id")
-            )
-            if existing_id == agent_id:
-                key_to_remove = api_key
-                break
-
-        if key_to_remove is None:
+        entry = key_manager.find_by_agent_id(agent_id)
+        if entry is None:
             LOGGER.error("Agent '%s' not found.", agent_id)
             return 1
 
@@ -2593,8 +2536,7 @@ def _agents_command(args: argparse.Namespace) -> int:
                 print("Cancelled.")
                 return 0
 
-        del data["agents"][key_to_remove]
-        save_keys(data)
+        key_manager.remove(entry.api_key)
         print(f"Removed agent '{agent_id}' and revoked API key.")
         return 0
 

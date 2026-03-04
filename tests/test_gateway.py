@@ -28,6 +28,8 @@ from dojozero.gateway._adapter import ExternalAgentAdapter, ExternalAgentState
 from dojozero.gateway._auth import (
     AgentCredentials,
     AgentIdentity,
+    AgentKeyEntry,
+    AgentKeyManager,
     AuthConfig,
     AuthProvider,
     LocalAgentAuthenticator,
@@ -764,6 +766,246 @@ class TestNoOpAuthenticator:
         """Test that NoOpAuthenticator is never enabled."""
         auth = NoOpAuthenticator()
         assert auth.is_enabled() is False
+
+
+class TestAgentKeyEntry:
+    """Tests for AgentKeyEntry dataclass."""
+
+    def test_from_yaml_data_simple_format(self):
+        """Test creating entry from simple string format."""
+        entry = AgentKeyEntry.from_yaml_data("sk-key-123", "my_agent_id")
+
+        assert entry.api_key == "sk-key-123"
+        assert entry.identity.agent_id == "my_agent_id"
+        assert entry.identity.display_name is None
+        assert entry.identity.metadata is None
+
+    def test_from_yaml_data_full_format(self):
+        """Test creating entry from full dict format."""
+        data = {
+            "agent_id": "full_agent",
+            "display_name": "Full Agent Name",
+            "metadata": {"tier": "premium"},
+        }
+        entry = AgentKeyEntry.from_yaml_data("sk-key-456", data)
+
+        assert entry.api_key == "sk-key-456"
+        assert entry.identity.agent_id == "full_agent"
+        assert entry.identity.display_name == "Full Agent Name"
+        assert entry.identity.metadata == {"tier": "premium"}
+
+    def test_to_yaml_data(self):
+        """Test converting entry to YAML-compatible dict."""
+        identity = AgentIdentity(
+            agent_id="test_agent",
+            display_name="Test Agent",
+            metadata={"org": "team-x"},
+        )
+        entry = AgentKeyEntry(api_key="sk-test", identity=identity)
+
+        data = entry.to_yaml_data()
+
+        assert data["agent_id"] == "test_agent"
+        assert data["display_name"] == "Test Agent"
+        assert data["metadata"] == {"org": "team-x"}
+
+    def test_to_yaml_data_minimal(self):
+        """Test converting minimal entry (no display_name/metadata)."""
+        identity = AgentIdentity(agent_id="minimal_agent")
+        entry = AgentKeyEntry(api_key="sk-minimal", identity=identity)
+
+        data = entry.to_yaml_data()
+
+        assert data == {"agent_id": "minimal_agent"}
+        assert "display_name" not in data
+        assert "metadata" not in data
+
+
+class TestAgentKeyManager:
+    """Tests for AgentKeyManager."""
+
+    @pytest.fixture
+    def keys_file(self, tmp_path):
+        """Create temporary keys file path."""
+        return tmp_path / "agent_keys.yaml"
+
+    def test_empty_manager(self, keys_file):
+        """Test manager with no keys file."""
+        manager = AgentKeyManager(keys_file)
+
+        assert len(manager) == 0
+        assert not manager
+        assert manager.get("any-key") is None
+        assert manager.find_by_agent_id("any-agent") is None
+
+    def test_add_and_get(self, keys_file):
+        """Test adding and retrieving keys."""
+        manager = AgentKeyManager(keys_file)
+
+        manager.add("sk-new", "new_agent", display_name="New Agent")
+
+        assert len(manager) == 1
+        assert manager
+
+        identity = manager.get("sk-new")
+        assert identity is not None
+        assert identity.agent_id == "new_agent"
+        assert identity.display_name == "New Agent"
+
+    def test_add_persists_to_file(self, keys_file):
+        """Test that add persists to YAML file."""
+        import yaml
+
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-persist", "persist_agent")
+
+        # Verify file was created
+        assert keys_file.exists()
+
+        # Verify content
+        with open(keys_file) as f:
+            data = yaml.safe_load(f)
+
+        assert "sk-persist" in data["agents"]
+        assert data["agents"]["sk-persist"]["agent_id"] == "persist_agent"
+
+    def test_find_by_agent_id(self, keys_file):
+        """Test finding entry by agent_id."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-findme", "searchable_agent")
+
+        entry = manager.find_by_agent_id("searchable_agent")
+
+        assert entry is not None
+        assert entry.api_key == "sk-findme"
+        assert entry.identity.agent_id == "searchable_agent"
+
+        # Not found
+        assert manager.find_by_agent_id("nonexistent") is None
+
+    def test_remove(self, keys_file):
+        """Test removing keys."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-removeme", "remove_agent")
+
+        assert len(manager) == 1
+
+        result = manager.remove("sk-removeme")
+        assert result is True
+        assert len(manager) == 0
+
+        # Remove again returns False
+        result = manager.remove("sk-removeme")
+        assert result is False
+
+    def test_remove_by_agent_id(self, keys_file):
+        """Test removing by agent_id."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-byagent", "agent_to_remove")
+
+        result = manager.remove_by_agent_id("agent_to_remove")
+        assert result is True
+        assert len(manager) == 0
+
+        # Not found
+        result = manager.remove_by_agent_id("nonexistent")
+        assert result is False
+
+    def test_list_all(self, keys_file):
+        """Test listing all entries."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-a", "agent_a")
+        manager.add("sk-b", "agent_b", display_name="Agent B")
+
+        entries = manager.list_all()
+
+        assert len(entries) == 2
+        agent_ids = {e.identity.agent_id for e in entries}
+        assert agent_ids == {"agent_a", "agent_b"}
+
+    def test_load_existing_file(self, keys_file):
+        """Test loading from existing YAML file."""
+        import yaml
+
+        # Create YAML file
+        data = {
+            "agents": {
+                "sk-existing1": {
+                    "agent_id": "existing_agent",
+                    "display_name": "Existing",
+                },
+                "sk-existing2": "simple_agent",
+            }
+        }
+        with open(keys_file, "w") as f:
+            yaml.safe_dump(data, f)
+
+        # Load
+        manager = AgentKeyManager(keys_file)
+
+        assert len(manager) == 2
+
+        id1 = manager.get("sk-existing1")
+        assert id1 is not None
+        assert id1.agent_id == "existing_agent"
+        assert id1.display_name == "Existing"
+
+        id2 = manager.get("sk-existing2")
+        assert id2 is not None
+        assert id2.agent_id == "simple_agent"
+
+    def test_reload(self, keys_file):
+        """Test reloading keys from file."""
+        import yaml
+
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-initial", "initial_agent")
+
+        # Manually modify file
+        with open(keys_file) as f:
+            data = yaml.safe_load(f)
+        data["agents"]["sk-new"] = {"agent_id": "new_agent"}
+        with open(keys_file, "w") as f:
+            yaml.safe_dump(data, f)
+
+        # Before reload
+        assert manager.get("sk-new") is None
+
+        # After reload
+        manager.reload()
+        assert manager.get("sk-new") is not None
+
+    def test_generate_api_key(self):
+        """Test API key generation."""
+        key1 = AgentKeyManager.generate_api_key()
+        key2 = AgentKeyManager.generate_api_key()
+
+        assert key1.startswith("sk-agent-")
+        assert key2.startswith("sk-agent-")
+        assert len(key1) == len("sk-agent-") + 32  # 16 bytes hex = 32 chars
+        assert key1 != key2
+
+    def test_to_identity_dict(self, keys_file):
+        """Test converting to identity dict."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-dict1", "agent1")
+        manager.add("sk-dict2", "agent2", display_name="Agent 2")
+
+        identity_dict = manager.to_identity_dict()
+
+        assert len(identity_dict) == 2
+        assert identity_dict["sk-dict1"].agent_id == "agent1"
+        assert identity_dict["sk-dict2"].agent_id == "agent2"
+        assert identity_dict["sk-dict2"].display_name == "Agent 2"
+
+    def test_creates_parent_directory(self, tmp_path):
+        """Test that save creates parent directories."""
+        nested_path = tmp_path / "nested" / "dir" / "agent_keys.yaml"
+
+        manager = AgentKeyManager(nested_path)
+        manager.add("sk-nested", "nested_agent")
+
+        assert nested_path.exists()
 
 
 class TestRateLimiter:
