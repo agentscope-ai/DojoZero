@@ -92,11 +92,11 @@ class TrialEndedError(DojoClientError):
         self,
         message: str,
         reason: str = "completed",
-        final_results: list[Any] | None = None,
+        final_results: list["AgentResult"] | None = None,
     ):
         super().__init__(message)
         self.reason = reason
-        self.final_results: list[Any] = final_results or []
+        self.final_results: list["AgentResult"] = final_results or []
 
 
 __all__ = [
