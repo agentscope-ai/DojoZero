@@ -27,9 +27,11 @@ from dojozero.dashboard_server._jsonl_utils import (
     extract_game_result_from_jsonl,
     get_jsonl_last_modified,
 )
+from dojozero.gateway import NoOpAuthenticator
 
 if TYPE_CHECKING:
     from ._gateway_routing import GatewayRouter
+    from dojozero.gateway import AgentAuthenticator
 
 LOGGER = logging.getLogger("dojozero.trial_manager")
 
@@ -87,6 +89,7 @@ class TrialManager:
         checkpoint_interval_seconds: float = 300.0,
         gateway_router: "GatewayRouter | None" = None,
         gateway_grace_period: float = 5.0,
+        authenticator: "AgentAuthenticator | None" = None,
     ):
         """Initialize the TrialManager.
 
@@ -102,6 +105,8 @@ class TrialManager:
                                   gateway (default 5s). This gives external agents time
                                   to receive the trial_ended SSE event and make final
                                   API calls (e.g., get_results).
+            authenticator: AgentAuthenticator for validating agent API keys.
+                          If None, uses NoOpAuthenticator (no auth).
         """
         self._orchestrator = orchestrator
         self._max_concurrent = max_concurrent
@@ -111,6 +116,7 @@ class TrialManager:
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
         self._gateway_router = gateway_router
         self._gateway_grace_period = gateway_grace_period
+        self._authenticator = authenticator
 
         # Queue for pending trials
         self._pending: asyncio.Queue[QueuedTrial] = asyncio.Queue()
@@ -209,6 +215,7 @@ class TrialManager:
                 data_hub=data_hub,
                 broker=broker,
                 metadata=metadata,
+                authenticator=self._authenticator,
             )
 
             # Create adapter and state manually since lifespan doesn't run for in-process routing
@@ -217,11 +224,13 @@ class TrialManager:
                 broker=broker,
                 trial_id=trial_id,
             )
+
             gateway_state = GatewayState(
                 trial_id=trial_id,
                 data_hub=data_hub,
                 broker=broker,
                 adapter=adapter,
+                authenticator=self._authenticator or NoOpAuthenticator(),
                 metadata=metadata,
             )
 
@@ -302,6 +311,13 @@ class TrialManager:
                 )
                 return False
 
+            # Try to get gateway adapter for external agent info (display_name, authenticated)
+            gateway_adapter = None
+            if self._gateway_router is not None:
+                gateway_state = self._gateway_router.get_gateway_state(trial_id)
+                if gateway_state is not None:
+                    gateway_adapter = gateway_state.adapter
+
             # Build results from broker (same logic as gateway adapter)
             agent_results: list[AgentResult] = []
             for agent_id in broker._accounts:
@@ -311,9 +327,20 @@ class TrialManager:
                     if account is None:
                         continue
 
+                    # Get display_name and authenticated from gateway if available
+                    display_name = None
+                    authenticated = False
+                    if gateway_adapter is not None:
+                        agent_state = gateway_adapter._agents.get(agent_id)
+                        if agent_state is not None:
+                            display_name = agent_state.display_name
+                            authenticated = agent_state.authenticated
+
                     agent_results.append(
                         AgentResult(
                             agent_id=agent_id,
+                            display_name=display_name,
+                            authenticated=authenticated,
                             final_balance=str(account.balance),
                             net_profit=str(stats.net_profit),
                             total_bets=stats.total_bets,

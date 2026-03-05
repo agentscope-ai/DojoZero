@@ -16,9 +16,12 @@ import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Coroutine
+from typing import TYPE_CHECKING, Any, Coroutine
 
 from fastapi import Depends, FastAPI, Query, Request
+
+if TYPE_CHECKING:
+    from dojozero.gateway import AgentAuthenticator
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
@@ -262,6 +265,7 @@ def create_dashboard_app(
     stale_threshold_hours: float = 24.0,
     enable_gateway: bool = False,
     data_dir: str | Path | None = None,
+    authenticator: "AgentAuthenticator | None" = None,
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
@@ -279,6 +283,8 @@ def create_dashboard_app(
         enable_gateway: Enable HTTP gateway routing for external agents
         data_dir: Base directory for trial data files (persistence_file will be generated
             under this directory). If None, trials must provide their own persistence_file.
+        authenticator: AgentAuthenticator for validating agent API keys. If None and
+            agent_keys.yaml exists, uses LocalAgentAuthenticator. Otherwise NoOpAuthenticator.
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
@@ -303,6 +309,7 @@ def create_dashboard_app(
             auto_resume=auto_resume,
             stale_threshold_hours=stale_threshold_hours,
             gateway_router=gateway_router,
+            authenticator=authenticator,
         )
 
         # Create schedule manager
@@ -1376,6 +1383,7 @@ async def run_dashboard_server(
     stale_threshold_hours: float = 24.0,
     enable_gateway: bool = False,
     data_dir: str | Path | None = None,
+    authenticator: "AgentAuthenticator | None" = None,
 ) -> None:
     """Run the Dashboard Server.
 
@@ -1395,6 +1403,7 @@ async def run_dashboard_server(
         enable_gateway: Enable HTTP gateway routing for external agents
         data_dir: Base directory for trial data files (persistence_file will be generated
             under this directory). If None, trials must provide their own persistence_file.
+        authenticator: AgentAuthenticator for validating agent API keys
     """
     import uvicorn
 
@@ -1411,6 +1420,7 @@ async def run_dashboard_server(
         stale_threshold_hours=stale_threshold_hours,
         enable_gateway=enable_gateway,
         data_dir=data_dir,
+        authenticator=authenticator,
     )
 
     config = uvicorn.Config(

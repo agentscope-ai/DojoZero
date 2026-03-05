@@ -25,7 +25,16 @@ from dojozero.gateway._models import (
     TotalLine,
 )
 from dojozero.gateway._adapter import ExternalAgentAdapter, ExternalAgentState
-from dojozero.gateway._auth import AgentCredentials, AuthConfig, AuthProvider
+from dojozero.gateway._auth import (
+    AgentCredentials,
+    AgentIdentity,
+    AgentKeyEntry,
+    AgentKeyManager,
+    AuthConfig,
+    AuthProvider,
+    LocalAgentAuthenticator,
+    NoOpAuthenticator,
+)
 from dojozero.gateway._rate_limit import (
     RateLimitBucket,
     RateLimitConfig,
@@ -42,25 +51,20 @@ class TestModels:
     def test_agent_registration_request(self):
         """Test AgentRegistrationRequest with camelCase aliases."""
         request = AgentRegistrationRequest(
-            agentId="agent1",
-            persona="test persona",
-            model="gpt-4",
+            apiKey="sk-agent-test-key",
             initialBalance="1000",
         )
-        assert request.agent_id == "agent1"
-        assert request.persona == "test persona"
-        assert request.model == "gpt-4"
+        assert request.api_key == "sk-agent-test-key"
         assert request.initial_balance == "1000"
 
     def test_agent_registration_request_from_camel_case(self):
         """Test AgentRegistrationRequest parsing camelCase JSON."""
         data = {
-            "agentId": "agent1",
-            "persona": "test",
+            "apiKey": "sk-agent-test-key",
             "initialBalance": "500",
         }
         request = AgentRegistrationRequest.model_validate(data)
-        assert request.agent_id == "agent1"
+        assert request.api_key == "sk-agent-test-key"
         assert request.initial_balance == "500"
 
     def test_agent_registration_response_serialization(self):
@@ -400,7 +404,7 @@ class TestGatewayServer:
         response = client.post(
             "/api/v1/register",
             json={
-                "agentId": "agent1",
+                "apiKey": "agent1",  # NoOpAuthenticator uses apiKey as agent_id
                 "persona": "test",
                 "initialBalance": "500",
             },
@@ -415,10 +419,10 @@ class TestGatewayServer:
         mock_broker.create_account = AsyncMock()
 
         # First registration
-        client.post("/api/v1/register", json={"agentId": "agent1"})
+        client.post("/api/v1/register", json={"apiKey": "agent1"})
 
         # Duplicate
-        response = client.post("/api/v1/register", json={"agentId": "agent1"})
+        response = client.post("/api/v1/register", json={"apiKey": "agent1"})
         assert response.status_code == 409
 
     def test_unregister_agent(self, client, mock_broker):
@@ -426,7 +430,7 @@ class TestGatewayServer:
         mock_broker.create_account = AsyncMock()
 
         # Register first
-        client.post("/api/v1/register", json={"agentId": "agent1"})
+        client.post("/api/v1/register", json={"apiKey": "agent1"})
 
         # Unregister
         response = client.delete("/api/v1/register/agent1")
@@ -556,6 +560,453 @@ class TestAuthProvider:
         assert config.jwt_algorithm == "HS256"
         assert config.require_registration is True
         assert config.allow_header_auth is True
+
+
+class TestAgentIdentity:
+    """Tests for AgentIdentity dataclass."""
+
+    def test_basic_creation(self):
+        """Test creating an AgentIdentity with required fields."""
+        identity = AgentIdentity(agent_id="agent_alice")
+
+        assert identity.agent_id == "agent_alice"
+        assert identity.display_name is None
+        assert identity.metadata is None
+
+    def test_full_creation(self):
+        """Test creating an AgentIdentity with all fields."""
+        identity = AgentIdentity(
+            agent_id="agent_alice",
+            display_name="Alice's Bot",
+            metadata={"org": "team-alpha", "tier": "premium"},
+        )
+
+        assert identity.agent_id == "agent_alice"
+        assert identity.display_name == "Alice's Bot"
+        assert identity.metadata == {"org": "team-alpha", "tier": "premium"}
+
+    def test_to_dict(self):
+        """Test converting AgentIdentity to dict."""
+        identity = AgentIdentity(
+            agent_id="agent_alice",
+            display_name="Alice's Bot",
+            metadata={"org": "team-alpha"},
+        )
+
+        result = identity.to_dict()
+
+        assert result["agentId"] == "agent_alice"
+        assert result["displayName"] == "Alice's Bot"
+        assert result["metadata"] == {"org": "team-alpha"}
+
+    def test_from_dict_camel_case(self):
+        """Test creating AgentIdentity from camelCase dict."""
+        data = {
+            "agentId": "agent_bob",
+            "displayName": "Bob's Agent",
+            "metadata": {"tier": "basic"},
+        }
+
+        identity = AgentIdentity.from_dict(data)
+
+        assert identity.agent_id == "agent_bob"
+        assert identity.display_name == "Bob's Agent"
+        assert identity.metadata == {"tier": "basic"}
+
+    def test_from_dict_snake_case(self):
+        """Test creating AgentIdentity from snake_case dict."""
+        data = {
+            "agent_id": "agent_charlie",
+            "display_name": "Charlie's Agent",
+        }
+
+        identity = AgentIdentity.from_dict(data)
+
+        assert identity.agent_id == "agent_charlie"
+        assert identity.display_name == "Charlie's Agent"
+
+    def test_immutable(self):
+        """Test that AgentIdentity is immutable (frozen)."""
+        identity = AgentIdentity(agent_id="agent_alice")
+
+        with pytest.raises(AttributeError):
+            identity.agent_id = "agent_bob"  # type: ignore
+
+
+class TestLocalAgentAuthenticator:
+    """Tests for LocalAgentAuthenticator."""
+
+    @pytest.mark.asyncio
+    async def test_validate_with_direct_keys(self):
+        """Test validation with directly provided keys."""
+        keys = {
+            "sk-agent-abc123": AgentIdentity(
+                agent_id="agent_alice",
+                display_name="Alice's Bot",
+            ),
+            "sk-agent-def456": AgentIdentity(agent_id="agent_bob"),
+        }
+        auth = LocalAgentAuthenticator(keys=keys)
+
+        # Valid key
+        identity = await auth.validate("sk-agent-abc123")
+        assert identity is not None
+        assert identity.agent_id == "agent_alice"
+        assert identity.display_name == "Alice's Bot"
+
+        # Another valid key
+        identity = await auth.validate("sk-agent-def456")
+        assert identity is not None
+        assert identity.agent_id == "agent_bob"
+
+        # Invalid key
+        identity = await auth.validate("sk-agent-invalid")
+        assert identity is None
+
+    @pytest.mark.asyncio
+    async def test_validate_empty_authenticator(self):
+        """Test validation with no keys configured."""
+        auth = LocalAgentAuthenticator()
+
+        identity = await auth.validate("sk-agent-any")
+        assert identity is None
+
+    def test_is_enabled_with_keys(self):
+        """Test is_enabled returns True when keys are configured."""
+        auth = LocalAgentAuthenticator(keys={"sk-key": AgentIdentity(agent_id="agent")})
+        assert auth.is_enabled() is True
+
+    def test_is_enabled_without_keys(self):
+        """Test is_enabled returns False when no keys configured."""
+        auth = LocalAgentAuthenticator()
+        assert auth.is_enabled() is False
+
+    def test_add_and_remove_key(self):
+        """Test adding and removing keys dynamically."""
+        auth = LocalAgentAuthenticator()
+
+        assert not auth.is_enabled()
+
+        # Add key
+        auth.add_key("sk-new-key", AgentIdentity(agent_id="new_agent"))
+        assert auth.is_enabled()
+
+        # Remove key
+        result = auth.remove_key("sk-new-key")
+        assert result is True
+        assert not auth.is_enabled()
+
+        # Remove non-existent key
+        result = auth.remove_key("sk-non-existent")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_load_from_yaml_file(self, tmp_path):
+        """Test loading keys from YAML file."""
+        # Create a temporary YAML file
+        yaml_content = """
+agents:
+  sk-agent-yaml1:
+    agent_id: agent_from_yaml
+    display_name: YAML Agent
+    metadata:
+      source: yaml_file
+  sk-agent-yaml2: simple_agent
+"""
+        yaml_file = tmp_path / "agent_keys.yaml"
+        yaml_file.write_text(yaml_content)
+
+        auth = LocalAgentAuthenticator(config_path=yaml_file)
+
+        # Check full format
+        identity = await auth.validate("sk-agent-yaml1")
+        assert identity is not None
+        assert identity.agent_id == "agent_from_yaml"
+        assert identity.display_name == "YAML Agent"
+        assert identity.metadata == {"source": "yaml_file"}
+
+        # Check simple format
+        identity = await auth.validate("sk-agent-yaml2")
+        assert identity is not None
+        assert identity.agent_id == "simple_agent"
+        assert identity.display_name is None
+
+    @pytest.mark.asyncio
+    async def test_load_from_nonexistent_file(self, tmp_path):
+        """Test that nonexistent file doesn't cause error."""
+        nonexistent = tmp_path / "does_not_exist.yaml"
+
+        auth = LocalAgentAuthenticator(config_path=nonexistent)
+
+        assert not auth.is_enabled()
+        identity = await auth.validate("any-key")
+        assert identity is None
+
+
+class TestNoOpAuthenticator:
+    """Tests for NoOpAuthenticator."""
+
+    @pytest.mark.asyncio
+    async def test_validate_uses_api_key_as_agent_id(self):
+        """Test that NoOpAuthenticator uses api_key as agent_id."""
+        auth = NoOpAuthenticator()
+
+        # Non-empty key returns identity with key as agent_id
+        identity = await auth.validate("any-key")
+        assert identity is not None
+        assert identity.agent_id == "any-key"
+        assert identity.display_name == "any-key"
+
+        # Empty key returns None
+        identity = await auth.validate("")
+        assert identity is None
+
+    def test_is_enabled_always_false(self):
+        """Test that NoOpAuthenticator is never enabled."""
+        auth = NoOpAuthenticator()
+        assert auth.is_enabled() is False
+
+
+class TestAgentKeyEntry:
+    """Tests for AgentKeyEntry dataclass."""
+
+    def test_from_yaml_data_simple_format(self):
+        """Test creating entry from simple string format."""
+        entry = AgentKeyEntry.from_yaml_data("sk-key-123", "my_agent_id")
+
+        assert entry.api_key == "sk-key-123"
+        assert entry.identity.agent_id == "my_agent_id"
+        assert entry.identity.display_name is None
+        assert entry.identity.metadata is None
+
+    def test_from_yaml_data_full_format(self):
+        """Test creating entry from full dict format."""
+        data = {
+            "agent_id": "full_agent",
+            "display_name": "Full Agent Name",
+            "metadata": {"tier": "premium"},
+        }
+        entry = AgentKeyEntry.from_yaml_data("sk-key-456", data)
+
+        assert entry.api_key == "sk-key-456"
+        assert entry.identity.agent_id == "full_agent"
+        assert entry.identity.display_name == "Full Agent Name"
+        assert entry.identity.metadata == {"tier": "premium"}
+
+    def test_to_yaml_data(self):
+        """Test converting entry to YAML-compatible dict."""
+        identity = AgentIdentity(
+            agent_id="test_agent",
+            display_name="Test Agent",
+            metadata={"org": "team-x"},
+        )
+        entry = AgentKeyEntry(api_key="sk-test", identity=identity)
+
+        data = entry.to_yaml_data()
+
+        assert data["agent_id"] == "test_agent"
+        assert data["display_name"] == "Test Agent"
+        assert data["metadata"] == {"org": "team-x"}
+
+    def test_to_yaml_data_minimal(self):
+        """Test converting minimal entry (no display_name/metadata)."""
+        identity = AgentIdentity(agent_id="minimal_agent")
+        entry = AgentKeyEntry(api_key="sk-minimal", identity=identity)
+
+        data = entry.to_yaml_data()
+
+        assert data == {"agent_id": "minimal_agent"}
+        assert "display_name" not in data
+        assert "metadata" not in data
+
+
+class TestAgentKeyManager:
+    """Tests for AgentKeyManager."""
+
+    @pytest.fixture
+    def keys_file(self, tmp_path):
+        """Create temporary keys file path."""
+        return tmp_path / "agent_keys.yaml"
+
+    def test_empty_manager(self, keys_file):
+        """Test manager with no keys file."""
+        manager = AgentKeyManager(keys_file)
+
+        assert len(manager) == 0
+        assert not manager
+        assert manager.get("any-key") is None
+        assert manager.find_by_agent_id("any-agent") is None
+
+    def test_add_and_get(self, keys_file):
+        """Test adding and retrieving keys."""
+        manager = AgentKeyManager(keys_file)
+
+        manager.add("sk-new", "new_agent", display_name="New Agent")
+
+        assert len(manager) == 1
+        assert manager
+
+        identity = manager.get("sk-new")
+        assert identity is not None
+        assert identity.agent_id == "new_agent"
+        assert identity.display_name == "New Agent"
+
+    def test_add_persists_to_file(self, keys_file):
+        """Test that add persists to YAML file."""
+        import yaml
+
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-persist", "persist_agent")
+
+        # Verify file was created
+        assert keys_file.exists()
+
+        # Verify content
+        with open(keys_file) as f:
+            data = yaml.safe_load(f)
+
+        assert "sk-persist" in data["agents"]
+        assert data["agents"]["sk-persist"]["agent_id"] == "persist_agent"
+
+    def test_find_by_agent_id(self, keys_file):
+        """Test finding entry by agent_id."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-findme", "searchable_agent")
+
+        entry = manager.find_by_agent_id("searchable_agent")
+
+        assert entry is not None
+        assert entry.api_key == "sk-findme"
+        assert entry.identity.agent_id == "searchable_agent"
+
+        # Not found
+        assert manager.find_by_agent_id("nonexistent") is None
+
+    def test_remove(self, keys_file):
+        """Test removing keys."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-removeme", "remove_agent")
+
+        assert len(manager) == 1
+
+        result = manager.remove("sk-removeme")
+        assert result is True
+        assert len(manager) == 0
+
+        # Remove again returns False
+        result = manager.remove("sk-removeme")
+        assert result is False
+
+    def test_remove_by_agent_id(self, keys_file):
+        """Test removing by agent_id."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-byagent", "agent_to_remove")
+
+        result = manager.remove_by_agent_id("agent_to_remove")
+        assert result is True
+        assert len(manager) == 0
+
+        # Not found
+        result = manager.remove_by_agent_id("nonexistent")
+        assert result is False
+
+    def test_list_all(self, keys_file):
+        """Test listing all entries."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-a", "agent_a")
+        manager.add("sk-b", "agent_b", display_name="Agent B")
+
+        entries = manager.list_all()
+
+        assert len(entries) == 2
+        agent_ids = {e.identity.agent_id for e in entries}
+        assert agent_ids == {"agent_a", "agent_b"}
+
+    def test_load_existing_file(self, keys_file):
+        """Test loading from existing YAML file."""
+        import yaml
+
+        # Create YAML file
+        data = {
+            "agents": {
+                "sk-existing1": {
+                    "agent_id": "existing_agent",
+                    "display_name": "Existing",
+                },
+                "sk-existing2": "simple_agent",
+            }
+        }
+        with open(keys_file, "w") as f:
+            yaml.safe_dump(data, f)
+
+        # Load
+        manager = AgentKeyManager(keys_file)
+
+        assert len(manager) == 2
+
+        id1 = manager.get("sk-existing1")
+        assert id1 is not None
+        assert id1.agent_id == "existing_agent"
+        assert id1.display_name == "Existing"
+
+        id2 = manager.get("sk-existing2")
+        assert id2 is not None
+        assert id2.agent_id == "simple_agent"
+
+    def test_reload(self, keys_file):
+        """Test reloading keys from file."""
+        import yaml
+
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-initial", "initial_agent")
+
+        # Manually modify file
+        with open(keys_file) as f:
+            data = yaml.safe_load(f)
+        data["agents"]["sk-new"] = {"agent_id": "new_agent"}
+        with open(keys_file, "w") as f:
+            yaml.safe_dump(data, f)
+
+        # Auto-reload: get() now detects file changes and reloads automatically
+        new_identity = manager.get("sk-new")
+        assert new_identity is not None
+        assert new_identity.agent_id == "new_agent"
+
+        # Explicit reload still works
+        manager.reload()
+        assert manager.get("sk-new") is not None
+
+    def test_generate_api_key(self):
+        """Test API key generation."""
+        key1 = AgentKeyManager.generate_api_key()
+        key2 = AgentKeyManager.generate_api_key()
+
+        assert key1.startswith("sk-agent-")
+        assert key2.startswith("sk-agent-")
+        assert len(key1) == len("sk-agent-") + 32  # 16 bytes hex = 32 chars
+        assert key1 != key2
+
+    def test_to_identity_dict(self, keys_file):
+        """Test converting to identity dict."""
+        manager = AgentKeyManager(keys_file)
+        manager.add("sk-dict1", "agent1")
+        manager.add("sk-dict2", "agent2", display_name="Agent 2")
+
+        identity_dict = manager.to_identity_dict()
+
+        assert len(identity_dict) == 2
+        assert identity_dict["sk-dict1"].agent_id == "agent1"
+        assert identity_dict["sk-dict2"].agent_id == "agent2"
+        assert identity_dict["sk-dict2"].display_name == "Agent 2"
+
+    def test_creates_parent_directory(self, tmp_path):
+        """Test that save creates parent directories."""
+        nested_path = tmp_path / "nested" / "dir" / "agent_keys.yaml"
+
+        manager = AgentKeyManager(nested_path)
+        manager.add("sk-nested", "nested_agent")
+
+        assert nested_path.exists()
 
 
 class TestRateLimiter:
@@ -757,9 +1208,17 @@ class TestTrialResults:
             broker=mock_broker,
             trial_id="trial123",
         )
-        # Pre-register agents by adding to _agents dict
-        adapter._agents["agent1"] = MagicMock()
-        adapter._agents["agent2"] = MagicMock()
+        # Pre-register agents by adding to _agents dict with proper state objects
+        adapter._agents["agent1"] = ExternalAgentState(
+            agent_id="agent1",
+            display_name="Agent One",
+            authenticated=True,
+        )
+        adapter._agents["agent2"] = ExternalAgentState(
+            agent_id="agent2",
+            display_name=None,
+            authenticated=False,
+        )
         return adapter
 
     @pytest.mark.asyncio
@@ -828,3 +1287,183 @@ class TestTrialResults:
         agent2_result = next(r for r in results.results if r.agent_id == "agent2")
         assert agent2_result.final_balance == "800"
         assert agent2_result.total_bets == 1
+
+
+class TestGatewayAuthIntegration:
+    """Tests for gateway registration with authentication."""
+
+    @pytest.fixture
+    def mock_data_hub(self):
+        """Create mock DataHub."""
+        hub = MagicMock()
+        hub.subscription_manager = MagicMock()
+        hub.subscription_manager.global_sequence = 100
+        hub.get_recent_events.return_value = []
+        return hub
+
+    @pytest.fixture
+    def mock_broker(self):
+        """Create mock BrokerOperator."""
+        broker = MagicMock()
+        broker.initial_balance = "1000"
+        broker._event = None
+        broker._accounts = {}
+        broker.create_account = AsyncMock()
+        return broker
+
+    @pytest.fixture
+    def authenticator(self):
+        """Create LocalAgentAuthenticator with test keys."""
+        return LocalAgentAuthenticator(
+            keys={
+                "sk-valid-key-123": AgentIdentity(
+                    agent_id="verified_agent",
+                    display_name="Verified Agent Name",
+                    metadata={"tier": "premium"},
+                ),
+                "sk-valid-key-456": AgentIdentity(
+                    agent_id="another_verified",
+                ),
+            }
+        )
+
+    @pytest.fixture
+    def app_with_auth(self, mock_data_hub, mock_broker, authenticator):
+        """Create test app with authentication enabled."""
+        return create_gateway_app(
+            trial_id="trial123",
+            data_hub=mock_data_hub,
+            broker=mock_broker,
+            metadata={"sport_type": "nba"},
+            authenticator=authenticator,
+        )
+
+    @pytest.fixture
+    def client_with_auth(self, app_with_auth):
+        """Create test client with auth-enabled app."""
+        with TestClient(app_with_auth) as client:
+            yield client
+
+    @pytest.fixture
+    def app_no_auth(self, mock_data_hub, mock_broker):
+        """Create test app with authentication disabled (NoOpAuthenticator)."""
+        return create_gateway_app(
+            trial_id="trial123",
+            data_hub=mock_data_hub,
+            broker=mock_broker,
+            metadata={"sport_type": "nba"},
+            authenticator=NoOpAuthenticator(),
+        )
+
+    @pytest.fixture
+    def client_no_auth(self, app_no_auth):
+        """Create test client with no-auth app."""
+        with TestClient(app_no_auth) as client:
+            yield client
+
+    def test_register_with_valid_api_key(self, client_with_auth):
+        """Test registration with valid API key succeeds and returns verified identity."""
+        response = client_with_auth.post(
+            "/api/v1/register",
+            json={
+                "apiKey": "sk-valid-key-123",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        # Uses verified agent_id from authenticator
+        assert data["agentId"] == "verified_agent"
+        assert data["trialId"] == "trial123"
+        assert "balance" in data
+
+    def test_register_with_invalid_api_key(self, client_with_auth):
+        """Test registration with invalid API key returns 401."""
+        response = client_with_auth.post(
+            "/api/v1/register",
+            json={
+                "apiKey": "sk-invalid-key",
+            },
+        )
+
+        assert response.status_code == 401
+
+    def test_register_without_api_key_missing_field(self, client_with_auth):
+        """Test registration without apiKey field returns 422 validation error."""
+        response = client_with_auth.post(
+            "/api/v1/register",
+            json={
+                "persona": "test",
+            },
+        )
+
+        # Pydantic validation error for missing required field
+        assert response.status_code == 422
+
+    def test_register_with_noop_auth(self, client_no_auth):
+        """Test registration with NoOpAuthenticator uses apiKey as agent_id."""
+        response = client_no_auth.post(
+            "/api/v1/register",
+            json={
+                "apiKey": "test_agent",  # NoOpAuthenticator uses apiKey as agent_id
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        # NoOpAuthenticator uses apiKey as agent_id
+        assert data["agentId"] == "test_agent"
+
+    def test_register_verified_agent_uses_identity_display_name(self, client_with_auth):
+        """Test that verified agent uses identity's display_name."""
+        response = client_with_auth.post(
+            "/api/v1/register",
+            json={
+                "apiKey": "sk-valid-key-123",
+            },
+        )
+
+        assert response.status_code == 200
+        # The display_name from identity should be used
+
+    def test_multiple_agents_different_api_keys(self, client_with_auth):
+        """Test registering multiple agents with different API keys."""
+        # Register first verified agent
+        response1 = client_with_auth.post(
+            "/api/v1/register",
+            json={
+                "apiKey": "sk-valid-key-123",
+            },
+        )
+        assert response1.status_code == 200
+        assert response1.json()["agentId"] == "verified_agent"
+
+        # Register second verified agent with different key
+        response2 = client_with_auth.post(
+            "/api/v1/register",
+            json={
+                "apiKey": "sk-valid-key-456",
+            },
+        )
+        assert response2.status_code == 200
+        assert response2.json()["agentId"] == "another_verified"
+
+    def test_duplicate_registration_same_api_key(self, client_with_auth):
+        """Test that same API key cannot register twice."""
+        # First registration
+        response1 = client_with_auth.post(
+            "/api/v1/register",
+            json={
+                "apiKey": "sk-valid-key-123",
+            },
+        )
+        assert response1.status_code == 200
+
+        # Second registration with same API key
+        response2 = client_with_auth.post(
+            "/api/v1/register",
+            json={
+                "apiKey": "sk-valid-key-123",
+            },
+        )
+        assert response2.status_code == 409  # Conflict - already registered

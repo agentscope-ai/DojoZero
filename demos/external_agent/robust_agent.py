@@ -8,11 +8,14 @@ This example demonstrates:
 - State persistence across reconnections
 
 Usage:
-    # First, start a trial with gateway enabled:
+    # First, create an API key:
+    dojo0 agents add --id my-agent --name "My Agent"
+
+    # Start a trial with gateway enabled:
     dojo0 run --params your_trial.yaml --enable-gateway --gateway-port 8080
 
-    # Then run this agent:
-    python robust_agent.py --gateway http://localhost:8080 --agent-id robust-agent
+    # Run this agent:
+    python robust_agent.py --gateway http://localhost:8080 --api-key sk-agent-xxx
 """
 
 import argparse
@@ -97,7 +100,7 @@ class RobustBettingAgent:
     def __init__(
         self,
         gateway_url: str,
-        agent_id: str,
+        api_key: str,
         bet_amount: float = 10.0,
         bet_threshold: float = 0.55,
         max_reconnect_attempts: int = 10,
@@ -108,7 +111,8 @@ class RobustBettingAgent:
 
         Args:
             gateway_url: Gateway URL
-            agent_id: Unique agent identifier
+            api_key: API key for authentication (from dojo0 agents add).
+                     Agent identity comes from agent_keys.yaml.
             bet_amount: Amount to bet each time
             bet_threshold: Probability threshold for betting
             max_reconnect_attempts: Max consecutive reconnection attempts
@@ -116,7 +120,7 @@ class RobustBettingAgent:
             poll_interval: Polling interval when SSE unavailable (seconds)
         """
         self.gateway_url = gateway_url
-        self.agent_id = agent_id
+        self.api_key = api_key
         self.bet_amount = bet_amount
         self.bet_threshold = bet_threshold
         self.max_reconnect_attempts = max_reconnect_attempts
@@ -177,8 +181,7 @@ class RobustBettingAgent:
 
         async with self._client.connect_trial(
             gateway_url=self.gateway_url,
-            agent_id=self.agent_id,
-            persona="Robust betting agent",
+            api_key=self.api_key,
             initial_balance=1000.0,
         ) as trial:
             metadata = await trial.get_trial_metadata()
@@ -346,15 +349,15 @@ async def main():
         epilog="""
 Examples:
   Standalone mode:
-    python robust_agent.py --gateway http://localhost:8080 --agent-id my-agent
+    python robust_agent.py --gateway http://localhost:8080 --api-key sk-agent-xxx
 
   Dashboard mode (explicit):
-    python robust_agent.py --dashboard http://localhost:8000 --trial-id nba-game-xxx --agent-id my-agent
+    python robust_agent.py --dashboard http://localhost:8000 --trial-id nba-game-xxx --api-key sk-agent-xxx
 
   Dashboard mode (from config/env):
     # Set DOJOZERO_DASHBOARD_URLS=http://dash1:8000,http://dash2:8000
     # Or configure ~/.dojozero/config.yaml with dashboard_urls
-    python robust_agent.py --trial-id nba-game-xxx --agent-id my-agent
+    python robust_agent.py --trial-id nba-game-xxx --api-key sk-agent-xxx
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -378,11 +381,6 @@ Examples:
         help="Trial ID (required for dashboard mode)",
     )
     parser.add_argument(
-        "--agent-id",
-        default="robust-agent",
-        help="Agent ID (default: robust-agent)",
-    )
-    parser.add_argument(
         "--bet-amount",
         type=float,
         default=10.0,
@@ -399,6 +397,11 @@ Examples:
         type=int,
         default=10,
         help="Max reconnection attempts (default: 10)",
+    )
+    parser.add_argument(
+        "--api-key",
+        required=True,
+        help="API key for authentication (from 'dojo0 agents add')",
     )
     parser.add_argument(
         "--debug",
@@ -435,7 +438,7 @@ Examples:
 
     agent = RobustBettingAgent(
         gateway_url=gateway_url,
-        agent_id=args.agent_id,
+        api_key=args.api_key,
         bet_amount=args.bet_amount,
         bet_threshold=args.threshold,
         max_reconnect_attempts=args.max_reconnects,

@@ -61,21 +61,30 @@ class GatewayTransport:
     def __init__(
         self,
         base_url: str,
-        agent_id: str,
         timeout: float = 30.0,
     ):
         """Initialize transport.
 
         Args:
             base_url: Gateway base URL (e.g., "http://localhost:8080")
-            agent_id: Agent ID for authentication
             timeout: Request timeout in seconds
         """
         self.base_url = base_url.rstrip("/")
-        self.agent_id = agent_id
+        self.agent_id: str | None = None
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
         self._last_event_id: str | None = None
+
+    def set_agent_id(self, agent_id: str) -> None:
+        """Set agent ID after registration.
+
+        Args:
+            agent_id: Agent ID from registration response
+        """
+        self.agent_id = agent_id
+        # Update client headers if already initialized
+        if self._client:
+            self._client.headers.update(self._auth_headers())
 
     async def __aenter__(self) -> "GatewayTransport":
         """Enter async context."""
@@ -94,7 +103,9 @@ class GatewayTransport:
 
     def _auth_headers(self) -> dict[str, str]:
         """Get authentication headers."""
-        return {"X-Agent-ID": self.agent_id}
+        if self.agent_id:
+            return {"X-Agent-ID": self.agent_id}
+        return {}
 
     def _get_client(self) -> httpx.AsyncClient:
         """Get the HTTP client, raising if not initialized."""

@@ -566,6 +566,89 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip confirmation prompt.",
     )
 
+    # Agent management commands
+    agents_parser = subparsers.add_parser(
+        "agents",
+        help="Manage agent API keys for authentication",
+        description="Manage agent API keys stored in agent_keys.yaml.",
+    )
+    agents_subparsers = agents_parser.add_subparsers(
+        dest="agents_command", required=True
+    )
+
+    # agents add
+    agents_add_parser = agents_subparsers.add_parser(
+        "add",
+        help="Register a new agent and generate API key",
+    )
+    agents_add_parser.add_argument(
+        "--id",
+        required=True,
+        help="Unique agent identifier (used for cross-trial aggregation).",
+    )
+    agents_add_parser.add_argument(
+        "--name",
+        help="Human-readable display name for the agent.",
+    )
+    agents_add_parser.add_argument(
+        "--persona",
+        help="Persona tag for frontend display (e.g., 'degen', 'whale', 'shark').",
+    )
+    agents_add_parser.add_argument(
+        "--model",
+        help="Model identifier (e.g., 'gpt-4', 'claude-3').",
+    )
+    agents_add_parser.add_argument(
+        "--model-display-name",
+        help="Human-readable model name for frontend (e.g., 'GPT-4 Turbo').",
+    )
+    agents_add_parser.add_argument(
+        "--cdn-url",
+        help="Avatar image URL for frontend display.",
+    )
+    agents_add_parser.add_argument(
+        "--store",
+        default=DEFAULT_STORE_DIRECTORY,
+        help=f"Store directory containing agent_keys.yaml (default: {DEFAULT_STORE_DIRECTORY}).",
+    )
+
+    # agents list
+    agents_list_parser = agents_subparsers.add_parser(
+        "list",
+        help="List all registered agents",
+    )
+    agents_list_parser.add_argument(
+        "--store",
+        default=DEFAULT_STORE_DIRECTORY,
+        help=f"Store directory containing agent_keys.yaml (default: {DEFAULT_STORE_DIRECTORY}).",
+    )
+    agents_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output as JSON.",
+    )
+
+    # agents remove
+    agents_remove_parser = agents_subparsers.add_parser(
+        "remove",
+        help="Remove an agent and revoke its API key",
+    )
+    agents_remove_parser.add_argument(
+        "agent_id",
+        help="Agent ID to remove.",
+    )
+    agents_remove_parser.add_argument(
+        "--store",
+        default=DEFAULT_STORE_DIRECTORY,
+        help=f"Store directory containing agent_keys.yaml (default: {DEFAULT_STORE_DIRECTORY}).",
+    )
+    agents_remove_parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompt.",
+    )
+
     return parser
 
 
@@ -1843,6 +1926,21 @@ async def _serve_command(args: argparse.Namespace) -> int:
             "Gateway API enabled at http://%s:%d/api/gateway/{trial_id}/", host, port
         )
 
+    # Load agent authenticator if agent_keys.yaml exists
+    from dojozero.gateway import LocalAgentAuthenticator
+
+    authenticator = None
+    agent_keys_path = Path(store_path) / "agent_keys.yaml"
+    if agent_keys_path.exists():
+        authenticator = LocalAgentAuthenticator(config_path=agent_keys_path)
+        LOGGER.info(
+            "Agent authentication enabled (loaded %d keys from %s)",
+            len(authenticator._keys),
+            agent_keys_path,
+        )
+    else:
+        LOGGER.info("Agent authentication disabled (no agent_keys.yaml found)")
+
     await run_dashboard_server(
         orchestrator=orchestrator,
         scheduler_store=scheduler_store,
@@ -1856,6 +1954,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         auto_resume=auto_resume,
         stale_threshold_hours=stale_threshold_hours,
         enable_gateway=enable_gateway,
+        authenticator=authenticator,
     )
     return 0
 
@@ -2366,6 +2465,129 @@ async def _sync_service_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _agents_command(args: argparse.Namespace) -> int:
+    """Handle agents command - manage agent API keys."""
+    import json as json_module
+    from pathlib import Path
+
+    from dojozero.gateway._auth import AgentKeyManager
+
+    store_dir = Path(args.store)
+    keys_file = store_dir / "agent_keys.yaml"
+    key_manager = AgentKeyManager(keys_file)
+
+    if args.agents_command == "add":
+        agent_id = args.id
+        display_name = args.name
+        persona = args.persona
+        model = args.model
+        model_display_name = getattr(args, "model_display_name", None)
+        cdn_url = getattr(args, "cdn_url", None)
+
+        # Check if agent_id already exists
+        existing = key_manager.find_by_agent_id(agent_id)
+        if existing:
+            LOGGER.error(
+                "Agent '%s' already exists with key: %s...%s",
+                agent_id,
+                existing.api_key[:12],
+                existing.api_key[-4:],
+            )
+            return 1
+
+        # Generate new API key and add
+        api_key = AgentKeyManager.generate_api_key()
+        key_manager.add(
+            api_key,
+            agent_id,
+            display_name=display_name,
+            persona=persona,
+            model=model,
+            model_display_name=model_display_name,
+            cdn_url=cdn_url,
+        )
+
+        print(f"Created agent '{agent_id}'")
+        if display_name:
+            print(f"  Display name: {display_name}")
+        if persona:
+            print(f"  Persona: {persona}")
+        if model:
+            print(f"  Model: {model}")
+        if model_display_name:
+            print(f"  Model display name: {model_display_name}")
+        if cdn_url:
+            print(f"  CDN URL: {cdn_url}")
+        print(f"  API key: {api_key}")
+        print(f"\nStored in: {keys_file}")
+        return 0
+
+    elif args.agents_command == "list":
+        entries = key_manager.list_all()
+
+        if not entries:
+            print("No agents registered.")
+            print("\nUse 'dojo agents add --id <agent_id>' to register an agent.")
+            return 0
+
+        if args.json:
+            # JSON output (without exposing full keys)
+            output = []
+            for entry in entries:
+                item = {
+                    "agentId": entry.identity.agent_id,
+                    "displayName": entry.identity.display_name,
+                    "keyPrefix": entry.api_key[:12] + "...",
+                }
+                # Include optional fields only if set
+                if entry.identity.persona:
+                    item["persona"] = entry.identity.persona
+                if entry.identity.model:
+                    item["model"] = entry.identity.model
+                if entry.identity.model_display_name:
+                    item["modelDisplayName"] = entry.identity.model_display_name
+                if entry.identity.cdn_url:
+                    item["cdnUrl"] = entry.identity.cdn_url
+                output.append(item)
+            print(json_module.dumps(output, indent=2))
+        else:
+            # Table output
+            print(f"{'AGENT_ID':<20} {'DISPLAY_NAME':<25} {'KEY_PREFIX':<20}")
+            print("-" * 65)
+            for entry in entries:
+                agent_id = entry.identity.agent_id
+                display_name = entry.identity.display_name or "-"
+                key_prefix = entry.api_key[:12] + "..." + entry.api_key[-4:]
+                print(f"{agent_id:<20} {display_name:<25} {key_prefix:<20}")
+            print(f"\nTotal: {len(entries)} agent(s)")
+            print(f"Keys file: {keys_file}")
+        return 0
+
+    elif args.agents_command == "remove":
+        agent_id = args.agent_id
+
+        # Find the agent
+        entry = key_manager.find_by_agent_id(agent_id)
+        if entry is None:
+            LOGGER.error("Agent '%s' not found.", agent_id)
+            return 1
+
+        # Confirm
+        if not args.yes:
+            confirm = input(
+                f"Remove agent '{agent_id}'? This will revoke its API key. [y/N] "
+            )
+            if confirm.lower() != "y":
+                print("Cancelled.")
+                return 0
+
+        key_manager.remove(entry.api_key)
+        print(f"Removed agent '{agent_id}' and revoked API key.")
+        return 0
+
+    return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -2394,6 +2616,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(_remove_source_command(args))
         if args.command == "clear-schedules":
             return asyncio.run(_clear_schedules_command(args))
+        if args.command == "agents":
+            return _agents_command(args)
         raise DojoZeroCLIError(f"unknown command '{args.command}'")
     except DojoZeroCLIError as exc:
         LOGGER.error(str(exc))

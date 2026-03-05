@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from dojozero.gateway._adapter import ExternalAgentAdapter
+from dojozero.gateway._auth import AgentAuthenticator, NoOpAuthenticator
 from dojozero.gateway._models import (
     AgentRegistrationRequest,
     AgentRegistrationResponse,
@@ -48,6 +49,7 @@ class GatewayState:
     data_hub: "DataHub"
     broker: "BrokerOperator"
     adapter: ExternalAgentAdapter
+    authenticator: AgentAuthenticator = field(default_factory=NoOpAuthenticator)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -102,6 +104,7 @@ def create_gateway_app(
     data_hub: "DataHub",
     broker: "BrokerOperator",
     metadata: dict[str, Any] | None = None,
+    authenticator: AgentAuthenticator | None = None,
 ) -> FastAPI:
     """Create the Agent Gateway FastAPI application.
 
@@ -110,10 +113,14 @@ def create_gateway_app(
         data_hub: DataHub instance for event subscriptions
         broker: BrokerOperator for betting operations
         metadata: Trial metadata
+        authenticator: Optional authenticator for API key validation.
+            If None, uses NoOpAuthenticator (allows any agent_id).
 
     Returns:
         FastAPI application
     """
+    # Use NoOpAuthenticator if none provided (backwards compatible)
+    auth = authenticator or NoOpAuthenticator()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -129,11 +136,13 @@ def create_gateway_app(
             data_hub=data_hub,
             broker=broker,
             adapter=adapter,
+            authenticator=auth,
             metadata=metadata or {},
         )
 
         app.state.gateway_state = state
-        logger.info("Gateway started for trial %s", trial_id)
+        auth_status = "enabled" if auth.is_enabled() else "disabled"
+        logger.info("Gateway started for trial %s (auth: %s)", trial_id, auth_status)
 
         yield
 
@@ -164,18 +173,50 @@ def create_gateway_app(
         request: AgentRegistrationRequest,
         state: GatewayState = Depends(get_gateway_state),
     ) -> AgentRegistrationResponse:
-        """Register an external agent for this trial."""
+        """Register an external agent for this trial.
+
+        API key is required. Agent identity (agent_id, display_name) is derived
+        from the verified identity in agent_keys.yaml.
+
+        Use 'dojo0 agents add' to register agents and get API keys.
+        """
         # Convert initial_balance to string if it's a float
         initial_balance: str | None = None
         if request.initial_balance is not None:
             initial_balance = str(request.initial_balance)
 
+        # Validate API key and get identity
+        identity = await state.authenticator.validate(request.api_key)
+        if identity is None:
+            raise HTTPException(
+                status_code=401,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.INVALID_TOKEN,
+                        message="Invalid API key",
+                    )
+                ).model_dump(by_alias=True),
+            )
+
+        # Use verified identity - API key is the single source of truth
+        # All identity/metadata comes from agent_keys.yaml
+        logger.info(
+            "Agent authenticated: api_key=***%s, agent_id=%s, persona=%s",
+            request.api_key[-4:] if len(request.api_key) > 4 else "****",
+            identity.agent_id,
+            identity.persona or "(none)",
+        )
+
         try:
             return await state.adapter.register_agent(
-                agent_id=request.agent_id,
-                persona=request.persona or "",
-                model=request.model or "",
+                agent_id=identity.agent_id,
                 initial_balance=initial_balance,
+                display_name=identity.display_name,
+                persona=identity.persona,
+                model=identity.model,
+                model_display_name=identity.model_display_name,
+                cdn_url=identity.cdn_url,
+                authenticated=True,  # Always True - API key is required
             )
         except ValueError as e:
             error_msg = str(e)

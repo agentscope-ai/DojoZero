@@ -18,25 +18,43 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentRegistrationRequest(BaseModel):
-    """Request body for agent registration."""
+    """Request body for agent registration.
+
+    API key is required. Agent identity and metadata (agent_id, display_name,
+    persona, model, etc.) all come from the verified identity in agent_keys.yaml.
+
+    Use 'dojo0 agents add' to register agents and get API keys.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    agent_id: str = Field(alias="agentId")
-    persona: str | None = None
-    model: str | None = None
+    # Authentication (required)
+    api_key: str = Field(alias="apiKey")
+
+    # Optional override for initial balance (otherwise uses broker default)
     initial_balance: float | str | None = Field(default=None, alias="initialBalance")
 
 
 class AgentRegistrationResponse(BaseModel):
-    """Response for agent registration."""
+    """Response for agent registration.
+
+    All identity fields come from the verified API key in agent_keys.yaml.
+    """
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    agent_id: str = Field(serialization_alias="agentId")
+    agent_id: str = Field(serialization_alias="agentId")  # Verified/canonical ID
+    display_name: str | None = Field(default=None, serialization_alias="displayName")
+    persona: str | None = Field(default=None)  # Persona tag (e.g., "degen", "whale")
+    model: str | None = Field(default=None)  # Model name (e.g., "gpt-4")
+    model_display_name: str | None = Field(
+        default=None, serialization_alias="modelDisplayName"
+    )
+    cdn_url: str | None = Field(default=None, serialization_alias="cdnUrl")
     trial_id: str = Field(serialization_alias="trialId")
     balance: float | str
     registered_at: datetime = Field(serialization_alias="registeredAt")
+    authenticated: bool = False  # True if api_key was validated
 
 
 # ============================================================================
@@ -287,7 +305,11 @@ class AgentResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    agent_id: str = Field(serialization_alias="agentId")
+    agent_id: str = Field(
+        serialization_alias="agentId"
+    )  # Canonical ID (verified if authenticated)
+    display_name: str | None = Field(default=None, serialization_alias="displayName")
+    authenticated: bool = False  # True if agent was authenticated via API key
     final_balance: str = Field(serialization_alias="finalBalance")
     net_profit: str = Field(serialization_alias="netProfit")
     total_bets: int = Field(serialization_alias="totalBets")

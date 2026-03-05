@@ -8,13 +8,16 @@ This example demonstrates:
 - Querying balance and odds
 
 Usage:
+    # First, create an API key:
+    dojo0 agents add --id my-agent --name "My Agent"
+
     # Standalone mode (single trial):
     dojo0 run --params your_trial.yaml --enable-gateway --gateway-port 8080
-    python simple_agent.py --gateway http://localhost:8080 --agent-id my-agent
+    python simple_agent.py --gateway http://localhost:8080 --trial-id <trial-id> --api-key sk-agent-xxx
 
     # Dashboard mode (multiple trials):
     dojo0 serve --enable-gateway
-    python simple_agent.py --dashboard http://localhost:8000 --agent-id my-agent
+    python simple_agent.py --dashboard http://localhost:8000 --trial-id <trial-id> --api-key sk-agent-xxx
 """
 
 import argparse
@@ -76,16 +79,17 @@ class SimpleBettingAgent:
 
     async def run(
         self,
-        agent_id: str,
         trial_id: str,
+        api_key: str,
         gateway_url: str | None = None,
         dashboard_urls: list[str] | None = None,
     ):
         """Run the agent.
 
         Args:
-            agent_id: Unique agent identifier
             trial_id: Trial ID (required)
+            api_key: API key for authentication (from dojo0 agents add).
+                     Agent identity comes from agent_keys.yaml.
             gateway_url: Gateway URL for standalone mode (e.g., "http://localhost:8080")
             dashboard_urls: Dashboard URLs for sharded mode (e.g., ["http://localhost:8000"])
         """
@@ -120,12 +124,11 @@ class SimpleBettingAgent:
         if not gateway_url:
             raise ValueError("No gateway URL available")
 
-        logger.info("Connecting to %s as agent '%s'", gateway_url, agent_id)
+        logger.info("Connecting to %s", gateway_url)
 
         async with client.connect_trial(
             gateway_url=gateway_url,
-            agent_id=agent_id,
-            persona="Simple betting agent",
+            api_key=api_key,
             initial_balance=1000.0,
         ) as trial:
             # Get trial metadata
@@ -226,10 +229,10 @@ async def main():
         epilog="""
 Examples:
   Standalone mode:
-    python simple_agent.py --gateway http://localhost:8080 --trial-id my-trial --agent-id my-agent
+    python simple_agent.py --gateway http://localhost:8080 --trial-id my-trial --api-key sk-agent-xxx
 
   Dashboard mode:
-    python simple_agent.py --dashboard http://localhost:8000 --trial-id nba-game-401810734-xxx --agent-id my-agent
+    python simple_agent.py --dashboard http://localhost:8000 --trial-id nba-game-xxx --api-key sk-agent-xxx
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -251,11 +254,6 @@ Examples:
         help="Trial ID (required)",
     )
     parser.add_argument(
-        "--agent-id",
-        default="simple-agent",
-        help="Agent ID (default: simple-agent)",
-    )
-    parser.add_argument(
         "--bet-amount",
         type=float,
         default=10.0,
@@ -266,6 +264,11 @@ Examples:
         type=float,
         default=0.6,
         help="Probability threshold for betting (default: 0.6)",
+    )
+    parser.add_argument(
+        "--api-key",
+        required=True,
+        help="API key for authentication (from 'dojo0 agents add')",
     )
     parser.add_argument(
         "--debug",
@@ -287,8 +290,8 @@ Examples:
 
     try:
         await agent.run(
-            agent_id=args.agent_id,
             trial_id=args.trial_id,
+            api_key=args.api_key,
             gateway_url=args.gateway,
             dashboard_urls=[args.dashboard] if args.dashboard else None,
         )
