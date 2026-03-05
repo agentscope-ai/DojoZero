@@ -20,35 +20,37 @@ from pydantic import BaseModel, ConfigDict, Field
 class AgentRegistrationRequest(BaseModel):
     """Request body for agent registration.
 
-    Authentication flow:
-    1. If api_key is provided, it's validated against the identity service
-       - agent_id is set from the verified identity (request agent_id ignored)
-       - display_name can override the identity service's display name
-    2. If no api_key, falls back to trusting request agent_id (dev mode)
+    API key is required. Agent identity and metadata (agent_id, display_name,
+    persona, model, etc.) all come from the verified identity in agent_keys.yaml.
+
+    Use 'dojo0 agents add' to register agents and get API keys.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    # Authentication (optional for backwards compatibility)
-    api_key: str | None = Field(default=None, alias="apiKey")
+    # Authentication (required)
+    api_key: str = Field(alias="apiKey")
 
-    # Agent identification
-    agent_id: str = Field(alias="agentId")  # Used if no api_key, else ignored
-    display_name: str | None = Field(default=None, alias="displayName")  # Override
-
-    # Agent metadata
-    persona: str | None = None
-    model: str | None = None
+    # Optional override for initial balance (otherwise uses broker default)
     initial_balance: float | str | None = Field(default=None, alias="initialBalance")
 
 
 class AgentRegistrationResponse(BaseModel):
-    """Response for agent registration."""
+    """Response for agent registration.
+
+    All identity fields come from the verified API key in agent_keys.yaml.
+    """
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     agent_id: str = Field(serialization_alias="agentId")  # Verified/canonical ID
     display_name: str | None = Field(default=None, serialization_alias="displayName")
+    persona: str | None = Field(default=None)  # Persona tag (e.g., "degen", "whale")
+    model: str | None = Field(default=None)  # Model name (e.g., "gpt-4")
+    model_display_name: str | None = Field(
+        default=None, serialization_alias="modelDisplayName"
+    )
+    cdn_url: str | None = Field(default=None, serialization_alias="cdnUrl")
     trial_id: str = Field(serialization_alias="trialId")
     balance: float | str
     registered_at: datetime = Field(serialization_alias="registeredAt")

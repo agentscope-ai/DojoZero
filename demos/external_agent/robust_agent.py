@@ -103,6 +103,7 @@ class RobustBettingAgent:
         max_reconnect_attempts: int = 10,
         reconnect_delay: float = 5.0,
         poll_interval: float = 2.0,
+        api_key: str | None = None,
     ):
         """Initialize the agent.
 
@@ -114,6 +115,7 @@ class RobustBettingAgent:
             max_reconnect_attempts: Max consecutive reconnection attempts
             reconnect_delay: Delay between reconnection attempts (seconds)
             poll_interval: Polling interval when SSE unavailable (seconds)
+            api_key: API key for authentication (from dojo0 agents add)
         """
         self.gateway_url = gateway_url
         self.agent_id = agent_id
@@ -122,6 +124,7 @@ class RobustBettingAgent:
         self.max_reconnect_attempts = max_reconnect_attempts
         self.reconnect_delay = reconnect_delay
         self.poll_interval = poll_interval
+        self.api_key = api_key
         self.state = AgentState()
         self._client = DojoClient()
         self._running = True
@@ -178,8 +181,8 @@ class RobustBettingAgent:
         async with self._client.connect_trial(
             gateway_url=self.gateway_url,
             agent_id=self.agent_id,
-            persona="Robust betting agent",
             initial_balance=1000.0,
+            api_key=self.api_key,
         ) as trial:
             metadata = await trial.get_trial_metadata()
             logger.info(
@@ -401,6 +404,10 @@ Examples:
         help="Max reconnection attempts (default: 10)",
     )
     parser.add_argument(
+        "--api-key",
+        help="API key for authentication (from 'dojo0 agents add')",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging",
@@ -439,6 +446,7 @@ Examples:
         bet_amount=args.bet_amount,
         bet_threshold=args.threshold,
         max_reconnect_attempts=args.max_reconnects,
+        api_key=args.api_key,
     )
 
     # Handle Ctrl+C gracefully by cancelling the task

@@ -40,26 +40,41 @@ class AgentIdentity:
 
     This is returned by AgentAuthenticator.validate() and represents
     the canonical identity for cross-trial aggregation.
+
+    Includes display metadata for frontend rendering (persona, model, avatar).
     """
 
     agent_id: str  # Canonical ID for aggregation (from identity service)
     display_name: str | None = None  # Human-readable name
+    persona: str | None = None  # Persona tag (e.g., "degen", "whale", "shark")
+    model: str | None = None  # Exact model name (e.g., "gpt-4", "qwen3-max")
+    model_display_name: str | None = None  # Human-readable model name
+    cdn_url: str | None = None  # Avatar image URL
     metadata: dict[str, Any] | None = None  # Additional info (org, tier, etc.)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
+        """Convert to dictionary (camelCase for API compatibility)."""
         return {
             "agentId": self.agent_id,
             "displayName": self.display_name,
+            "persona": self.persona,
+            "model": self.model,
+            "modelDisplayName": self.model_display_name,
+            "cdnUrl": self.cdn_url,
             "metadata": self.metadata,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentIdentity:
-        """Create from dictionary."""
+        """Create from dictionary (supports both camelCase and snake_case)."""
         return cls(
             agent_id=data.get("agentId") or data.get("agent_id", ""),
             display_name=data.get("displayName") or data.get("display_name"),
+            persona=data.get("persona"),
+            model=data.get("model"),
+            model_display_name=data.get("modelDisplayName")
+            or data.get("model_display_name"),
+            cdn_url=data.get("cdnUrl") or data.get("cdn_url"),
             metadata=data.get("metadata"),
         )
 
@@ -99,7 +114,22 @@ class AgentAuthenticator(Protocol):
 
 @dataclass
 class AgentKeyEntry:
-    """Entry representing an agent key and its associated identity."""
+    """Entry representing an agent key and its associated identity.
+
+    YAML format examples:
+
+    Simple format (just agent_id):
+        sk-agent-abc123: my-agent
+
+    Full format with metadata:
+        sk-agent-abc123:
+          agent_id: my-agent
+          display_name: My Agent
+          persona: degen
+          model: gpt-4
+          model_display_name: GPT-4
+          cdn_url: https://example.com/avatar.png
+    """
 
     api_key: str
     identity: AgentIdentity
@@ -115,6 +145,10 @@ class AgentKeyEntry:
             identity = AgentIdentity(
                 agent_id=data.get("agent_id", api_key),
                 display_name=data.get("display_name"),
+                persona=data.get("persona"),
+                model=data.get("model"),
+                model_display_name=data.get("model_display_name"),
+                cdn_url=data.get("cdn_url"),
                 metadata=data.get("metadata"),
             )
         return cls(api_key=api_key, identity=identity)
@@ -124,6 +158,14 @@ class AgentKeyEntry:
         data: dict[str, Any] = {"agent_id": self.identity.agent_id}
         if self.identity.display_name:
             data["display_name"] = self.identity.display_name
+        if self.identity.persona:
+            data["persona"] = self.identity.persona
+        if self.identity.model:
+            data["model"] = self.identity.model
+        if self.identity.model_display_name:
+            data["model_display_name"] = self.identity.model_display_name
+        if self.identity.cdn_url:
+            data["cdn_url"] = self.identity.cdn_url
         if self.identity.metadata:
             data["metadata"] = self.identity.metadata
         return data
@@ -415,18 +457,20 @@ class LocalAgentAuthenticator:
 
 
 class NoOpAuthenticator:
-    """Authenticator that allows any agent ID (no API key required).
+    """Authenticator that allows any API key (no validation).
 
-    Used when authentication is disabled for backwards compatibility.
-    The agent_id from the request is trusted as-is.
+    Used when authentication is disabled for backwards compatibility and testing.
+    The api_key is used as both agent_id and display_name in the returned identity.
     """
 
-    async def validate(self, api_key: str) -> AgentIdentity | None:  # noqa: ARG002
-        """Always returns None (no validation)."""
-        return None
+    async def validate(self, api_key: str) -> AgentIdentity | None:
+        """Return identity using api_key as agent_id (no actual validation)."""
+        if not api_key:
+            return None
+        return AgentIdentity(agent_id=api_key, display_name=api_key)
 
     def is_enabled(self) -> bool:
-        """Always returns False."""
+        """Always returns False (no actual authentication)."""
         return False
 
 

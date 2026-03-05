@@ -175,70 +175,48 @@ def create_gateway_app(
     ) -> AgentRegistrationResponse:
         """Register an external agent for this trial.
 
-        If api_key is provided, validates against the authenticator:
-        - On success: uses verified agent_id from identity service
-        - On failure: returns 401 Unauthorized
+        API key is required. Agent identity (agent_id, display_name) is derived
+        from the verified identity in agent_keys.yaml.
 
-        If no api_key and authenticator is enabled: returns 401
-        If no api_key and authenticator is disabled: trusts request agent_id
+        Use 'dojo0 agents add' to register agents and get API keys.
         """
         # Convert initial_balance to string if it's a float
         initial_balance: str | None = None
         if request.initial_balance is not None:
             initial_balance = str(request.initial_balance)
 
-        # Determine agent identity via authentication
-        agent_id: str
-        display_name: str | None = request.display_name
-        authenticated = False
-
-        if request.api_key:
-            # Validate API key
-            identity = await state.authenticator.validate(request.api_key)
-            if identity is None:
-                raise HTTPException(
-                    status_code=401,
-                    detail=ErrorResponse(
-                        error=ErrorDetail(
-                            code=ErrorCodes.INVALID_TOKEN,
-                            message="Invalid API key",
-                        )
-                    ).model_dump(by_alias=True),
-                )
-            # Use verified identity
-            agent_id = identity.agent_id
-            authenticated = True
-            # Use request display_name if provided, else identity's display_name
-            if display_name is None:
-                display_name = identity.display_name
-            logger.info(
-                "Agent authenticated: api_key=***%s, agent_id=%s",
-                request.api_key[-4:] if len(request.api_key) > 4 else "****",
-                agent_id,
-            )
-        elif state.authenticator.is_enabled():
-            # Auth is enabled but no API key provided
+        # Validate API key and get identity
+        identity = await state.authenticator.validate(request.api_key)
+        if identity is None:
             raise HTTPException(
                 status_code=401,
                 detail=ErrorResponse(
                     error=ErrorDetail(
-                        code=ErrorCodes.AUTH_REQUIRED,
-                        message="API key required (apiKey field)",
+                        code=ErrorCodes.INVALID_TOKEN,
+                        message="Invalid API key",
                     )
                 ).model_dump(by_alias=True),
             )
-        else:
-            # Auth disabled - trust request agent_id (backwards compatible)
-            agent_id = request.agent_id
+
+        # Use verified identity - API key is the single source of truth
+        # All identity/metadata comes from agent_keys.yaml
+        logger.info(
+            "Agent authenticated: api_key=***%s, agent_id=%s, persona=%s",
+            request.api_key[-4:] if len(request.api_key) > 4 else "****",
+            identity.agent_id,
+            identity.persona or "(none)",
+        )
 
         try:
             return await state.adapter.register_agent(
-                agent_id=agent_id,
-                persona=request.persona or "",
-                model=request.model or "",
+                agent_id=identity.agent_id,
                 initial_balance=initial_balance,
-                display_name=display_name,
-                authenticated=authenticated,
+                display_name=identity.display_name,
+                persona=identity.persona,
+                model=identity.model,
+                model_display_name=identity.model_display_name,
+                cdn_url=identity.cdn_url,
+                authenticated=True,  # Always True - API key is required
             )
         except ValueError as e:
             error_msg = str(e)

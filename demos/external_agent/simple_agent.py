@@ -80,6 +80,7 @@ class SimpleBettingAgent:
         trial_id: str,
         gateway_url: str | None = None,
         dashboard_urls: list[str] | None = None,
+        api_key: str | None = None,
     ):
         """Run the agent.
 
@@ -88,6 +89,7 @@ class SimpleBettingAgent:
             trial_id: Trial ID (required)
             gateway_url: Gateway URL for standalone mode (e.g., "http://localhost:8080")
             dashboard_urls: Dashboard URLs for sharded mode (e.g., ["http://localhost:8000"])
+            api_key: API key for authentication (from dojo0 agents add)
         """
         # Create client with config
         client = DojoClient(
@@ -125,8 +127,8 @@ class SimpleBettingAgent:
         async with client.connect_trial(
             gateway_url=gateway_url,
             agent_id=agent_id,
-            persona="Simple betting agent",
             initial_balance=1000.0,
+            api_key=api_key,
         ) as trial:
             # Get trial metadata
             metadata = await trial.get_trial_metadata()
@@ -268,6 +270,10 @@ Examples:
         help="Probability threshold for betting (default: 0.6)",
     )
     parser.add_argument(
+        "--api-key",
+        help="API key for authentication (from 'dojo0 agents add')",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging",
@@ -291,6 +297,7 @@ Examples:
             trial_id=args.trial_id,
             gateway_url=args.gateway,
             dashboard_urls=[args.dashboard] if args.dashboard else None,
+            api_key=args.api_key,
         )
     except KeyboardInterrupt:
         logger.info("Agent stopped by user")

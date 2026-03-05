@@ -47,10 +47,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ExternalAgentState:
-    """State for a registered external agent."""
+    """State for a registered external agent.
+
+    All identity and display fields come from the verified API key.
+    """
 
     agent_id: str  # Canonical ID (verified if authenticated)
-    display_name: str | None = None  # Human-readable name for this trial
+    display_name: str | None = None  # Human-readable name
+    persona: str | None = None  # Persona tag (e.g., "degen", "whale", "shark")
+    model: str | None = None  # Model name (e.g., "gpt-4", "qwen3-max")
+    model_display_name: str | None = None  # Human-readable model name
+    cdn_url: str | None = None  # Avatar image URL
     authenticated: bool = False  # True if registered with valid API key
     subscription: Subscription | None = None
     registered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -117,22 +124,27 @@ class ExternalAgentAdapter:
     async def register_agent(
         self,
         agent_id: str,
-        persona: str = "",
-        model: str = "",
         initial_balance: str | None = None,
         display_name: str | None = None,
+        persona: str | None = None,
+        model: str | None = None,
+        model_display_name: str | None = None,
+        cdn_url: str | None = None,
         authenticated: bool = False,
     ) -> AgentRegistrationResponse:
         """Register an external agent.
 
         Creates account in broker and prepares for subscription.
+        All identity/metadata fields come from the verified API key.
 
         Args:
-            agent_id: Unique agent identifier (canonical ID if authenticated)
-            persona: Agent persona description
-            model: Model name/version (stored for future use)
+            agent_id: Unique agent identifier (canonical ID from API key)
             initial_balance: Starting balance (uses broker default if None)
-            display_name: Human-readable name for this trial
+            display_name: Human-readable name (from API key identity)
+            persona: Persona tag like "degen", "whale" (from API key identity)
+            model: Model name like "gpt-4" (from API key identity)
+            model_display_name: Human-readable model name (from API key identity)
+            cdn_url: Avatar image URL (from API key identity)
             authenticated: Whether agent was authenticated via API key
 
         Returns:
@@ -141,9 +153,6 @@ class ExternalAgentAdapter:
         Raises:
             ValueError: If agent already registered
         """
-        # model parameter kept for future use (agent metadata tracking)
-        _ = model
-
         if agent_id in self._agents:
             raise ValueError(f"Agent {agent_id} already registered")
 
@@ -153,19 +162,24 @@ class ExternalAgentAdapter:
         # Create account in broker
         await self._broker.create_account(agent_id, Decimal(balance))
 
-        # Create agent state
+        # Create agent state with all identity fields
         state = ExternalAgentState(
             agent_id=agent_id,
             display_name=display_name,
+            persona=persona,
+            model=model,
+            model_display_name=model_display_name,
+            cdn_url=cdn_url,
             authenticated=authenticated,
         )
         self._agents[agent_id] = state
 
         auth_status = "authenticated" if authenticated else "unauthenticated"
         logger.info(
-            "Registered external agent: agent_id=%s, display_name=%s, balance=%s, %s",
+            "Registered external agent: agent_id=%s, display_name=%s, persona=%s, balance=%s, %s",
             agent_id,
             display_name or agent_id,
+            persona or "(none)",
             balance,
             auth_status,
         )
@@ -173,6 +187,10 @@ class ExternalAgentAdapter:
         return AgentRegistrationResponse(
             agent_id=agent_id,
             display_name=display_name,
+            persona=persona,
+            model=model,
+            model_display_name=model_display_name,
+            cdn_url=cdn_url,
             trial_id=self._trial_id,
             balance=balance,
             registered_at=state.registered_at,

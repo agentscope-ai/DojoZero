@@ -672,20 +672,21 @@ class DojoClient:
         self,
         gateway_url: str,
         agent_id: str,
-        persona: str | None = None,
-        model: str | None = None,
         initial_balance: float | None = None,
         auto_register: bool = True,
+        api_key: str | None = None,
     ) -> AsyncIterator[TrialConnection]:
         """Connect to a trial.
 
         Args:
             gateway_url: Gateway URL (e.g., "http://localhost:8080")
-            agent_id: Unique agent identifier
-            persona: Agent persona description
-            model: Model identifier
+            agent_id: Fallback agent ID (used for X-Agent-ID header).
+                     The actual agent_id comes from the verified API key.
             initial_balance: Starting balance (if registering)
             auto_register: Whether to auto-register if not registered
+            api_key: API key for authentication (from dojo0 agents add).
+                     Agent identity (agent_id, display_name, persona, model)
+                     all come from agent_keys.yaml based on this key.
 
         Yields:
             TrialConnection for interacting with the trial
@@ -693,6 +694,7 @@ class DojoClient:
         Raises:
             ConnectionError: If connection fails
             RegistrationError: If registration fails
+            AuthenticationError: If api_key is invalid
         """
         transport = GatewayTransport(
             base_url=gateway_url,
@@ -705,28 +707,28 @@ class DojoClient:
 
             if auto_register:
                 # Try to register (may already be registered)
+                # API key is required - all identity comes from verified key
                 try:
                     reg_response = await transport.request(
                         "POST",
                         "/api/v1/register",
                         json={
-                            "agentId": agent_id,
-                            "persona": persona,
-                            "model": model,
+                            "apiKey": api_key,
                             "initialBalance": initial_balance,
                         },
                     )
                     trial_id = reg_response.get("trialId", "")
+                    # Agent ID comes from verified identity
+                    verified_agent_id = reg_response.get("agentId", agent_id)
                     logger.info(
                         "Registered agent %s for trial %s",
-                        agent_id,
+                        verified_agent_id,
                         trial_id,
                     )
                 except RegistrationError:
                     # 409 Conflict - agent already registered, continue
                     logger.info(
-                        "Agent %s already registered, continuing",
-                        agent_id,
+                        "Agent already registered, continuing",
                     )
 
             # Get trial info if not from registration

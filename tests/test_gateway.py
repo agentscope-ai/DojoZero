@@ -51,25 +51,20 @@ class TestModels:
     def test_agent_registration_request(self):
         """Test AgentRegistrationRequest with camelCase aliases."""
         request = AgentRegistrationRequest(
-            agentId="agent1",
-            persona="test persona",
-            model="gpt-4",
+            apiKey="sk-agent-test-key",
             initialBalance="1000",
         )
-        assert request.agent_id == "agent1"
-        assert request.persona == "test persona"
-        assert request.model == "gpt-4"
+        assert request.api_key == "sk-agent-test-key"
         assert request.initial_balance == "1000"
 
     def test_agent_registration_request_from_camel_case(self):
         """Test AgentRegistrationRequest parsing camelCase JSON."""
         data = {
-            "agentId": "agent1",
-            "persona": "test",
+            "apiKey": "sk-agent-test-key",
             "initialBalance": "500",
         }
         request = AgentRegistrationRequest.model_validate(data)
-        assert request.agent_id == "agent1"
+        assert request.api_key == "sk-agent-test-key"
         assert request.initial_balance == "500"
 
     def test_agent_registration_response_serialization(self):
@@ -409,7 +404,7 @@ class TestGatewayServer:
         response = client.post(
             "/api/v1/register",
             json={
-                "agentId": "agent1",
+                "apiKey": "agent1",  # NoOpAuthenticator uses apiKey as agent_id
                 "persona": "test",
                 "initialBalance": "500",
             },
@@ -424,10 +419,10 @@ class TestGatewayServer:
         mock_broker.create_account = AsyncMock()
 
         # First registration
-        client.post("/api/v1/register", json={"agentId": "agent1"})
+        client.post("/api/v1/register", json={"apiKey": "agent1"})
 
         # Duplicate
-        response = client.post("/api/v1/register", json={"agentId": "agent1"})
+        response = client.post("/api/v1/register", json={"apiKey": "agent1"})
         assert response.status_code == 409
 
     def test_unregister_agent(self, client, mock_broker):
@@ -435,7 +430,7 @@ class TestGatewayServer:
         mock_broker.create_account = AsyncMock()
 
         # Register first
-        client.post("/api/v1/register", json={"agentId": "agent1"})
+        client.post("/api/v1/register", json={"apiKey": "agent1"})
 
         # Unregister
         response = client.delete("/api/v1/register/agent1")
@@ -752,13 +747,17 @@ class TestNoOpAuthenticator:
     """Tests for NoOpAuthenticator."""
 
     @pytest.mark.asyncio
-    async def test_validate_always_returns_none(self):
-        """Test that NoOpAuthenticator always returns None."""
+    async def test_validate_uses_api_key_as_agent_id(self):
+        """Test that NoOpAuthenticator uses api_key as agent_id."""
         auth = NoOpAuthenticator()
 
+        # Non-empty key returns identity with key as agent_id
         identity = await auth.validate("any-key")
-        assert identity is None
+        assert identity is not None
+        assert identity.agent_id == "any-key"
+        assert identity.display_name == "any-key"
 
+        # Empty key returns None
         identity = await auth.validate("")
         assert identity is None
 
@@ -1365,9 +1364,7 @@ class TestGatewayAuthIntegration:
         response = client_with_auth.post(
             "/api/v1/register",
             json={
-                "agentId": "my_claimed_id",  # Will be overridden by verified ID
                 "apiKey": "sk-valid-key-123",
-                "displayName": "My Custom Name",  # Can override verified display_name
             },
         )
 
@@ -1383,94 +1380,87 @@ class TestGatewayAuthIntegration:
         response = client_with_auth.post(
             "/api/v1/register",
             json={
-                "agentId": "agent1",
                 "apiKey": "sk-invalid-key",
             },
         )
 
         assert response.status_code == 401
 
-    def test_register_without_api_key_auth_enabled(self, client_with_auth):
-        """Test registration without API key when auth is enabled returns 401."""
+    def test_register_without_api_key_missing_field(self, client_with_auth):
+        """Test registration without apiKey field returns 422 validation error."""
         response = client_with_auth.post(
             "/api/v1/register",
             json={
-                "agentId": "agent1",
+                "persona": "test",
             },
         )
 
-        assert response.status_code == 401
+        # Pydantic validation error for missing required field
+        assert response.status_code == 422
 
-    def test_register_without_api_key_auth_disabled(self, client_no_auth):
-        """Test registration without API key when auth is disabled succeeds."""
+    def test_register_with_noop_auth(self, client_no_auth):
+        """Test registration with NoOpAuthenticator uses apiKey as agent_id."""
         response = client_no_auth.post(
             "/api/v1/register",
             json={
-                "agentId": "unauthenticated_agent",
-                "displayName": "Test Agent",
+                "apiKey": "test_agent",  # NoOpAuthenticator uses apiKey as agent_id
             },
         )
 
         assert response.status_code == 200
         data = response.json()
-        # Uses the agent_id from request
-        assert data["agentId"] == "unauthenticated_agent"
+        # NoOpAuthenticator uses apiKey as agent_id
+        assert data["agentId"] == "test_agent"
 
     def test_register_verified_agent_uses_identity_display_name(self, client_with_auth):
-        """Test that verified agent can fall back to identity's display_name."""
+        """Test that verified agent uses identity's display_name."""
         response = client_with_auth.post(
             "/api/v1/register",
             json={
-                "agentId": "any_id",
                 "apiKey": "sk-valid-key-123",
-                # Not providing displayName - should use identity's display_name
             },
         )
 
         assert response.status_code == 200
         # The display_name from identity should be used
 
-    def test_multiple_agents_different_auth_status(self, client_with_auth):
-        """Test registering multiple agents with different auth status."""
-        # Register verified agent
+    def test_multiple_agents_different_api_keys(self, client_with_auth):
+        """Test registering multiple agents with different API keys."""
+        # Register first verified agent
         response1 = client_with_auth.post(
             "/api/v1/register",
             json={
-                "agentId": "claimed_id_1",
                 "apiKey": "sk-valid-key-123",
             },
         )
         assert response1.status_code == 200
         assert response1.json()["agentId"] == "verified_agent"
 
-        # Register another verified agent
+        # Register second verified agent with different key
         response2 = client_with_auth.post(
             "/api/v1/register",
             json={
-                "agentId": "claimed_id_2",
                 "apiKey": "sk-valid-key-456",
             },
         )
         assert response2.status_code == 200
         assert response2.json()["agentId"] == "another_verified"
 
-    def test_duplicate_registration_same_verified_agent(self, client_with_auth):
-        """Test that same verified agent cannot register twice."""
+    def test_duplicate_registration_same_api_key(self, client_with_auth):
+        """Test that same API key cannot register twice."""
         # First registration
         response1 = client_with_auth.post(
             "/api/v1/register",
             json={
-                "agentId": "any",
                 "apiKey": "sk-valid-key-123",
             },
         )
         assert response1.status_code == 200
 
-        # Second registration with same API key (same verified_agent)
+        # Second registration with same API key
         response2 = client_with_auth.post(
             "/api/v1/register",
             json={
-                "agentId": "different",
                 "apiKey": "sk-valid-key-123",
             },
         )
