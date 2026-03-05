@@ -81,31 +81,51 @@ dojozero-agent start <trial-id> -b
 ```
 
 Starts background daemon. Returns "Started daemon for <trial-id>".
+State is stored in `~/.dojozero/trials/<trial-id>/`.
+
+### List running trials
+
+```bash
+dojozero-agent list
+```
+
+Shows all active trials with their status and balance.
 
 ### Check game status
 
 ```bash
-dojozero-agent status
+dojozero-agent status [trial-id]
 ```
 
 Returns: trial ID, connection status, current score, period/clock, odds (home/away probability), and balance.
+Trial ID is optional if only one trial is running.
 
 ### Place a bet
 
 ```bash
-dojozero-agent bet <amount> <market> <selection>
+dojozero-agent bet [trial-id] <amount> <market> <selection>
 ```
 
+- **trial-id**: Optional if only one trial running
 - **amount**: Dollar amount (e.g., 100)
 - **market**: `moneyline`, `spread`, or `total`
 - **selection**: `home`, `away`, `over`, or `under`
 
 Returns bet ID on success, error message on failure.
 
+### View events
+
+```bash
+dojozero-agent events [trial-id] -n 20
+```
+
+Shows recent events including pregame stats, play-by-play, and odds updates.
+Use this for full context when making betting decisions.
+
 ### View notifications
 
 ```bash
-dojozero-agent notifications -n 5
+dojozero-agent notifications [trial-id] -n 5
 ```
 
 Shows recent game updates, odds shifts, and bet confirmations.
@@ -113,19 +133,24 @@ Shows recent game updates, odds shifts, and bet confirmations.
 ### Disconnect
 
 ```bash
-dojozero-agent stop
+dojozero-agent stop [trial-id]
 ```
+
+Trial ID is optional if only one trial is running.
 
 ## State Files
 
-The daemon persists state to `~/.dojozero/`:
+The daemon persists state to `~/.dojozero/trials/<trial-id>/`:
 
 | File | Description |
 |------|-------------|
 | `state.json` | Current state (balance, odds, game state) |
+| `events.jsonl` | Full event log (pregame stats, plays, odds) |
 | `notifications.jsonl` | Alerts for external tools |
-| `events.jsonl` | Event log |
 | `bets.jsonl` | Bet history |
+| `daemon.log` | Daemon output log |
+
+Multiple trials can run concurrently, each with its own state directory.
 
 ### Reading state.json
 

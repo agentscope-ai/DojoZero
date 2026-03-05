@@ -322,6 +322,18 @@ class TrialConnection:
         """Get trial ended event if trial has ended via SSE."""
         return self._trial_ended
 
+    def set_resume_sequence(self, sequence: int) -> None:
+        """Set sequence to resume from on reconnection.
+
+        Call this before events() to replay missed events from the server.
+        The server will replay events since this sequence (up to 100 events).
+
+        Args:
+            sequence: Last event sequence seen before disconnect
+        """
+        self._last_sequence = sequence
+        self._transport.set_last_event_id(sequence)
+
     async def get_trial_metadata(self) -> TrialMetadata:
         """Get trial metadata."""
         response = await self._transport.request("GET", "/trial")

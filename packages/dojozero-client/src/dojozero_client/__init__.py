@@ -53,6 +53,7 @@ from dojozero_client._daemon import (
     DaemonState,
     get_daemon_status,
     is_daemon_running,
+    list_running_trials,
     stop_daemon,
 )
 from dojozero_client._exceptions import (
@@ -97,6 +98,7 @@ __all__ = [
     "DaemonState",
     "get_daemon_status",
     "is_daemon_running",
+    "list_running_trials",
     "stop_daemon",
     # Transport (advanced use)
     "GatewayTransport",

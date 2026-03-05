@@ -63,8 +63,9 @@ class Strategy(Protocol):
         ...
 
 
-def _default_state_dir() -> Path:
-    return CONFIG_DIR
+def _trial_state_dir(trial_id: str) -> Path:
+    """Get state directory for a specific trial."""
+    return CONFIG_DIR / "trials" / trial_id
 
 
 def _default_notify() -> list[str]:
@@ -79,15 +80,24 @@ def _default_strategy_config() -> dict[str, Any]:
     return {}
 
 
+def _unset_state_dir() -> Path:
+    """Sentinel factory - state_dir will be set in __post_init__."""
+    return Path()  # Placeholder, will be replaced
+
+
 @dataclass
 class DaemonConfig:
-    """Configuration for the daemon."""
+    """Configuration for the daemon.
+
+    State is stored in ~/.dojozero/trials/{trial_id}/ to support
+    multiple concurrent trials.
+    """
 
     trial_id: str
     gateway_url: str = "http://localhost:8080"
     api_key: str = ""
     agent_id: str = ""  # Internal use only, populated from server
-    state_dir: Path = field(default_factory=_default_state_dir)
+    state_dir: Path = field(default_factory=_unset_state_dir)
     strategy: str | None = None
     strategy_config: dict[str, Any] = field(default_factory=_default_strategy_config)
     auto_bet: bool = False
@@ -97,6 +107,9 @@ class DaemonConfig:
     def __post_init__(self) -> None:
         if not self.agent_id:
             self.agent_id = f"agent-{os.getpid()}"
+        # Auto-compute state_dir from trial_id if not explicitly set
+        if self.state_dir == Path():
+            self.state_dir = _trial_state_dir(self.trial_id)
 
 
 def _default_holdings() -> list[dict[str, Any]]:
@@ -203,12 +216,26 @@ class Daemon:
             self.config.gateway_url,
         )
 
+        # Check for existing state to resume from
+        resume_sequence = 0
+        existing_state = self._read_state()
+        if existing_state:
+            resume_sequence = existing_state.get("last_event_sequence", 0)
+            if resume_sequence > 0:
+                logger.info(
+                    "Resuming from sequence %d (from previous session)", resume_sequence
+                )
+
         try:
             async with self.client.connect_trial(
                 gateway_url=self.config.gateway_url,
                 api_key=self.config.api_key,
                 initial_balance=1000.0,  # Default balance for new agents
             ) as trial:
+                # Set resume sequence for event replay
+                if resume_sequence > 0:
+                    trial.set_resume_sequence(resume_sequence)
+
                 # Initialize state
                 balance = await trial.get_balance()
                 self._state = DaemonState(
@@ -225,6 +252,7 @@ class Daemon:
                         }
                         for h in balance.holdings
                     ],
+                    last_event_sequence=resume_sequence,  # Preserve sequence
                 )
                 self._save_state()
                 logger.info("Connected as agent %s", trial.agent_id)
@@ -479,17 +507,23 @@ class Daemon:
         signal.signal(signal.SIGINT, handle_signal)
 
 
-def get_daemon_status(state_dir: Path | None = None) -> dict[str, Any] | None:
+def get_daemon_status(
+    trial_id: str | None = None, state_dir: Path | None = None
+) -> dict[str, Any] | None:
     """Get current daemon status.
 
     Args:
-        state_dir: State directory path, defaults to ~/.dojozero/
+        trial_id: Trial ID to check status for
+        state_dir: Override state directory (defaults to ~/.dojozero/trials/{trial_id}/)
 
     Returns:
         State dict or None if no daemon is running
     """
     if state_dir is None:
-        state_dir = CONFIG_DIR
+        if trial_id:
+            state_dir = _trial_state_dir(trial_id)
+        else:
+            state_dir = CONFIG_DIR
 
     state_file = state_dir / "state.json"
     if not state_file.exists():
@@ -501,17 +535,23 @@ def get_daemon_status(state_dir: Path | None = None) -> dict[str, Any] | None:
         return None
 
 
-def is_daemon_running(state_dir: Path | None = None) -> bool:
+def is_daemon_running(
+    trial_id: str | None = None, state_dir: Path | None = None
+) -> bool:
     """Check if a daemon is currently running.
 
     Args:
-        state_dir: State directory path, defaults to ~/.dojozero/
+        trial_id: Trial ID to check
+        state_dir: Override state directory (defaults to ~/.dojozero/trials/{trial_id}/)
 
     Returns:
         True if daemon is running
     """
     if state_dir is None:
-        state_dir = CONFIG_DIR
+        if trial_id:
+            state_dir = _trial_state_dir(trial_id)
+        else:
+            state_dir = CONFIG_DIR
 
     pid_file = state_dir / "daemon.pid"
     if not pid_file.exists():
@@ -527,17 +567,21 @@ def is_daemon_running(state_dir: Path | None = None) -> bool:
         return False
 
 
-def stop_daemon(state_dir: Path | None = None) -> bool:
+def stop_daemon(trial_id: str | None = None, state_dir: Path | None = None) -> bool:
     """Stop the running daemon.
 
     Args:
-        state_dir: State directory path, defaults to ~/.dojozero/
+        trial_id: Trial ID to stop
+        state_dir: Override state directory (defaults to ~/.dojozero/trials/{trial_id}/)
 
     Returns:
         True if daemon was stopped
     """
     if state_dir is None:
-        state_dir = CONFIG_DIR
+        if trial_id:
+            state_dir = _trial_state_dir(trial_id)
+        else:
+            state_dir = CONFIG_DIR
 
     pid_file = state_dir / "daemon.pid"
     if not pid_file.exists():
@@ -552,6 +596,26 @@ def stop_daemon(state_dir: Path | None = None) -> bool:
         return False
 
 
+def list_running_trials() -> list[str]:
+    """List all trials with running daemons.
+
+    Returns:
+        List of trial IDs with active daemons
+    """
+    trials_dir = CONFIG_DIR / "trials"
+    if not trials_dir.exists():
+        return []
+
+    running = []
+    for trial_dir in trials_dir.iterdir():
+        if trial_dir.is_dir():
+            trial_id = trial_dir.name
+            if is_daemon_running(trial_id=trial_id):
+                running.append(trial_id)
+
+    return running
+
+
 __all__ = [
     "Daemon",
     "DaemonConfig",
@@ -560,4 +624,5 @@ __all__ = [
     "get_daemon_status",
     "is_daemon_running",
     "stop_daemon",
+    "list_running_trials",
 ]

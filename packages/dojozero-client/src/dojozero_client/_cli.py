@@ -32,18 +32,43 @@ from dojozero_client._daemon import (
     DaemonConfig,
     get_daemon_status,
     is_daemon_running,
+    list_running_trials,
     stop_daemon,
+    _trial_state_dir,
 )
 
 logger = logging.getLogger(__name__)
 
 
+def _get_state_dir(args: argparse.Namespace) -> Path:
+    """Get state directory from args.
+
+    Priority:
+    1. Explicit --state-dir override
+    2. Computed from trial_id: ~/.dojozero/trials/{trial_id}/
+    3. Auto-detect if only one trial is running
+    4. Legacy fallback: ~/.dojozero/
+    """
+    if args.state_dir:
+        return Path(args.state_dir)
+    if hasattr(args, "trial_id") and args.trial_id:
+        return _trial_state_dir(args.trial_id)
+    # Auto-detect if only one trial running
+    running = list_running_trials()
+    if len(running) == 1:
+        return _trial_state_dir(running[0])
+    return CONFIG_DIR
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the daemon for a trial."""
-    state_dir = Path(args.state_dir) if args.state_dir else CONFIG_DIR
+    state_dir = _get_state_dir(args)
 
-    if is_daemon_running(state_dir):
-        print("Daemon already running. Use 'stop' first.", file=sys.stderr)
+    if is_daemon_running(trial_id=args.trial_id, state_dir=state_dir):
+        print(
+            f"Daemon already running for {args.trial_id}. Use 'stop' first.",
+            file=sys.stderr,
+        )
         return 1
 
     api_key = args.api_key or os.environ.get("DOJOZERO_AGENT_API_KEY", "")
@@ -124,14 +149,15 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 def cmd_stop(args: argparse.Namespace) -> int:
     """Stop the running daemon."""
-    state_dir = Path(args.state_dir) if args.state_dir else CONFIG_DIR
+    trial_id = getattr(args, "trial_id", None)
+    state_dir = _get_state_dir(args)
 
-    if not is_daemon_running(state_dir):
-        print("No daemon running")
+    if not is_daemon_running(trial_id=trial_id, state_dir=state_dir):
+        print(f"No daemon running{f' for {trial_id}' if trial_id else ''}")
         return 1
 
-    if stop_daemon(state_dir):
-        print("Daemon stopped")
+    if stop_daemon(trial_id=trial_id, state_dir=state_dir):
+        print(f"Daemon stopped{f' for {trial_id}' if trial_id else ''}")
         return 0
     else:
         print("Failed to stop daemon", file=sys.stderr)
@@ -140,14 +166,17 @@ def cmd_stop(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     """Show current daemon status."""
-    state_dir = Path(args.state_dir) if args.state_dir else CONFIG_DIR
-    state = get_daemon_status(state_dir)
+    trial_id = getattr(args, "trial_id", None)
+    state_dir = _get_state_dir(args)
+    state = get_daemon_status(trial_id=trial_id, state_dir=state_dir)
 
     if not state:
-        print("No active trial. Use 'start <trial-id>' first.")
+        print(
+            f"No active trial{f' for {trial_id}' if trial_id else ''}. Use 'start <trial-id>' first."
+        )
         return 1
 
-    running = is_daemon_running(state_dir)
+    running = is_daemon_running(trial_id=trial_id, state_dir=state_dir)
     game_state = state.get("game_state", {})
     odds = state.get("current_odds", {})
 
@@ -177,7 +206,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_logs(args: argparse.Namespace) -> int:
     """Show daemon logs."""
-    state_dir = Path(args.state_dir) if args.state_dir else CONFIG_DIR
+    state_dir = _get_state_dir(args)
     log_file = state_dir / "daemon.log"
 
     if not log_file.exists():
@@ -203,8 +232,9 @@ def cmd_bet(args: argparse.Namespace) -> int:
     """Place a bet via the REST API."""
     import httpx
 
-    state_dir = Path(args.state_dir) if args.state_dir else CONFIG_DIR
-    state = get_daemon_status(state_dir)
+    trial_id = getattr(args, "trial_id", None)
+    state_dir = _get_state_dir(args)
+    state = get_daemon_status(trial_id=trial_id, state_dir=state_dir)
 
     if not state:
         print("No active trial. Use 'start <trial-id>' first.", file=sys.stderr)
@@ -245,7 +275,7 @@ def cmd_bet(args: argparse.Namespace) -> int:
 
 def cmd_notifications(args: argparse.Namespace) -> int:
     """Show recent notifications."""
-    state_dir = Path(args.state_dir) if args.state_dir else CONFIG_DIR
+    state_dir = _get_state_dir(args)
     notif_file = state_dir / "notifications.jsonl"
 
     if not notif_file.exists():
@@ -272,7 +302,7 @@ def cmd_notifications(args: argparse.Namespace) -> int:
 
 def cmd_events(args: argparse.Namespace) -> int:
     """Show recent events."""
-    state_dir = Path(args.state_dir) if args.state_dir else CONFIG_DIR
+    state_dir = _get_state_dir(args)
     events_file = state_dir / "events.jsonl"
 
     if not events_file.exists():
@@ -299,7 +329,7 @@ def cmd_events(args: argparse.Namespace) -> int:
 
 def cmd_bets(args: argparse.Namespace) -> int:
     """Show bet history."""
-    state_dir = Path(args.state_dir) if args.state_dir else CONFIG_DIR
+    state_dir = _get_state_dir(args)
     bets_file = state_dir / "bets.jsonl"
 
     if not bets_file.exists():
@@ -322,6 +352,27 @@ def cmd_bets(args: argparse.Namespace) -> int:
             print(f"[{bet_id}] ${amount:.2f} on {selection} ({market}) - {status}")
         except json.JSONDecodeError:
             continue
+
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List all running trials."""
+    running = list_running_trials()
+
+    if not running:
+        print("No daemons running")
+        return 0
+
+    print(f"Running trials ({len(running)}):")
+    for trial_id in running:
+        state = get_daemon_status(trial_id=trial_id)
+        if state:
+            status = state.get("status", "unknown")
+            balance = state.get("balance", 0)
+            print(f"  {trial_id}: {status}, balance=${balance:.2f}")
+        else:
+            print(f"  {trial_id}: (status unknown)")
 
     return 0
 
@@ -408,14 +459,23 @@ def create_parser() -> argparse.ArgumentParser:
 
     # stop
     p_stop = subparsers.add_parser("stop", help="Stop the daemon")
+    p_stop.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
     p_stop.set_defaults(func=cmd_stop)
 
     # status
     p_status = subparsers.add_parser("status", help="Show daemon status")
+    p_status.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
     p_status.set_defaults(func=cmd_status)
 
     # logs
     p_logs = subparsers.add_parser("logs", help="Show daemon logs")
+    p_logs.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
     p_logs.add_argument(
         "-f",
         "--follow",
@@ -426,6 +486,9 @@ def create_parser() -> argparse.ArgumentParser:
 
     # bet
     p_bet = subparsers.add_parser("bet", help="Place a bet")
+    p_bet.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
     p_bet.add_argument("amount", type=float, help="Bet amount")
     p_bet.add_argument(
         "market",
@@ -437,18 +500,31 @@ def create_parser() -> argparse.ArgumentParser:
 
     # notifications
     p_notif = subparsers.add_parser("notifications", help="Show notifications")
+    p_notif.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
     p_notif.add_argument("-n", "--count", type=int, default=10, help="Number to show")
     p_notif.set_defaults(func=cmd_notifications)
 
     # events
     p_events = subparsers.add_parser("events", help="Show event log")
+    p_events.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
     p_events.add_argument("-n", "--count", type=int, default=20, help="Number to show")
     p_events.set_defaults(func=cmd_events)
 
     # bets
     p_bets = subparsers.add_parser("bets", help="Show bet history")
+    p_bets.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
     p_bets.add_argument("-n", "--count", type=int, default=20, help="Number to show")
     p_bets.set_defaults(func=cmd_bets)
+
+    # list - show all running trials
+    p_list = subparsers.add_parser("list", help="List running trials")
+    p_list.set_defaults(func=cmd_list)
 
     # discover
     p_discover = subparsers.add_parser("discover", help="Discover available trials")
