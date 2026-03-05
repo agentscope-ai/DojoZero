@@ -217,7 +217,13 @@ class Daemon:
                     status="connected",
                     balance=balance.balance,
                     holdings=[
-                        {"market": k, "shares": v} for k, v in balance.holdings.items()
+                        {
+                            "event_id": h.event_id,
+                            "selection": h.selection,
+                            "bet_type": h.bet_type,
+                            "shares": h.shares,
+                        }
+                        for h in balance.holdings
                     ],
                 )
                 self._save_state()

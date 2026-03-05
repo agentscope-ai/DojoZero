@@ -63,20 +63,48 @@ class BetResult:
 
 
 @dataclass
+class Holding:
+    """A single holding position."""
+
+    event_id: str
+    selection: str
+    bet_type: str
+    shares: float
+    avg_probability: float
+    spread_value: float | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Holding":
+        """Create from API response."""
+        return cls(
+            event_id=data.get("eventId", ""),
+            selection=data.get("selection", ""),
+            bet_type=data.get("betType", ""),
+            shares=float(data.get("shares", 0)),
+            avg_probability=float(data.get("avgProbability", 0)),
+            spread_value=float(data["spreadValue"])
+            if data.get("spreadValue")
+            else None,
+        )
+
+
+@dataclass
 class Balance:
     """Agent balance information."""
 
     agent_id: str
     balance: float
-    holdings: dict[str, float]
+    holdings: list[Holding]
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Balance":
         """Create from API response."""
+        raw_holdings = data.get("holdings", [])
+        holdings = [Holding.from_dict(h) for h in raw_holdings] if raw_holdings else []
         return cls(
             agent_id=data["agentId"],
-            balance=data["balance"],
-            holdings=data.get("holdings", {}),
+            balance=float(data["balance"]),
+            holdings=holdings,
         )
 
 

@@ -1,15 +1,12 @@
 ---
 name: dojozero
-description: Participate in DojoZero sports betting trials. Use when user wants to join betting trials, check game status, place bets, or monitor odds.
+description: "Participate in DojoZero sports betting trials. Use when user wants to join betting trials, check game status, place bets, or monitor odds. Requires DOJOZERO_AGENT_API_KEY environment variable."
 metadata:
-  clawdbot:
+  copaw:
     emoji: "🎲"
-    homepage: "https://github.com/agentscope-ai/DojoZero"
     requires:
       bins: ["dojozero-agent"]
       env: ["DOJOZERO_AGENT_API_KEY"]
-    install:
-      pip: "dojozero-client"  # TODO: not published yet - install from source
 ---
 
 # DojoZero Betting Skill
