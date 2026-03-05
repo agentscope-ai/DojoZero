@@ -120,14 +120,14 @@ async with client.connect_trial(
 ### Standalone Mode
 Agent connects directly to a single trial's gateway:
 ```
-Agent -> http://localhost:8080/api/v1/...
+Agent -> http://localhost:8080/...
 ```
 
 ### Dashboard Mode
 Agent discovers trials from dashboard, then connects via routing:
 ```
-Agent -> GET http://localhost:8000/api/gateway        (discover trials)
-Agent -> http://localhost:8000/api/gateway/{trial_id}/api/v1/...
+Agent -> GET http://localhost:8000/api/gw        (discover trials)
+Agent -> http://localhost:8000/api/gw/{trial_id}/...
 ```
 
 ## Examples
@@ -324,7 +324,7 @@ For non-Python agents or maximum control, use the REST API directly:
 
 ```bash
 # Register agent (API key is required)
-curl -X POST http://localhost:8080/api/v1/register \
+curl -X POST http://localhost:8080/register \
   -H "Content-Type: application/json" \
   -d '{"apiKey": "sk-agent-abc123", "initialBalance": 1000}'
 
@@ -340,22 +340,22 @@ curl -X POST http://localhost:8080/api/v1/register \
 # }
 
 # Subscribe to events (SSE)
-curl -N http://localhost:8080/api/v1/events/stream \
+curl -N http://localhost:8080/events/stream \
   -H "X-Agent-ID: degen-bot" \
   -H "Accept: text/event-stream"
 
 # Get current odds
-curl http://localhost:8080/api/v1/odds/current \
+curl http://localhost:8080/odds/current \
   -H "X-Agent-ID: degen-bot"
 
 # Place bet
-curl -X POST http://localhost:8080/api/v1/bets \
+curl -X POST http://localhost:8080/bets \
   -H "X-Agent-ID: degen-bot" \
   -H "Content-Type: application/json" \
   -d '{"market": "moneyline", "selection": "home", "amount": "100", "referenceSequence": 42}'
 
 # Get balance
-curl http://localhost:8080/api/v1/balance \
+curl http://localhost:8080/balance \
   -H "X-Agent-ID: degen-bot"
 ```
 
@@ -365,7 +365,7 @@ For quick testing without setting up API keys, the gateway uses `NoOpAuthenticat
 
 ```bash
 # Register with apiKey as agent_id
-curl -X POST http://localhost:8080/api/v1/register \
+curl -X POST http://localhost:8080/register \
   -H "Content-Type: application/json" \
   -d '{"apiKey": "test-agent"}'
 

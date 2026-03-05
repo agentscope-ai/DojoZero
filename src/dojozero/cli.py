@@ -377,7 +377,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--enable-gateway",
         dest="enable_gateway",
         action="store_true",
-        help="Enable HTTP gateway for external agents. Routes /api/gateway/{trial_id}/* to trials.",
+        help="Enable HTTP gateway for external agents. Routes /api/gw/{trial_id}/* to trials.",
     )
 
     # Arena Server command
@@ -1033,9 +1033,9 @@ async def _start_gateway_server(
     server = uvicorn.Server(config)
 
     LOGGER.info("Starting Gateway server at http://%s:%d", host, port)
-    LOGGER.info("  Registration: POST http://%s:%d/api/v1/register", host, port)
-    LOGGER.info("  Events stream: GET http://%s:%d/api/v1/events/stream", host, port)
-    LOGGER.info("  Place bet: POST http://%s:%d/api/v1/bets", host, port)
+    LOGGER.info("  Registration: POST http://%s:%d/agents", host, port)
+    LOGGER.info("  Events stream: GET http://%s:%d/events/stream", host, port)
+    LOGGER.info("  Place bet: POST http://%s:%d/bets", host, port)
 
     # Run server as a background task
     async def run_server() -> None:
@@ -1923,7 +1923,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
     enable_gateway = getattr(args, "enable_gateway", False)
     if enable_gateway:
         LOGGER.info(
-            "Gateway API enabled at http://%s:%d/api/gateway/{trial_id}/", host, port
+            "Gateway API enabled at http://%s:%d/api/gw/{trial_id}/", host, port
         )
 
     # Load agent authenticator if agent_keys.yaml exists
