@@ -124,7 +124,7 @@ class GatewayTransport:
 
         Args:
             method: HTTP method (GET, POST, etc.)
-            path: API path (e.g., "/api/v1/agents")
+            path: API path (e.g., "/agents")
             json: JSON body for POST/PUT
             params: Query parameters
 
@@ -216,7 +216,7 @@ class GatewayTransport:
         try:
             async with client.stream(
                 "GET",
-                "/api/v1/events/stream",
+                "/events/stream",
                 headers=headers,
                 timeout=None,  # SSE streams are long-lived
             ) as response:

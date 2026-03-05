@@ -1363,7 +1363,7 @@ def create_dashboard_app(
 
         # Store gateway router on app.state for reference
         app.state.gateway_router = gateway_router
-        LOGGER.info("Gateway routing enabled at /api/gateway/{trial_id}/")
+        LOGGER.info("Gateway routing enabled at /gw/{trial_id}/")
 
     return app
 

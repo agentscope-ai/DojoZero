@@ -407,7 +407,7 @@ class TestGatewayServer:
         mock_broker.create_account = AsyncMock()
 
         response = client.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "apiKey": "agent1",  # NoOpAuthenticator uses apiKey as agent_id
                 "persona": "test",
@@ -424,10 +424,10 @@ class TestGatewayServer:
         mock_broker.create_account = AsyncMock()
 
         # First registration
-        client.post("/api/v1/agents", json={"apiKey": "agent1"})
+        client.post("/agents", json={"apiKey": "agent1"})
 
         # Duplicate
-        response = client.post("/api/v1/agents", json={"apiKey": "agent1"})
+        response = client.post("/agents", json={"apiKey": "agent1"})
         assert response.status_code == 409
 
     def test_unregister_agent(self, client, mock_broker):
@@ -435,20 +435,20 @@ class TestGatewayServer:
         mock_broker.create_account = AsyncMock()
 
         # Register first
-        client.post("/api/v1/agents", json={"apiKey": "agent1"})
+        client.post("/agents", json={"apiKey": "agent1"})
 
         # Unregister
-        response = client.delete("/api/v1/agents/agent1")
+        response = client.delete("/agents/agent1")
         assert response.status_code == 200
 
     def test_unregister_nonexistent(self, client):
         """Test unregistering nonexistent agent."""
-        response = client.delete("/api/v1/agents/unknown")
+        response = client.delete("/agents/unknown")
         assert response.status_code == 404
 
     def test_get_trial_metadata(self, client):
         """Test trial metadata endpoint."""
-        response = client.get("/api/v1/trial")
+        response = client.get("/trial")
         assert response.status_code == 200
         data = response.json()
         assert data["trialId"] == "trial123"
@@ -456,20 +456,20 @@ class TestGatewayServer:
     def test_get_odds_requires_registration(self, client):
         """Test odds endpoint requires agent registration."""
         response = client.get(
-            "/api/v1/odds/current",
+            "/odds/current",
             headers={"X-Agent-ID": "unknown"},
         )
         assert response.status_code == 403
 
     def test_get_odds_requires_auth(self, client):
         """Test odds endpoint requires X-Agent-ID header."""
-        response = client.get("/api/v1/odds/current")
+        response = client.get("/odds/current")
         assert response.status_code == 401
 
     def test_get_balance_requires_registration(self, client):
         """Test balance endpoint requires registration."""
         response = client.get(
-            "/api/v1/balance",
+            "/balance",
             headers={"X-Agent-ID": "unknown"},
         )
         assert response.status_code == 403
@@ -477,7 +477,7 @@ class TestGatewayServer:
     def test_place_bet_requires_auth(self, client):
         """Test bet placement requires auth."""
         response = client.post(
-            "/api/v1/bets",
+            "/bets",
             json={
                 "market": "moneyline",
                 "selection": "home",
@@ -1371,7 +1371,7 @@ class TestGatewayAuthIntegration:
     def test_register_with_valid_api_key(self, client_with_auth):
         """Test registration with valid API key succeeds and returns verified identity."""
         response = client_with_auth.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },
@@ -1387,7 +1387,7 @@ class TestGatewayAuthIntegration:
     def test_register_with_invalid_api_key(self, client_with_auth):
         """Test registration with invalid API key returns 401."""
         response = client_with_auth.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "apiKey": "sk-invalid-key",
             },
@@ -1398,7 +1398,7 @@ class TestGatewayAuthIntegration:
     def test_register_without_api_key_missing_field(self, client_with_auth):
         """Test registration without apiKey field returns 422 validation error."""
         response = client_with_auth.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "persona": "test",
             },
@@ -1410,7 +1410,7 @@ class TestGatewayAuthIntegration:
     def test_register_with_noop_auth(self, client_no_auth):
         """Test registration with NoOpAuthenticator uses apiKey as agent_id."""
         response = client_no_auth.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "apiKey": "test_agent",  # NoOpAuthenticator uses apiKey as agent_id
             },
@@ -1424,7 +1424,7 @@ class TestGatewayAuthIntegration:
     def test_register_verified_agent_uses_identity_display_name(self, client_with_auth):
         """Test that verified agent uses identity's display_name."""
         response = client_with_auth.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },
@@ -1437,7 +1437,7 @@ class TestGatewayAuthIntegration:
         """Test registering multiple agents with different API keys."""
         # Register first verified agent
         response1 = client_with_auth.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },
@@ -1447,7 +1447,7 @@ class TestGatewayAuthIntegration:
 
         # Register second verified agent with different key
         response2 = client_with_auth.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-456",
             },
@@ -1459,7 +1459,7 @@ class TestGatewayAuthIntegration:
         """Test that same API key cannot register twice."""
         # First registration
         response1 = client_with_auth.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },
@@ -1468,7 +1468,7 @@ class TestGatewayAuthIntegration:
 
         # Second registration with same API key
         response2 = client_with_auth.post(
-            "/api/v1/agents",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },

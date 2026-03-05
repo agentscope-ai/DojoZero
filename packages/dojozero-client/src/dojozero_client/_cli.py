@@ -215,7 +215,7 @@ def cmd_bet(args: argparse.Namespace) -> int:
 
     try:
         resp = httpx.post(
-            f"{gateway_url}/api/v1/bets",
+            f"{gateway_url}/bets",
             headers={"X-Agent-ID": agent_id},
             json={
                 "market": args.market,

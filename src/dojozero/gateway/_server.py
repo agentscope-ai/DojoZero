@@ -168,7 +168,7 @@ def create_gateway_app(
     # Registration Endpoints
     # =========================================================================
 
-    @app.post("/api/v1/agents", response_model=AgentRegistrationResponse)
+    @app.post("/agents", response_model=AgentRegistrationResponse)
     async def register_agent(
         request: AgentRegistrationRequest,
         state: GatewayState = Depends(get_gateway_state),
@@ -232,7 +232,7 @@ def create_gateway_app(
                 )
             raise HTTPException(status_code=400, detail=error_msg)
 
-    @app.delete("/api/v1/agents/{agent_id}")
+    @app.delete("/agents/{agent_id}")
     async def unregister_agent(
         agent_id: str,
         state: GatewayState = Depends(get_gateway_state),
@@ -246,7 +246,7 @@ def create_gateway_app(
     # Trial Metadata
     # =========================================================================
 
-    @app.get("/api/v1/trial", response_model=TrialMetadataResponse)
+    @app.get("/trial", response_model=TrialMetadataResponse)
     async def get_trial_metadata(
         state: GatewayState = Depends(get_gateway_state),
     ) -> TrialMetadataResponse:
@@ -266,7 +266,7 @@ def create_gateway_app(
             metadata=state.metadata,
         )
 
-    @app.get("/api/v1/trial/results", response_model=TrialResultsResponse)
+    @app.get("/trial/results", response_model=TrialResultsResponse)
     async def get_trial_results(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
@@ -294,7 +294,7 @@ def create_gateway_app(
     # Event Streaming
     # =========================================================================
 
-    @app.get("/api/v1/events/stream")
+    @app.get("/events/stream")
     async def stream_events(
         request: Request,
         agent_id: str = Depends(get_agent_id),
@@ -347,7 +347,7 @@ def create_gateway_app(
 
         return create_sse_response(connection, last_event_id)
 
-    @app.get("/api/v1/events/recent", response_model=RecentEventsResponse)
+    @app.get("/events/recent", response_model=RecentEventsResponse)
     async def get_recent_events(
         agent_id: str = Depends(get_agent_id),
         since: int | None = Query(
@@ -412,7 +412,7 @@ def create_gateway_app(
     # Odds
     # =========================================================================
 
-    @app.get("/api/v1/odds/current", response_model=CurrentOddsResponse)
+    @app.get("/odds/current", response_model=CurrentOddsResponse)
     async def get_current_odds(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
@@ -427,7 +427,7 @@ def create_gateway_app(
     # Betting
     # =========================================================================
 
-    @app.post("/api/v1/bets", response_model=BetResponse)
+    @app.post("/bets", response_model=BetResponse)
     async def place_bet(
         request: BetRequest,
         agent_id: str = Depends(get_agent_id),
@@ -465,7 +465,7 @@ def create_gateway_app(
                 ).model_dump(by_alias=True),
             )
 
-    @app.get("/api/v1/bets", response_model=BetsListResponse)
+    @app.get("/bets", response_model=BetsListResponse)
     async def get_bets(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
@@ -476,7 +476,7 @@ def create_gateway_app(
 
         return BetsListResponse(bets=state.adapter.get_bets(agent_id))
 
-    @app.get("/api/v1/balance", response_model=BalanceResponse)
+    @app.get("/balance", response_model=BalanceResponse)
     async def get_balance(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
@@ -494,7 +494,7 @@ def create_gateway_app(
     # Agent List
     # =========================================================================
 
-    @app.get("/api/v1/agents")
+    @app.get("/agents")
     async def list_agents(
         state: GatewayState = Depends(get_gateway_state),
     ) -> dict[str, Any]:
@@ -525,7 +525,7 @@ def create_gateway_app(
     # Leaderboard / All Agents Statistics
     # =========================================================================
 
-    @app.get("/api/v1/leaderboard")
+    @app.get("/leaderboard")
     async def get_leaderboard(
         state: GatewayState = Depends(get_gateway_state),
     ) -> dict[str, Any]:

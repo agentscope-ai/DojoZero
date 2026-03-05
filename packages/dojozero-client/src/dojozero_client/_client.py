@@ -324,7 +324,7 @@ class TrialConnection:
 
     async def get_trial_metadata(self) -> TrialMetadata:
         """Get trial metadata."""
-        response = await self._transport.request("GET", "/api/v1/trial")
+        response = await self._transport.request("GET", "/trial")
         return TrialMetadata.from_dict(response)
 
     async def events(
@@ -448,7 +448,7 @@ class TrialConnection:
 
         response = await self._transport.request(
             "GET",
-            "/api/v1/events/recent",
+            "/events/recent",
             params=params,
         )
 
@@ -467,7 +467,7 @@ class TrialConnection:
         Returns:
             Current odds information
         """
-        response = await self._transport.request("GET", "/api/v1/odds/current")
+        response = await self._transport.request("GET", "/odds/current")
         return Odds.from_dict(response)
 
     async def place_bet(
@@ -509,7 +509,7 @@ class TrialConnection:
 
         response = await self._transport.request(
             "POST",
-            "/api/v1/bets",
+            "/bets",
             json=body,
         )
 
@@ -521,7 +521,7 @@ class TrialConnection:
         Returns:
             List of BetResult objects
         """
-        response = await self._transport.request("GET", "/api/v1/bets")
+        response = await self._transport.request("GET", "/bets")
         return [BetResult.from_dict(b) for b in response.get("bets", [])]
 
     async def get_balance(self) -> Balance:
@@ -530,7 +530,7 @@ class TrialConnection:
         Returns:
             Balance information
         """
-        response = await self._transport.request("GET", "/api/v1/balance")
+        response = await self._transport.request("GET", "/balance")
         return Balance.from_dict(response)
 
     async def get_results(self) -> TrialResults:
@@ -545,7 +545,7 @@ class TrialConnection:
         Returns:
             TrialResults with status and all agent results
         """
-        response = await self._transport.request("GET", "/api/v1/trial/results")
+        response = await self._transport.request("GET", "/trial/results")
         return TrialResults.from_dict(response)
 
 
@@ -728,7 +728,7 @@ class DojoClient:
             try:
                 reg_response = await transport.request(
                     "POST",
-                    "/api/v1/agents",
+                    "/agents",
                     json={
                         "apiKey": api_key,
                         "initialBalance": initial_balance,
