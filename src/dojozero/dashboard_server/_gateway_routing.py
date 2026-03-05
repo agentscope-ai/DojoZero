@@ -1,6 +1,6 @@
 """Gateway routing for Dashboard Server.
 
-Routes /gw/{trial_id}/* requests to in-process trial gateways.
+Routes /api/gw/{trial_id}/* requests to in-process trial gateways.
 Enables external agents to connect to trials managed by the dashboard.
 """
 
@@ -102,8 +102,8 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
     """Create a FastAPI sub-application for gateway routing.
 
     Routes:
-        GET /gw - List all trial gateways
-        ANY /gw/{trial_id}/{path:path} - Route to trial gateway
+        GET /api/gw - List all trial gateways
+        ANY /api/gw/{trial_id}/{path:path} - Route to trial gateway
 
     Args:
         router: GatewayRouter instance
@@ -117,19 +117,19 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
         description="Routes requests to per-trial gateways",
     )
 
-    @app.get("/gw")
+    @app.get("/api/gw")
     async def list_gateways() -> dict[str, Any]:
         """List all available trial gateways."""
         trial_ids = router.list_gateways()
         return {
             "gateways": [
-                {"trial_id": tid, "endpoint": f"/gw/{tid}"} for tid in trial_ids
+                {"trial_id": tid, "endpoint": f"/api/gw/{tid}"} for tid in trial_ids
             ],
             "count": len(trial_ids),
         }
 
     @app.api_route(
-        "/gw/{trial_id}/{path:path}",
+        "/api/gw/{trial_id}/{path:path}",
         methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
     )
     async def route_to_gateway(
@@ -139,7 +139,7 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
     ) -> Response:
         """Route request to the appropriate trial gateway.
 
-        The path is rewritten from /gw/{trial_id}/...
+        The path is rewritten from /api/gw/{trial_id}/...
         to /... for the trial's gateway.
         """
         gateway = router.get_gateway(trial_id)
@@ -174,8 +174,8 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
                 )
             return await _handle_sse_directly(request, gateway_state)
 
-        # Rewrite the path to remove /gw/{trial_id} prefix
-        # Original: /gw/{trial_id}/events/stream
+        # Rewrite the path to remove /api/gw/{trial_id} prefix
+        # Original: /api/gw/{trial_id}/events/stream
         # Rewritten: /events/stream
         new_path = f"/{path}" if path else "/"
 

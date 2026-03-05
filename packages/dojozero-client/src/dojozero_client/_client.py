@@ -680,7 +680,7 @@ class DojoClient:
         """
         import httpx
 
-        url = f"{dashboard_url.rstrip('/')}/api/gateway"
+        url = f"{dashboard_url.rstrip('/')}/api/gw"
 
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
