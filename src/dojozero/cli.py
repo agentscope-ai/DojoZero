@@ -591,6 +591,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Human-readable display name for the agent.",
     )
     agents_add_parser.add_argument(
+        "--persona",
+        help="Persona tag for frontend display (e.g., 'degen', 'whale', 'shark').",
+    )
+    agents_add_parser.add_argument(
+        "--model",
+        help="Model identifier (e.g., 'gpt-4', 'claude-3').",
+    )
+    agents_add_parser.add_argument(
+        "--model-display-name",
+        help="Human-readable model name for frontend (e.g., 'GPT-4 Turbo').",
+    )
+    agents_add_parser.add_argument(
+        "--cdn-url",
+        help="Avatar image URL for frontend display.",
+    )
+    agents_add_parser.add_argument(
         "--store",
         default=DEFAULT_STORE_DIRECTORY,
         help=f"Store directory containing agent_keys.yaml (default: {DEFAULT_STORE_DIRECTORY}).",
@@ -2463,6 +2479,10 @@ def _agents_command(args: argparse.Namespace) -> int:
     if args.agents_command == "add":
         agent_id = args.id
         display_name = args.name
+        persona = args.persona
+        model = args.model
+        model_display_name = getattr(args, "model_display_name", None)
+        cdn_url = getattr(args, "cdn_url", None)
 
         # Check if agent_id already exists
         existing = key_manager.find_by_agent_id(agent_id)
@@ -2477,11 +2497,27 @@ def _agents_command(args: argparse.Namespace) -> int:
 
         # Generate new API key and add
         api_key = AgentKeyManager.generate_api_key()
-        key_manager.add(api_key, agent_id, display_name=display_name)
+        key_manager.add(
+            api_key,
+            agent_id,
+            display_name=display_name,
+            persona=persona,
+            model=model,
+            model_display_name=model_display_name,
+            cdn_url=cdn_url,
+        )
 
         print(f"Created agent '{agent_id}'")
         if display_name:
             print(f"  Display name: {display_name}")
+        if persona:
+            print(f"  Persona: {persona}")
+        if model:
+            print(f"  Model: {model}")
+        if model_display_name:
+            print(f"  Model display name: {model_display_name}")
+        if cdn_url:
+            print(f"  CDN URL: {cdn_url}")
         print(f"  API key: {api_key}")
         print(f"\nStored in: {keys_file}")
         return 0
@@ -2496,14 +2532,23 @@ def _agents_command(args: argparse.Namespace) -> int:
 
         if args.json:
             # JSON output (without exposing full keys)
-            output = [
-                {
+            output = []
+            for entry in entries:
+                item = {
                     "agentId": entry.identity.agent_id,
                     "displayName": entry.identity.display_name,
                     "keyPrefix": entry.api_key[:12] + "...",
                 }
-                for entry in entries
-            ]
+                # Include optional fields only if set
+                if entry.identity.persona:
+                    item["persona"] = entry.identity.persona
+                if entry.identity.model:
+                    item["model"] = entry.identity.model
+                if entry.identity.model_display_name:
+                    item["modelDisplayName"] = entry.identity.model_display_name
+                if entry.identity.cdn_url:
+                    item["cdnUrl"] = entry.identity.cdn_url
+                output.append(item)
             print(json_module.dumps(output, indent=2))
         else:
             # Table output

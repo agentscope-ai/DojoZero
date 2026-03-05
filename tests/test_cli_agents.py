@@ -32,6 +32,10 @@ class TestAgentsCommand:
         agents_command: str,
         agent_id: str | None = None,
         name: str | None = None,
+        persona: str | None = None,
+        model: str | None = None,
+        model_display_name: str | None = None,
+        cdn_url: str | None = None,
         json_output: bool = False,
         yes: bool = False,
     ) -> argparse.Namespace:
@@ -44,6 +48,10 @@ class TestAgentsCommand:
         if agents_command == "add":
             args.id = agent_id
             args.name = name
+            args.persona = persona
+            args.model = model
+            args.model_display_name = model_display_name
+            args.cdn_url = cdn_url
 
         # 'list' command args
         if agents_command == "list":

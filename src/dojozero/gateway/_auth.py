@@ -276,6 +276,10 @@ class AgentKeyManager:
         api_key: str,
         agent_id: str,
         display_name: str | None = None,
+        persona: str | None = None,
+        model: str | None = None,
+        model_display_name: str | None = None,
+        cdn_url: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AgentKeyEntry:
         """Add a new agent key.
@@ -284,6 +288,10 @@ class AgentKeyManager:
             api_key: The API key
             agent_id: The agent identifier
             display_name: Optional human-readable name
+            persona: Optional persona tag (e.g., 'degen', 'whale')
+            model: Optional model identifier (e.g., 'gpt-4')
+            model_display_name: Optional human-readable model name
+            cdn_url: Optional avatar image URL
             metadata: Optional additional metadata
 
         Returns:
@@ -292,6 +300,10 @@ class AgentKeyManager:
         identity = AgentIdentity(
             agent_id=agent_id,
             display_name=display_name,
+            persona=persona,
+            model=model,
+            model_display_name=model_display_name,
+            cdn_url=cdn_url,
             metadata=metadata,
         )
         entry = AgentKeyEntry(api_key=api_key, identity=identity)
