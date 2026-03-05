@@ -967,10 +967,12 @@ class TestAgentKeyManager:
         with open(keys_file, "w") as f:
             yaml.safe_dump(data, f)
 
-        # Before reload
-        assert manager.get("sk-new") is None
+        # Auto-reload: get() now detects file changes and reloads automatically
+        new_identity = manager.get("sk-new")
+        assert new_identity is not None
+        assert new_identity.agent_id == "new_agent"
 
-        # After reload
+        # Explicit reload still works
         manager.reload()
         assert manager.get("sk-new") is not None
 

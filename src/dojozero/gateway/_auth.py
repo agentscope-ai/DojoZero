@@ -197,14 +197,19 @@ class AgentKeyManager:
         """
         self._keys_file = Path(keys_file)
         self._entries: dict[str, AgentKeyEntry] = {}
+        self._last_mtime: float = 0.0
         self._load()
 
     def _load(self) -> None:
         """Load keys from YAML file."""
         if not self._keys_file.exists():
+            self._last_mtime = 0.0
             return
 
         try:
+            # Track file modification time for auto-reload
+            self._last_mtime = self._keys_file.stat().st_mtime
+
             with open(self._keys_file) as f:
                 data = yaml.safe_load(f) or {}
 
@@ -219,6 +224,24 @@ class AgentKeyManager:
             )
         except Exception as e:
             logger.error("Failed to load agent keys from %s: %s", self._keys_file, e)
+
+    def _check_reload(self) -> None:
+        """Reload if file has been modified since last load."""
+        if not self._keys_file.exists():
+            if self._entries:
+                # File was deleted, clear entries
+                self._entries.clear()
+                self._last_mtime = 0.0
+            return
+
+        try:
+            current_mtime = self._keys_file.stat().st_mtime
+            if current_mtime > self._last_mtime:
+                logger.info("Agent keys file modified, reloading...")
+                self._entries.clear()
+                self._load()
+        except OSError:
+            pass  # File access error, skip reload
 
     def _save(self) -> None:
         """Save keys to YAML file."""
@@ -248,12 +271,15 @@ class AgentKeyManager:
     def get(self, api_key: str) -> AgentIdentity | None:
         """Get identity for API key.
 
+        Auto-reloads from file if it has been modified.
+
         Args:
             api_key: The API key to look up
 
         Returns:
             AgentIdentity if found, None otherwise
         """
+        self._check_reload()
         entry = self._entries.get(api_key)
         return entry.identity if entry else None
 
