@@ -1334,6 +1334,33 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         await self._log_accounts_and_bets_status("account_created")
         return account
 
+    async def delete_account(self, agent_id: str) -> bool:
+        """Delete an agent account.
+
+        Args:
+            agent_id: Agent whose account to delete
+
+        Returns:
+            True if account was deleted, False if not found
+        """
+        if agent_id not in self._accounts:
+            return False
+
+        del self._accounts[agent_id]
+        logger.info("Deleted account for %s", agent_id)
+        return True
+
+    def has_account(self, agent_id: str) -> bool:
+        """Check if an account exists for agent.
+
+        Args:
+            agent_id: Agent to check
+
+        Returns:
+            True if account exists
+        """
+        return agent_id in self._accounts
+
     async def get_balance(self, agent_id: str) -> Decimal:
         """Retrieve current account balance"""
         if agent_id not in self._accounts:

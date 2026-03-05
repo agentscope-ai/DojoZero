@@ -168,7 +168,7 @@ def create_gateway_app(
     # Registration Endpoints
     # =========================================================================
 
-    @app.post("/api/v1/register", response_model=AgentRegistrationResponse)
+    @app.post("/api/v1/agents", response_model=AgentRegistrationResponse)
     async def register_agent(
         request: AgentRegistrationRequest,
         state: GatewayState = Depends(get_gateway_state),
@@ -232,7 +232,7 @@ def create_gateway_app(
                 )
             raise HTTPException(status_code=400, detail=error_msg)
 
-    @app.delete("/api/v1/register/{agent_id}")
+    @app.delete("/api/v1/agents/{agent_id}")
     async def unregister_agent(
         agent_id: str,
         state: GatewayState = Depends(get_gateway_state),

@@ -134,8 +134,11 @@ class ExternalAgentAdapter:
     ) -> AgentRegistrationResponse:
         """Register an external agent.
 
-        Creates account in broker and prepares for subscription.
+        Creates account in broker (or reuses existing) and prepares for subscription.
         All identity/metadata fields come from the verified API key.
+
+        Supports reconnection: if agent has an existing account (e.g., after
+        disconnect or dashboard restart), they can rejoin with their balance intact.
 
         Args:
             agent_id: Unique agent identifier (canonical ID from API key)
@@ -151,16 +154,23 @@ class ExternalAgentAdapter:
             Registration response with agent details
 
         Raises:
-            ValueError: If agent already registered
+            ValueError: If agent already connected (active SSE session)
         """
         if agent_id in self._agents:
-            raise ValueError(f"Agent {agent_id} already registered")
+            raise ValueError(f"Agent {agent_id} already connected")
 
         # Use broker's default balance if not specified
         balance = initial_balance or self._broker.initial_balance
 
-        # Create account in broker
-        await self._broker.create_account(agent_id, Decimal(balance))
+        # Check if account exists (reconnection case)
+        if self._broker.has_account(agent_id):
+            logger.info(
+                "Agent %s reconnecting with existing account",
+                agent_id,
+            )
+        else:
+            # New agent: create account in broker
+            await self._broker.create_account(agent_id, Decimal(balance))
 
         # Create agent state with all identity fields
         state = ExternalAgentState(
@@ -200,7 +210,7 @@ class ExternalAgentAdapter:
     async def unregister_agent(self, agent_id: str) -> bool:
         """Unregister an external agent.
 
-        Cleans up subscription and removes from tracking.
+        Cleans up subscription, removes from tracking, and deletes broker account.
 
         Args:
             agent_id: Agent to unregister
@@ -217,6 +227,9 @@ class ExternalAgentAdapter:
             await self._data_hub.subscription_manager.unsubscribe(
                 state.subscription.subscription_id
             )
+
+        # Delete broker account so agent can rejoin
+        await self._broker.delete_account(agent_id)
 
         logger.info("Unregistered external agent: %s", agent_id)
         return True

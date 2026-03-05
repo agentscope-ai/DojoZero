@@ -124,7 +124,7 @@ class GatewayTransport:
 
         Args:
             method: HTTP method (GET, POST, etc.)
-            path: API path (e.g., "/api/v1/register")
+            path: API path (e.g., "/api/v1/agents")
             json: JSON body for POST/PUT
             params: Query parameters
 

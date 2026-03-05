@@ -728,7 +728,7 @@ class DojoClient:
             try:
                 reg_response = await transport.request(
                     "POST",
-                    "/api/v1/register",
+                    "/api/v1/agents",
                     json={
                         "apiKey": api_key,
                         "initialBalance": initial_balance,
