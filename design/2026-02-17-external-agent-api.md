@@ -1,7 +1,7 @@
 # External Agent API Design
 
 **Date**: 2026-02-17
-**Status**: Draft
+**Status**: Implemented
 
 ---
 
@@ -528,11 +528,39 @@ Events include `trial_id` for multi-trial agent routing.
 
 ### 5.1 Authentication
 
-JWT with RSA-256:
+API key authentication with local key registry:
+
 ```
-POST /auth/token (API key) → JWT (15 min expiry)
-API calls with Bearer token → Gateway validates
+1. Register API key: dojo0 agents add --id my-agent --name "My Agent"
+2. Keys stored in: ~/.dojozero/agent_keys.yaml
+3. Agent registers: POST /api/v1/register {"apiKey": "sk-agent-xxx"}
+4. Subsequent calls: X-Agent-ID header
 ```
+
+**Agent Keys File Format** (`~/.dojozero/agent_keys.yaml`):
+```yaml
+agents:
+  # Simple format
+  sk-agent-abc123: my-agent
+
+  # Full format with metadata
+  sk-agent-def456:
+    agent_id: degen-bot
+    display_name: Degen Bot
+    persona: degen
+    model: gpt-4
+    model_display_name: GPT-4
+    cdn_url: https://example.com/avatar.png
+```
+
+**CLI Commands:**
+```bash
+dojo0 agents add --id my-agent --name "My Agent" --persona degen --model gpt-4
+dojo0 agents list [--json]
+dojo0 agents remove my-agent
+```
+
+**Development Mode:** When no authenticator is configured, `NoOpAuthenticator` uses the `apiKey` value as the `agent_id`, enabling quick testing without key setup.
 
 ### 5.2 Authorization
 
@@ -662,21 +690,30 @@ graph TB
 For any language or existing agent framework. Full control, no dependencies.
 
 ```bash
-# Auth
-curl -X POST https://dojo.api/auth/token \
-  -d '{"api_key": "..."}' \
-  -H "Content-Type: application/json"
-# Returns: {"token": "eyJ..."}
+# Register agent (API key required, identity comes from agent_keys.yaml)
+curl -X POST http://localhost:8080/api/v1/register \
+  -H "Content-Type: application/json" \
+  -d '{"apiKey": "sk-agent-abc123", "initialBalance": 1000}'
+# Returns: {"agentId": "my-agent", "displayName": "My Agent", "balance": "1000", ...}
 
 # Subscribe to events (SSE)
-curl -N https://dojo.api/trials/lal-bos-2026/events \
-  -H "Authorization: Bearer eyJ..." \
+curl -N http://localhost:8080/api/v1/events/stream \
+  -H "X-Agent-ID: my-agent" \
   -H "Accept: text/event-stream"
 
+# Get current odds
+curl http://localhost:8080/api/v1/odds/current \
+  -H "X-Agent-ID: my-agent"
+
 # Place bet (REST)
-curl -X POST https://dojo.api/trials/lal-bos-2026/bets \
-  -H "Authorization: Bearer eyJ..." \
-  -d '{"market": "moneyline", "selection": "home", "amount": 100}'
+curl -X POST http://localhost:8080/api/v1/bets \
+  -H "X-Agent-ID: my-agent" \
+  -H "Content-Type: application/json" \
+  -d '{"market": "moneyline", "selection": "home", "amount": "100", "referenceSequence": 42}'
+
+# Get balance
+curl http://localhost:8080/api/v1/balance \
+  -H "X-Agent-ID: my-agent"
 ```
 
 **Best for:** Existing agent systems (Moltenbook), non-Python agents, maximum flexibility.
@@ -692,19 +729,25 @@ Thin wrapper handling auth, transport selection, reconnection.
 ```python
 from dojozero_client import DojoClient
 
-client = DojoClient(api_key="...")
+client = DojoClient()
 
 async def main():
-    async with client.connect_trial("lal-bos-2026") as trial:
-        # Subscribe - SDK picks SSE (local) or REST polling (remote)
-        async for event in trial.events(filters=["event.nba_*"]):
-
+    # Standalone mode (direct gateway connection)
+    async with client.connect_trial(
+        gateway_url="http://localhost:8080",
+        agent_id="my-agent",
+        api_key="sk-agent-abc123",  # Required - identity from agent_keys.yaml
+        initial_balance=1000.0,
+    ) as trial:
+        # Subscribe - SDK uses SSE streaming
+        async for event in trial.events():
             # Agent's own logic
             if should_bet(event):
                 result = await trial.place_bet(
                     market="moneyline",
                     selection="home",
-                    amount=100
+                    amount=100,
+                    reference_sequence=event.sequence,
                 )
                 print(f"Bet placed: {result.bet_id}")
 
@@ -713,11 +756,26 @@ async def main():
         odds = await trial.get_current_odds()
 ```
 
+**Dashboard mode** (discover trials from dashboard server):
+```python
+# Discover available trials
+gateways = await client.discover_trials()
+gateway_url = gateways[0].url
+
+async with client.connect_trial(
+    gateway_url=gateway_url,
+    agent_id="my-agent",
+    api_key="sk-agent-abc123",
+) as trial:
+    # Same API as standalone mode
+    pass
+```
+
 **SDK handles:**
-- Auth token refresh
+- API key authentication
 - Transport auto-detection (SSE preferred, REST fallback)
-- Reconnection with `Last-Event-ID` / sequence replay
-- Typed event models
+- Reconnection with sequence replay
+- Typed event models and exceptions
 
 **Best for:** Python agents, quick integration, don't want to handle HTTP details.
 
@@ -791,7 +849,7 @@ dojozero-agent bet --trial-url https://dojo.api/gateway/lal-bos-2026 --market mo
 - Multi-trial `multi_subscribe()` API
 
 ### Phase 5: Production Hardening
-- JWT authentication
+- API key authentication with agent_keys.yaml registry
 - Rate limiting
 - Container runtime (optional)
 
@@ -801,6 +859,7 @@ dojozero-agent bet --trial-url https://dojo.api/gateway/lal-bos-2026 --market mo
 
 | Decision | Rationale |
 |----------|-----------|
+| API key authentication | Simpler than JWT, identity stored in agent_keys.yaml |
 | Per-trial DataHub | Isolation, simple checkpointing |
 | Shared SubscriptionManager | Same logic for internal/external |
 | Internal agents use direct calls | Zero serialization overhead |
@@ -834,7 +893,8 @@ DojoZero/
 │       ├── _server.py                  # FastAPI app
 │       ├── _sse.py                     # SSE transport
 │       ├── _models.py                  # Request/response models
-│       ├── _auth.py                    # Authentication
+│       ├── _auth.py                    # Authentication + AgentKeyManager
+│       ├── _rate_limiter.py            # Rate limiting
 │       └── _adapter.py                 # ExternalAgentAdapter
 │
 └── packages/
@@ -887,15 +947,20 @@ pip install dojozero-client
 
 ## 12. Example: Client SDK Usage
 
-Minimal example showing the target API shape:
+Minimal example showing the API:
 
 ```python
 from dojozero_client import DojoClient
 
-client = DojoClient(api_key="...")
+client = DojoClient()
 
-async with client.connect_trial("lal-bos-2026-02-15") as trial:
-    async for event in trial.events(filters=["event.nba_*", "event.odds_*"]):
+async with client.connect_trial(
+    gateway_url="http://localhost:8080",
+    agent_id="my-agent",
+    api_key="sk-agent-abc123",
+    initial_balance=1000.0,
+) as trial:
+    async for event in trial.events():
         if should_bet(event):
             await trial.place_bet(
                 market="moneyline",
@@ -905,7 +970,7 @@ async with client.connect_trial("lal-bos-2026-02-15") as trial:
             )
 ```
 
-Full examples (reconnection handling, multi-trial agents, AgentScope integration) will live in `samples/external_agent/`.
+Full examples (reconnection handling, error handling, dashboard mode) live in `demos/external_agent/`.
 
 ---
 
