@@ -1313,8 +1313,19 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # Account Management
     # =========================================================================
 
-    async def create_account(self, agent_id: str, initial_balance: Decimal) -> Account:
-        """Initialize a new agent account"""
+    async def create_account(
+        self,
+        agent_id: str,
+        initial_balance: Decimal,
+        is_external: bool = False,
+    ) -> Account:
+        """Initialize a new agent account.
+
+        Args:
+            agent_id: Unique agent identifier
+            initial_balance: Starting balance
+            is_external: True if created via gateway (external agent with API key)
+        """
         if initial_balance < 0:
             raise ValueError("Initial balance must be non-negative")
 
@@ -1327,10 +1338,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             balance=initial_balance,
             created_at=now,
             last_updated=now,
+            is_external=is_external,
         )
         self._accounts[agent_id] = account
 
-        logger.info("Created account for %s with balance %s", agent_id, initial_balance)
+        agent_type = "external" if is_external else "internal"
+        logger.info(
+            "Created %s account for %s with balance %s",
+            agent_type,
+            agent_id,
+            initial_balance,
+        )
         await self._log_accounts_and_bets_status("account_created")
         return account
 

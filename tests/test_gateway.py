@@ -246,7 +246,9 @@ class TestExternalAgentAdapter:
         assert response.agent_id == "agent1"
         assert response.trial_id == "trial123"
         assert response.balance == "500"
-        mock_broker.create_account.assert_called_once_with("agent1", Decimal("500"))
+        mock_broker.create_account.assert_called_once_with(
+            "agent1", Decimal("500"), is_external=True
+        )
 
     @pytest.mark.asyncio
     async def test_register_duplicate_agent(self, adapter):
@@ -1183,8 +1185,8 @@ class TestTrialResults:
         broker._event = None
         # Mock accounts with balances
         broker._accounts = {
-            "agent1": MagicMock(balance=Decimal("1200")),
-            "agent2": MagicMock(balance=Decimal("800")),
+            "agent1": MagicMock(balance=Decimal("1200"), is_external=True),
+            "agent2": MagicMock(balance=Decimal("800"), is_external=False),
         }
 
         # Mock get_statistics to return proper stats
@@ -1292,6 +1294,36 @@ class TestTrialResults:
         agent2_result = next(r for r in results.results if r.agent_id == "agent2")
         assert agent2_result.final_balance == "800"
         assert agent2_result.total_bets == 1
+
+    @pytest.mark.asyncio
+    async def test_results_use_is_external_fallback(self, adapter):
+        """Test authenticated falls back to account.is_external when agent not in _agents."""
+        # Clear _agents to simulate post-restart scenario where agents haven't reconnected
+        adapter._agents.clear()
+
+        results = await adapter.get_results()
+
+        # agent1 has is_external=True, should show authenticated=True
+        agent1_result = next(r for r in results.results if r.agent_id == "agent1")
+        assert agent1_result.authenticated is True
+
+        # agent2 has is_external=False, should show authenticated=False
+        agent2_result = next(r for r in results.results if r.agent_id == "agent2")
+        assert agent2_result.authenticated is False
+
+    @pytest.mark.asyncio
+    async def test_results_prefer_agent_state_over_is_external(self, adapter):
+        """Test that agent_state.authenticated is used when agent is connected."""
+        # agent1 is in _agents with authenticated=True, account.is_external=True
+        # agent2 is in _agents with authenticated=False, account.is_external=False
+        results = await adapter.get_results()
+
+        agent1_result = next(r for r in results.results if r.agent_id == "agent1")
+        assert agent1_result.authenticated is True
+        assert agent1_result.display_name == "Agent One"
+
+        agent2_result = next(r for r in results.results if r.agent_id == "agent2")
+        assert agent2_result.authenticated is False
 
 
 class TestGatewayAuthIntegration:

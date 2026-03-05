@@ -327,14 +327,21 @@ class TrialManager:
                     if account is None:
                         continue
 
-                    # Get display_name and authenticated from gateway if available
+                    # Get display_name from gateway if agent is currently connected
                     display_name = None
-                    authenticated = False
+                    agent_state = None
                     if gateway_adapter is not None:
                         agent_state = gateway_adapter._agents.get(agent_id)
                         if agent_state is not None:
                             display_name = agent_state.display_name
-                            authenticated = agent_state.authenticated
+
+                    # Use agent_state.authenticated if connected, otherwise fall back
+                    # to account.is_external (persisted) - external agents are
+                    # authenticated by definition since API key is required
+                    if agent_state is not None:
+                        authenticated = agent_state.authenticated
+                    else:
+                        authenticated = account.is_external
 
                     agent_results.append(
                         AgentResult(

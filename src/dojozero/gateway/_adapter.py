@@ -169,8 +169,10 @@ class ExternalAgentAdapter:
                 agent_id,
             )
         else:
-            # New agent: create account in broker
-            await self._broker.create_account(agent_id, Decimal(balance))
+            # New agent: create account in broker (mark as external)
+            await self._broker.create_account(
+                agent_id, Decimal(balance), is_external=True
+            )
 
         # Create agent state with all identity fields
         state = ExternalAgentState(
@@ -617,10 +619,17 @@ class ExternalAgentAdapter:
                 if account is None:
                     continue
 
-                # Get agent state for display_name and authenticated status
+                # Get agent state for display_name (if currently connected)
                 agent_state = self._agents.get(agent_id)
                 display_name = agent_state.display_name if agent_state else None
-                authenticated = agent_state.authenticated if agent_state else False
+
+                # Use agent_state.authenticated if connected, otherwise fall back to
+                # account.is_external (persisted) - external agents are authenticated
+                # by definition since API key is required to create the account
+                if agent_state is not None:
+                    authenticated = agent_state.authenticated
+                else:
+                    authenticated = account.is_external
 
                 results.append(
                     AgentResult(

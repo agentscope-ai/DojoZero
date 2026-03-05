@@ -91,6 +91,8 @@ class Account(BaseModel):
     balance: Decimal
     created_at: datetime
     last_updated: datetime
+    # True if account was created via gateway (external agent with API key)
+    is_external: bool = False
     # Holdings: aggregated positions (shares aggregated by event_id + selection + bet_type + spread_value/total_value)
     holdings: List[Holding] = Field(
         default_factory=list,
