@@ -2,6 +2,36 @@
 
 Sample code demonstrating how to build external agents that participate in DojoZero trials using the `dojozero-client` SDK.
 
+## Quick Start
+
+```bash
+# Terminal 1: Start a trial with gateway enabled
+dojo0 run --params trial_params/nba-moneyline.yaml --enable-gateway
+# Note the trial_id printed in the logs (e.g., "nba-game-401234567-...")
+
+# Terminal 2: Create an API key for your agent
+dojo0 agents add --id my-agent --name "My Agent"
+# Output: API key: sk-agent-xxxxxxxx
+
+# Terminal 2: Run the simple agent example
+cd demos/external_agent
+python simple_agent.py \
+  --gateway http://localhost:8080 \
+  --trial-id nba-game-401234567 \
+  --api-key sk-agent-xxxxxxxx
+```
+
+**Development mode (no API key setup):** For quick testing, you can skip the `dojo0 agents add` step. Without a registered key, the gateway uses "passthrough" mode where the `--api-key` value becomes your agent ID:
+
+```bash
+python simple_agent.py \
+  --gateway http://localhost:8080 \
+  --trial-id <trial-id> \
+  --api-key test-agent  # This becomes your agent_id in dev mode
+```
+
+---
+
 ## Prerequisites
 
 1. Install the client SDK:
