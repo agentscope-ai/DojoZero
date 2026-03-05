@@ -46,12 +46,19 @@ def cmd_start(args: argparse.Namespace) -> int:
         print("Daemon already running. Use 'stop' first.", file=sys.stderr)
         return 1
 
+    api_key = args.api_key or os.environ.get("DOJOZERO_AGENT_API_KEY", "")
+    if not api_key:
+        print(
+            "Error: API key required. Use --api-key or set DOJOZERO_AGENT_API_KEY.",
+            file=sys.stderr,
+        )
+        return 1
+
     config = DaemonConfig(
         trial_id=args.trial_id,
         gateway_url=args.gateway
-        or os.environ.get("DOJOZERO_GATEWAY_URL", "http://localhost:8000"),
-        agent_id=args.agent_id or "",
-        api_key=args.api_key or os.environ.get("DOJOZERO_API_KEY", ""),
+        or os.environ.get("DOJOZERO_GATEWAY_URL", "http://localhost:8080"),
+        api_key=api_key,
         state_dir=state_dir,
         strategy=args.strategy,
         auto_bet=args.auto_bet,
@@ -73,8 +80,8 @@ def cmd_start(args: argparse.Namespace) -> int:
             "--gateway",
             config.gateway_url,
         ]
-        if config.agent_id:
-            cmd.extend(["--agent-id", config.agent_id])
+        if config.api_key:
+            cmd.extend(["--api-key", config.api_key])
         if config.strategy:
             cmd.extend(["--strategy", config.strategy])
         if config.auto_bet:
@@ -319,6 +326,33 @@ def cmd_bets(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_discover(args: argparse.Namespace) -> int:
+    """Discover available trials from dashboard."""
+    from dojozero_client._client import DojoClient
+
+    dashboard_urls = None
+    if args.dashboard:
+        dashboard_urls = [args.dashboard]
+
+    client = DojoClient(dashboard_urls=dashboard_urls)
+
+    try:
+        gateways = asyncio.run(client.discover_trials())
+    except Exception as e:
+        print(f"Discovery failed: {e}", file=sys.stderr)
+        return 1
+
+    if not gateways:
+        print("No trials available")
+        return 0
+
+    print("Available trials:")
+    for g in gateways:
+        print(f"  {g.trial_id}: {g.url or g.endpoint}")
+
+    return 0
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create argument parser."""
     parser = argparse.ArgumentParser(
@@ -338,16 +372,11 @@ def create_parser() -> argparse.ArgumentParser:
     p_start.add_argument(
         "--gateway",
         "-g",
-        help="Gateway URL (default: $DOJOZERO_GATEWAY_URL or localhost:8000)",
-    )
-    p_start.add_argument(
-        "--agent-id",
-        "-a",
-        help="Agent ID (default: auto-generated)",
+        help="Gateway URL (default: $DOJOZERO_GATEWAY_URL or localhost:8080)",
     )
     p_start.add_argument(
         "--api-key",
-        help="API key (default: $DOJOZERO_API_KEY)",
+        help="API key for authentication (required, or set $DOJOZERO_AGENT_API_KEY)",
     )
     p_start.add_argument(
         "--strategy",
@@ -420,6 +449,15 @@ def create_parser() -> argparse.ArgumentParser:
     p_bets = subparsers.add_parser("bets", help="Show bet history")
     p_bets.add_argument("-n", "--count", type=int, default=20, help="Number to show")
     p_bets.set_defaults(func=cmd_bets)
+
+    # discover
+    p_discover = subparsers.add_parser("discover", help="Discover available trials")
+    p_discover.add_argument(
+        "--dashboard",
+        "-d",
+        help="Dashboard URL (default: $DOJOZERO_DASHBOARD_URL)",
+    )
+    p_discover.set_defaults(func=cmd_discover)
 
     return parser
 

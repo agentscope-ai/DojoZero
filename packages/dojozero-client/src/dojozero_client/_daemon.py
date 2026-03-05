@@ -84,9 +84,9 @@ class DaemonConfig:
     """Configuration for the daemon."""
 
     trial_id: str
-    gateway_url: str = "http://localhost:8000"
-    agent_id: str = ""
+    gateway_url: str = "http://localhost:8080"
     api_key: str = ""
+    agent_id: str = ""  # Internal use only, populated from server
     state_dir: Path = field(default_factory=_default_state_dir)
     strategy: str | None = None
     strategy_config: dict[str, Any] = field(default_factory=_default_strategy_config)

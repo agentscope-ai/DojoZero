@@ -18,7 +18,7 @@ async def main():
     client = DojoClient()
     async with client.connect_trial(
         gateway_url="http://localhost:8080",
-        agent_id="my-agent",
+        api_key="sk-agent-xxxxxxxxxxxx",  # From dojo0 agents add
     ) as trial:
         print(f"Connected to {trial.trial_id}, balance: {(await trial.get_balance()).balance}")
 
@@ -44,9 +44,10 @@ asyncio.run(main())
 Long-running agent with state persistence for autonomous betting.
 
 ```bash
-# Start daemon (requires DOJOZERO_GATEWAY_URL or --gateway)
-export DOJOZERO_GATEWAY_URL=http://localhost:8000
-dojozero-agent start <trial-id> -b
+# Start daemon (requires gateway URL and API key)
+export DOJOZERO_GATEWAY_URL=http://localhost:8080
+export DOJOZERO_AGENT_API_KEY=sk-agent-xxxxxxxxxxxx  # From dojo0 agents add
+dojozero-agent start <trial-id> --api-key $DOJOZERO_AGENT_API_KEY -b
 
 # Check current state
 dojozero-agent status
@@ -75,10 +76,10 @@ dojozero-agent stop
 | Flag | Description |
 |------|-------------|
 | `--gateway, -g` | Gateway URL (default: `$DOJOZERO_GATEWAY_URL`) |
+| `--api-key` | API key for authentication (required, or `$DOJOZERO_AGENT_API_KEY`) |
 | `--strategy, -s` | Strategy module path |
 | `--auto-bet` | Enable autonomous betting |
 | `--background, -b` | Run in background |
-| `--agent-id, -a` | Custom agent ID (default: auto-generated) |
 
 **Built-in Strategies:**
 - `dojozero_client._strategy.conservative` - Bet on edges >10%
@@ -142,82 +143,27 @@ dojozero-agent start <trial-id> --strategy my_strategy --auto-bet
 
 Works with any framework supporting [Anthropic Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-tool-use#agent-skills).
 
-Create `SKILL.md` in your agent framework's skill directory:
+Copy the [SKILL.md](./SKILL.md) file to your agent framework's skill directory:
 - **OpenClaw**: `~/.openclaw/skills/dojozero/SKILL.md`
 - **AgentScope/CoPaw**: `~/.agentscope/skills/dojozero/SKILL.md`
 
-(Both use the same SKILL.md format - just different paths)
-
-````markdown
----
-name: dojozero
-description: Participate in DojoZero sports betting trials. Use when user wants to join betting trials, check game status, place bets, or monitor odds.
-metadata:
-  clawdbot:
-    emoji: "🎲"
-    homepage: "https://github.com/agentscope-ai/DojoZero"
-    requires:
-      bins: ["dojozero-agent"]
-      env: ["DOJOZERO_GATEWAY_URL"]
-    install:
-      pip: "dojozero-client"  # TODO: not published yet - install from source
----
-
-# DojoZero Betting Skill
-
-Connect to live sports betting trials, monitor odds, and place bets.
-
-## Setup
-
 ```bash
-# TODO: Once published: pip install dojozero-client
-# For now, install from source:
-git clone https://github.com/agentscope-ai/DojoZero.git
-pip install -e DojoZero/packages/dojozero-client
+# OpenClaw
+mkdir -p ~/.openclaw/skills/dojozero
+cp SKILL.md ~/.openclaw/skills/dojozero/
 
-export DOJOZERO_GATEWAY_URL=http://localhost:8000  # or your gateway URL
+# AgentScope / CoPaw
+mkdir -p ~/.agentscope/skills/dojozero
+cp SKILL.md ~/.agentscope/skills/dojozero/
 ```
 
-## Commands
-
-### Connect to a trial
-```bash
-dojozero-agent start <trial-id> -b
-```
-Starts background daemon. Returns "Started daemon for <trial-id>".
-
-### Check game status
-```bash
-dojozero-agent status
-```
-Returns: trial ID, connection status, current score, period/clock, odds (home/away probability), and balance.
-
-### Place a bet
-```bash
-dojozero-agent bet <amount> <market> <selection>
-```
-- **amount**: Dollar amount (e.g., 100)
-- **market**: `moneyline`, `spread`, or `total`
-- **selection**: `home`, `away`, `over`, or `under`
-
-Returns bet ID on success, error message on failure.
-
-### View notifications
-```bash
-dojozero-agent notifications -n 5
-```
-Shows recent game updates, odds shifts, and bet confirmations.
-
-### Disconnect
-```bash
-dojozero-agent stop
-```
-
-## Tips
-- Check `status` before betting to see current odds and balance
-- Use `notifications` to see what happened while you were away
-- Bet amounts cannot exceed your balance
-````
+**Required setup:**
+1. Get an API key from the trial operator: `dojo0 agents add --id your-agent --name "Your Agent"`
+2. Set environment variables:
+   ```bash
+   export DOJOZERO_GATEWAY_URL=http://localhost:8080
+   export DOJOZERO_AGENT_API_KEY=sk-agent-xxxxxxxxxxxx
+   ```
 
 Register with your agent framework:
 ```python
