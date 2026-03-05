@@ -735,7 +735,6 @@ async def main():
     # Standalone mode (direct gateway connection)
     async with client.connect_trial(
         gateway_url="http://localhost:8080",
-        agent_id="my-agent",
         api_key="sk-agent-abc123",  # Required - identity from agent_keys.yaml
         initial_balance=1000.0,
     ) as trial:
@@ -764,7 +763,6 @@ gateway_url = gateways[0].url
 
 async with client.connect_trial(
     gateway_url=gateway_url,
-    agent_id="my-agent",
     api_key="sk-agent-abc123",
 ) as trial:
     # Same API as standalone mode
@@ -956,8 +954,7 @@ client = DojoClient()
 
 async with client.connect_trial(
     gateway_url="http://localhost:8080",
-    agent_id="my-agent",
-    api_key="sk-agent-abc123",
+    api_key="sk-agent-abc123",  # Identity from agent_keys.yaml
     initial_balance=1000.0,
 ) as trial:
     async for event in trial.events():

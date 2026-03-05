@@ -206,7 +206,7 @@ class Daemon:
         try:
             async with self.client.connect_trial(
                 gateway_url=self.config.gateway_url,
-                agent_id=self.config.agent_id,
+                api_key=self.config.api_key,
                 initial_balance=1000.0,  # Default balance for new agents
             ) as trial:
                 # Initialize state

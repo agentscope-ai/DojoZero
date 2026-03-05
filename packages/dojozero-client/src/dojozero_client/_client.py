@@ -13,7 +13,6 @@ from typing import Any, AsyncIterator
 
 from dojozero_client._exceptions import (
     ConnectionError,
-    NotRegisteredError,
     RegistrationError,
     TrialEndedError,
 )
@@ -547,7 +546,7 @@ class DojoClient:
         ```
         async with client.connect_trial(
             gateway_url="http://localhost:8080",
-            agent_id="my-agent",
+            api_key="sk-agent-xxx",  # From: dojo0 agents add --id my-agent
         ) as trial:
             async for event in trial.events():
                 ...
@@ -561,7 +560,7 @@ class DojoClient:
         # Connect using gateway info
         async with client.connect_trial(
             gateway_url=gateways[0].url,
-            agent_id="my-agent",
+            api_key="sk-agent-xxx",
         ) as trial:
             async for event in trial.events():
                 ...
@@ -671,22 +670,17 @@ class DojoClient:
     async def connect_trial(
         self,
         gateway_url: str,
-        agent_id: str,
+        api_key: str,
         initial_balance: float | None = None,
-        auto_register: bool = True,
-        api_key: str | None = None,
     ) -> AsyncIterator[TrialConnection]:
         """Connect to a trial.
 
         Args:
             gateway_url: Gateway URL (e.g., "http://localhost:8080")
-            agent_id: Fallback agent ID (used for X-Agent-ID header).
-                     The actual agent_id comes from the verified API key.
-            initial_balance: Starting balance (if registering)
-            auto_register: Whether to auto-register if not registered
             api_key: API key for authentication (from dojo0 agents add).
                      Agent identity (agent_id, display_name, persona, model)
                      all come from agent_keys.yaml based on this key.
+            initial_balance: Starting balance (if registering)
 
         Yields:
             TrialConnection for interacting with the trial
@@ -698,51 +692,43 @@ class DojoClient:
         """
         transport = GatewayTransport(
             base_url=gateway_url,
-            agent_id=agent_id,
             timeout=self._timeout,
         )
 
         async with transport:
-            trial_id = ""
+            # Register with API key - identity comes from verified key
+            try:
+                reg_response = await transport.request(
+                    "POST",
+                    "/api/v1/register",
+                    json={
+                        "apiKey": api_key,
+                        "initialBalance": initial_balance,
+                    },
+                )
+                trial_id = reg_response.get("trialId", "")
+                agent_id = reg_response.get("agentId", "")
 
-            if auto_register:
-                # Try to register (may already be registered)
-                # API key is required - all identity comes from verified key
-                try:
-                    reg_response = await transport.request(
-                        "POST",
-                        "/api/v1/register",
-                        json={
-                            "apiKey": api_key,
-                            "initialBalance": initial_balance,
-                        },
-                    )
-                    trial_id = reg_response.get("trialId", "")
-                    # Agent ID comes from verified identity
-                    verified_agent_id = reg_response.get("agentId", agent_id)
-                    logger.info(
-                        "Registered agent %s for trial %s",
-                        verified_agent_id,
-                        trial_id,
-                    )
-                except RegistrationError:
-                    # 409 Conflict - agent already registered, continue
-                    logger.info(
-                        "Agent already registered, continuing",
-                    )
+                # Set agent_id for subsequent requests
+                transport.set_agent_id(agent_id)
 
-            # Get trial info if not from registration
-            if not trial_id:
+                logger.info(
+                    "Registered agent %s for trial %s",
+                    agent_id,
+                    trial_id,
+                )
+            except RegistrationError as e:
+                # 409 Conflict - agent already registered, get info
+                logger.info("Agent already registered, fetching trial info")
                 try:
-                    trial_response = await transport.request(
-                        "GET",
-                        "/api/v1/trial",
-                    )
-                    trial_id = trial_response.get("trialId", "unknown")
-                except NotRegisteredError:
+                    # Need to get agent_id from a different endpoint
+                    # For now, re-raise - user should use a fresh api_key or handle this
                     raise ConnectionError(
-                        f"Agent {agent_id} not registered and auto_register=False"
-                    )
+                        f"Agent already registered. Use a different API key or "
+                        f"unregister first: {e}"
+                    ) from e
+                except Exception:
+                    raise
 
             connection = TrialConnection(
                 transport=transport,

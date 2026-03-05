@@ -108,8 +108,7 @@ Pass the API key when connecting:
 ```python
 async with client.connect_trial(
     gateway_url="http://localhost:8080",
-    agent_id="fallback-id",  # Used for X-Agent-ID header
-    api_key="sk-agent-abc123",  # Required - determines identity
+    api_key="sk-agent-abc123",  # Required - identity from agent_keys.yaml
     initial_balance=1000.0,
 ) as trial:
     # Agent identity comes from the verified API key
@@ -185,8 +184,7 @@ client = DojoClient()
 
 async with client.connect_trial(
     gateway_url="http://localhost:8080",
-    agent_id="my-agent",
-    api_key="sk-agent-abc123",  # Required
+    api_key="sk-agent-abc123",  # Required - identity from agent_keys.yaml
     initial_balance=1000.0,
 ) as trial:
     # Use trial connection
@@ -200,16 +198,14 @@ from dojozero_client import DojoClient
 client = DojoClient()
 
 # Step 1: Discover available trials
-gateways = await client.list_gateways("http://localhost:8000")
+gateways = await client.discover_trials()
 print(f"Found {len(gateways)} trials")
 for g in gateways:
-    print(f"  - {g.trial_id}: {g.endpoint}")
+    print(f"  - {g.trial_id}: {g.url}")
 
-# Step 2: Build URL and connect (same connect_trial method)
-gateway_url = f"http://localhost:8000{gateways[0].endpoint}"
+# Step 2: Connect to trial
 async with client.connect_trial(
-    gateway_url=gateway_url,
-    agent_id="my-agent",
+    gateway_url=gateways[0].url,
     api_key="sk-agent-abc123",
     initial_balance=1000.0,
 ) as trial:
@@ -306,7 +302,6 @@ client = DojoClient()
 async def monitor_trial(gateway_url: str, api_key: str):
     async with client.connect_trial(
         gateway_url=gateway_url,
-        agent_id="multi-agent",
         api_key=api_key,
     ) as trial:
         async for event in trial.events():
