@@ -459,15 +459,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             }
         ]
 
-    def _parse_summary_response(self, resp: Any) -> str:
-        """Extract plain text from an LLM summary response."""
-        text_parts = [
-            block.get("text", "")
-            for block in resp.content
-            if isinstance(block, dict) and block.get("type") == "text"
-        ]
-        return "\n".join(filter(None, text_parts)).strip()
-
     async def _offload(self) -> None:
         """Compress memory using LLM summarization, with sparse-summary fallback.
 
@@ -483,21 +474,31 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         prepending compressed context, to avoid nesting/duplication.
         """
 
-        # try:
-        summary_request = self._build_summary_request()
-        if summary_request:
-            model = self._react_agent.model
-            original_stream = model.stream
-            model.stream = False
-            try:
-                resp = await model(summary_request)
-            finally:
-                model.stream = original_stream
-            events_summary = self._parse_summary_response(resp)
-        else:
-            events_summary = ""
         summary_label = "[Memory Summary]"
-
+        try:
+            summary_request = self._build_summary_request()
+            if summary_request:
+                model = self._react_agent.model
+                original_stream = model.stream
+                model.stream = False
+                try:
+                    resp = await model(summary_request)
+                finally:
+                    model.stream = original_stream
+                resp_content = getattr(resp, "content", None)
+                events_summary, _ = _parse_response_content(resp_content)
+                if not events_summary:
+                    raise ValueError("LLM returned empty summary")
+            else:
+                events_summary = ""
+        except Exception as e:
+            logger.warning(
+                "agent '%s' LLM summarization failed, using sparse fallback: %s",
+                self.actor_id,
+                e,
+            )
+            events_summary = self._build_events_summary()
+            summary_label = "[Historical Event Summary]"
         bet_history = await self._get_bet_history_summary()
 
         self._compressed_context = (

@@ -47,7 +47,7 @@ class TrialBrokerConfig(BaseModel):
 
 
 MEMORY_SUMMARY_PROMPT = """\
-You are a memory compressor for a sports forecasting AI. Summarize the conversation below into a concise context block under 2000 tokens.
+You are a memory compressor for a sports forecasting AI. Summarize the conversation below into a concise context block under 1500 tokens.
 
 Include ONLY sections with relevant content:
 
@@ -66,7 +66,7 @@ Include ONLY sections with relevant content:
 Rules:
 - Never omit numbers (scores, odds, amounts).
 - Never invent facts not in the conversation.
-- Keep total output under 1500 tokens.\
+- Keep total output under 1500 tokens.
 """
 
 __all__ = ["TrialBrokerConfig", "MEMORY_SUMMARY_PROMPT"]
