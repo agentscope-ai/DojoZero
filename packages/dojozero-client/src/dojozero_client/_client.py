@@ -370,7 +370,10 @@ class TrialConnection:
 
                     # Filter by event type if specified
                     if event_types:
-                        event_type = envelope.payload.get("eventType", "")
+                        # Check both snake_case and camelCase keys
+                        event_type = envelope.payload.get(
+                            "event_type", envelope.payload.get("eventType", "")
+                        )
                         if not any(
                             self._matches_filter(event_type, f) for f in event_types
                         ):
