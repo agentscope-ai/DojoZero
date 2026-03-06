@@ -28,6 +28,7 @@ from dojozero.agents import (
 )
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
+from dojozero.betting._config import MEMORY_SUMMARY_PROMPT
 from dojozero.data._models import DataEvent, EventTypes, extract_game_id
 from dojozero.betting._models import (
     ReasoningStep,
@@ -334,7 +335,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Memory compression settings
         self._event_history: deque[str] = deque(maxlen=1000)
         self._compressed_context: str | None = None
-        self._compression_threshold: int = 20
+        self._memory_token_threshold: int = 9000
         self._head_events: int = 10
         self._tail_events: int = 10
         self._max_event_chars: int = 200
@@ -407,6 +408,10 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             ]
         )
 
+    def _estimate_memory_tokens(self, messages: list[dict]) -> int:
+        """Rough token estimate for a list of memory messages."""
+        return len(json.dumps(messages, default=str)) // 4
+
     async def _get_bet_history_summary(self) -> str:
         """Get bet history from broker operator if available."""
         for op in self._operator_registry.values():
@@ -428,29 +433,92 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                     logger.warning("Failed to get bet history: %s", e)
         return "No betting history available."
 
-    async def _offload(self) -> None:
-        """Compress memory by summarizing events and clearing assistant messages.
+    def _build_summary_request(self) -> list[dict] | None:
+        """Build the LLM summarization request from event history.
 
-        Compression strategy:
-        1. Build sparse summary from _event_history: first N + last N events + ellipsis
-        2. Get bet history from broker (replaces assistant action memory)
-        3. Store compressed context for injection in next _process_events call
-        4. Clear ReActAgent memory
+        Returns None if there is nothing to summarize.
+        """
+        events = list(self._event_history)
+        if not events:
+            return None
+
+        transcript = "\n".join(events)
+        if not transcript:
+            return None
+
+        return [
+            {
+                "role": "user",
+                "content": (
+                    f"{MEMORY_SUMMARY_PROMPT}\n\n"
+                    "---BEGIN CONVERSATION---\n"
+                    f"{transcript}\n"
+                    "---END CONVERSATION---\n\n"
+                    "Provide the compressed summary:"
+                ),
+            }
+        ]
+
+    def _parse_summary_response(self, resp: Any) -> str:
+        """Extract plain text from an LLM summary response."""
+        text_parts = [
+            block.get("text", "")
+            for block in resp.content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        return "\n".join(filter(None, text_parts)).strip()
+
+    async def _offload(self) -> None:
+        """Compress memory using LLM summarization, with sparse-summary fallback.
+
+        Strategy:
+        1. Capture current ReActAgent memory as a transcript
+        2. Call LLM to produce a structured summary (pre-game analysis, game
+           progress, betting record, market context)
+        3. Fall back to the sparse first-N/last-N event summary on LLM failure
+        4. Append broker bet history and store as _compressed_context
+        5. Clear ReActAgent memory
 
         Note: Events are added to _event_history in _process_events BEFORE
         prepending compressed context, to avoid nesting/duplication.
         """
-        # Build compressed context
-        events_summary = self._build_events_summary()
+
+        # try:
+        summary_request = self._build_summary_request()
+        if summary_request:
+            model = self._react_agent.model
+            original_stream = model.stream
+            model.stream = False
+            try:
+                resp = await model(summary_request)
+            finally:
+                model.stream = original_stream
+            events_summary = self._parse_summary_response(resp)
+        else:
+            events_summary = ""
+        summary_label = "[Memory Summary]"
+        # if not events_summary:
+        #     raise ValueError("LLM returned empty summary")
+        # except Exception as e:
+        #     logger.warning(
+        #         "agent '%s' LLM summarization failed, using sparse fallback: %s",
+        #         self.actor_id,
+        #         e,
+        #     )
+        #     events_summary = self._build_events_summary()
+        #     summary_label = "[Historical Event Summary]"
+
         bet_history = await self._get_bet_history_summary()
 
         self._compressed_context = (
-            "[Historical Event Summary]\n"
+            f"{summary_label}\n"
             f"{events_summary}\n\n"
             "[Your Betting History]\n"
             f"{bet_history}"
         )
-
+        print("*********compressed_context*********\n")
+        print(self._compressed_context)
+        print("*********compressed_context*********\n")
         # Clear the ReActAgent's memory
         self._react_agent.memory = InMemoryMemory()
 
@@ -779,9 +847,11 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 **(bet or {}),
             )
             self._emit_response_span(response_message)
-
-        # Compact memory for next iteration
-        if len(memory_after_dicts) >= self._compression_threshold:
+        # Compact memory for next iteration when context becomes too large
+        if (
+            self._estimate_memory_tokens(memory_after_dicts)
+            >= self._memory_token_threshold
+        ):
             await self._offload()
 
         logger.info(
