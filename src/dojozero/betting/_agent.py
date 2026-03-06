@@ -497,16 +497,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         else:
             events_summary = ""
         summary_label = "[Memory Summary]"
-        # if not events_summary:
-        #     raise ValueError("LLM returned empty summary")
-        # except Exception as e:
-        #     logger.warning(
-        #         "agent '%s' LLM summarization failed, using sparse fallback: %s",
-        #         self.actor_id,
-        #         e,
-        #     )
-        #     events_summary = self._build_events_summary()
-        #     summary_label = "[Historical Event Summary]"
 
         bet_history = await self._get_bet_history_summary()
 
@@ -516,9 +506,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             "[Your Betting History]\n"
             f"{bet_history}"
         )
-        print("*********compressed_context*********\n")
-        print(self._compressed_context)
-        print("*********compressed_context*********\n")
+
         # Clear the ReActAgent's memory
         self._react_agent.memory = InMemoryMemory()
 
