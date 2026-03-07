@@ -152,23 +152,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
     )
     run_parser.add_argument(
-        "--enable-gateway",
-        dest="enable_gateway",
+        "--disable-gateway",
+        dest="disable_gateway",
         action="store_true",
-        help="Enable HTTP gateway for external agents to participate in the trial.",
+        help="Disable HTTP gateway for external agents (gateway is enabled by default).",
     )
     run_parser.add_argument(
         "--gateway-port",
         dest="gateway_port",
         type=int,
         default=8080,
-        help="Port for the HTTP gateway (default: 8080). Only used with --enable-gateway.",
+        help="Port for the HTTP gateway (default: 8080).",
     )
     run_parser.add_argument(
         "--gateway-host",
         dest="gateway_host",
         default="127.0.0.1",
-        help="Host for the HTTP gateway (default: 127.0.0.1). Only used with --enable-gateway.",
+        help="Host for the HTTP gateway (default: 127.0.0.1).",
     )
 
     subparsers.add_parser(
@@ -374,10 +374,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to Ray runtime configuration YAML file (only used with --runtime-provider ray).",
     )
     serve_parser.add_argument(
-        "--enable-gateway",
-        dest="enable_gateway",
+        "--disable-gateway",
+        dest="disable_gateway",
         action="store_true",
-        help="Enable HTTP gateway for external agents. Routes /api/gw/{trial_id}/* to trials.",
+        help="Disable HTTP gateway for external agents (gateway is enabled by default).",
     )
 
     # Arena Server command
@@ -1312,9 +1312,9 @@ async def _run_command(args: argparse.Namespace) -> int:
                 "--trial-id is required when resuming without a params file"
             )
 
-    # Create gateway config if enabled
+    # Create gateway config (enabled by default, can be disabled with --disable-gateway)
     gateway_config: GatewayConfig | None = None
-    if getattr(args, "enable_gateway", False):
+    if not getattr(args, "disable_gateway", False):
         gateway_config = GatewayConfig(
             enabled=True,
             host=getattr(args, "gateway_host", "127.0.0.1"),
@@ -1920,10 +1920,10 @@ async def _serve_command(args: argparse.Namespace) -> int:
     else:
         LOGGER.info("No trace backend configured - traces will not be exported")
 
-    enable_gateway = getattr(args, "enable_gateway", False)
+    enable_gateway = not getattr(args, "disable_gateway", False)
     if enable_gateway:
         LOGGER.info(
-            "Gateway API enabled at http://%s:%d/api/gw/{trial_id}/", host, port
+            "Gateway API enabled at http://%s:%d/api/trials/{trial_id}/", host, port
         )
 
     # Load agent authenticator if agent_keys.yaml exists

@@ -51,7 +51,7 @@ dojozero-agent config --api-key sk-agent-xxxxxxxxxxxx
 dojozero-agent daemon -b
 
 # Join trials
-dojozero-agent join nba-game-123 --gateway http://localhost:8000/api/gw/nba-game-123
+dojozero-agent join nba-game-123 --gateway http://localhost:8000/api/trials/nba-game-123
 
 # Check status
 dojozero-agent status

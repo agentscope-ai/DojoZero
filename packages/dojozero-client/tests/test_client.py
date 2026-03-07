@@ -17,34 +17,34 @@ class TestGatewayInfo:
         """Test creating GatewayInfo from API response."""
         data = {
             "trial_id": "trial-123",
-            "endpoint": "/api/gw/trial-123",
+            "endpoint": "/api/trials/trial-123",
         }
         info = GatewayInfo.from_dict(data)
         assert info.trial_id == "trial-123"
-        assert info.endpoint == "/api/gw/trial-123"
+        assert info.endpoint == "/api/trials/trial-123"
         assert info.url is None
 
     def test_from_dict_with_url(self):
         """Test creating GatewayInfo with URL."""
         data = {
             "trial_id": "trial-123",
-            "endpoint": "/api/gw/trial-123",
-            "url": "http://localhost:8000/api/gw/trial-123",
+            "endpoint": "/api/trials/trial-123",
+            "url": "http://localhost:8000/api/trials/trial-123",
         }
         info = GatewayInfo.from_dict(data)
-        assert info.url == "http://localhost:8000/api/gw/trial-123"
+        assert info.url == "http://localhost:8000/api/trials/trial-123"
 
     def test_url_field_optional(self):
         """Test URL field is optional."""
-        info = GatewayInfo(trial_id="abc", endpoint="/api/gw/abc")
+        info = GatewayInfo(trial_id="abc", endpoint="/api/trials/abc")
         assert info.url is None
 
         info_with_url = GatewayInfo(
             trial_id="abc",
-            endpoint="/api/gw/abc",
-            url="http://localhost:8000/api/gw/abc",
+            endpoint="/api/trials/abc",
+            url="http://localhost:8000/api/trials/abc",
         )
-        assert info_with_url.url == "http://localhost:8000/api/gw/abc"
+        assert info_with_url.url == "http://localhost:8000/api/trials/abc"
 
 
 class TestDojoClient:
@@ -86,8 +86,8 @@ class TestDojoClientListGateways:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "gateways": [
-                {"trial_id": "trial-1", "endpoint": "/api/gw/trial-1"},
-                {"trial_id": "trial-2", "endpoint": "/api/gw/trial-2"},
+                {"trial_id": "trial-1", "endpoint": "/api/trials/trial-1"},
+                {"trial_id": "trial-2", "endpoint": "/api/trials/trial-2"},
             ],
             "count": 2,
         }
@@ -136,14 +136,14 @@ class TestDojoClientDiscoverTrials:
 
         with patch.object(client, "list_gateways") as mock_list:
             mock_list.return_value = [
-                GatewayInfo(trial_id="trial-1", endpoint="/api/gw/trial-1"),
+                GatewayInfo(trial_id="trial-1", endpoint="/api/trials/trial-1"),
             ]
 
             gateways = await client.discover_trials()
 
             assert len(gateways) == 1
             assert gateways[0].trial_id == "trial-1"
-            assert gateways[0].url == "http://localhost:8000/api/gw/trial-1"
+            assert gateways[0].url == "http://localhost:8000/api/trials/trial-1"
 
     @pytest.mark.asyncio
     async def test_discover_trials_multiple_dashboards(self):
@@ -152,9 +152,9 @@ class TestDojoClientDiscoverTrials:
 
         async def mock_list_gateways(url):
             if "dash-a" in url:
-                return [GatewayInfo(trial_id="trial-1", endpoint="/api/gw/trial-1")]
+                return [GatewayInfo(trial_id="trial-1", endpoint="/api/trials/trial-1")]
             else:
-                return [GatewayInfo(trial_id="trial-2", endpoint="/api/gw/trial-2")]
+                return [GatewayInfo(trial_id="trial-2", endpoint="/api/trials/trial-2")]
 
         with patch.object(client, "list_gateways", side_effect=mock_list_gateways):
             gateways = await client.discover_trials()
@@ -166,9 +166,9 @@ class TestDojoClientDiscoverTrials:
             # Check URLs are correct
             for gw in gateways:
                 if gw.trial_id == "trial-1":
-                    assert gw.url == "http://dash-a:8000/api/gw/trial-1"
+                    assert gw.url == "http://dash-a:8000/api/trials/trial-1"
                 else:
-                    assert gw.url == "http://dash-b:8000/api/gw/trial-2"
+                    assert gw.url == "http://dash-b:8000/api/trials/trial-2"
 
     @pytest.mark.asyncio
     async def test_discover_trials_partial_failure(self):
@@ -177,7 +177,7 @@ class TestDojoClientDiscoverTrials:
 
         async def mock_list_gateways(url):
             if "dash-a" in url:
-                return [GatewayInfo(trial_id="trial-1", endpoint="/api/gw/trial-1")]
+                return [GatewayInfo(trial_id="trial-1", endpoint="/api/trials/trial-1")]
             else:
                 raise ConnectionError("Dashboard unavailable")
 
