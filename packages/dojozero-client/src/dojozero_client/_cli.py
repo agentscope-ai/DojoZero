@@ -26,16 +26,21 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from dojozero_client._config import CONFIG_DIR
+from dojozero_client._config import CONFIG_DIR, SOCKET_PATH
+from dojozero_client._credentials import has_api_key, load_api_key, save_api_key
 from dojozero_client._daemon import (
     Daemon,
     DaemonConfig,
+    UnifiedDaemon,
     get_daemon_status,
     is_daemon_running,
+    is_unified_daemon_running,
     list_running_trials,
     stop_daemon,
+    stop_unified_daemon,
     _trial_state_dir,
 )
+from dojozero_client._rpc import RPCClient, RPCError
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +361,7 @@ def cmd_bets(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_list(args: argparse.Namespace) -> int:
+def cmd_list(_args: argparse.Namespace) -> int:
     """List all running trials."""
     running = list_running_trials()
 
@@ -402,6 +407,229 @@ def cmd_discover(args: argparse.Namespace) -> int:
         print(f"  {g.trial_id}: {g.url or g.endpoint}")
 
     return 0
+
+
+# =============================================================================
+# Unified Daemon Commands (New Architecture)
+# =============================================================================
+
+
+def cmd_daemon_start(args: argparse.Namespace) -> int:
+    """Start the unified daemon."""
+    if is_unified_daemon_running():
+        print("Unified daemon already running")
+        return 1
+
+    if not has_api_key():
+        print(
+            "Error: No API key configured. Run 'dojozero-agent config --api-key <key>' first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.background:
+        # Start as background process
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        log_file = CONFIG_DIR / "daemon.log"
+
+        env = os.environ.copy()
+        env.setdefault("NO_PROXY", "localhost,127.0.0.1")
+
+        cmd = [sys.executable, "-m", "dojozero_client._cli", "daemon"]
+
+        with open(log_file, "a") as f:
+            subprocess.Popen(
+                cmd,
+                start_new_session=True,
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                env=env,
+            )
+        print("Started unified daemon (background)")
+        print(f"Logs: {log_file}")
+        return 0
+
+    # Run in foreground
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    daemon = UnifiedDaemon()
+    try:
+        asyncio.run(daemon.start())
+    except KeyboardInterrupt:
+        print("\nStopping daemon...")
+    return 0
+
+
+def cmd_daemon_stop(_args: argparse.Namespace) -> int:
+    """Stop the unified daemon."""
+    if not is_unified_daemon_running():
+        print("Unified daemon not running")
+        return 1
+
+    if stop_unified_daemon():
+        print("Unified daemon stopped")
+        return 0
+    else:
+        print("Failed to stop daemon", file=sys.stderr)
+        return 1
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    """Configure credentials and settings."""
+    if args.api_key:
+        save_api_key(args.api_key)
+        print("API key saved to ~/.dojozero/credentials.json")
+        return 0
+
+    if args.show:
+        key = load_api_key()
+        if key:
+            # Show masked key
+            masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
+            print(f"API key: {masked}")
+        else:
+            print("No API key configured")
+        return 0
+
+    print("Use --api-key to set key, or --show to display current")
+    return 1
+
+
+def cmd_join(args: argparse.Namespace) -> int:
+    """Join a trial via unified daemon."""
+    if not is_unified_daemon_running():
+        print(
+            "Unified daemon not running. Start with 'dojozero-agent daemon -b'",
+            file=sys.stderr,
+        )
+        return 1
+
+    client = RPCClient(SOCKET_PATH)
+    try:
+        result = client.call_sync(
+            "join",
+            trial_id=args.trial_id,
+            gateway_url=args.gateway,
+        )
+        print(f"Joined trial {args.trial_id} as {result.get('agent_id')}")
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
+    except ConnectionError as e:
+        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_leave(args: argparse.Namespace) -> int:
+    """Leave a trial via unified daemon."""
+    if not is_unified_daemon_running():
+        print("Unified daemon not running", file=sys.stderr)
+        return 1
+
+    client = RPCClient(SOCKET_PATH)
+    try:
+        client.call_sync("leave", trial_id=args.trial_id)
+        print(f"Left trial {args.trial_id}")
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
+    except ConnectionError as e:
+        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_rpc_bet(args: argparse.Namespace) -> int:
+    """Place a bet via unified daemon RPC."""
+    if not is_unified_daemon_running():
+        print("Unified daemon not running", file=sys.stderr)
+        return 1
+
+    client = RPCClient(SOCKET_PATH)
+    try:
+        result = client.call_sync(
+            "bet",
+            trial_id=args.trial_id,
+            amount=args.amount,
+            market=args.market,
+            selection=args.selection,
+        )
+        print(f"Bet placed: ${args.amount} on {args.selection} ({args.market})")
+        print(f"Bet ID: {result.get('bet_id')}")
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
+    except ConnectionError as e:
+        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_rpc_status(args: argparse.Namespace) -> int:
+    """Get status via unified daemon RPC."""
+    if not is_unified_daemon_running():
+        print("Unified daemon not running", file=sys.stderr)
+        return 1
+
+    client = RPCClient(SOCKET_PATH)
+    try:
+        trial_id = getattr(args, "trial_id", None)
+        result = client.call_sync("status", trial_id=trial_id)
+
+        print(f"Trial: {result.get('trial_id', 'unknown')}")
+        print(f"Agent: {result.get('agent_id', 'unknown')}")
+        print(f"Status: {result.get('status', 'unknown')}")
+        print(f"Balance: ${result.get('balance', 0):.2f}")
+
+        odds = result.get("current_odds", {})
+        if odds:
+            print(
+                f"Odds: Home {odds.get('home_probability', 0):.0%}, Away {odds.get('away_probability', 0):.0%}"
+            )
+
+        print(f"Last Update: {result.get('last_updated', 'never')}")
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
+    except ConnectionError as e:
+        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_rpc_list(_args: argparse.Namespace) -> int:
+    """List trials via unified daemon RPC."""
+    if not is_unified_daemon_running():
+        print("Unified daemon not running", file=sys.stderr)
+        return 1
+
+    client = RPCClient(SOCKET_PATH)
+    try:
+        result = client.call_sync("list")
+        trials = result.get("trials", {})
+
+        if not trials:
+            print("No trials connected")
+            return 0
+
+        print(f"Connected trials ({len(trials)}):")
+        for trial_id, info in trials.items():
+            status = "connected" if info.get("connected") else "disconnected"
+            balance = info.get("balance", 0)
+            print(f"  {trial_id}: {status}, balance=${balance:.2f}")
+
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
+    except ConnectionError as e:
+        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
+        return 1
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -534,6 +762,57 @@ def create_parser() -> argparse.ArgumentParser:
         help="Dashboard URL (default: $DOJOZERO_DASHBOARD_URL)",
     )
     p_discover.set_defaults(func=cmd_discover)
+
+    # =========================================================================
+    # Unified Daemon Commands (New Architecture)
+    # =========================================================================
+
+    # daemon - start unified daemon
+    p_daemon = subparsers.add_parser(
+        "daemon", help="Start unified daemon (manages multiple trials)"
+    )
+    p_daemon.add_argument(
+        "--background",
+        "-b",
+        action="store_true",
+        help="Run in background",
+    )
+    p_daemon.set_defaults(func=cmd_daemon_start)
+
+    # daemon-stop - stop unified daemon
+    p_daemon_stop = subparsers.add_parser("daemon-stop", help="Stop the unified daemon")
+    p_daemon_stop.set_defaults(func=cmd_daemon_stop)
+
+    # config - configure credentials
+    p_config = subparsers.add_parser(
+        "config", help="Configure credentials and settings"
+    )
+    p_config.add_argument(
+        "--api-key",
+        help="Set API key (stored securely in ~/.dojozero/credentials.json)",
+    )
+    p_config.add_argument(
+        "--show",
+        action="store_true",
+        help="Show current configuration",
+    )
+    p_config.set_defaults(func=cmd_config)
+
+    # join - join a trial via daemon RPC
+    p_join = subparsers.add_parser("join", help="Join a trial (via unified daemon)")
+    p_join.add_argument("trial_id", help="Trial ID to join")
+    p_join.add_argument(
+        "--gateway",
+        "-g",
+        required=True,
+        help="Gateway URL for this trial",
+    )
+    p_join.set_defaults(func=cmd_join)
+
+    # leave - leave a trial via daemon RPC
+    p_leave = subparsers.add_parser("leave", help="Leave a trial (via unified daemon)")
+    p_leave.add_argument("trial_id", help="Trial ID to leave")
+    p_leave.set_defaults(func=cmd_leave)
 
     return parser
 

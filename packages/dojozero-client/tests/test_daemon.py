@@ -13,8 +13,10 @@ from dojozero_client._daemon import (
     _trial_state_dir,
     get_daemon_status,
     is_daemon_running,
+    is_unified_daemon_running,
     list_running_trials,
     stop_daemon,
+    stop_unified_daemon,
 )
 from dojozero_client._config import CONFIG_DIR
 
@@ -206,3 +208,54 @@ class TestListRunningTrials:
             with patch("dojozero_client._daemon.CONFIG_DIR", Path(tmpdir)):
                 result = list_running_trials()
                 assert result == ["trial-1"]
+
+
+class TestUnifiedDaemonHelpers:
+    """Tests for unified daemon helper functions."""
+
+    def test_is_unified_daemon_running_no_pid_file(self):
+        """Test returns False when no PID file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pid_file = Path(tmpdir) / "daemon.pid"
+            with patch("dojozero_client._daemon.PID_FILE", pid_file):
+                result = is_unified_daemon_running()
+                assert result is False
+
+    def test_is_unified_daemon_running_stale_pid(self):
+        """Test returns False for stale PID."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pid_file = Path(tmpdir) / "daemon.pid"
+            pid_file.write_text("999999999")  # Non-existent PID
+
+            with patch("dojozero_client._daemon.PID_FILE", pid_file):
+                result = is_unified_daemon_running()
+                assert result is False
+
+    def test_is_unified_daemon_running_current_process(self):
+        """Test returns True for current process PID."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pid_file = Path(tmpdir) / "daemon.pid"
+            pid_file.write_text(str(os.getpid()))
+
+            with patch("dojozero_client._daemon.PID_FILE", pid_file):
+                result = is_unified_daemon_running()
+                assert result is True
+
+    def test_stop_unified_daemon_no_pid_file(self):
+        """Test returns False when no PID file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pid_file = Path(tmpdir) / "daemon.pid"
+            with patch("dojozero_client._daemon.PID_FILE", pid_file):
+                result = stop_unified_daemon()
+                assert result is False
+
+    def test_stop_unified_daemon_stale_pid(self):
+        """Test returns False for stale PID (process doesn't exist)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pid_file = Path(tmpdir) / "daemon.pid"
+            pid_file.write_text("999999999")  # Non-existent PID
+
+            with patch("dojozero_client._daemon.PID_FILE", pid_file):
+                result = stop_unified_daemon()
+                # Returns False because os.kill fails
+                assert result is False

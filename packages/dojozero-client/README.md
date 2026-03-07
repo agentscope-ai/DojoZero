@@ -39,9 +39,58 @@ async def main():
 asyncio.run(main())
 ```
 
-## Daemon Mode (dojozero-agent)
+## Unified Daemon Mode (Recommended)
 
-Long-running agent with state persistence for autonomous betting.
+Single daemon process managing multiple trial connections with secure credential storage.
+
+```bash
+# One-time setup: store API key securely
+dojozero-agent config --api-key sk-agent-xxxxxxxxxxxx
+
+# Start unified daemon (manages all trials)
+dojozero-agent daemon -b
+
+# Join trials
+dojozero-agent join nba-game-123 --gateway http://localhost:8000/api/gw/nba-game-123
+
+# Check status
+dojozero-agent status
+
+# Place bets (routed through daemon)
+dojozero-agent bet 100 moneyline home
+
+# List connected trials
+dojozero-agent list
+
+# Leave a trial
+dojozero-agent leave nba-game-123
+
+# Stop daemon
+dojozero-agent daemon-stop
+```
+
+**Benefits of Unified Daemon:**
+- API key stored securely in `~/.dojozero/credentials.json` (mode 0600)
+- No API key in CLI arguments or environment variables
+- Single process manages multiple trials
+- Unix socket RPC for secure local communication
+
+### State Directory (`~/.dojozero/`)
+
+| File | Description |
+|------|-------------|
+| `credentials.json` | API key (mode 0600) |
+| `daemon.sock` | Unix socket for RPC |
+| `daemon.pid` | Unified daemon PID |
+| `daemon.log` | Daemon logs |
+| `trials/{id}/state.json` | Per-trial state |
+| `trials/{id}/events.jsonl` | Per-trial events |
+
+---
+
+## Legacy Daemon Mode (Per-Trial)
+
+Original per-trial daemon mode (still supported for backward compatibility).
 
 ```bash
 # Start daemon (requires gateway URL and API key)
@@ -86,12 +135,12 @@ dojozero-agent stop
 - `dojozero_client._strategy.momentum` - Follow odds trends
 - `dojozero_client._strategy.manual` - No auto-bet (default)
 
-### State Directory (`~/.dojozero/`)
+### Legacy State Directory (`~/.dojozero/trials/{trial-id}/`)
 
 | File | Description |
 |------|-------------|
-| `daemon.pid` | PID file (check if daemon running) |
-| `daemon.log` | Logs (background mode) |
+| `daemon.pid` | Per-trial PID file |
+| `daemon.log` | Per-trial logs |
 | `state.json` | Current state (balance, odds, game state) |
 | `events.jsonl` | Event log (one JSON per line) |
 | `bets.jsonl` | Bet history |

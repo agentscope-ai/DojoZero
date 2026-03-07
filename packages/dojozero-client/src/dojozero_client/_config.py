@@ -25,6 +25,11 @@ DEFAULT_GATEWAY_URL = "http://localhost:8000"
 CONFIG_FILE_NAME = "config.yaml"
 CONFIG_DIR = Path.home() / ".dojozero"
 
+# Unified daemon paths
+SOCKET_PATH = CONFIG_DIR / "daemon.sock"
+PID_FILE = CONFIG_DIR / "daemon.pid"
+TRIALS_DIR = CONFIG_DIR / "trials"
+
 
 def _default_dashboard_urls() -> list[str]:
     return []
@@ -146,6 +151,10 @@ def _load_config_file(config_file: Path | None = None) -> dict[str, Any] | None:
 
 __all__ = [
     "ClientConfig",
+    "CONFIG_DIR",
     "DEFAULT_GATEWAY_URL",
+    "PID_FILE",
+    "SOCKET_PATH",
+    "TRIALS_DIR",
     "load_config",
 ]
