@@ -347,9 +347,9 @@ async def run_mock_dashboard(
 ) -> tuple[asyncio.Task, asyncio.Event, Any]:
     """Start a mock dashboard server with gateway routing (dashboard mode).
 
-    This simulates `dojo0 serve --enable-gateway` by providing:
-    - GET /api/gw - List available trials
-    - /api/gw/{trial_id}/... - Route to trial's gateway
+    This simulates `dojo0 serve` by providing:
+    - GET /api/gateways - List available trials
+    - /api/trials/{trial_id}/... - Route to trial's gateway
 
     Returns:
         Tuple of (server_task, ready_event, server)
@@ -370,16 +370,16 @@ async def run_mock_dashboard(
     # Main dashboard app
     dashboard = FastAPI(title="Demo Dashboard")
 
-    @dashboard.get("/api/gw")
+    @dashboard.get("/api/gateways")
     async def list_gateways():
         """List available trial gateways."""
         gateways = [
-            {"trial_id": tid, "endpoint": f"/api/gw/{tid}"} for tid in trial_ids
+            {"trial_id": tid, "endpoint": f"/api/trials/{tid}"} for tid in trial_ids
         ]
         return {"gateways": gateways, "count": len(gateways)}
 
     @dashboard.api_route(
-        "/api/gw/{trial_id}/{path:path}",
+        "/api/trials/{trial_id}/{path:path}",
         methods=["GET", "POST", "PUT", "DELETE"],
     )
     async def route_to_gateway(trial_id: str, path: str, request: Request):

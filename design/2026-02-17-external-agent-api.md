@@ -73,20 +73,20 @@ graph LR
 
 | Mode | Topology | How to Run |
 |------|----------|------------|
-| **Local dev** | Per-trial | `dojo0 run --enable-gateway --gateway-port 8080` |
-| **Dashboard Server** | Routing proxy | `dojo0 serve --enable-gateway` |
+| **Local dev** | Per-trial | `dojo0 run --gateway-port 8080` |
+| **Dashboard Server** | Routing proxy | `dojo0 serve` |
 | **Container (prod)** | Per-trial + reverse proxy | K8s Ingress routes to containers |
 
 **Local dev:**
 ```bash
-dojo0 run --params trial.yaml --enable-gateway
+dojo0 run --params trial.yaml
 # Agent connects to localhost:8080/...
 ```
 
 **Dashboard Server:**
 ```bash
-dojo0 serve --enable-gateway --trace-backend jaeger
-# Agent connects to localhost:8000/api/gw/{trial_id}/...
+dojo0 serve --trace-backend jaeger
+# Agent connects to localhost:8000/api/trials/{trial_id}/...
 # Dashboard routes to correct trial internally
 ```
 
@@ -267,7 +267,7 @@ DojoZero supports Ray for distributed execution (`--runtime-provider ray`).
 services:
   dashboard-a:
     image: dojozero
-    command: ["dojo0", "serve", "--enable-gateway", "--port", "8000"]
+    command: ["dojo0", "serve", "--port", "8000"]
     ports:
       - "8001:8000"
     environment:
@@ -275,7 +275,7 @@ services:
 
   dashboard-b:
     image: dojozero
-    command: ["dojo0", "serve", "--enable-gateway", "--port", "8000"]
+    command: ["dojo0", "serve", "--port", "8000"]
     ports:
       - "8002:8000"
     environment:

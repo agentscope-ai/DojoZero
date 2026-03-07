@@ -585,7 +585,7 @@ class GatewayInfo:
 class DojoClient:
     """DojoZero client for external agents.
 
-    Standalone mode (dojo0 run --enable-gateway):
+    Standalone mode (dojo0 run):
         ```
         async with client.connect_trial(
             gateway_url="http://localhost:8080",
@@ -595,7 +595,7 @@ class DojoClient:
                 ...
         ```
 
-    Dashboard mode (dojo0 serve --enable-gateway):
+    Dashboard mode (dojo0 serve):
         ```
         # Discover available trials (queries all configured dashboards)
         gateways = await client.discover_trials()

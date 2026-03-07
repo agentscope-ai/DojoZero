@@ -1,6 +1,6 @@
 """DojoZero Client - Python SDK for external agents.
 
-Standalone mode (dojo0 run --enable-gateway):
+Standalone mode (dojo0 run):
 
     from dojozero_client import DojoClient
 
@@ -13,7 +13,7 @@ Standalone mode (dojo0 run --enable-gateway):
         async for event in trial.events():
             ...
 
-Dashboard mode (dojo0 serve --enable-gateway):
+Dashboard mode (dojo0 serve):
 
     from dojozero_client import DojoClient
 

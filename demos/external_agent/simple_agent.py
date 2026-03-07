@@ -12,11 +12,11 @@ Usage:
     dojo0 agents add --id my-agent --name "My Agent"
 
     # Standalone mode (single trial):
-    dojo0 run --params your_trial.yaml --enable-gateway --gateway-port 8080
+    dojo0 run --params your_trial.yaml --gateway-port 8080
     python simple_agent.py --gateway http://localhost:8080 --trial-id <trial-id> --api-key sk-agent-xxx
 
     # Dashboard mode (multiple trials):
-    dojo0 serve --enable-gateway
+    dojo0 serve
     python simple_agent.py --dashboard http://localhost:8000 --trial-id <trial-id> --api-key sk-agent-xxx
 """
 

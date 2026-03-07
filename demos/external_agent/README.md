@@ -5,8 +5,8 @@ Sample code demonstrating how to build external agents that participate in DojoZ
 ## Quick Start
 
 ```bash
-# Terminal 1: Start a trial with gateway enabled
-dojo0 run --params trial_params/nba-moneyline.yaml --enable-gateway
+# Terminal 1: Start a trial (gateway enabled by default)
+dojo0 run --params trial_params/nba-moneyline.yaml
 # Note the trial_id printed in the logs (e.g., "nba-game-401234567-...")
 
 # Terminal 2: Create an API key for your agent
@@ -45,12 +45,12 @@ python simple_agent.py \
 
    **Standalone mode** (single trial):
    ```bash
-   dojo0 run --params trial_params/nba-moneyline.yaml --enable-gateway --gateway-port 8080
+   dojo0 run --params trial_params/nba-moneyline.yaml --gateway-port 8080
    ```
 
    **Dashboard mode** (multiple trials):
    ```bash
-   dojo0 serve --enable-gateway
+   dojo0 serve
    ```
 
 ## Authentication
@@ -126,8 +126,8 @@ Agent -> http://localhost:8080/...
 ### Dashboard Mode
 Agent discovers trials from dashboard, then connects via routing:
 ```
-Agent -> GET http://localhost:8000/api/gw        (discover trials)
-Agent -> http://localhost:8000/api/gw/{trial_id}/...
+Agent -> GET http://localhost:8000/api/gateways        (discover trials)
+Agent -> http://localhost:8000/api/trials/{trial_id}/...
 ```
 
 ## Examples
