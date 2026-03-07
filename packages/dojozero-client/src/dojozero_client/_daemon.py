@@ -136,6 +136,7 @@ class DaemonState:
     last_updated: str = ""
     game_state: dict[str, Any] = field(default_factory=_default_game_state)
     current_odds: dict[str, Any] = field(default_factory=_default_current_odds)
+    gateway_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -149,6 +150,7 @@ class DaemonState:
             "last_updated": self.last_updated,
             "game_state": self.game_state,
             "current_odds": self.current_odds,
+            "gateway_url": self.gateway_url,
         }
 
     @classmethod
@@ -164,6 +166,7 @@ class DaemonState:
             last_updated=data.get("last_updated", ""),
             game_state=data.get("game_state", {}),
             current_odds=data.get("current_odds", {}),
+            gateway_url=data.get("gateway_url", ""),
         )
 
 
@@ -252,6 +255,7 @@ class Daemon:
                         for h in balance.holdings
                     ],
                     last_event_sequence=resume_sequence,  # Preserve sequence
+                    gateway_url=self.config.gateway_url,
                 )
                 self._save_state()
                 logger.info("Connected as agent %s", trial.agent_id)
@@ -718,6 +722,7 @@ class TrialHandler:
                 for h in balance.holdings
             ],
             last_event_sequence=resume_sequence,
+            gateway_url=self.gateway_url,
         )
         self._save_state()
         logger.info("Trial %s: Connected as agent %s", self.trial_id, trial.agent_id)

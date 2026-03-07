@@ -69,6 +69,7 @@ class TestDaemonState:
             status="connected",
             balance=1000.0,
             last_event_sequence=42,
+            gateway_url="http://localhost:8000/api/gw/test-trial",
         )
         data = state.to_dict()
         assert data["trial_id"] == "test-trial"
@@ -76,6 +77,7 @@ class TestDaemonState:
         assert data["status"] == "connected"
         assert data["balance"] == 1000.0
         assert data["last_event_sequence"] == 42
+        assert data["gateway_url"] == "http://localhost:8000/api/gw/test-trial"
 
     def test_from_dict(self):
         """Test deserialization from dict."""
@@ -85,6 +87,7 @@ class TestDaemonState:
             "status": "connected",
             "balance": 500.0,
             "last_event_sequence": 100,
+            "gateway_url": "http://localhost:8080/api/gw/test-trial",
         }
         state = DaemonState.from_dict(data)
         assert state.trial_id == "test-trial"
@@ -92,6 +95,17 @@ class TestDaemonState:
         assert state.status == "connected"
         assert state.balance == 500.0
         assert state.last_event_sequence == 100
+        assert state.gateway_url == "http://localhost:8080/api/gw/test-trial"
+
+    def test_from_dict_without_gateway_url(self):
+        """Test deserialization without gateway_url (backward compat)."""
+        data = {
+            "trial_id": "test-trial",
+            "status": "connected",
+        }
+        state = DaemonState.from_dict(data)
+        assert state.trial_id == "test-trial"
+        assert state.gateway_url == ""  # Default empty string
 
 
 class TestDaemonHelpers:

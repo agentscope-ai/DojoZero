@@ -266,7 +266,10 @@ def cmd_bet(args: argparse.Namespace) -> int:
         print("No active trial. Use 'start <trial-id>' first.", file=sys.stderr)
         return 1
 
-    gateway_url = os.environ.get("DOJOZERO_GATEWAY_URL", "http://localhost:8000")
+    # Use gateway_url from state (saved by daemon), fallback to env var
+    gateway_url = state.get("gateway_url") or os.environ.get(
+        "DOJOZERO_GATEWAY_URL", "http://localhost:8000"
+    )
     agent_id = state.get("agent_id", "")
 
     try:
@@ -276,7 +279,7 @@ def cmd_bet(args: argparse.Namespace) -> int:
             json={
                 "market": args.market,
                 "selection": args.selection,
-                "amount": args.amount,
+                "amount": str(args.amount),  # API expects string for decimal precision
             },
             timeout=10.0,
         )
