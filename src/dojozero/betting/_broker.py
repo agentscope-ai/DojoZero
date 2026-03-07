@@ -74,6 +74,37 @@ BrokerStateChangeType = Literal[
 # Logger for broker operations
 logger = logging.getLogger(__name__)
 
+
+def _odds_info_to_str(odds_info: OddsInfo) -> str:
+    """Format OddsInfo to a human-readable string (same style as _format_odds_update).
+
+    Probabilities are included here since this string replaces the old odds_update
+    event text that was pushed to the agent.
+    """
+    lines: list[str] = []
+
+    ml = odds_info.moneyline
+    if ml:
+        lines.append(
+            f"- Home: {ml.home_odds:.2f} ({ml.home_probability * 100:.1f}% implied probability)"
+        )
+        lines.append(
+            f"- Away: {ml.away_odds:.2f} ({ml.away_probability * 100:.1f}% implied probability)"
+        )
+
+    for sp in odds_info.spreads:
+        lines.append(
+            f"- Spread: {sp.spread:+.1f} (Home: {sp.home_odds:.2f}, Away: {sp.away_odds:.2f})"
+        )
+
+    for t in odds_info.totals:
+        lines.append(
+            f"- Total: O/U {t.total:.1f} (Over: {t.over_odds:.2f}, Under: {t.under_odds:.2f})"
+        )
+
+    return "\n".join(lines)
+
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -360,6 +391,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 spread_updates=spread_updates,
                 total_updates=total_updates,
             )
+            if self._event:
+                self._event.current_odds = _odds_info_to_str(pending_odds)
         except Exception as e:
             logger.error(
                 "Failed to apply pending odds for event %s: %s",
@@ -488,6 +521,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 spread_updates=spread_updates,
                 total_updates=total_updates,
             )
+            self._event.current_odds = _odds_info_to_str(odds_info)
         elif event_id in self._pending_team_info:
             # We have team info from GameUpdateEvent - initialize event with probabilities
             team_info = self._pending_team_info[event_id]
@@ -519,6 +553,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 spread_updates=spread_updates,
                 total_updates=total_updates,
             )
+            if self._event:
+                self._event.current_odds = _odds_info_to_str(odds_info)
             # Clear pending team info
             del self._pending_team_info[event_id]
         else:
@@ -1923,9 +1959,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         @tool
         async def get_event() -> str:
-            """Get current game information and all available betting options.
+            """Get current game information and all available betting options, including the latest market odds.
 
-            Call this first before placing any bets. The broker handles one event at a time.
+            Call this first before placing any bets. The broker handles one event at a time.Call this tool proactively to check the current market odds at any time and base your decisions on the latest data.
 
             Returns:
                 JSON string (parse with JSON) or "null" if no event available. When event exists, returns object with:
@@ -1956,6 +1992,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
                 Metadata:
                 - last_odds_update: Last probability update time (ISO format string) or null
+                - current_odds: Latest market odds as a formatted string, or null if not yet received.
+                  Same format as the old odds_update event, e.g.:
+                  "- Home: 1.20 (83.5% implied probability)\\n- Away: 6.06 (16.5% implied probability)\\n- Spread: -12.5 (...)"
+                  Check this field to see the current market prices before placing a bet.
                 - betting_closed_at: When betting closed (ISO format string) or null if still open
 
             Note: Probabilities represent the price per share. If you bet $100 at probability 0.56, you get 100/0.56 ≈ 178.57 shares.

@@ -134,6 +134,7 @@ class BettingEvent(BaseModel):
         description="Total (over/under) betting lines: {total_value: {'over_probability': Decimal, 'under_probability': Decimal}}",
     )
     last_odds_update: Optional[datetime] = None
+    current_odds: Optional[str] = None
     betting_closed_at: Optional[datetime] = None
 
     @computed_field

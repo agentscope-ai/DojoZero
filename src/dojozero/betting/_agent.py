@@ -10,7 +10,6 @@ import inspect
 import json
 import logging
 from collections import deque
-from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Sequence, TypedDict
 
 from agentscope.agent import ReActAgent
@@ -339,10 +338,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         self._head_events: int = 10
         self._tail_events: int = 10
         self._max_event_chars: int = 200
-
-        # Throttle settings for odds updates (at most once per cooldown period)
-        self._odds_update_cooldown = timedelta(minutes=3)
-        self._last_odds_update_time: datetime | None = None
 
     @property
     def name(self) -> str:
@@ -688,44 +683,33 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         return "\n".join(lines)
 
-    def _filter_throttled_events(
+    def _filter_excluded_events(
         self, events: list[StreamEvent[Any]]
     ) -> list[StreamEvent[Any]]:
-        """Filter out events that should be throttled.
+        """Filter out events that should not wake the agent.
 
-        Currently throttles ODDS_UPDATE events to at most once per cooldown period.
-        Uses event timestamps (not wall-clock time) so backtest replay works correctly.
+        ODDS_UPDATE events are excluded because odds are now pull-based: the agent
+        reads current odds by calling get_event() rather than being pushed them.
 
         Args:
             events: List of events to filter
 
         Returns:
-            Filtered list of events (throttled events removed)
+            Filtered list of events (excluded events removed)
         """
         filtered: list[StreamEvent[Any]] = []
 
         for event in events:
             payload = event.payload
 
-            # Check if this is an OddsUpdateEvent that should be throttled
             if isinstance(payload, DataEvent):
                 event_type = getattr(payload, "event_type", None)
                 if event_type == EventTypes.ODDS_UPDATE:
-                    # Use event timestamp for cooldown (works for both live and backtest)
-                    event_time = payload.timestamp
-                    if (
-                        self._last_odds_update_time
-                        and (event_time - self._last_odds_update_time)
-                        < self._odds_update_cooldown
-                    ):
-                        logger.debug(
-                            "agent '%s' throttling odds_update (last update: %s ago)",
-                            self.actor_id,
-                            event_time - self._last_odds_update_time,
-                        )
-                        continue  # Skip this event
-                    # Update last processed time with event timestamp
-                    self._last_odds_update_time = event_time
+                    logger.debug(
+                        "agent '%s' ignoring odds_update event (pull-based via get_event)",
+                        self.actor_id,
+                    )
+                    continue
 
             filtered.append(event)
 
@@ -740,10 +724,10 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         if not events:
             return
 
-        # Apply throttling filter BEFORE any processing
-        events = self._filter_throttled_events(events)
+        # Apply event filter BEFORE any processing
+        events = self._filter_excluded_events(events)
         if not events:
-            logger.debug("agent '%s' all events throttled, skipping", self.actor_id)
+            logger.debug("agent '%s' all events filtered, skipping", self.actor_id)
             return
 
         # Update event count
