@@ -334,6 +334,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Memory compression settings
         self._event_history: deque[str] = deque(maxlen=1000)
         self._compressed_context: str | None = None
+        self._last_summarized_event_count: int = (
+            0  # len(_event_history) at last summary
+        )
         self._memory_token_threshold: int = 9000
         self._head_events: int = 10
         self._tail_events: int = 10
@@ -431,14 +434,38 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
     def _build_summary_request(self) -> list[dict] | None:
         """Build the LLM summarization request from event history.
 
+        Uses incremental summarization: only events added since the last summary
+        are included as new content; the previous compressed summary (if any) is
+        provided as prior context so the LLM can produce an updated summary
+        without re-reading the full event history.
+
         Returns None if there is nothing to summarize.
         """
-        events = list(self._event_history)
-        if not events:
+        all_events = list(self._event_history)
+        # Only events added after the last summary
+        new_events = all_events[self._last_summarized_event_count :]
+        if not new_events and not self._compressed_context:
             return None
 
-        transcript = "\n".join(events)
-        if not transcript:
+        transcript = "\n".join(new_events) if new_events else ""
+
+        prior_context_block = ""
+        if self._compressed_context:
+            prior_context_block = (
+                "---PREVIOUS SUMMARY---\n"
+                f"{self._compressed_context}\n"
+                "---END PREVIOUS SUMMARY---\n\n"
+            )
+
+        new_events_block = ""
+        if transcript:
+            new_events_block = (
+                "---NEW EVENTS SINCE LAST SUMMARY---\n"
+                f"{transcript}\n"
+                "---END NEW EVENTS---\n\n"
+            )
+
+        if not prior_context_block and not new_events_block:
             return None
 
         return [
@@ -446,10 +473,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 "role": "user",
                 "content": (
                     f"{MEMORY_SUMMARY_PROMPT}\n\n"
-                    "---BEGIN CONVERSATION---\n"
-                    f"{transcript}\n"
-                    "---END CONVERSATION---\n\n"
-                    "Provide the compressed summary:"
+                    f"{prior_context_block}"
+                    f"{new_events_block}"
+                    "Provide the updated compressed summary:"
                 ),
             }
         ]
@@ -502,6 +528,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             "[Your Betting History]\n"
             f"{bet_history}"
         )
+
+        # Record how many events from _event_history are covered by this summary
+        self._last_summarized_event_count = len(self._event_history)
 
         # Clear the ReActAgent's memory
         self._react_agent.memory = InMemoryMemory()
@@ -754,8 +783,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             input_content = (
                 f"{self._compressed_context}\n\n[New Events]\n{input_content}"
             )
-            # Clear compressed context after use
-            self._compressed_context = None
 
         # Log event processing with stream count summary
         logger.info(
