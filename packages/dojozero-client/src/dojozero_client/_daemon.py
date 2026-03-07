@@ -98,7 +98,6 @@ class DaemonConfig:
     trial_id: str
     gateway_url: str = "http://localhost:8080"
     api_key: str = ""
-    agent_id: str = ""  # Internal use only, populated from server
     state_dir: Path = field(default_factory=_unset_state_dir)
     strategy: str | None = None
     strategy_config: dict[str, Any] = field(default_factory=_default_strategy_config)
@@ -107,8 +106,6 @@ class DaemonConfig:
     filters: list[str] = field(default_factory=_default_filters)
 
     def __post_init__(self) -> None:
-        if not self.agent_id:
-            self.agent_id = f"agent-{os.getpid()}"
         # Auto-compute state_dir from trial_id if not explicitly set
         if self.state_dir == Path():
             self.state_dir = _trial_state_dir(self.trial_id)
