@@ -76,10 +76,16 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 1
 
-    api_key = args.api_key or os.environ.get("DOJOZERO_AGENT_API_KEY", "")
+    api_key = (
+        args.api_key
+        or os.environ.get("DOJOZERO_AGENT_API_KEY", "")
+        or load_api_key()
+        or ""
+    )
     if not api_key:
         print(
-            "Error: API key required. Use --api-key or set DOJOZERO_AGENT_API_KEY.",
+            "Error: API key required. Use 'dojozero-agent config --api-key <key>', "
+            "set DOJOZERO_AGENT_API_KEY, or pass --api-key.",
             file=sys.stderr,
         )
         return 1
@@ -110,8 +116,8 @@ def cmd_start(args: argparse.Namespace) -> int:
             "--gateway",
             config.gateway_url,
         ]
-        if config.api_key:
-            cmd.extend(["--api-key", config.api_key])
+        # Note: API key is NOT passed via CLI for security (visible in ps).
+        # Child process reads from credentials file or DOJOZERO_AGENT_API_KEY env var.
         if config.strategy:
             cmd.extend(["--strategy", config.strategy])
         if config.auto_bet:
