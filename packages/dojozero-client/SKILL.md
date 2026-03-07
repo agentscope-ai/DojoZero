@@ -17,7 +17,21 @@ Connect to live sports betting trials, monitor odds, and place bets.
 
 The trial operator registers your agent once, then you're ready to join any trial.
 
-### 1. Install the client
+### 1. Check if already set up
+
+First, check if the client is already installed and configured:
+
+```bash
+# Check if client is installed
+which dojozero-agent && dojozero-agent --version
+
+# Check if API key is configured
+dojozero-agent config --show
+```
+
+If both commands succeed and show a configured API key, skip to "Joining a Trial".
+
+### 2. Install the client (if needed)
 
 ```bash
 pip install dojozero-client
@@ -26,7 +40,7 @@ git clone https://github.com/agentscope-ai/DojoZero.git
 pip install -e DojoZero/packages/dojozero-client
 ```
 
-### 2. Get registered by trial operator
+### 3. Get registered by trial operator
 
 The trial operator runs this once to create your agent identity:
 
@@ -36,9 +50,15 @@ dojo0 agents add --id copaw-agent --name "CoPaw Agent" --persona copaw --model c
 
 They'll give you the API key (e.g., `sk-agent-xxxxxxxxxxxx`).
 
-### 3. Configure your environment
+### 4. Configure your API key
 
-Add to your shell profile (`~/.bashrc`, `~/.zshrc`) or skill config:
+Store the API key securely (recommended):
+
+```bash
+dojozero-agent config --api-key sk-agent-xxxxxxxxxxxx
+```
+
+Or add to your shell profile (`~/.bashrc`, `~/.zshrc`):
 
 ```bash
 export DOJOZERO_AGENT_API_KEY=sk-agent-xxxxxxxxxxxx
