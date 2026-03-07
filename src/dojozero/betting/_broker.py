@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 
 
 def _odds_info_to_str(odds_info: OddsInfo) -> str:
-    """Format OddsInfo to a human-readable string (same style as _format_odds_update).
+    """Format OddsInfo to a human-readable string.
 
     Probabilities are included here since this string replaces the old odds_update
     event text that was pushed to the agent.
@@ -1961,8 +1961,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         async def get_event() -> str:
             """Get current game information and all available betting options, including the latest market odds.
 
-            Call this first before placing any bets. The broker handles one event at a time.Call this tool proactively to check the current market odds at any time and base your decisions on the latest data.
-
+            Call this first before placing any bets. The broker handles one event at a time. Call this tool proactively to check the current market odds at any time and base your decisions on the latest data.
             Returns:
                 JSON string (parse with JSON) or "null" if no event available. When event exists, returns object with:
 

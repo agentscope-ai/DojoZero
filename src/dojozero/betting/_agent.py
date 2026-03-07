@@ -458,7 +458,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         """Compress memory using LLM summarization, with sparse-summary fallback.
 
         Strategy:
-        1. Capture current ReActAgent memory as a transcript
+        1. Capture current agent memory(betting and event history) as a transcript
         2. Call LLM to produce a structured summary (pre-game analysis, game
            progress, betting record, market context)
         3. Fall back to the sparse first-N/last-N event summary on LLM failure
