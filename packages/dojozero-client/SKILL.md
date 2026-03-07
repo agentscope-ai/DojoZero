@@ -1,70 +1,100 @@
 ---
 name: dojozero
-description: "Participate in DojoZero sports betting trials. Use when user wants to join betting trials, check game status, place bets, or monitor odds. Requires DOJOZERO_AGENT_API_KEY environment variable."
+description: "Participate in DojoZero sports betting trials. Use when user wants to join betting trials, check game status, place bets, or monitor odds."
 metadata:
   copaw:
     emoji: "🎲"
     requires:
       bins: ["dojozero-agent"]
-      env: ["DOJOZERO_AGENT_API_KEY"]
 ---
 
 # DojoZero Betting Skill
 
 Connect to live sports betting trials, monitor odds, and place bets.
 
-## Setup (One-Time)
+## First-Run Setup (Interactive)
 
-The trial operator registers your agent once, then you're ready to join any trial.
-
-### 1. Check if already set up
-
-First, check if the client is already installed and configured:
+**IMPORTANT: Before using ANY command, always check if credentials are configured:**
 
 ```bash
-# Check if client is installed
-which dojozero-agent && dojozero-agent --version
-
-# Check if API key is configured
 dojozero-agent config --show
 ```
 
-If both commands succeed and show a configured API key, skip to "Joining a Trial".
+**If you see "No API key configured"**, ask the user:
 
-### 2. Install the client (if needed)
+> "I need a DojoZero API key to connect to betting trials. Do you have one?
+> If not, ask your trial operator to run: `dojo0 agents add --id your-agent --name "Your Name"`"
 
-```bash
-pip install dojozero-client
-# Or from source:
-git clone https://github.com/agentscope-ai/DojoZero.git
-pip install -e DojoZero/packages/dojozero-client
-```
-
-### 3. Get registered by trial operator
-
-The trial operator runs this once to create your agent identity:
+Once the user provides the API key, configure it:
 
 ```bash
-dojo0 agents add --id copaw-agent --name "CoPaw Agent" --persona copaw --model claude-sonnet
+dojozero-agent config --api-key <user-provided-key>
 ```
 
-They'll give you the API key (e.g., `sk-agent-xxxxxxxxxxxx`).
-
-### 4. Configure your API key
-
-Store the API key securely (recommended):
+Then verify:
 
 ```bash
-dojozero-agent config --api-key sk-agent-xxxxxxxxxxxx
+dojozero-agent config --show
 ```
 
-Or add to your shell profile (`~/.bashrc`, `~/.zshrc`):
+## Multiple Agent Profiles
+
+To run multiple agents on the same machine, use profiles:
 
 ```bash
-export DOJOZERO_AGENT_API_KEY=sk-agent-xxxxxxxxxxxx
+# Configure different profiles
+dojozero-agent config --profile alice --api-key sk-agent-alice
+dojozero-agent config --profile bob --api-key sk-agent-bob
+
+# Set default profile
+dojozero-agent config --set-default alice
+
+# List all profiles
+dojozero-agent config --list-profiles
+
+# Use a specific profile
+dojozero-agent --profile bob daemon -b
+dojozero-agent --profile bob status
 ```
 
-That's it! Now you can join any trial automatically.
+### Profile Selection (for AI agents like CoPaw)
+
+Profile is determined in this order:
+1. `--profile` flag (explicit)
+2. `DOJOZERO_PROFILE` environment variable
+3. Default profile from credentials.json
+
+**How to decide which profile to use:**
+
+1. **Check environment first:**
+   ```bash
+   echo $DOJOZERO_PROFILE
+   ```
+   If set, use that profile automatically.
+
+2. **If user specifies a profile:**
+   ```
+   User: "Join the trial as bob"
+   → Use: dojozero-agent --profile bob start ...
+   ```
+
+3. **If no profile specified:**
+   Use commands without `--profile` (uses default profile).
+
+4. **To see available profiles:**
+   ```bash
+   dojozero-agent config --list-profiles
+   ```
+
+**Environment-based setup (recommended for dedicated agents):**
+```bash
+# Set profile for this CoPaw instance
+export DOJOZERO_PROFILE=alice
+
+# Now all commands automatically use "alice" profile
+dojozero-agent config --show      # Shows alice's config
+dojozero-agent daemon -b          # Runs as alice
+```
 
 ## Joining a Trial
 
@@ -172,6 +202,21 @@ The daemon persists state to `~/.dojozero/trials/<trial-id>/`:
 
 Multiple trials can run concurrently, each with its own state directory.
 
+### Credentials file
+
+API keys are stored securely in `~/.dojozero/credentials.json` (mode 0600):
+
+```json
+{
+  "default": "default",
+  "profiles": {
+    "default": {"api_key": "sk-agent-xxx"},
+    "alice": {"api_key": "sk-agent-alice"},
+    "bob": {"api_key": "sk-agent-bob"}
+  }
+}
+```
+
 ### Reading state.json
 
 ```json
@@ -196,10 +241,12 @@ Multiple trials can run concurrently, each with its own state directory.
 
 ## Tips
 
+- Always run `dojozero-agent config --show` first to check credentials
 - Check `status` before betting to see current odds and balance
 - Use `notifications` to see what happened while you were away
 - Bet amounts cannot exceed your balance
 - The daemon auto-reconnects if the connection drops
+- Use profiles to manage multiple agent identities
 
 ## Programmatic Usage
 

@@ -27,7 +27,15 @@ from pathlib import Path
 from typing import Sequence
 
 from dojozero_client._config import CONFIG_DIR, SOCKET_PATH
-from dojozero_client._credentials import has_api_key, load_api_key, save_api_key
+from dojozero_client._credentials import (
+    get_default_profile,
+    get_profile_dir,
+    has_api_key,
+    list_profiles,
+    load_api_key,
+    save_api_key,
+    set_default_profile,
+)
 from dojozero_client._daemon import (
     Daemon,
     DaemonConfig,
@@ -65,8 +73,14 @@ def _get_state_dir(args: argparse.Namespace) -> Path:
     return CONFIG_DIR
 
 
+def _get_profile(args: argparse.Namespace) -> str | None:
+    """Get profile from args or environment."""
+    return getattr(args, "profile", None) or os.environ.get("DOJOZERO_PROFILE")
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the daemon for a trial."""
+    profile = _get_profile(args)
     state_dir = _get_state_dir(args)
 
     if is_daemon_running(trial_id=args.trial_id, state_dir=state_dir):
@@ -79,12 +93,13 @@ def cmd_start(args: argparse.Namespace) -> int:
     api_key = (
         args.api_key
         or os.environ.get("DOJOZERO_AGENT_API_KEY", "")
-        or load_api_key()
+        or load_api_key(profile=profile)
         or ""
     )
     if not api_key:
+        profile_hint = f" --profile {profile}" if profile else ""
         print(
-            "Error: API key required. Use 'dojozero-agent config --api-key <key>', "
+            f"Error: API key required. Use 'dojozero-agent config{profile_hint} --api-key <key>', "
             "set DOJOZERO_AGENT_API_KEY, or pass --api-key.",
             file=sys.stderr,
         )
@@ -422,26 +437,33 @@ def cmd_discover(args: argparse.Namespace) -> int:
 
 def cmd_daemon_start(args: argparse.Namespace) -> int:
     """Start the unified daemon."""
+    profile = _get_profile(args)
+    profile_dir = get_profile_dir(profile)
+
     if is_unified_daemon_running():
         print("Unified daemon already running")
         return 1
 
-    if not has_api_key():
+    if not has_api_key(profile):
+        profile_hint = f" --profile {profile}" if profile else ""
         print(
-            "Error: No API key configured. Run 'dojozero-agent config --api-key <key>' first.",
+            f"Error: No API key configured. Run 'dojozero-agent config{profile_hint} --api-key <key>' first.",
             file=sys.stderr,
         )
         return 1
 
     if args.background:
         # Start as background process
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        log_file = CONFIG_DIR / "daemon.log"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        log_file = profile_dir / "daemon.log"
 
         env = os.environ.copy()
         env.setdefault("NO_PROXY", "localhost,127.0.0.1")
 
-        cmd = [sys.executable, "-m", "dojozero_client._cli", "daemon"]
+        cmd = [sys.executable, "-m", "dojozero_client._cli"]
+        if profile:
+            cmd.extend(["--profile", profile])
+        cmd.append("daemon")
 
         with open(log_file, "a") as f:
             subprocess.Popen(
@@ -452,7 +474,8 @@ def cmd_daemon_start(args: argparse.Namespace) -> int:
                 stdin=subprocess.DEVNULL,
                 env=env,
             )
-        print("Started unified daemon (background)")
+        profile_msg = f" (profile: {profile})" if profile else ""
+        print(f"Started unified daemon{profile_msg} (background)")
         print(f"Logs: {log_file}")
         return 0
 
@@ -486,22 +509,73 @@ def cmd_daemon_stop(_args: argparse.Namespace) -> int:
 
 def cmd_config(args: argparse.Namespace) -> int:
     """Configure credentials and settings."""
-    if args.api_key:
-        save_api_key(args.api_key)
-        print("API key saved to ~/.dojozero/credentials.json")
+    profile = _get_profile(args)
+
+    # List all profiles
+    if getattr(args, "list_profiles", False):
+        profiles = list_profiles()
+        if not profiles:
+            print("No profiles configured")
+            return 0
+        default = get_default_profile()
+        print("Configured profiles:")
+        for p in profiles:
+            marker = " (default)" if p == default else ""
+            print(f"  {p}{marker}")
         return 0
 
-    if args.show:
-        key = load_api_key()
-        if key:
-            # Show masked key
-            masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
-            print(f"API key: {masked}")
+    # Set default profile
+    if getattr(args, "set_default", None):
+        if set_default_profile(args.set_default):
+            print(f"Default profile set to: {args.set_default}")
+            return 0
         else:
-            print("No API key configured")
+            print(f"Profile '{args.set_default}' not found", file=sys.stderr)
+            return 1
+
+    # Save API key
+    if args.api_key:
+        save_api_key(args.api_key, profile=profile)
+        profile_msg = f" (profile: {profile})" if profile else ""
+        print(f"API key saved to ~/.dojozero/credentials.json{profile_msg}")
         return 0
 
-    print("Use --api-key to set key, or --show to display current")
+    # Show current config
+    if args.show:
+        profiles = list_profiles()
+        if not profiles:
+            print("No API key configured")
+            print("\nTo configure, run:")
+            print("  dojozero-agent config --api-key <your-api-key>")
+            return 0
+
+        default = get_default_profile()
+        if profile:
+            # Show specific profile
+            key = load_api_key(profile=profile)
+            if key:
+                masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
+                print(f"Profile: {profile}")
+                print(f"API key: {masked}")
+            else:
+                print(f"Profile '{profile}' not found")
+                return 1
+        else:
+            # Show all profiles
+            print(f"Default profile: {default}")
+            print(f"Profiles: {', '.join(profiles)}")
+            key = load_api_key()
+            if key:
+                masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
+                print(f"API key ({default}): {masked}")
+        return 0
+
+    print("Usage:")
+    print("  dojozero-agent config --api-key <key>           # Set API key")
+    print("  dojozero-agent config --profile bob --api-key <key>  # Set for profile")
+    print("  dojozero-agent config --show                    # Show current config")
+    print("  dojozero-agent config --list-profiles           # List all profiles")
+    print("  dojozero-agent config --set-default <profile>   # Set default profile")
     return 1
 
 
@@ -647,6 +721,11 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--state-dir",
         help=f"State directory (default: {CONFIG_DIR})",
+    )
+    parser.add_argument(
+        "--profile",
+        "-p",
+        help="Profile name for credentials and state (default: uses default profile)",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -801,6 +880,16 @@ def create_parser() -> argparse.ArgumentParser:
         "--show",
         action="store_true",
         help="Show current configuration",
+    )
+    p_config.add_argument(
+        "--list-profiles",
+        action="store_true",
+        help="List all configured profiles",
+    )
+    p_config.add_argument(
+        "--set-default",
+        metavar="PROFILE",
+        help="Set the default profile",
     )
     p_config.set_defaults(func=cmd_config)
 
