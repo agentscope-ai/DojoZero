@@ -71,12 +71,14 @@ class TestModels:
         """Test AgentRegistrationResponse serializes to camelCase."""
         response = AgentRegistrationResponse(
             agent_id="agent1",
+            session_key="sk-session-abc123",
             trial_id="trial123",
             balance="1000",
             registered_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         )
         dumped = response.model_dump(by_alias=True)
         assert "agentId" in dumped
+        assert "sessionKey" in dumped
         assert "trialId" in dumped
         assert "registeredAt" in dumped
 
@@ -191,9 +193,16 @@ class TestExternalAgentState:
         """Test state creation with defaults."""
         state = ExternalAgentState(agent_id="agent1")
         assert state.agent_id == "agent1"
+        assert state.session_key == ""  # Default empty session key
         assert state.subscription is None
         assert state.registered_at is not None
         assert state.last_activity_at is not None
+
+    def test_creation_with_session_key(self):
+        """Test state creation with session key."""
+        state = ExternalAgentState(agent_id="agent1", session_key="sk-session-123")
+        assert state.agent_id == "agent1"
+        assert state.session_key == "sk-session-123"
 
 
 class TestExternalAgentAdapter:
@@ -260,19 +269,80 @@ class TestExternalAgentAdapter:
 
     @pytest.mark.asyncio
     async def test_unregister_agent(self, adapter):
-        """Test agent unregistration."""
+        """Test agent unregistration with session key."""
+        response = await adapter.register_agent(agent_id="agent1")
+        session_key = response.session_key
+        assert adapter.is_registered("agent1")
+
+        result = await adapter.unregister_agent("agent1", session_key=session_key)
+        assert result is True
+        assert not adapter.is_registered("agent1")
+
+    @pytest.mark.asyncio
+    async def test_unregister_agent_invalid_session_key(self, adapter):
+        """Test unregistration with invalid session key fails."""
         await adapter.register_agent(agent_id="agent1")
         assert adapter.is_registered("agent1")
 
-        result = await adapter.unregister_agent("agent1")
-        assert result is True
-        assert not adapter.is_registered("agent1")
+        with pytest.raises(ValueError, match="Invalid session key"):
+            await adapter.unregister_agent("agent1", session_key="wrong-key")
+
+        # Agent should still be registered
+        assert adapter.is_registered("agent1")
+
+    @pytest.mark.asyncio
+    async def test_unregister_agent_missing_session_key(self, adapter):
+        """Test unregistration without session key when agent has one fails."""
+        await adapter.register_agent(agent_id="agent1")
+        assert adapter.is_registered("agent1")
+
+        with pytest.raises(ValueError, match="Session key required"):
+            await adapter.unregister_agent("agent1", session_key=None)
+
+        # Agent should still be registered
+        assert adapter.is_registered("agent1")
 
     @pytest.mark.asyncio
     async def test_unregister_nonexistent(self, adapter):
         """Test unregistering nonexistent agent."""
         result = await adapter.unregister_agent("nonexistent")
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_reconnect_agent(self, adapter, mock_broker):
+        """Test agent reconnection with session key."""
+        # Register first
+        reg_response = await adapter.register_agent(agent_id="agent1")
+        session_key = reg_response.session_key
+        assert session_key  # Should have a session key
+
+        # Reconnect with same session key
+        reconnect_response = await adapter.reconnect_agent(
+            agent_id="agent1",
+            session_key=session_key,
+        )
+        assert reconnect_response.agent_id == "agent1"
+        assert reconnect_response.session_key == session_key  # Same session key
+
+    @pytest.mark.asyncio
+    async def test_reconnect_agent_invalid_session_key(self, adapter):
+        """Test reconnection with wrong session key fails."""
+        await adapter.register_agent(agent_id="agent1")
+
+        with pytest.raises(ValueError, match="Invalid session key"):
+            await adapter.reconnect_agent(
+                agent_id="agent1",
+                session_key="wrong-key",
+            )
+
+    @pytest.mark.asyncio
+    async def test_reconnect_agent_not_registered(self, adapter):
+        """Test reconnection for unregistered agent fails."""
+        with pytest.raises(ValueError, match="not registered"):
+            await adapter.reconnect_agent(
+                agent_id="nonexistent",
+                session_key="some-key",
+            )
 
     def test_is_registered(self, adapter):
         """Test registration check."""
@@ -433,19 +503,43 @@ class TestGatewayServer:
         assert response.status_code == 409
 
     def test_unregister_agent(self, client, mock_broker):
-        """Test agent unregistration."""
+        """Test agent unregistration with session key."""
+        mock_broker.create_account = AsyncMock()
+
+        # Register first and get session key
+        reg_response = client.post("/agents", json={"apiKey": "agent1"})
+        session_key = reg_response.json()["sessionKey"]
+
+        # Unregister with session key
+        response = client.request(
+            "DELETE",
+            "/agents/agent1",
+            json={"sessionKey": session_key},
+        )
+        assert response.status_code == 200
+
+    def test_unregister_invalid_session_key(self, client, mock_broker):
+        """Test unregistering with wrong session key fails."""
         mock_broker.create_account = AsyncMock()
 
         # Register first
         client.post("/agents", json={"apiKey": "agent1"})
 
-        # Unregister
-        response = client.delete("/agents/agent1")
-        assert response.status_code == 200
+        # Try to unregister with wrong session key
+        response = client.request(
+            "DELETE",
+            "/agents/agent1",
+            json={"sessionKey": "wrong-key"},
+        )
+        assert response.status_code == 403
 
     def test_unregister_nonexistent(self, client):
         """Test unregistering nonexistent agent."""
-        response = client.delete("/agents/unknown")
+        response = client.request(
+            "DELETE",
+            "/agents/unknown",
+            json={"sessionKey": "any-key"},
+        )
         assert response.status_code == 404
 
     def test_get_trial_metadata(self, client):
@@ -487,6 +581,57 @@ class TestGatewayServer:
             },
         )
         assert response.status_code == 401
+
+    def test_reconnect_agent(self, client, mock_broker):
+        """Test agent reconnection with session key."""
+        mock_broker.create_account = AsyncMock()
+
+        # Register first and get session key
+        reg_response = client.post("/agents", json={"apiKey": "agent1"})
+        assert reg_response.status_code == 200
+        session_key = reg_response.json()["sessionKey"]
+
+        # Reconnect with same API key and session key
+        reconnect_response = client.post(
+            "/agents/reconnect",
+            json={
+                "apiKey": "agent1",
+                "sessionKey": session_key,
+            },
+        )
+        assert reconnect_response.status_code == 200
+        data = reconnect_response.json()
+        assert data["agentId"] == "agent1"
+        # Session key should be the same
+        assert data["sessionKey"] == session_key
+
+    def test_reconnect_invalid_session_key(self, client, mock_broker):
+        """Test reconnection with wrong session key fails."""
+        mock_broker.create_account = AsyncMock()
+
+        # Register first
+        client.post("/agents", json={"apiKey": "agent1"})
+
+        # Try to reconnect with wrong session key
+        response = client.post(
+            "/agents/reconnect",
+            json={
+                "apiKey": "agent1",
+                "sessionKey": "wrong-key",
+            },
+        )
+        assert response.status_code == 403
+
+    def test_reconnect_nonexistent_agent(self, client, mock_broker):
+        """Test reconnection for unregistered agent fails."""
+        response = client.post(
+            "/agents/reconnect",
+            json={
+                "apiKey": "nonexistent",
+                "sessionKey": "some-key",
+            },
+        )
+        assert response.status_code == 404
 
 
 class TestAuthProvider:

@@ -35,15 +35,43 @@ class AgentRegistrationRequest(BaseModel):
     initial_balance: float | str | None = Field(default=None, alias="initialBalance")
 
 
+class AgentReconnectRequest(BaseModel):
+    """Request body for agent reconnection.
+
+    Requires both API key (for identity verification) and session key
+    (to prove this client originally registered the agent).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    api_key: str = Field(alias="apiKey")
+    session_key: str = Field(alias="sessionKey")
+
+
+class AgentUnregisterRequest(BaseModel):
+    """Request body for agent unregistration.
+
+    Requires session key to prove ownership of the session.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_key: str = Field(alias="sessionKey")
+
+
 class AgentRegistrationResponse(BaseModel):
     """Response for agent registration.
 
     All identity fields come from the verified API key in agent_keys.yaml.
+    Session key is used for secure reconnection and unregistration.
     """
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     agent_id: str = Field(serialization_alias="agentId")  # Verified/canonical ID
+    session_key: str = Field(
+        serialization_alias="sessionKey"
+    )  # For reconnect/unregister
     display_name: str | None = Field(default=None, serialization_alias="displayName")
     persona: str | None = Field(default=None)  # Persona tag (e.g., "degen", "whale")
     model: str | None = Field(default=None)  # Model name (e.g., "gpt-4")
@@ -264,6 +292,7 @@ class ErrorCodes:
     AUTH_REQUIRED = "AUTH_REQUIRED"
     TOKEN_EXPIRED = "TOKEN_EXPIRED"
     INVALID_TOKEN = "INVALID_TOKEN"
+    SESSION_KEY_INVALID = "SESSION_KEY_INVALID"
 
     # Rate limiting
     RATE_LIMITED = "RATE_LIMITED"
@@ -350,6 +379,8 @@ __all__ = [
     # Registration
     "AgentRegistrationRequest",
     "AgentRegistrationResponse",
+    "AgentReconnectRequest",
+    "AgentUnregisterRequest",
     # Trial
     "TrialMetadataResponse",
     # Events

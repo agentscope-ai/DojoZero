@@ -288,6 +288,7 @@ class TrialConnection:
         transport: GatewayTransport,
         agent_id: str,
         trial_id: str,
+        session_key: str = "",
     ):
         """Initialize trial connection.
 
@@ -295,10 +296,12 @@ class TrialConnection:
             transport: Gateway transport layer
             agent_id: Agent ID
             trial_id: Trial ID from registration
+            session_key: Session key for secure reconnection/unregistration
         """
         self._transport = transport
         self._agent_id = agent_id
         self._trial_id = trial_id
+        self._session_key = session_key
         self._last_sequence: int = 0
         self._trial_ended: TrialEndedEvent | None = None
 
@@ -311,6 +314,11 @@ class TrialConnection:
     def trial_id(self) -> str:
         """Get trial ID."""
         return self._trial_id
+
+    @property
+    def session_key(self) -> str:
+        """Get session key for secure reconnection/unregistration."""
+        return self._session_key
 
     @property
     def last_sequence(self) -> int:
@@ -715,6 +723,7 @@ class DojoClient:
         gateway_url: str,
         api_key: str,
         initial_balance: float | None = None,
+        session_key: str | None = None,
     ) -> AsyncIterator[TrialConnection]:
         """Connect to a trial.
 
@@ -724,9 +733,11 @@ class DojoClient:
                      Agent identity (agent_id, display_name, persona, model)
                      all come from agent_keys.yaml based on this key.
             initial_balance: Starting balance (if registering)
+            session_key: Session key from previous connection (for secure reconnection)
 
         Yields:
-            TrialConnection for interacting with the trial
+            TrialConnection for interacting with the trial.
+            Access connection.session_key to get the session key for storage.
 
         Raises:
             ConnectionError: If connection fails
@@ -739,44 +750,80 @@ class DojoClient:
         )
 
         async with transport:
-            # Register with API key - identity comes from verified key
-            try:
-                reg_response = await transport.request(
-                    "POST",
-                    "/agents",
-                    json={
-                        "apiKey": api_key,
-                        "initialBalance": initial_balance,
-                    },
-                )
-                trial_id = reg_response.get("trialId", "")
-                agent_id = reg_response.get("agentId", "")
+            trial_id = ""
+            agent_id = ""
+            new_session_key = ""
 
-                # Set agent_id for subsequent requests
-                transport.set_agent_id(agent_id)
-
-                logger.info(
-                    "Registered agent %s for trial %s",
-                    agent_id,
-                    trial_id,
-                )
-            except RegistrationError as e:
-                # 409 Conflict - agent already registered, get info
-                logger.info("Agent already registered, fetching trial info")
+            # Try reconnect first if we have a session key
+            if session_key:
                 try:
-                    # Need to get agent_id from a different endpoint
-                    # For now, re-raise - user should use a fresh api_key or handle this
-                    raise ConnectionError(
-                        f"Agent already registered. Use a different API key or "
-                        f"unregister first: {e}"
-                    ) from e
-                except Exception:
+                    reconnect_response = await transport.request(
+                        "POST",
+                        "/agents/reconnect",
+                        json={
+                            "apiKey": api_key,
+                            "sessionKey": session_key,
+                        },
+                    )
+                    trial_id = reconnect_response.get("trialId", "")
+                    agent_id = reconnect_response.get("agentId", "")
+                    new_session_key = reconnect_response.get("sessionKey", session_key)
+
+                    # Set agent_id for subsequent requests
+                    transport.set_agent_id(agent_id)
+
+                    logger.info(
+                        "Reconnected agent %s for trial %s using session key",
+                        agent_id,
+                        trial_id,
+                    )
+                except Exception as e:
+                    # Reconnect failed - will try fresh registration below
+                    logger.info(
+                        "Session key reconnect failed, will try registration: %s", e
+                    )
+                    session_key = None  # Clear so we try registration
+
+            # Try fresh registration if no session key or reconnect failed
+            if not agent_id:
+                try:
+                    reg_response = await transport.request(
+                        "POST",
+                        "/agents",
+                        json={
+                            "apiKey": api_key,
+                            "initialBalance": initial_balance,
+                        },
+                    )
+                    trial_id = reg_response.get("trialId", "")
+                    agent_id = reg_response.get("agentId", "")
+                    new_session_key = reg_response.get("sessionKey", "")
+
+                    # Set agent_id for subsequent requests
+                    transport.set_agent_id(agent_id)
+
+                    logger.info(
+                        "Registered agent %s for trial %s",
+                        agent_id,
+                        trial_id,
+                    )
+                except RegistrationError as e:
+                    # 409 Conflict - agent already registered but we don't have session key
+                    # This is an error state - agent is connected elsewhere
+                    error_msg = str(e)
+                    if "already" in error_msg.lower():
+                        raise ConnectionError(
+                            f"Agent already connected elsewhere and no session key provided. "
+                            f"Either stop the other connection or provide the session key. "
+                            f"Original error: {error_msg}"
+                        ) from e
                     raise
 
             connection = TrialConnection(
                 transport=transport,
                 agent_id=agent_id,
                 trial_id=trial_id,
+                session_key=new_session_key,
             )
 
             yield connection

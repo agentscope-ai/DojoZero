@@ -201,3 +201,36 @@ class TestDojoClientDiscoverTrials:
                 DojoConnectionError, match="All .* dashboards unreachable"
             ):
                 await client.discover_trials()
+
+
+class TestReconnection:
+    """Tests for reconnection when agent already registered."""
+
+    def test_extract_agent_id_from_error_message(self):
+        """Test extracting agent_id from error message."""
+        import re
+
+        # Test format: "Agent copaw-agent already connected"
+        error_msg = "Agent copaw-agent already connected"
+        match = re.search(r"Agent (\S+) already", error_msg)
+        assert match is not None
+        assert match.group(1) == "copaw-agent"
+
+    def test_extract_agent_id_from_json_error(self):
+        """Test extracting agent_id from JSON error."""
+        import re
+
+        # Test format from API response
+        error_msg = '{"detail":{"error":{"code":"ALREADY_REGISTERED","message":"Agent test-bot already connected","details":{}}}}'
+        match = re.search(r'"message":\s*"Agent (\S+) already', error_msg)
+        assert match is not None
+        assert match.group(1) == "test-bot"
+
+    def test_extract_agent_id_with_hyphen(self):
+        """Test extracting agent_id with hyphens."""
+        import re
+
+        error_msg = "Agent my-long-agent-name already connected"
+        match = re.search(r"Agent (\S+) already", error_msg)
+        assert match is not None
+        assert match.group(1) == "my-long-agent-name"

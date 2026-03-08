@@ -129,6 +129,7 @@ class DaemonState:
 
     trial_id: str = ""
     agent_id: str = ""
+    session_key: str = ""  # Session key for secure reconnection/unregistration
     status: str = "disconnected"
     balance: float = 0.0
     holdings: list[dict[str, Any]] = field(default_factory=_default_holdings)
@@ -143,6 +144,7 @@ class DaemonState:
         return {
             "trial_id": self.trial_id,
             "agent_id": self.agent_id,
+            "session_key": self.session_key,
             "status": self.status,
             "balance": self.balance,
             "holdings": self.holdings,
@@ -159,6 +161,7 @@ class DaemonState:
         return cls(
             trial_id=data.get("trial_id", ""),
             agent_id=data.get("agent_id", ""),
+            session_key=data.get("session_key", ""),
             status=data.get("status", "disconnected"),
             balance=data.get("balance", 0.0),
             holdings=data.get("holdings", []),
@@ -220,20 +223,25 @@ class Daemon:
 
         # Check for existing state to resume from
         resume_sequence = 0
+        stored_session_key = ""
         existing_state = self._read_state()
         if existing_state:
             resume_sequence = existing_state.get("last_event_sequence", 0)
+            stored_session_key = existing_state.get("session_key", "")
             if resume_sequence > 0:
                 logger.info(
                     "Resuming from sequence %d (from previous session)", resume_sequence
                 )
 
         try:
-            async with self.client.connect_trial(
-                gateway_url=self.config.gateway_url,
-                api_key=self.config.api_key,
-                initial_balance=1000.0,  # Default balance for new agents
-            ) as trial:
+            async with (
+                self.client.connect_trial(
+                    gateway_url=self.config.gateway_url,
+                    api_key=self.config.api_key,
+                    initial_balance=1000.0,  # Default balance for new agents
+                    session_key=stored_session_key,  # Use stored session key for reconnection
+                ) as trial
+            ):
                 # Set resume sequence for event replay
                 if resume_sequence > 0:
                     trial.set_resume_sequence(resume_sequence)
@@ -243,6 +251,7 @@ class Daemon:
                 self._state = DaemonState(
                     trial_id=self.config.trial_id,
                     agent_id=trial.agent_id,
+                    session_key=trial.session_key,  # Store session key for reconnection
                     status="connected",
                     balance=balance.balance,
                     holdings=[
@@ -690,11 +699,17 @@ class TrialHandler:
                     resume_sequence,
                 )
 
+        # Check for existing session key from previous state
+        stored_session_key = (
+            existing_state.get("session_key", "") if existing_state else ""
+        )
+
         # Connect to trial using async context manager
         self._context_manager = self.client.connect_trial(
             gateway_url=self.gateway_url,
             api_key=self.api_key,
             initial_balance=1000.0,
+            session_key=stored_session_key,
         )
         # Enter the context manager manually
         self._trial = await self._context_manager.__aenter__()
@@ -705,11 +720,12 @@ class TrialHandler:
         if resume_sequence > 0:
             trial.set_resume_sequence(resume_sequence)
 
-        # Initialize state
+        # Initialize state (preserve session key from connection)
         balance = await trial.get_balance()
         self._state = DaemonState(
             trial_id=self.trial_id,
             agent_id=trial.agent_id,
+            session_key=trial.session_key,  # Store session key for reconnection
             status="connected",
             balance=balance.balance,
             holdings=[

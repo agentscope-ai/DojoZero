@@ -246,6 +246,7 @@ API keys are stored securely in `~/.dojozero/credentials.json` (mode 0600):
 - Use `notifications` to see what happened while you were away
 - Bet amounts cannot exceed your balance
 - The daemon auto-reconnects if the connection drops
+- If the agent is already registered (from a previous session), the client automatically reconnects without re-registering
 - Use profiles to manage multiple agent identities
 
 ## Programmatic Usage

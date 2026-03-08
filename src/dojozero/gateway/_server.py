@@ -17,8 +17,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from dojozero.gateway._adapter import ExternalAgentAdapter
 from dojozero.gateway._auth import AgentAuthenticator, NoOpAuthenticator
 from dojozero.gateway._models import (
+    AgentReconnectRequest,
     AgentRegistrationRequest,
     AgentRegistrationResponse,
+    AgentUnregisterRequest,
     BalanceResponse,
     BetRequest,
     BetResponse,
@@ -232,15 +234,90 @@ def create_gateway_app(
                 )
             raise HTTPException(status_code=400, detail=error_msg)
 
+    @app.post("/agents/reconnect", response_model=AgentRegistrationResponse)
+    async def reconnect_agent(
+        request: AgentReconnectRequest,
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> AgentRegistrationResponse:
+        """Reconnect an existing agent using API key and session key.
+
+        Requires both the API key (for identity verification) and the session key
+        (returned during original registration) to prove ownership of the session.
+        """
+        # Validate API key and get identity
+        identity = await state.authenticator.validate(request.api_key)
+        if identity is None:
+            raise HTTPException(
+                status_code=401,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.INVALID_TOKEN,
+                        message="Invalid API key",
+                    )
+                ).model_dump(by_alias=True),
+            )
+
+        try:
+            return await state.adapter.reconnect_agent(
+                agent_id=identity.agent_id,
+                session_key=request.session_key,
+                display_name=identity.display_name,
+                persona=identity.persona,
+                model=identity.model,
+                model_display_name=identity.model_display_name,
+                cdn_url=identity.cdn_url,
+            )
+        except ValueError as e:
+            error_msg = str(e)
+            if "not registered" in error_msg.lower():
+                raise HTTPException(
+                    status_code=404,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.NOT_REGISTERED,
+                            message=error_msg,
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            if "session key" in error_msg.lower():
+                raise HTTPException(
+                    status_code=403,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.SESSION_KEY_INVALID,
+                            message=error_msg,
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            raise HTTPException(status_code=400, detail=error_msg)
+
     @app.delete("/agents/{agent_id}")
     async def unregister_agent(
         agent_id: str,
+        request: AgentUnregisterRequest,
         state: GatewayState = Depends(get_gateway_state),
     ) -> dict[str, str]:
-        """Unregister an external agent."""
-        if await state.adapter.unregister_agent(agent_id):
-            return {"message": "Unregistered successfully"}
-        raise HTTPException(status_code=404, detail="Agent not found")
+        """Unregister an external agent.
+
+        Requires the session key (returned during registration) to prove ownership.
+        """
+        try:
+            if await state.adapter.unregister_agent(agent_id, request.session_key):
+                return {"message": "Unregistered successfully"}
+            raise HTTPException(status_code=404, detail="Agent not found")
+        except ValueError as e:
+            error_msg = str(e)
+            if "session key" in error_msg.lower():
+                raise HTTPException(
+                    status_code=403,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.SESSION_KEY_INVALID,
+                            message=error_msg,
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            raise HTTPException(status_code=400, detail=error_msg)
 
     # =========================================================================
     # Trial Metadata

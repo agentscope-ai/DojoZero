@@ -66,6 +66,7 @@ class TestDaemonState:
         state = DaemonState(
             trial_id="test-trial",
             agent_id="agent-1",
+            session_key="sk-session-123",
             status="connected",
             balance=1000.0,
             last_event_sequence=42,
@@ -74,6 +75,7 @@ class TestDaemonState:
         data = state.to_dict()
         assert data["trial_id"] == "test-trial"
         assert data["agent_id"] == "agent-1"
+        assert data["session_key"] == "sk-session-123"
         assert data["status"] == "connected"
         assert data["balance"] == 1000.0
         assert data["last_event_sequence"] == 42
@@ -84,6 +86,7 @@ class TestDaemonState:
         data = {
             "trial_id": "test-trial",
             "agent_id": "agent-1",
+            "session_key": "sk-session-456",
             "status": "connected",
             "balance": 500.0,
             "last_event_sequence": 100,
@@ -92,13 +95,14 @@ class TestDaemonState:
         state = DaemonState.from_dict(data)
         assert state.trial_id == "test-trial"
         assert state.agent_id == "agent-1"
+        assert state.session_key == "sk-session-456"
         assert state.status == "connected"
         assert state.balance == 500.0
         assert state.last_event_sequence == 100
         assert state.gateway_url == "http://localhost:8080/api/trials/test-trial"
 
     def test_from_dict_without_gateway_url(self):
-        """Test deserialization without gateway_url (backward compat)."""
+        """Test deserialization without gateway_url or session_key (backward compat)."""
         data = {
             "trial_id": "test-trial",
             "status": "connected",
@@ -106,6 +110,7 @@ class TestDaemonState:
         state = DaemonState.from_dict(data)
         assert state.trial_id == "test-trial"
         assert state.gateway_url == ""  # Default empty string
+        assert state.session_key == ""  # Default empty string
 
 
 class TestDaemonHelpers:
