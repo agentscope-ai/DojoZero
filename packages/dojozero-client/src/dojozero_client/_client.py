@@ -619,28 +619,28 @@ class DojoClient:
 
     Configuration (layered precedence):
         1. Constructor arguments
-        2. Environment variables (DOJOZERO_GATEWAY_URL, DOJOZERO_DASHBOARD_URLS)
+        2. Environment variables (DOJOZERO_DASHBOARD_URL, DOJOZERO_DASHBOARD_URLS)
         3. Config file (~/.dojozero/config.yaml)
         4. Defaults (http://localhost:8000)
     """
 
     def __init__(
         self,
-        gateway_url: str | None = None,
+        dashboard_url: str | None = None,
         dashboard_urls: list[str] | None = None,
         timeout: float = 30.0,
     ):
         """Initialize DojoZero client.
 
         Args:
-            gateway_url: Gateway URL (standalone mode)
+            dashboard_url: Dashboard URL (single server mode)
             dashboard_urls: List of dashboard URLs (sharded mode)
             timeout: Default request timeout in seconds
         """
         from dojozero_client._config import load_config
 
         self._config = load_config(
-            gateway_url=gateway_url,
+            dashboard_url=dashboard_url,
             dashboard_urls=dashboard_urls,
             timeout=timeout,
         )

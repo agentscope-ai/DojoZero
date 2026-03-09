@@ -55,10 +55,10 @@ class TestDojoClient:
         client = DojoClient()
         assert client._timeout == 30.0
 
-    def test_init_with_gateway_url(self):
-        """Test client initialization with gateway URL."""
-        client = DojoClient(gateway_url="http://localhost:8080")
-        assert client._config.gateway_url == "http://localhost:8080"
+    def test_init_with_dashboard_url(self):
+        """Test client initialization with dashboard URL."""
+        client = DojoClient(dashboard_url="http://localhost:8080")
+        assert client._config.dashboard_url == "http://localhost:8080"
 
     def test_init_with_dashboard_urls(self):
         """Test client initialization with dashboard URLs."""
@@ -132,7 +132,7 @@ class TestDojoClientDiscoverTrials:
     @pytest.mark.asyncio
     async def test_discover_trials_single_dashboard(self):
         """Test discovering trials from single dashboard."""
-        client = DojoClient(gateway_url="http://localhost:8000")
+        client = DojoClient(dashboard_url="http://localhost:8000")
 
         with patch.object(client, "list_gateways") as mock_list:
             mock_list.return_value = [

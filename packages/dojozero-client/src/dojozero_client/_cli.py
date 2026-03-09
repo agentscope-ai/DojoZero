@@ -20,13 +20,18 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
 
-from dojozero_client._config import CONFIG_DIR, SOCKET_PATH
+from dojozero_client._config import (
+    CONFIG_DIR,
+    SOCKET_PATH,
+    has_config,
+    load_config,
+    save_config,
+)
 from dojozero_client._credentials import (
     get_default_profile,
     get_profile_dir,
@@ -90,6 +95,14 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # Check config setup
+    if not has_config() and not args.gateway:
+        print(
+            "No configuration found. Run 'dojozero-agent config --show' to set up.",
+            file=sys.stderr,
+        )
+        return 1
+
     api_key = (
         args.api_key
         or os.environ.get("DOJOZERO_AGENT_API_KEY", "")
@@ -105,10 +118,16 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 1
 
-    config = DaemonConfig(
+    # Determine gateway URL: explicit flag > constructed from config
+    if args.gateway:
+        gateway_url = args.gateway
+    else:
+        client_config = load_config()
+        gateway_url = client_config.get_gateway_url(args.trial_id)
+
+    daemon_config = DaemonConfig(
         trial_id=args.trial_id,
-        gateway_url=args.gateway
-        or os.environ.get("DOJOZERO_GATEWAY_URL", "http://localhost:8080"),
+        gateway_url=gateway_url,
         api_key=api_key,
         state_dir=state_dir,
         strategy=args.strategy,
@@ -129,13 +148,13 @@ def cmd_start(args: argparse.Namespace) -> int:
             "start",
             args.trial_id,
             "--gateway",
-            config.gateway_url,
+            daemon_config.gateway_url,
         ]
         # Note: API key is NOT passed via CLI for security (visible in ps).
         # Child process reads from credentials file or DOJOZERO_AGENT_API_KEY env var.
-        if config.strategy:
-            cmd.extend(["--strategy", config.strategy])
-        if config.auto_bet:
+        if daemon_config.strategy:
+            cmd.extend(["--strategy", daemon_config.strategy])
+        if daemon_config.auto_bet:
             cmd.append("--auto-bet")
         # Don't pass --background to avoid infinite recursion
 
@@ -165,7 +184,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    daemon = Daemon(config)
+    daemon = Daemon(daemon_config)
     try:
         asyncio.run(daemon.start())
     except KeyboardInterrupt:
@@ -536,6 +555,13 @@ def cmd_config(args: argparse.Namespace) -> int:
             print(f"Profile '{args.set_default}' not found", file=sys.stderr)
             return 1
 
+    # Save dashboard URL
+    if getattr(args, "dashboard_url", None):
+        save_config(dashboard_url=args.dashboard_url)
+        print("Dashboard URL saved to ~/.dojozero/config.yaml")
+        print(f"  dashboard_url: {args.dashboard_url}")
+        return 0
+
     # Save API key
     if args.api_key:
         save_api_key(args.api_key, profile=profile)
@@ -545,35 +571,50 @@ def cmd_config(args: argparse.Namespace) -> int:
 
     # Show current config
     if args.show:
+        # Show config (dashboard URL)
+        print("Configuration (~/.dojozero/config.yaml):")
+        if has_config():
+            client_config = load_config()
+            print(f"  dashboard_url: {client_config.dashboard_url}")
+        else:
+            print("  (not configured - using default: http://localhost:8000)")
+            print("")
+            print("  To configure for remote server:")
+            print("    dojozero-agent config --dashboard-url http://your-server:8000")
+
+        # Show credentials
+        print("")
+        print("Credentials (~/.dojozero/credentials.json):")
         profiles = list_profiles()
         if not profiles:
-            print("No API key configured")
-            print("\nTo configure, run:")
-            print("  dojozero-agent config --api-key <your-api-key>")
-            return 0
-
-        default = get_default_profile()
-        if profile:
-            # Show specific profile
-            key = load_api_key(profile=profile)
-            if key:
-                masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
-                print(f"Profile: {profile}")
-                print(f"API key: {masked}")
-            else:
-                print(f"Profile '{profile}' not found")
-                return 1
+            print("  (no API key configured)")
+            print("")
+            print("  To configure:")
+            print("    dojozero-agent config --api-key <your-api-key>")
         else:
-            # Show all profiles
-            print(f"Default profile: {default}")
-            print(f"Profiles: {', '.join(profiles)}")
-            key = load_api_key()
-            if key:
-                masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
-                print(f"API key ({default}): {masked}")
+            default = get_default_profile()
+            if profile:
+                # Show specific profile
+                key = load_api_key(profile=profile)
+                if key:
+                    masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
+                    print(f"  Profile: {profile}")
+                    print(f"  API key: {masked}")
+                else:
+                    print(f"  Profile '{profile}' not found")
+                    return 1
+            else:
+                # Show all profiles
+                print(f"  Default profile: {default}")
+                print(f"  Profiles: {', '.join(profiles)}")
+                key = load_api_key()
+                if key:
+                    masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
+                    print(f"  API key ({default}): {masked}")
         return 0
 
     print("Usage:")
+    print("  dojozero-agent config --dashboard-url <url>     # Set dashboard URL")
     print("  dojozero-agent config --api-key <key>           # Set API key")
     print("  dojozero-agent config --profile bob --api-key <key>  # Set for profile")
     print("  dojozero-agent config --show                    # Show current config")
@@ -739,7 +780,7 @@ def create_parser() -> argparse.ArgumentParser:
     p_start.add_argument(
         "--gateway",
         "-g",
-        help="Gateway URL (default: $DOJOZERO_GATEWAY_URL or localhost:8080)",
+        help="Gateway URL (optional: auto-constructed from dashboard_url in config.yaml)",
     )
     p_start.add_argument(
         "--api-key",
@@ -871,9 +912,13 @@ def create_parser() -> argparse.ArgumentParser:
     p_daemon_stop = subparsers.add_parser("daemon-stop", help="Stop the unified daemon")
     p_daemon_stop.set_defaults(func=cmd_daemon_stop)
 
-    # config - configure credentials
+    # config - configure credentials and settings
     p_config = subparsers.add_parser(
         "config", help="Configure credentials and settings"
+    )
+    p_config.add_argument(
+        "--dashboard-url",
+        help="Set dashboard server URL (stored in ~/.dojozero/config.yaml)",
     )
     p_config.add_argument(
         "--api-key",

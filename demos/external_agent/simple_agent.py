@@ -82,7 +82,7 @@ class SimpleBettingAgent:
         trial_id: str,
         api_key: str,
         gateway_url: str | None = None,
-        dashboard_urls: list[str] | None = None,
+        dashboard_url: str | None = None,
     ):
         """Run the agent.
 
@@ -90,17 +90,14 @@ class SimpleBettingAgent:
             trial_id: Trial ID (required)
             api_key: API key for authentication (from dojo0 agents add).
                      Agent identity comes from agent_keys.yaml.
-            gateway_url: Gateway URL for standalone mode (e.g., "http://localhost:8080")
-            dashboard_urls: Dashboard URLs for sharded mode (e.g., ["http://localhost:8000"])
+            gateway_url: Direct gateway URL for standalone mode (e.g., "http://localhost:8080")
+            dashboard_url: Dashboard URL for discovery mode (e.g., "http://localhost:8000")
         """
         # Create client with config
-        client = DojoClient(
-            gateway_url=gateway_url,
-            dashboard_urls=dashboard_urls,
-        )
+        client = DojoClient(dashboard_url=dashboard_url)
 
         # Discovery mode: find the specified trial
-        if dashboard_urls or (not gateway_url):
+        if dashboard_url or (not gateway_url):
             logger.info("Discovering trial '%s'...", trial_id)
             gateways = await client.discover_trials()
 
@@ -293,7 +290,7 @@ Examples:
             trial_id=args.trial_id,
             api_key=args.api_key,
             gateway_url=args.gateway,
-            dashboard_urls=[args.dashboard] if args.dashboard else None,
+            dashboard_url=args.dashboard,
         )
     except KeyboardInterrupt:
         logger.info("Agent stopped by user")

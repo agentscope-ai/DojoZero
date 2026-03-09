@@ -195,7 +195,7 @@ class Daemon:
             config: Daemon configuration
         """
         self.config = config
-        self.client = DojoClient(gateway_url=config.gateway_url)
+        self.client = DojoClient()
         self.state_dir = config.state_dir
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.running = False

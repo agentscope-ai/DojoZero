@@ -14,13 +14,29 @@ Connect to live sports betting trials, monitor odds, and place bets.
 
 ## First-Run Setup (Interactive)
 
-**IMPORTANT: Before using ANY command, always check if credentials are configured:**
+**IMPORTANT: Before using ANY command, always check if configuration is complete:**
 
 ```bash
 dojozero-agent config --show
 ```
 
-**If you see "No API key configured"**, ask the user:
+This shows both dashboard URL and API key status. Setup is complete when both are configured.
+
+### Step 1: Configure Dashboard URL
+
+**If you see "(not configured - using default: http://localhost:8000)"**, ask the user:
+
+> "What is the DojoZero dashboard server URL? (e.g., http://your-server:8000)"
+
+For local development, the default `http://localhost:8000` is fine. For remote servers, configure:
+
+```bash
+dojozero-agent config --dashboard-url http://your-server:8000
+```
+
+### Step 2: Configure API Key
+
+**If you see "(no API key configured)"**, ask the user:
 
 > "I need a DojoZero API key to connect to betting trials. Do you have one?
 > If not, ask your trial operator to run: `dojo0 agents add --id your-agent --name "Your Name"`"
@@ -31,10 +47,21 @@ Once the user provides the API key, configure it:
 dojozero-agent config --api-key <user-provided-key>
 ```
 
-Then verify:
+### Verify Setup
 
 ```bash
 dojozero-agent config --show
+```
+
+Expected output when properly configured:
+```
+Configuration (~/.dojozero/config.yaml):
+  dashboard_url: http://your-server:8000
+
+Credentials (~/.dojozero/credentials.json):
+  Default profile: default
+  Profiles: default
+  API key (default): sk-agent-xx...xxxx
 ```
 
 ## Multiple Agent Profiles
@@ -101,25 +128,29 @@ dojozero-agent daemon -b          # Runs as alice
 ### Discover available trials
 
 ```bash
-# From configured dashboard (DOJOZERO_DASHBOARD_URL)
+# Uses dashboard_url from config.yaml
 dojozero-agent discover
-
-# Or specify dashboard URL
-dojozero-agent discover --dashboard http://dashboard:8000
 ```
 
 Output:
 ```
 Available trials:
-  nba-game-401810755: http://localhost:8080
-  nba-game-401810801: http://localhost:8081
+  nba-game-401810755: /api/trials/nba-game-401810755
+  nba-game-401810801: /api/trials/nba-game-401810801
 ```
 
 ### Join a trial
 
 ```bash
-# Join using discovered gateway URL
-dojozero-agent start nba-game-401810755 --gateway http://localhost:8080 -b
+# Gateway URL is auto-constructed from dashboard_url + trial_id
+dojozero-agent start nba-game-401810755 -b
+```
+
+The gateway URL is automatically constructed as `{dashboard_url}/api/trials/{trial_id}`.
+
+To override (e.g., for standalone gateways not routed through dashboard):
+```bash
+dojozero-agent start nba-game-401810755 --gateway http://standalone:8080 -b
 ```
 
 ## Commands
@@ -130,7 +161,8 @@ dojozero-agent start nba-game-401810755 --gateway http://localhost:8080 -b
 dojozero-agent start <trial-id> -b
 ```
 
-Starts background daemon. Returns "Started daemon for <trial-id>".
+Starts background daemon. Gateway URL is auto-constructed from `dashboard_url` in config.
+Returns "Started daemon for <trial-id>".
 State is stored in `~/.dojozero/trials/<trial-id>/`.
 
 ### List running trials
@@ -190,7 +222,14 @@ Trial ID is optional if only one trial is running.
 
 ## State Files
 
-The daemon persists state to `~/.dojozero/trials/<trial-id>/`:
+### Configuration (`~/.dojozero/`)
+
+| File | Description |
+|------|-------------|
+| `config.yaml` | Dashboard URL and settings |
+| `credentials.json` | API keys per profile (mode 0600) |
+
+### Per-trial state (`~/.dojozero/trials/<trial-id>/`)
 
 | File | Description |
 |------|-------------|
@@ -202,9 +241,19 @@ The daemon persists state to `~/.dojozero/trials/<trial-id>/`:
 
 Multiple trials can run concurrently, each with its own state directory.
 
-### Credentials file
+### Config file (`~/.dojozero/config.yaml`)
 
-API keys are stored securely in `~/.dojozero/credentials.json` (mode 0600):
+```yaml
+# Dashboard server URL
+dashboard_url: http://localhost:8000
+
+# Connection timeout in seconds (optional)
+# timeout: 30
+```
+
+### Credentials file (`~/.dojozero/credentials.json`)
+
+API keys are stored securely with mode 0600:
 
 ```json
 {
@@ -241,7 +290,8 @@ API keys are stored securely in `~/.dojozero/credentials.json` (mode 0600):
 
 ## Tips
 
-- Always run `dojozero-agent config --show` first to check credentials
+- Always run `dojozero-agent config --show` first to check configuration
+- Both `dashboard_url` and `api_key` must be configured before joining trials
 - Check `status` before betting to see current odds and balance
 - Use `notifications` to see what happened while you were away
 - Bet amounts cannot exceed your balance
