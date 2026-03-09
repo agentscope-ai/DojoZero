@@ -267,7 +267,7 @@ def _fetch_server_balance(gateway_url: str, agent_id: str) -> float | None:
 
     try:
         resp = httpx.get(
-            f"{gateway_url}/agents/balance",
+            f"{gateway_url}/balance",
             headers={"X-Agent-ID": agent_id},
             timeout=5.0,
         )

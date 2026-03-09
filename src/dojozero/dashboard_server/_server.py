@@ -1354,12 +1354,12 @@ def create_dashboard_app(
     # -------------------------------------------------------------------------
 
     if enable_gateway and gateway_router is not None:
-        from ._gateway_routing import create_gateway_routes
+        from ._gateway_routing import create_gateway_router
 
-        gateway_routes_app = create_gateway_routes(gateway_router)
+        gateway_api_router = create_gateway_router(gateway_router)
 
-        # Mount the gateway routes
-        app.mount("/", gateway_routes_app)
+        # Include the gateway router (catch-all route added after specific routes)
+        app.include_router(gateway_api_router)
 
         # Store gateway router on app.state for reference
         app.state.gateway_router = gateway_router
