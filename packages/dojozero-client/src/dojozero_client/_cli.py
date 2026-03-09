@@ -23,7 +23,7 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from dojozero_client._config import (
     CONFIG_DIR,
@@ -243,10 +243,54 @@ def cmd_status(args: argparse.Namespace) -> int:
         away_prob = odds.get("away_probability", 0)
         print(f"Odds: Home {home_prob:.0%}, Away {away_prob:.0%}")
 
-    print(f"Balance: ${state.get('balance', 0):.2f}")
+    # Fetch fresh balance from server if possible
+    balance = state.get("balance", 0)
+    gateway_url = state.get("gateway_url")
+    agent_id = state.get("agent_id")
+    if gateway_url and agent_id:
+        fresh_balance = _fetch_server_balance(gateway_url, agent_id)
+        if fresh_balance is not None:
+            balance = fresh_balance
+            # Update local state if different
+            if balance != state.get("balance", 0):
+                _update_local_balance(state_dir, balance)
+
+    print(f"Balance: ${balance:.2f}")
     print(f"Last Update: {state.get('last_updated', 'never')}")
 
     return 0
+
+
+def _fetch_server_balance(gateway_url: str, agent_id: str) -> float | None:
+    """Fetch fresh balance from server."""
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"{gateway_url}/agents/balance",
+            headers={"X-Agent-ID": agent_id},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            return float(resp.json().get("balance", 0))
+    except Exception:
+        pass
+    return None
+
+
+def _update_local_balance(state_dir: Path, balance: float) -> None:
+    """Update balance in local state.json."""
+    from datetime import datetime
+
+    state_file = state_dir / "state.json"
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text())
+            state["balance"] = balance
+            state["last_updated"] = datetime.now().isoformat()
+            state_file.write_text(json.dumps(state, indent=2))
+        except Exception:
+            pass
 
 
 def cmd_logs(args: argparse.Namespace) -> int:
@@ -274,9 +318,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
 
 
 def cmd_bet(args: argparse.Namespace) -> int:
-    """Place a bet via the REST API."""
-    import httpx
-
+    """Place a bet via daemon RPC or REST API."""
     trial_id = getattr(args, "trial_id", None)
     state_dir = _get_state_dir(args)
     state = get_daemon_status(trial_id=trial_id, state_dir=state_dir)
@@ -285,7 +327,29 @@ def cmd_bet(args: argparse.Namespace) -> int:
         print("No active trial. Use 'start <trial-id>' first.", file=sys.stderr)
         return 1
 
-    # Use gateway_url from state (saved by daemon), fallback to env var
+    actual_trial_id = state.get("trial_id", trial_id)
+
+    # Try unified daemon RPC first (keeps local state in sync)
+    if is_unified_daemon_running():
+        client = RPCClient(SOCKET_PATH)
+        try:
+            result = client.call_sync(
+                "bet",
+                trial_id=actual_trial_id,
+                amount=args.amount,
+                market=args.market,
+                selection=args.selection,
+            )
+            print(f"Bet placed: ${args.amount} on {args.selection} ({args.market})")
+            print(f"Bet ID: {result.get('bet_id')}")
+            return 0
+        except RPCError as e:
+            print(f"Error: {e.message}", file=sys.stderr)
+            return 1
+
+    # Fallback to direct REST API (legacy per-trial daemon mode)
+    import httpx
+
     gateway_url = state.get("gateway_url") or os.environ.get(
         "DOJOZERO_GATEWAY_URL", "http://localhost:8000"
     )
@@ -298,7 +362,7 @@ def cmd_bet(args: argparse.Namespace) -> int:
             json={
                 "market": args.market,
                 "selection": args.selection,
-                "amount": str(args.amount),  # API expects string for decimal precision
+                "amount": str(args.amount),
             },
             timeout=10.0,
         )
@@ -312,13 +376,66 @@ def cmd_bet(args: argparse.Namespace) -> int:
             return 1
 
         data = resp.json()
+        bet_id = data.get("betId")
         print(f"Bet placed: ${args.amount} on {args.selection} ({args.market})")
-        print(f"Bet ID: {data.get('betId')}")
+        print(f"Bet ID: {bet_id}")
+
+        # Update local state for legacy mode
+        _update_local_state_after_bet(state_dir, gateway_url, agent_id, data)
+
         return 0
 
     except httpx.ConnectError as e:
         print(f"Connection error: {e}", file=sys.stderr)
         return 1
+
+
+def _update_local_state_after_bet(
+    state_dir: Path, gateway_url: str, agent_id: str, bet_data: dict[str, Any]
+) -> None:
+    """Update local state after placing a bet (legacy mode).
+
+    Fetches fresh balance from server and updates state.json and bets.jsonl.
+    """
+    import httpx
+    from datetime import datetime
+
+    # Fetch fresh balance
+    try:
+        resp = httpx.get(
+            f"{gateway_url}/agents/balance",
+            headers={"X-Agent-ID": agent_id},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            balance_data = resp.json()
+            new_balance = float(balance_data.get("balance", 0))
+
+            # Update state.json
+            state_file = state_dir / "state.json"
+            if state_file.exists():
+                state = json.loads(state_file.read_text())
+                state["balance"] = new_balance
+                state["last_updated"] = datetime.now().isoformat()
+                state_file.write_text(json.dumps(state, indent=2))
+    except Exception:
+        pass  # Best effort - don't fail the bet command
+
+    # Append to bets.jsonl
+    try:
+        bets_file = state_dir / "bets.jsonl"
+        bet_record = {
+            "bet_id": bet_data.get("betId"),
+            "market": bet_data.get("market"),
+            "selection": bet_data.get("selection"),
+            "amount": float(bet_data.get("amount", 0)),
+            "status": bet_data.get("status", "placed"),
+            "placed_at": datetime.now().isoformat(),
+        }
+        with open(bets_file, "a") as f:
+            f.write(json.dumps(bet_record) + "\n")
+    except Exception:
+        pass  # Best effort
 
 
 def cmd_notifications(args: argparse.Namespace) -> int:
@@ -404,7 +521,7 @@ def cmd_bets(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_list(_args: argparse.Namespace) -> int:
+def cmd_list(_: argparse.Namespace) -> int:
     """List all running trials."""
     running = list_running_trials()
 
@@ -512,7 +629,7 @@ def cmd_daemon_start(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_daemon_stop(_args: argparse.Namespace) -> int:
+def cmd_daemon_stop(_: argparse.Namespace) -> int:
     """Stop the unified daemon."""
     if not is_unified_daemon_running():
         print("Unified daemon not running")
@@ -723,7 +840,7 @@ def cmd_rpc_status(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_rpc_list(_args: argparse.Namespace) -> int:
+def cmd_rpc_list(_: argparse.Namespace) -> int:
     """List trials via unified daemon RPC."""
     if not is_unified_daemon_running():
         print("Unified daemon not running", file=sys.stderr)

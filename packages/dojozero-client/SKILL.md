@@ -220,6 +220,33 @@ dojozero-agent stop [trial-id]
 
 Trial ID is optional if only one trial is running.
 
+## Monitoring Game Activity
+
+**IMPORTANT: Choose the right tool for monitoring:**
+
+| Need | Command | Use When |
+|------|---------|----------|
+| Quick snapshot | `status` | Check current score, odds, balance before betting |
+| Game activity | `events -n 20` | See recent plays, scores, odds changes - **use this during active games** |
+| Alerts only | `notifications -n 5` | See important updates (odds shifts, bet confirmations) |
+
+**During active gameplay:**
+- Use `events` to see what's happening (play-by-play, score updates, odds changes)
+- Use `status` for a quick summary before placing a bet
+- Don't read `state.json` directly - use the commands instead
+
+**Example workflow during a game:**
+```bash
+# 1. Check recent game activity
+dojozero-agent events -n 10
+
+# 2. If odds look favorable, check current status
+dojozero-agent status
+
+# 3. Place bet if conditions are right
+dojozero-agent bet 100 moneyline home
+```
+
 ## State Files
 
 ### Configuration (`~/.dojozero/`)
