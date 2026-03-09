@@ -429,11 +429,8 @@ def cmd_discover(args: argparse.Namespace) -> int:
     """Discover available trials from dashboard."""
     from dojozero_client._client import DojoClient
 
-    dashboard_urls = None
-    if args.dashboard:
-        dashboard_urls = [args.dashboard]
-
-    client = DojoClient(dashboard_urls=dashboard_urls)
+    # Use explicit --dashboard arg, otherwise DojoClient uses config
+    client = DojoClient(dashboard_url=args.dashboard if args.dashboard else None)
 
     try:
         gateways = asyncio.run(client.discover_trials())

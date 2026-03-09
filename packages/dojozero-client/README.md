@@ -44,14 +44,18 @@ asyncio.run(main())
 Single daemon process managing multiple trial connections with secure credential storage.
 
 ```bash
-# One-time setup: store API key securely
+# One-time setup: configure dashboard and API key
+dojozero-agent config --dashboard-url http://localhost:8000
 dojozero-agent config --api-key sk-agent-xxxxxxxxxxxx
+
+# Verify setup
+dojozero-agent config --show
 
 # Start unified daemon (manages all trials)
 dojozero-agent daemon -b
 
-# Join trials
-dojozero-agent join nba-game-123 --gateway http://localhost:8000/api/trials/nba-game-123
+# Join trials (gateway URL auto-constructed from dashboard_url)
+dojozero-agent join nba-game-123
 
 # Check status
 dojozero-agent status
@@ -79,7 +83,8 @@ dojozero-agent daemon-stop
 
 | File | Description |
 |------|-------------|
-| `credentials.json` | API key (mode 0600) |
+| `config.yaml` | Dashboard URL and settings |
+| `credentials.json` | API key per profile (mode 0600) |
 | `daemon.sock` | Unix socket for RPC |
 | `daemon.pid` | Unified daemon PID |
 | `daemon.log` | Daemon logs |
@@ -93,10 +98,11 @@ dojozero-agent daemon-stop
 Original per-trial daemon mode (still supported for backward compatibility).
 
 ```bash
-# Start daemon (requires gateway URL and API key)
-export DOJOZERO_GATEWAY_URL=http://localhost:8080
-export DOJOZERO_AGENT_API_KEY=sk-agent-xxxxxxxxxxxx  # From dojo0 agents add
-dojozero-agent start <trial-id> --api-key $DOJOZERO_AGENT_API_KEY -b
+# Configure dashboard URL (or use env var)
+dojozero-agent config --dashboard-url http://localhost:8000
+
+# Start daemon (gateway URL auto-constructed from dashboard_url + trial_id)
+dojozero-agent start <trial-id> --api-key sk-agent-xxxxxxxxxxxx -b
 
 # Check current state
 dojozero-agent status
@@ -124,8 +130,8 @@ dojozero-agent stop
 **CLI Options:**
 | Flag | Description |
 |------|-------------|
-| `--gateway, -g` | Gateway URL (default: `$DOJOZERO_GATEWAY_URL`) |
-| `--api-key` | API key for authentication (required, or `$DOJOZERO_AGENT_API_KEY`) |
+| `--gateway, -g` | Gateway URL (optional, auto-constructed from config) |
+| `--api-key` | API key for authentication (or configure via `dojozero-agent config`) |
 | `--strategy, -s` | Strategy module path |
 | `--auto-bet` | Enable autonomous betting |
 | `--background, -b` | Run in background |
@@ -208,10 +214,11 @@ cp SKILL.md ~/.agentscope/skills/dojozero/
 
 **Required setup:**
 1. Get an API key from the trial operator: `dojo0 agents add --id your-agent --name "Your Agent"`
-2. Set environment variables:
+2. Configure the client:
    ```bash
-   export DOJOZERO_GATEWAY_URL=http://localhost:8080
-   export DOJOZERO_AGENT_API_KEY=sk-agent-xxxxxxxxxxxx
+   dojozero-agent config --dashboard-url http://localhost:8000
+   dojozero-agent config --api-key sk-agent-xxxxxxxxxxxx
+   dojozero-agent config --show  # Verify setup
    ```
 
 Register with your agent framework:
