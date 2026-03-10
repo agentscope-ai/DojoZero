@@ -17,8 +17,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from dojozero.gateway._adapter import ExternalAgentAdapter
 from dojozero.gateway._auth import AgentAuthenticator, NoOpAuthenticator
 from dojozero.gateway._models import (
+    AgentReconnectRequest,
     AgentRegistrationRequest,
     AgentRegistrationResponse,
+    AgentUnregisterRequest,
     BalanceResponse,
     BetRequest,
     BetResponse,
@@ -168,7 +170,7 @@ def create_gateway_app(
     # Registration Endpoints
     # =========================================================================
 
-    @app.post("/api/v1/register", response_model=AgentRegistrationResponse)
+    @app.post("/agents", response_model=AgentRegistrationResponse)
     async def register_agent(
         request: AgentRegistrationRequest,
         state: GatewayState = Depends(get_gateway_state),
@@ -232,21 +234,96 @@ def create_gateway_app(
                 )
             raise HTTPException(status_code=400, detail=error_msg)
 
-    @app.delete("/api/v1/register/{agent_id}")
+    @app.post("/agents/reconnect", response_model=AgentRegistrationResponse)
+    async def reconnect_agent(
+        request: AgentReconnectRequest,
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> AgentRegistrationResponse:
+        """Reconnect an existing agent using API key and session key.
+
+        Requires both the API key (for identity verification) and the session key
+        (returned during original registration) to prove ownership of the session.
+        """
+        # Validate API key and get identity
+        identity = await state.authenticator.validate(request.api_key)
+        if identity is None:
+            raise HTTPException(
+                status_code=401,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.INVALID_TOKEN,
+                        message="Invalid API key",
+                    )
+                ).model_dump(by_alias=True),
+            )
+
+        try:
+            return await state.adapter.reconnect_agent(
+                agent_id=identity.agent_id,
+                session_key=request.session_key,
+                display_name=identity.display_name,
+                persona=identity.persona,
+                model=identity.model,
+                model_display_name=identity.model_display_name,
+                cdn_url=identity.cdn_url,
+            )
+        except ValueError as e:
+            error_msg = str(e)
+            if "not registered" in error_msg.lower():
+                raise HTTPException(
+                    status_code=404,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.NOT_REGISTERED,
+                            message=error_msg,
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            if "session key" in error_msg.lower():
+                raise HTTPException(
+                    status_code=403,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.SESSION_KEY_INVALID,
+                            message=error_msg,
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            raise HTTPException(status_code=400, detail=error_msg)
+
+    @app.delete("/agents/{agent_id}")
     async def unregister_agent(
         agent_id: str,
+        request: AgentUnregisterRequest,
         state: GatewayState = Depends(get_gateway_state),
     ) -> dict[str, str]:
-        """Unregister an external agent."""
-        if await state.adapter.unregister_agent(agent_id):
-            return {"message": "Unregistered successfully"}
-        raise HTTPException(status_code=404, detail="Agent not found")
+        """Unregister an external agent.
+
+        Requires the session key (returned during registration) to prove ownership.
+        """
+        try:
+            if await state.adapter.unregister_agent(agent_id, request.session_key):
+                return {"message": "Unregistered successfully"}
+            raise HTTPException(status_code=404, detail="Agent not found")
+        except ValueError as e:
+            error_msg = str(e)
+            if "session key" in error_msg.lower():
+                raise HTTPException(
+                    status_code=403,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.SESSION_KEY_INVALID,
+                            message=error_msg,
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            raise HTTPException(status_code=400, detail=error_msg)
 
     # =========================================================================
     # Trial Metadata
     # =========================================================================
 
-    @app.get("/api/v1/trial", response_model=TrialMetadataResponse)
+    @app.get("/trial", response_model=TrialMetadataResponse)
     async def get_trial_metadata(
         state: GatewayState = Depends(get_gateway_state),
     ) -> TrialMetadataResponse:
@@ -266,7 +343,7 @@ def create_gateway_app(
             metadata=state.metadata,
         )
 
-    @app.get("/api/v1/trial/results", response_model=TrialResultsResponse)
+    @app.get("/trial/results", response_model=TrialResultsResponse)
     async def get_trial_results(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
@@ -294,7 +371,7 @@ def create_gateway_app(
     # Event Streaming
     # =========================================================================
 
-    @app.get("/api/v1/events/stream")
+    @app.get("/events/stream")
     async def stream_events(
         request: Request,
         agent_id: str = Depends(get_agent_id),
@@ -347,7 +424,7 @@ def create_gateway_app(
 
         return create_sse_response(connection, last_event_id)
 
-    @app.get("/api/v1/events/recent", response_model=RecentEventsResponse)
+    @app.get("/events/recent", response_model=RecentEventsResponse)
     async def get_recent_events(
         agent_id: str = Depends(get_agent_id),
         since: int | None = Query(
@@ -412,7 +489,7 @@ def create_gateway_app(
     # Odds
     # =========================================================================
 
-    @app.get("/api/v1/odds/current", response_model=CurrentOddsResponse)
+    @app.get("/odds/current", response_model=CurrentOddsResponse)
     async def get_current_odds(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
@@ -427,7 +504,7 @@ def create_gateway_app(
     # Betting
     # =========================================================================
 
-    @app.post("/api/v1/bets", response_model=BetResponse)
+    @app.post("/bets", response_model=BetResponse)
     async def place_bet(
         request: BetRequest,
         agent_id: str = Depends(get_agent_id),
@@ -465,7 +542,7 @@ def create_gateway_app(
                 ).model_dump(by_alias=True),
             )
 
-    @app.get("/api/v1/bets", response_model=BetsListResponse)
+    @app.get("/bets", response_model=BetsListResponse)
     async def get_bets(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
@@ -476,7 +553,7 @@ def create_gateway_app(
 
         return BetsListResponse(bets=state.adapter.get_bets(agent_id))
 
-    @app.get("/api/v1/balance", response_model=BalanceResponse)
+    @app.get("/balance", response_model=BalanceResponse)
     async def get_balance(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
@@ -494,7 +571,7 @@ def create_gateway_app(
     # Agent List
     # =========================================================================
 
-    @app.get("/api/v1/agents")
+    @app.get("/agents")
     async def list_agents(
         state: GatewayState = Depends(get_gateway_state),
     ) -> dict[str, Any]:
@@ -525,7 +602,7 @@ def create_gateway_app(
     # Leaderboard / All Agents Statistics
     # =========================================================================
 
-    @app.get("/api/v1/leaderboard")
+    @app.get("/leaderboard")
     async def get_leaderboard(
         state: GatewayState = Depends(get_gateway_state),
     ) -> dict[str, Any]:

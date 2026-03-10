@@ -71,12 +71,14 @@ class TestModels:
         """Test AgentRegistrationResponse serializes to camelCase."""
         response = AgentRegistrationResponse(
             agent_id="agent1",
+            session_key="sk-session-abc123",
             trial_id="trial123",
             balance="1000",
             registered_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         )
         dumped = response.model_dump(by_alias=True)
         assert "agentId" in dumped
+        assert "sessionKey" in dumped
         assert "trialId" in dumped
         assert "registeredAt" in dumped
 
@@ -191,9 +193,16 @@ class TestExternalAgentState:
         """Test state creation with defaults."""
         state = ExternalAgentState(agent_id="agent1")
         assert state.agent_id == "agent1"
+        assert state.session_key == ""  # Default empty session key
         assert state.subscription is None
         assert state.registered_at is not None
         assert state.last_activity_at is not None
+
+    def test_creation_with_session_key(self):
+        """Test state creation with session key."""
+        state = ExternalAgentState(agent_id="agent1", session_key="sk-session-123")
+        assert state.agent_id == "agent1"
+        assert state.session_key == "sk-session-123"
 
 
 class TestExternalAgentAdapter:
@@ -215,6 +224,8 @@ class TestExternalAgentAdapter:
         broker = MagicMock()
         broker.initial_balance = "1000"
         broker.create_account = AsyncMock()
+        broker.delete_account = AsyncMock(return_value=True)
+        broker.has_account = MagicMock(return_value=False)
         broker._event = None
         broker._accounts = {}
         broker._bets = {}
@@ -244,31 +255,94 @@ class TestExternalAgentAdapter:
         assert response.agent_id == "agent1"
         assert response.trial_id == "trial123"
         assert response.balance == "500"
-        mock_broker.create_account.assert_called_once_with("agent1", Decimal("500"))
+        mock_broker.create_account.assert_called_once_with(
+            "agent1", Decimal("500"), is_external=True
+        )
 
     @pytest.mark.asyncio
     async def test_register_duplicate_agent(self, adapter):
         """Test duplicate registration raises error."""
         await adapter.register_agent(agent_id="agent1")
 
-        with pytest.raises(ValueError, match="already registered"):
+        with pytest.raises(ValueError, match="already connected"):
             await adapter.register_agent(agent_id="agent1")
 
     @pytest.mark.asyncio
     async def test_unregister_agent(self, adapter):
-        """Test agent unregistration."""
+        """Test agent unregistration with session key."""
+        response = await adapter.register_agent(agent_id="agent1")
+        session_key = response.session_key
+        assert adapter.is_registered("agent1")
+
+        result = await adapter.unregister_agent("agent1", session_key=session_key)
+        assert result is True
+        assert not adapter.is_registered("agent1")
+
+    @pytest.mark.asyncio
+    async def test_unregister_agent_invalid_session_key(self, adapter):
+        """Test unregistration with invalid session key fails."""
         await adapter.register_agent(agent_id="agent1")
         assert adapter.is_registered("agent1")
 
-        result = await adapter.unregister_agent("agent1")
-        assert result is True
-        assert not adapter.is_registered("agent1")
+        with pytest.raises(ValueError, match="Invalid session key"):
+            await adapter.unregister_agent("agent1", session_key="wrong-key")
+
+        # Agent should still be registered
+        assert adapter.is_registered("agent1")
+
+    @pytest.mark.asyncio
+    async def test_unregister_agent_missing_session_key(self, adapter):
+        """Test unregistration without session key when agent has one fails."""
+        await adapter.register_agent(agent_id="agent1")
+        assert adapter.is_registered("agent1")
+
+        with pytest.raises(ValueError, match="Session key required"):
+            await adapter.unregister_agent("agent1", session_key=None)
+
+        # Agent should still be registered
+        assert adapter.is_registered("agent1")
 
     @pytest.mark.asyncio
     async def test_unregister_nonexistent(self, adapter):
         """Test unregistering nonexistent agent."""
         result = await adapter.unregister_agent("nonexistent")
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_reconnect_agent(self, adapter, mock_broker):
+        """Test agent reconnection with session key."""
+        # Register first
+        reg_response = await adapter.register_agent(agent_id="agent1")
+        session_key = reg_response.session_key
+        assert session_key  # Should have a session key
+
+        # Reconnect with same session key
+        reconnect_response = await adapter.reconnect_agent(
+            agent_id="agent1",
+            session_key=session_key,
+        )
+        assert reconnect_response.agent_id == "agent1"
+        assert reconnect_response.session_key == session_key  # Same session key
+
+    @pytest.mark.asyncio
+    async def test_reconnect_agent_invalid_session_key(self, adapter):
+        """Test reconnection with wrong session key fails."""
+        await adapter.register_agent(agent_id="agent1")
+
+        with pytest.raises(ValueError, match="Invalid session key"):
+            await adapter.reconnect_agent(
+                agent_id="agent1",
+                session_key="wrong-key",
+            )
+
+    @pytest.mark.asyncio
+    async def test_reconnect_agent_not_registered(self, adapter):
+        """Test reconnection for unregistered agent fails."""
+        with pytest.raises(ValueError, match="not registered"):
+            await adapter.reconnect_agent(
+                agent_id="nonexistent",
+                session_key="some-key",
+            )
 
     def test_is_registered(self, adapter):
         """Test registration check."""
@@ -369,6 +443,9 @@ class TestGatewayServer:
         """Create mock BrokerOperator."""
         broker = MagicMock()
         broker.initial_balance = "1000"
+        broker.create_account = AsyncMock()
+        broker.delete_account = AsyncMock(return_value=True)
+        broker.has_account = MagicMock(return_value=False)
         broker._event = None
         broker._accounts = {}
         return broker
@@ -402,7 +479,7 @@ class TestGatewayServer:
         mock_broker.create_account = AsyncMock()
 
         response = client.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "apiKey": "agent1",  # NoOpAuthenticator uses apiKey as agent_id
                 "persona": "test",
@@ -419,31 +496,55 @@ class TestGatewayServer:
         mock_broker.create_account = AsyncMock()
 
         # First registration
-        client.post("/api/v1/register", json={"apiKey": "agent1"})
+        client.post("/agents", json={"apiKey": "agent1"})
 
         # Duplicate
-        response = client.post("/api/v1/register", json={"apiKey": "agent1"})
+        response = client.post("/agents", json={"apiKey": "agent1"})
         assert response.status_code == 409
 
     def test_unregister_agent(self, client, mock_broker):
-        """Test agent unregistration."""
+        """Test agent unregistration with session key."""
+        mock_broker.create_account = AsyncMock()
+
+        # Register first and get session key
+        reg_response = client.post("/agents", json={"apiKey": "agent1"})
+        session_key = reg_response.json()["sessionKey"]
+
+        # Unregister with session key
+        response = client.request(
+            "DELETE",
+            "/agents/agent1",
+            json={"sessionKey": session_key},
+        )
+        assert response.status_code == 200
+
+    def test_unregister_invalid_session_key(self, client, mock_broker):
+        """Test unregistering with wrong session key fails."""
         mock_broker.create_account = AsyncMock()
 
         # Register first
-        client.post("/api/v1/register", json={"apiKey": "agent1"})
+        client.post("/agents", json={"apiKey": "agent1"})
 
-        # Unregister
-        response = client.delete("/api/v1/register/agent1")
-        assert response.status_code == 200
+        # Try to unregister with wrong session key
+        response = client.request(
+            "DELETE",
+            "/agents/agent1",
+            json={"sessionKey": "wrong-key"},
+        )
+        assert response.status_code == 403
 
     def test_unregister_nonexistent(self, client):
         """Test unregistering nonexistent agent."""
-        response = client.delete("/api/v1/register/unknown")
+        response = client.request(
+            "DELETE",
+            "/agents/unknown",
+            json={"sessionKey": "any-key"},
+        )
         assert response.status_code == 404
 
     def test_get_trial_metadata(self, client):
         """Test trial metadata endpoint."""
-        response = client.get("/api/v1/trial")
+        response = client.get("/trial")
         assert response.status_code == 200
         data = response.json()
         assert data["trialId"] == "trial123"
@@ -451,20 +552,20 @@ class TestGatewayServer:
     def test_get_odds_requires_registration(self, client):
         """Test odds endpoint requires agent registration."""
         response = client.get(
-            "/api/v1/odds/current",
+            "/odds/current",
             headers={"X-Agent-ID": "unknown"},
         )
         assert response.status_code == 403
 
     def test_get_odds_requires_auth(self, client):
         """Test odds endpoint requires X-Agent-ID header."""
-        response = client.get("/api/v1/odds/current")
+        response = client.get("/odds/current")
         assert response.status_code == 401
 
     def test_get_balance_requires_registration(self, client):
         """Test balance endpoint requires registration."""
         response = client.get(
-            "/api/v1/balance",
+            "/balance",
             headers={"X-Agent-ID": "unknown"},
         )
         assert response.status_code == 403
@@ -472,7 +573,7 @@ class TestGatewayServer:
     def test_place_bet_requires_auth(self, client):
         """Test bet placement requires auth."""
         response = client.post(
-            "/api/v1/bets",
+            "/bets",
             json={
                 "market": "moneyline",
                 "selection": "home",
@@ -480,6 +581,57 @@ class TestGatewayServer:
             },
         )
         assert response.status_code == 401
+
+    def test_reconnect_agent(self, client, mock_broker):
+        """Test agent reconnection with session key."""
+        mock_broker.create_account = AsyncMock()
+
+        # Register first and get session key
+        reg_response = client.post("/agents", json={"apiKey": "agent1"})
+        assert reg_response.status_code == 200
+        session_key = reg_response.json()["sessionKey"]
+
+        # Reconnect with same API key and session key
+        reconnect_response = client.post(
+            "/agents/reconnect",
+            json={
+                "apiKey": "agent1",
+                "sessionKey": session_key,
+            },
+        )
+        assert reconnect_response.status_code == 200
+        data = reconnect_response.json()
+        assert data["agentId"] == "agent1"
+        # Session key should be the same
+        assert data["sessionKey"] == session_key
+
+    def test_reconnect_invalid_session_key(self, client, mock_broker):
+        """Test reconnection with wrong session key fails."""
+        mock_broker.create_account = AsyncMock()
+
+        # Register first
+        client.post("/agents", json={"apiKey": "agent1"})
+
+        # Try to reconnect with wrong session key
+        response = client.post(
+            "/agents/reconnect",
+            json={
+                "apiKey": "agent1",
+                "sessionKey": "wrong-key",
+            },
+        )
+        assert response.status_code == 403
+
+    def test_reconnect_nonexistent_agent(self, client, mock_broker):
+        """Test reconnection for unregistered agent fails."""
+        response = client.post(
+            "/agents/reconnect",
+            json={
+                "apiKey": "nonexistent",
+                "sessionKey": "some-key",
+            },
+        )
+        assert response.status_code == 404
 
 
 class TestAuthProvider:
@@ -1178,8 +1330,8 @@ class TestTrialResults:
         broker._event = None
         # Mock accounts with balances
         broker._accounts = {
-            "agent1": MagicMock(balance=Decimal("1200")),
-            "agent2": MagicMock(balance=Decimal("800")),
+            "agent1": MagicMock(balance=Decimal("1200"), is_external=True),
+            "agent2": MagicMock(balance=Decimal("800"), is_external=False),
         }
 
         # Mock get_statistics to return proper stats
@@ -1288,6 +1440,36 @@ class TestTrialResults:
         assert agent2_result.final_balance == "800"
         assert agent2_result.total_bets == 1
 
+    @pytest.mark.asyncio
+    async def test_results_use_is_external_fallback(self, adapter):
+        """Test authenticated falls back to account.is_external when agent not in _agents."""
+        # Clear _agents to simulate post-restart scenario where agents haven't reconnected
+        adapter._agents.clear()
+
+        results = await adapter.get_results()
+
+        # agent1 has is_external=True, should show authenticated=True
+        agent1_result = next(r for r in results.results if r.agent_id == "agent1")
+        assert agent1_result.authenticated is True
+
+        # agent2 has is_external=False, should show authenticated=False
+        agent2_result = next(r for r in results.results if r.agent_id == "agent2")
+        assert agent2_result.authenticated is False
+
+    @pytest.mark.asyncio
+    async def test_results_prefer_agent_state_over_is_external(self, adapter):
+        """Test that agent_state.authenticated is used when agent is connected."""
+        # agent1 is in _agents with authenticated=True, account.is_external=True
+        # agent2 is in _agents with authenticated=False, account.is_external=False
+        results = await adapter.get_results()
+
+        agent1_result = next(r for r in results.results if r.agent_id == "agent1")
+        assert agent1_result.authenticated is True
+        assert agent1_result.display_name == "Agent One"
+
+        agent2_result = next(r for r in results.results if r.agent_id == "agent2")
+        assert agent2_result.authenticated is False
+
 
 class TestGatewayAuthIntegration:
     """Tests for gateway registration with authentication."""
@@ -1309,6 +1491,8 @@ class TestGatewayAuthIntegration:
         broker._event = None
         broker._accounts = {}
         broker.create_account = AsyncMock()
+        broker.delete_account = AsyncMock(return_value=True)
+        broker.has_account = MagicMock(return_value=False)
         return broker
 
     @pytest.fixture
@@ -1364,7 +1548,7 @@ class TestGatewayAuthIntegration:
     def test_register_with_valid_api_key(self, client_with_auth):
         """Test registration with valid API key succeeds and returns verified identity."""
         response = client_with_auth.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },
@@ -1380,7 +1564,7 @@ class TestGatewayAuthIntegration:
     def test_register_with_invalid_api_key(self, client_with_auth):
         """Test registration with invalid API key returns 401."""
         response = client_with_auth.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "apiKey": "sk-invalid-key",
             },
@@ -1391,7 +1575,7 @@ class TestGatewayAuthIntegration:
     def test_register_without_api_key_missing_field(self, client_with_auth):
         """Test registration without apiKey field returns 422 validation error."""
         response = client_with_auth.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "persona": "test",
             },
@@ -1403,7 +1587,7 @@ class TestGatewayAuthIntegration:
     def test_register_with_noop_auth(self, client_no_auth):
         """Test registration with NoOpAuthenticator uses apiKey as agent_id."""
         response = client_no_auth.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "apiKey": "test_agent",  # NoOpAuthenticator uses apiKey as agent_id
             },
@@ -1417,7 +1601,7 @@ class TestGatewayAuthIntegration:
     def test_register_verified_agent_uses_identity_display_name(self, client_with_auth):
         """Test that verified agent uses identity's display_name."""
         response = client_with_auth.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },
@@ -1430,7 +1614,7 @@ class TestGatewayAuthIntegration:
         """Test registering multiple agents with different API keys."""
         # Register first verified agent
         response1 = client_with_auth.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },
@@ -1440,7 +1624,7 @@ class TestGatewayAuthIntegration:
 
         # Register second verified agent with different key
         response2 = client_with_auth.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-456",
             },
@@ -1452,7 +1636,7 @@ class TestGatewayAuthIntegration:
         """Test that same API key cannot register twice."""
         # First registration
         response1 = client_with_auth.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },
@@ -1461,7 +1645,7 @@ class TestGatewayAuthIntegration:
 
         # Second registration with same API key
         response2 = client_with_auth.post(
-            "/api/v1/register",
+            "/agents",
             json={
                 "apiKey": "sk-valid-key-123",
             },

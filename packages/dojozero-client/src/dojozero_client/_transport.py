@@ -86,6 +86,16 @@ class GatewayTransport:
         if self._client:
             self._client.headers.update(self._auth_headers())
 
+    def set_last_event_id(self, event_id: int | str) -> None:
+        """Set last event ID for reconnection replay.
+
+        Call this before streaming to resume from a specific sequence.
+
+        Args:
+            event_id: Last event sequence seen (will be converted to string)
+        """
+        self._last_event_id = str(event_id)
+
     async def __aenter__(self) -> "GatewayTransport":
         """Enter async context."""
         self._client = httpx.AsyncClient(
@@ -124,7 +134,7 @@ class GatewayTransport:
 
         Args:
             method: HTTP method (GET, POST, etc.)
-            path: API path (e.g., "/api/v1/register")
+            path: API path (e.g., "/agents")
             json: JSON body for POST/PUT
             params: Query parameters
 
@@ -216,7 +226,7 @@ class GatewayTransport:
         try:
             async with client.stream(
                 "GET",
-                "/api/v1/events/stream",
+                "/events/stream",
                 headers=headers,
                 timeout=None,  # SSE streams are long-lived
             ) as response:

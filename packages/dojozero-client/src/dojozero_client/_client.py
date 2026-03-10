@@ -63,20 +63,48 @@ class BetResult:
 
 
 @dataclass
+class Holding:
+    """A single holding position."""
+
+    event_id: str
+    selection: str
+    bet_type: str
+    shares: float
+    avg_probability: float
+    spread_value: float | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Holding":
+        """Create from API response."""
+        return cls(
+            event_id=data.get("eventId", ""),
+            selection=data.get("selection", ""),
+            bet_type=data.get("betType", ""),
+            shares=float(data.get("shares", 0)),
+            avg_probability=float(data.get("avgProbability", 0)),
+            spread_value=float(data["spreadValue"])
+            if data.get("spreadValue")
+            else None,
+        )
+
+
+@dataclass
 class Balance:
     """Agent balance information."""
 
     agent_id: str
     balance: float
-    holdings: dict[str, float]
+    holdings: list[Holding]
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Balance":
         """Create from API response."""
+        raw_holdings = data.get("holdings", [])
+        holdings = [Holding.from_dict(h) for h in raw_holdings] if raw_holdings else []
         return cls(
             agent_id=data["agentId"],
-            balance=data["balance"],
-            holdings=data.get("holdings", {}),
+            balance=float(data["balance"]),
+            holdings=holdings,
         )
 
 
@@ -260,6 +288,7 @@ class TrialConnection:
         transport: GatewayTransport,
         agent_id: str,
         trial_id: str,
+        session_key: str = "",
     ):
         """Initialize trial connection.
 
@@ -267,10 +296,12 @@ class TrialConnection:
             transport: Gateway transport layer
             agent_id: Agent ID
             trial_id: Trial ID from registration
+            session_key: Session key for secure reconnection/unregistration
         """
         self._transport = transport
         self._agent_id = agent_id
         self._trial_id = trial_id
+        self._session_key = session_key
         self._last_sequence: int = 0
         self._trial_ended: TrialEndedEvent | None = None
 
@@ -285,6 +316,11 @@ class TrialConnection:
         return self._trial_id
 
     @property
+    def session_key(self) -> str:
+        """Get session key for secure reconnection/unregistration."""
+        return self._session_key
+
+    @property
     def last_sequence(self) -> int:
         """Get last seen sequence number."""
         return self._last_sequence
@@ -294,9 +330,21 @@ class TrialConnection:
         """Get trial ended event if trial has ended via SSE."""
         return self._trial_ended
 
+    def set_resume_sequence(self, sequence: int) -> None:
+        """Set sequence to resume from on reconnection.
+
+        Call this before events() to replay missed events from the server.
+        The server will replay events since this sequence (up to 100 events).
+
+        Args:
+            sequence: Last event sequence seen before disconnect
+        """
+        self._last_sequence = sequence
+        self._transport.set_last_event_id(sequence)
+
     async def get_trial_metadata(self) -> TrialMetadata:
         """Get trial metadata."""
-        response = await self._transport.request("GET", "/api/v1/trial")
+        response = await self._transport.request("GET", "/trial")
         return TrialMetadata.from_dict(response)
 
     async def events(
@@ -330,7 +378,10 @@ class TrialConnection:
 
                     # Filter by event type if specified
                     if event_types:
-                        event_type = envelope.payload.get("eventType", "")
+                        # Check both snake_case and camelCase keys
+                        event_type = envelope.payload.get(
+                            "event_type", envelope.payload.get("eventType", "")
+                        )
                         if not any(
                             self._matches_filter(event_type, f) for f in event_types
                         ):
@@ -420,7 +471,7 @@ class TrialConnection:
 
         response = await self._transport.request(
             "GET",
-            "/api/v1/events/recent",
+            "/events/recent",
             params=params,
         )
 
@@ -439,7 +490,7 @@ class TrialConnection:
         Returns:
             Current odds information
         """
-        response = await self._transport.request("GET", "/api/v1/odds/current")
+        response = await self._transport.request("GET", "/odds/current")
         return Odds.from_dict(response)
 
     async def place_bet(
@@ -481,7 +532,7 @@ class TrialConnection:
 
         response = await self._transport.request(
             "POST",
-            "/api/v1/bets",
+            "/bets",
             json=body,
         )
 
@@ -493,7 +544,7 @@ class TrialConnection:
         Returns:
             List of BetResult objects
         """
-        response = await self._transport.request("GET", "/api/v1/bets")
+        response = await self._transport.request("GET", "/bets")
         return [BetResult.from_dict(b) for b in response.get("bets", [])]
 
     async def get_balance(self) -> Balance:
@@ -502,7 +553,7 @@ class TrialConnection:
         Returns:
             Balance information
         """
-        response = await self._transport.request("GET", "/api/v1/balance")
+        response = await self._transport.request("GET", "/balance")
         return Balance.from_dict(response)
 
     async def get_results(self) -> TrialResults:
@@ -517,7 +568,7 @@ class TrialConnection:
         Returns:
             TrialResults with status and all agent results
         """
-        response = await self._transport.request("GET", "/api/v1/trial/results")
+        response = await self._transport.request("GET", "/trial/results")
         return TrialResults.from_dict(response)
 
 
@@ -542,7 +593,7 @@ class GatewayInfo:
 class DojoClient:
     """DojoZero client for external agents.
 
-    Standalone mode (dojo0 run --enable-gateway):
+    Standalone mode (dojo0 run):
         ```
         async with client.connect_trial(
             gateway_url="http://localhost:8080",
@@ -552,7 +603,7 @@ class DojoClient:
                 ...
         ```
 
-    Dashboard mode (dojo0 serve --enable-gateway):
+    Dashboard mode (dojo0 serve):
         ```
         # Discover available trials (queries all configured dashboards)
         gateways = await client.discover_trials()
@@ -568,28 +619,28 @@ class DojoClient:
 
     Configuration (layered precedence):
         1. Constructor arguments
-        2. Environment variables (DOJOZERO_GATEWAY_URL, DOJOZERO_DASHBOARD_URLS)
+        2. Environment variables (DOJOZERO_DASHBOARD_URL, DOJOZERO_DASHBOARD_URLS)
         3. Config file (~/.dojozero/config.yaml)
         4. Defaults (http://localhost:8000)
     """
 
     def __init__(
         self,
-        gateway_url: str | None = None,
+        dashboard_url: str | None = None,
         dashboard_urls: list[str] | None = None,
         timeout: float = 30.0,
     ):
         """Initialize DojoZero client.
 
         Args:
-            gateway_url: Gateway URL (standalone mode)
+            dashboard_url: Dashboard URL (single server mode)
             dashboard_urls: List of dashboard URLs (sharded mode)
             timeout: Default request timeout in seconds
         """
         from dojozero_client._config import load_config
 
         self._config = load_config(
-            gateway_url=gateway_url,
+            dashboard_url=dashboard_url,
             dashboard_urls=dashboard_urls,
             timeout=timeout,
         )
@@ -652,7 +703,7 @@ class DojoClient:
         """
         import httpx
 
-        url = f"{dashboard_url.rstrip('/')}/api/gateway"
+        url = f"{dashboard_url.rstrip('/')}/api/gateways"
 
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -672,6 +723,7 @@ class DojoClient:
         gateway_url: str,
         api_key: str,
         initial_balance: float | None = None,
+        session_key: str | None = None,
     ) -> AsyncIterator[TrialConnection]:
         """Connect to a trial.
 
@@ -681,9 +733,11 @@ class DojoClient:
                      Agent identity (agent_id, display_name, persona, model)
                      all come from agent_keys.yaml based on this key.
             initial_balance: Starting balance (if registering)
+            session_key: Session key from previous connection (for secure reconnection)
 
         Yields:
-            TrialConnection for interacting with the trial
+            TrialConnection for interacting with the trial.
+            Access connection.session_key to get the session key for storage.
 
         Raises:
             ConnectionError: If connection fails
@@ -696,44 +750,80 @@ class DojoClient:
         )
 
         async with transport:
-            # Register with API key - identity comes from verified key
-            try:
-                reg_response = await transport.request(
-                    "POST",
-                    "/api/v1/register",
-                    json={
-                        "apiKey": api_key,
-                        "initialBalance": initial_balance,
-                    },
-                )
-                trial_id = reg_response.get("trialId", "")
-                agent_id = reg_response.get("agentId", "")
+            trial_id = ""
+            agent_id = ""
+            new_session_key = ""
 
-                # Set agent_id for subsequent requests
-                transport.set_agent_id(agent_id)
-
-                logger.info(
-                    "Registered agent %s for trial %s",
-                    agent_id,
-                    trial_id,
-                )
-            except RegistrationError as e:
-                # 409 Conflict - agent already registered, get info
-                logger.info("Agent already registered, fetching trial info")
+            # Try reconnect first if we have a session key
+            if session_key:
                 try:
-                    # Need to get agent_id from a different endpoint
-                    # For now, re-raise - user should use a fresh api_key or handle this
-                    raise ConnectionError(
-                        f"Agent already registered. Use a different API key or "
-                        f"unregister first: {e}"
-                    ) from e
-                except Exception:
+                    reconnect_response = await transport.request(
+                        "POST",
+                        "/agents/reconnect",
+                        json={
+                            "apiKey": api_key,
+                            "sessionKey": session_key,
+                        },
+                    )
+                    trial_id = reconnect_response.get("trialId", "")
+                    agent_id = reconnect_response.get("agentId", "")
+                    new_session_key = reconnect_response.get("sessionKey", session_key)
+
+                    # Set agent_id for subsequent requests
+                    transport.set_agent_id(agent_id)
+
+                    logger.info(
+                        "Reconnected agent %s for trial %s using session key",
+                        agent_id,
+                        trial_id,
+                    )
+                except Exception as e:
+                    # Reconnect failed - will try fresh registration below
+                    logger.info(
+                        "Session key reconnect failed, will try registration: %s", e
+                    )
+                    session_key = None  # Clear so we try registration
+
+            # Try fresh registration if no session key or reconnect failed
+            if not agent_id:
+                try:
+                    reg_response = await transport.request(
+                        "POST",
+                        "/agents",
+                        json={
+                            "apiKey": api_key,
+                            "initialBalance": initial_balance,
+                        },
+                    )
+                    trial_id = reg_response.get("trialId", "")
+                    agent_id = reg_response.get("agentId", "")
+                    new_session_key = reg_response.get("sessionKey", "")
+
+                    # Set agent_id for subsequent requests
+                    transport.set_agent_id(agent_id)
+
+                    logger.info(
+                        "Registered agent %s for trial %s",
+                        agent_id,
+                        trial_id,
+                    )
+                except RegistrationError as e:
+                    # 409 Conflict - agent already registered but we don't have session key
+                    # This is an error state - agent is connected elsewhere
+                    error_msg = str(e)
+                    if "already" in error_msg.lower():
+                        raise ConnectionError(
+                            f"Agent already connected elsewhere and no session key provided. "
+                            f"Either stop the other connection or provide the session key. "
+                            f"Original error: {error_msg}"
+                        ) from e
                     raise
 
             connection = TrialConnection(
                 transport=transport,
                 agent_id=agent_id,
                 trial_id=trial_id,
+                session_key=new_session_key,
             )
 
             yield connection

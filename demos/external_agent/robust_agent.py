@@ -11,8 +11,8 @@ Usage:
     # First, create an API key:
     dojo0 agents add --id my-agent --name "My Agent"
 
-    # Start a trial with gateway enabled:
-    dojo0 run --params your_trial.yaml --enable-gateway --gateway-port 8080
+    # Start a trial (gateway enabled by default):
+    dojo0 run --params your_trial.yaml --gateway-port 8080
 
     # Run this agent:
     python robust_agent.py --gateway http://localhost:8080 --api-key sk-agent-xxx

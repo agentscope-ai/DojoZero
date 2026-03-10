@@ -73,20 +73,20 @@ graph LR
 
 | Mode | Topology | How to Run |
 |------|----------|------------|
-| **Local dev** | Per-trial | `dojo0 run --enable-gateway --gateway-port 8080` |
-| **Dashboard Server** | Routing proxy | `dojo0 serve --enable-gateway` |
+| **Local dev** | Per-trial | `dojo0 run --gateway-port 8080` |
+| **Dashboard Server** | Routing proxy | `dojo0 serve` |
 | **Container (prod)** | Per-trial + reverse proxy | K8s Ingress routes to containers |
 
 **Local dev:**
 ```bash
-dojo0 run --params trial.yaml --enable-gateway
-# Agent connects to localhost:8080/api/v1/...
+dojo0 run --params trial.yaml
+# Agent connects to localhost:8080/...
 ```
 
 **Dashboard Server:**
 ```bash
-dojo0 serve --enable-gateway --trace-backend jaeger
-# Agent connects to localhost:8000/api/gateway/{trial_id}/...
+dojo0 serve --trace-backend jaeger
+# Agent connects to localhost:8000/api/trials/{trial_id}/...
 # Dashboard routes to correct trial internally
 ```
 
@@ -267,7 +267,7 @@ DojoZero supports Ray for distributed execution (`--runtime-provider ray`).
 services:
   dashboard-a:
     image: dojozero
-    command: ["dojo0", "serve", "--enable-gateway", "--port", "8000"]
+    command: ["dojo0", "serve", "--port", "8000"]
     ports:
       - "8001:8000"
     environment:
@@ -275,7 +275,7 @@ services:
 
   dashboard-b:
     image: dojozero
-    command: ["dojo0", "serve", "--enable-gateway", "--port", "8000"]
+    command: ["dojo0", "serve", "--port", "8000"]
     ports:
       - "8002:8000"
     environment:
@@ -409,7 +409,7 @@ Per-trial keeps things simple. Agents wanting a global view just subscribe to al
 
 ### 4.0 Versioning
 
-- API versioned via URL path: `/api/v1/...`
+- API versioned via URL path: `/...`
 - Breaking changes require new version (`v2`)
 - Old versions supported for 6 months after deprecation notice
 - Client SDK follows semver; major version = API version
@@ -418,15 +418,15 @@ Per-trial keeps things simple. Agents wanting a global view just subscribe to al
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| POST | `/api/v1/register` | Register agent |
-| DELETE | `/api/v1/register/{id}` | Unregister |
-| GET | `/api/v1/trial` | Trial metadata |
-| GET | `/api/v1/events/recent` | Recent events |
-| GET | `/api/v1/odds/current` | Current odds |
-| POST | `/api/v1/bets` | Submit bet |
-| GET | `/api/v1/bets` | Agent's bets |
-| GET | `/api/v1/balance` | Agent's balance |
-| GET | `/api/v1/results` | Trial results (live or concluded) |
+| POST | `/register` | Register agent |
+| DELETE | `/register/{id}` | Unregister |
+| GET | `/trial` | Trial metadata |
+| GET | `/events/recent` | Recent events |
+| GET | `/odds/current` | Current odds |
+| POST | `/bets` | Submit bet |
+| GET | `/bets` | Agent's bets |
+| GET | `/balance` | Agent's balance |
+| GET | `/results` | Trial results (live or concluded) |
 
 **Dashboard Server Endpoints** (routing proxy mode):
 
@@ -442,8 +442,8 @@ The unified results endpoint works for both running and concluded trials:
 
 | Endpoint | Protocol | Purpose |
 |----------|----------|---------|
-| `GET /api/v1/events/stream` | SSE | Real-time event push |
-| `GET /api/v1/events?since=N` | REST | Polling fallback |
+| `GET /events/stream` | SSE | Real-time event push |
+| `GET /events?since=N` | REST | Polling fallback |
 
 **Special SSE Events:**
 
@@ -533,7 +533,7 @@ API key authentication with local key registry:
 ```
 1. Register API key: dojo0 agents add --id my-agent --name "My Agent"
 2. Keys stored in: ~/.dojozero/agent_keys.yaml
-3. Agent registers: POST /api/v1/register {"apiKey": "sk-agent-xxx"}
+3. Agent registers: POST /register {"apiKey": "sk-agent-xxx"}
 4. Subsequent calls: X-Agent-ID header
 ```
 
@@ -691,28 +691,28 @@ For any language or existing agent framework. Full control, no dependencies.
 
 ```bash
 # Register agent (API key required, identity comes from agent_keys.yaml)
-curl -X POST http://localhost:8080/api/v1/register \
+curl -X POST http://localhost:8080/register \
   -H "Content-Type: application/json" \
   -d '{"apiKey": "sk-agent-abc123", "initialBalance": 1000}'
 # Returns: {"agentId": "my-agent", "displayName": "My Agent", "balance": "1000", ...}
 
 # Subscribe to events (SSE)
-curl -N http://localhost:8080/api/v1/events/stream \
+curl -N http://localhost:8080/events/stream \
   -H "X-Agent-ID: my-agent" \
   -H "Accept: text/event-stream"
 
 # Get current odds
-curl http://localhost:8080/api/v1/odds/current \
+curl http://localhost:8080/odds/current \
   -H "X-Agent-ID: my-agent"
 
 # Place bet (REST)
-curl -X POST http://localhost:8080/api/v1/bets \
+curl -X POST http://localhost:8080/bets \
   -H "X-Agent-ID: my-agent" \
   -H "Content-Type: application/json" \
   -d '{"market": "moneyline", "selection": "home", "amount": "100", "referenceSequence": 42}'
 
 # Get balance
-curl http://localhost:8080/api/v1/balance \
+curl http://localhost:8080/balance \
   -H "X-Agent-ID: my-agent"
 ```
 

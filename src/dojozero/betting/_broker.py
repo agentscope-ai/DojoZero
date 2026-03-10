@@ -14,7 +14,7 @@ import json
 import logging
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict
 
@@ -181,6 +181,52 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             "present" if self._event else "none",
             len(self._bets),
         )
+
+    def ensure_event_initialized(
+        self,
+        event_id: str,
+        home_team: str,
+        away_team: str,
+        game_time: datetime | None = None,
+    ) -> bool:
+        """Ensure a betting event exists, creating one from metadata if needed.
+
+        This method is called by the gateway when the broker's _event is None
+        but trial metadata is available. This handles cases where:
+        - The broker was restored from checkpoint without receiving GameInitializeEvent
+        - A timing issue prevented the broker from receiving the initial event
+
+        Returns:
+            True if event was created, False if event already existed
+        """
+        if self._event is not None:
+            logger.debug(
+                "Event already initialized: event_id=%s, skipping metadata initialization",
+                self._event.event_id,
+            )
+            return False
+
+        # Create event from metadata
+        actual_game_time = game_time or datetime.now(timezone.utc)
+        betting_event = BettingEvent(
+            event_id=event_id,
+            home_team=home_team,
+            away_team=away_team,
+            game_time=actual_game_time,
+            status=EventStatus.SCHEDULED,
+            home_probability=None,
+            away_probability=None,
+            last_odds_update=None,
+        )
+
+        self._event = betting_event
+        logger.info(
+            "Initialized event from metadata: event_id=%s, %s vs %s (probabilities pending)",
+            event_id,
+            home_team,
+            away_team,
+        )
+        return True
 
     async def register_agents(self, agents: Sequence[Agent]) -> None:
         """Register agents and create their accounts"""
@@ -1313,8 +1359,19 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # Account Management
     # =========================================================================
 
-    async def create_account(self, agent_id: str, initial_balance: Decimal) -> Account:
-        """Initialize a new agent account"""
+    async def create_account(
+        self,
+        agent_id: str,
+        initial_balance: Decimal,
+        is_external: bool = False,
+    ) -> Account:
+        """Initialize a new agent account.
+
+        Args:
+            agent_id: Unique agent identifier
+            initial_balance: Starting balance
+            is_external: True if created via gateway (external agent with API key)
+        """
         if initial_balance < 0:
             raise ValueError("Initial balance must be non-negative")
 
@@ -1327,12 +1384,46 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             balance=initial_balance,
             created_at=now,
             last_updated=now,
+            is_external=is_external,
         )
         self._accounts[agent_id] = account
 
-        logger.info("Created account for %s with balance %s", agent_id, initial_balance)
+        agent_type = "external" if is_external else "internal"
+        logger.info(
+            "Created %s account for %s with balance %s",
+            agent_type,
+            agent_id,
+            initial_balance,
+        )
         await self._log_accounts_and_bets_status("account_created")
         return account
+
+    async def delete_account(self, agent_id: str) -> bool:
+        """Delete an agent account.
+
+        Args:
+            agent_id: Agent whose account to delete
+
+        Returns:
+            True if account was deleted, False if not found
+        """
+        if agent_id not in self._accounts:
+            return False
+
+        del self._accounts[agent_id]
+        logger.info("Deleted account for %s", agent_id)
+        return True
+
+    def has_account(self, agent_id: str) -> bool:
+        """Check if an account exists for agent.
+
+        Args:
+            agent_id: Agent to check
+
+        Returns:
+            True if account exists
+        """
+        return agent_id in self._accounts
 
     async def get_balance(self, agent_id: str) -> Decimal:
         """Retrieve current account balance"""

@@ -27,7 +27,7 @@ from ._scheduler import (
 )
 from ._gateway_routing import (
     GatewayRouter,
-    create_gateway_routes,
+    create_gateway_router,
 )
 from ._server import (
     DashboardServerState,
@@ -67,7 +67,7 @@ __all__ = [
     "get_server_state",
     # Gateway Routing
     "GatewayRouter",
-    "create_gateway_routes",
+    "create_gateway_router",
     # Trial Manager
     "TrialManager",
     "QueuedTrial",

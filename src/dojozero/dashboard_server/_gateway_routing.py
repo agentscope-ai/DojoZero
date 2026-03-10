@@ -1,6 +1,6 @@
 """Gateway routing for Dashboard Server.
 
-Routes /api/gateway/{trial_id}/* requests to in-process trial gateways.
+Routes /api/trials/{trial_id}/* requests to in-process trial gateways.
 Enables external agents to connect to trials managed by the dashboard.
 """
 
@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 if TYPE_CHECKING:
@@ -98,39 +98,35 @@ class GatewayRouter:
         return list(self._gateways.keys())
 
 
-def create_gateway_routes(router: GatewayRouter) -> FastAPI:
-    """Create a FastAPI sub-application for gateway routing.
+def create_gateway_router(gateway_router: GatewayRouter) -> APIRouter:
+    """Create an APIRouter for gateway routing.
 
     Routes:
-        GET /api/gateway - List all trial gateways
-        ANY /api/gateway/{trial_id}/{path:path} - Route to trial gateway
+        GET /api/gateways - List all trial gateways
+        ANY /api/trials/{trial_id}/{path:path} - Route to trial gateway
 
     Args:
-        router: GatewayRouter instance
+        gateway_router: GatewayRouter instance
 
     Returns:
-        FastAPI app that can be mounted on the main dashboard app
+        APIRouter to include in the main dashboard app
     """
 
-    app = FastAPI(
-        title="Gateway Router",
-        description="Routes requests to per-trial gateways",
-    )
+    router = APIRouter()
 
-    @app.get("/api/gateway")
+    @router.get("/api/gateways")
     async def list_gateways() -> dict[str, Any]:
         """List all available trial gateways."""
-        trial_ids = router.list_gateways()
+        trial_ids = gateway_router.list_gateways()
         return {
             "gateways": [
-                {"trial_id": tid, "endpoint": f"/api/gateway/{tid}"}
-                for tid in trial_ids
+                {"trial_id": tid, "endpoint": f"/api/trials/{tid}"} for tid in trial_ids
             ],
             "count": len(trial_ids),
         }
 
-    @app.api_route(
-        "/api/gateway/{trial_id}/{path:path}",
+    @router.api_route(
+        "/api/trials/{trial_id}/{path:path}",
         methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
     )
     async def route_to_gateway(
@@ -140,10 +136,10 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
     ) -> Response:
         """Route request to the appropriate trial gateway.
 
-        The path is rewritten from /api/gateway/{trial_id}/api/v1/...
-        to /api/v1/... for the trial's gateway.
+        The path is rewritten from /api/trials/{trial_id}/...
+        to /... for the trial's gateway.
         """
-        gateway = router.get_gateway(trial_id)
+        gateway = gateway_router.get_gateway(trial_id)
         if gateway is None:
             raise HTTPException(
                 status_code=404,
@@ -158,11 +154,11 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
         # Check if this is an SSE request to the events stream endpoint
         accept_header = request.headers.get("accept", "")
         is_sse = "text/event-stream" in accept_header
-        is_events_stream = path == "api/v1/events/stream"
+        is_events_stream = path == "events/stream"
 
         if is_sse and is_events_stream:
             # Handle SSE directly without httpx (httpx doesn't handle async streaming well)
-            gateway_state = router.get_gateway_state(trial_id)
+            gateway_state = gateway_router.get_gateway_state(trial_id)
             if gateway_state is None:
                 raise HTTPException(
                     status_code=500,
@@ -175,9 +171,9 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
                 )
             return await _handle_sse_directly(request, gateway_state)
 
-        # Rewrite the path to remove /api/gateway/{trial_id} prefix
-        # Original: /api/gateway/{trial_id}/api/v1/events/stream
-        # Rewritten: /api/v1/events/stream
+        # Rewrite the path to remove /api/trials/{trial_id} prefix
+        # Original: /api/trials/{trial_id}/events/stream
+        # Rewritten: /events/stream
         new_path = f"/{path}" if path else "/"
 
         # Create a new scope with the rewritten path
@@ -196,7 +192,7 @@ def create_gateway_routes(router: GatewayRouter) -> FastAPI:
         response = await _forward_to_app(gateway, new_request)
         return response
 
-    return app
+    return router
 
 
 async def _handle_sse_directly(
@@ -352,5 +348,5 @@ async def _forward_to_app(app: FastAPI, request: Request) -> Response:
 
 __all__ = [
     "GatewayRouter",
-    "create_gateway_routes",
+    "create_gateway_router",
 ]

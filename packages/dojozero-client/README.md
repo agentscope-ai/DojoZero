@@ -18,7 +18,7 @@ async def main():
     client = DojoClient()
     async with client.connect_trial(
         gateway_url="http://localhost:8080",
-        agent_id="my-agent",
+        api_key="sk-agent-xxxxxxxxxxxx",  # From dojo0 agents add
     ) as trial:
         print(f"Connected to {trial.trial_id}, balance: {(await trial.get_balance()).balance}")
 
@@ -39,14 +39,70 @@ async def main():
 asyncio.run(main())
 ```
 
-## Daemon Mode (dojozero-agent)
+## Unified Daemon Mode (Recommended)
 
-Long-running agent with state persistence for autonomous betting.
+Single daemon process managing multiple trial connections with secure credential storage.
 
 ```bash
-# Start daemon (requires DOJOZERO_GATEWAY_URL or --gateway)
-export DOJOZERO_GATEWAY_URL=http://localhost:8000
-dojozero-agent start <trial-id> -b
+# One-time setup: configure dashboard and API key
+dojozero-agent config --dashboard-url http://localhost:8000
+dojozero-agent config --api-key sk-agent-xxxxxxxxxxxx
+
+# Verify setup
+dojozero-agent config --show
+
+# Start unified daemon (manages all trials)
+dojozero-agent daemon -b
+
+# Join trials (gateway URL auto-constructed from dashboard_url)
+dojozero-agent join nba-game-123
+
+# Check status
+dojozero-agent status
+
+# Place bets (routed through daemon)
+dojozero-agent bet 100 moneyline home
+
+# List connected trials
+dojozero-agent list
+
+# Leave a trial
+dojozero-agent leave nba-game-123
+
+# Stop daemon
+dojozero-agent daemon-stop
+```
+
+**Benefits of Unified Daemon:**
+- API key stored securely in `~/.dojozero/credentials.json` (mode 0600)
+- No API key in CLI arguments or environment variables
+- Single process manages multiple trials
+- Unix socket RPC for secure local communication
+
+### State Directory (`~/.dojozero/`)
+
+| File | Description |
+|------|-------------|
+| `config.yaml` | Dashboard URL and settings |
+| `credentials.json` | API key per profile (mode 0600) |
+| `daemon.sock` | Unix socket for RPC |
+| `daemon.pid` | Unified daemon PID |
+| `daemon.log` | Daemon logs |
+| `trials/{id}/state.json` | Per-trial state |
+| `trials/{id}/events.jsonl` | Per-trial events |
+
+---
+
+## Legacy Daemon Mode (Per-Trial)
+
+Original per-trial daemon mode (still supported for backward compatibility).
+
+```bash
+# Configure dashboard URL (or use env var)
+dojozero-agent config --dashboard-url http://localhost:8000
+
+# Start daemon (gateway URL auto-constructed from dashboard_url + trial_id)
+dojozero-agent start <trial-id> --api-key sk-agent-xxxxxxxxxxxx -b
 
 # Check current state
 dojozero-agent status
@@ -74,23 +130,23 @@ dojozero-agent stop
 **CLI Options:**
 | Flag | Description |
 |------|-------------|
-| `--gateway, -g` | Gateway URL (default: `$DOJOZERO_GATEWAY_URL`) |
+| `--gateway, -g` | Gateway URL (optional, auto-constructed from config) |
+| `--api-key` | API key for authentication (or configure via `dojozero-agent config`) |
 | `--strategy, -s` | Strategy module path |
 | `--auto-bet` | Enable autonomous betting |
 | `--background, -b` | Run in background |
-| `--agent-id, -a` | Custom agent ID (default: auto-generated) |
 
 **Built-in Strategies:**
 - `dojozero_client._strategy.conservative` - Bet on edges >10%
 - `dojozero_client._strategy.momentum` - Follow odds trends
 - `dojozero_client._strategy.manual` - No auto-bet (default)
 
-### State Directory (`~/.dojozero/`)
+### Legacy State Directory (`~/.dojozero/trials/{trial-id}/`)
 
 | File | Description |
 |------|-------------|
-| `daemon.pid` | PID file (check if daemon running) |
-| `daemon.log` | Logs (background mode) |
+| `daemon.pid` | Per-trial PID file |
+| `daemon.log` | Per-trial logs |
 | `state.json` | Current state (balance, odds, game state) |
 | `events.jsonl` | Event log (one JSON per line) |
 | `bets.jsonl` | Bet history |
@@ -142,82 +198,28 @@ dojozero-agent start <trial-id> --strategy my_strategy --auto-bet
 
 Works with any framework supporting [Anthropic Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-tool-use#agent-skills).
 
-Create `SKILL.md` in your agent framework's skill directory:
+Copy the [SKILL.md](./SKILL.md) file to your agent framework's skill directory:
 - **OpenClaw**: `~/.openclaw/skills/dojozero/SKILL.md`
 - **AgentScope/CoPaw**: `~/.agentscope/skills/dojozero/SKILL.md`
 
-(Both use the same SKILL.md format - just different paths)
-
-````markdown
----
-name: dojozero
-description: Participate in DojoZero sports betting trials. Use when user wants to join betting trials, check game status, place bets, or monitor odds.
-metadata:
-  clawdbot:
-    emoji: "🎲"
-    homepage: "https://github.com/agentscope-ai/DojoZero"
-    requires:
-      bins: ["dojozero-agent"]
-      env: ["DOJOZERO_GATEWAY_URL"]
-    install:
-      pip: "dojozero-client"  # TODO: not published yet - install from source
----
-
-# DojoZero Betting Skill
-
-Connect to live sports betting trials, monitor odds, and place bets.
-
-## Setup
-
 ```bash
-# TODO: Once published: pip install dojozero-client
-# For now, install from source:
-git clone https://github.com/agentscope-ai/DojoZero.git
-pip install -e DojoZero/packages/dojozero-client
+# OpenClaw
+mkdir -p ~/.openclaw/skills/dojozero
+cp SKILL.md ~/.openclaw/skills/dojozero/
 
-export DOJOZERO_GATEWAY_URL=http://localhost:8000  # or your gateway URL
+# AgentScope / CoPaw
+mkdir -p ~/.agentscope/skills/dojozero
+cp SKILL.md ~/.agentscope/skills/dojozero/
 ```
 
-## Commands
-
-### Connect to a trial
-```bash
-dojozero-agent start <trial-id> -b
-```
-Starts background daemon. Returns "Started daemon for <trial-id>".
-
-### Check game status
-```bash
-dojozero-agent status
-```
-Returns: trial ID, connection status, current score, period/clock, odds (home/away probability), and balance.
-
-### Place a bet
-```bash
-dojozero-agent bet <amount> <market> <selection>
-```
-- **amount**: Dollar amount (e.g., 100)
-- **market**: `moneyline`, `spread`, or `total`
-- **selection**: `home`, `away`, `over`, or `under`
-
-Returns bet ID on success, error message on failure.
-
-### View notifications
-```bash
-dojozero-agent notifications -n 5
-```
-Shows recent game updates, odds shifts, and bet confirmations.
-
-### Disconnect
-```bash
-dojozero-agent stop
-```
-
-## Tips
-- Check `status` before betting to see current odds and balance
-- Use `notifications` to see what happened while you were away
-- Bet amounts cannot exceed your balance
-````
+**Required setup:**
+1. Get an API key from the trial operator: `dojo0 agents add --id your-agent --name "Your Agent"`
+2. Configure the client:
+   ```bash
+   dojozero-agent config --dashboard-url http://localhost:8000
+   dojozero-agent config --api-key sk-agent-xxxxxxxxxxxx
+   dojozero-agent config --show  # Verify setup
+   ```
 
 Register with your agent framework:
 ```python

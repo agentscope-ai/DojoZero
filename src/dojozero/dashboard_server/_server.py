@@ -263,7 +263,7 @@ def create_dashboard_app(
     initial_trial_sources: list[InitialTrialSourceDict] | None = None,
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
-    enable_gateway: bool = False,
+    enable_gateway: bool = True,
     data_dir: str | Path | None = None,
     authenticator: "AgentAuthenticator | None" = None,
 ) -> FastAPI:
@@ -280,7 +280,7 @@ def create_dashboard_app(
         initial_trial_sources: List of trial source configurations to register on startup
         auto_resume: Automatically resume interrupted trials on startup (default True)
         stale_threshold_hours: Skip resuming trials older than this many hours (default 24)
-        enable_gateway: Enable HTTP gateway routing for external agents
+        enable_gateway: Enable HTTP gateway routing for external agents (default True)
         data_dir: Base directory for trial data files (persistence_file will be generated
             under this directory). If None, trials must provide their own persistence_file.
         authenticator: AgentAuthenticator for validating agent API keys. If None and
@@ -1354,16 +1354,16 @@ def create_dashboard_app(
     # -------------------------------------------------------------------------
 
     if enable_gateway and gateway_router is not None:
-        from ._gateway_routing import create_gateway_routes
+        from ._gateway_routing import create_gateway_router
 
-        gateway_routes_app = create_gateway_routes(gateway_router)
+        gateway_api_router = create_gateway_router(gateway_router)
 
-        # Mount the gateway routes
-        app.mount("/", gateway_routes_app)
+        # Include the gateway router (catch-all route added after specific routes)
+        app.include_router(gateway_api_router)
 
         # Store gateway router on app.state for reference
         app.state.gateway_router = gateway_router
-        LOGGER.info("Gateway routing enabled at /api/gateway/{trial_id}/")
+        LOGGER.info("Gateway routing enabled at /api/trials/{trial_id}/")
 
     return app
 
@@ -1381,7 +1381,7 @@ async def run_dashboard_server(
     initial_trial_sources: list[InitialTrialSourceDict] | None = None,
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
-    enable_gateway: bool = False,
+    enable_gateway: bool = True,
     data_dir: str | Path | None = None,
     authenticator: "AgentAuthenticator | None" = None,
 ) -> None:

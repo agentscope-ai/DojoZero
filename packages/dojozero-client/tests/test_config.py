@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from dojozero_client._config import (
     ClientConfig,
-    DEFAULT_GATEWAY_URL,
+    DEFAULT_DASHBOARD_URL,
     load_config,
 )
 
@@ -18,7 +18,7 @@ class TestClientConfig:
     def test_defaults(self):
         """Test default configuration values."""
         config = ClientConfig()
-        assert config.gateway_url == DEFAULT_GATEWAY_URL
+        assert config.dashboard_url == DEFAULT_DASHBOARD_URL
         assert config.dashboard_urls == []
         assert config.timeout == 30.0
 
@@ -39,19 +39,35 @@ class TestClientConfig:
         )
         assert config.is_sharded is True
 
-    def test_get_discovery_urls_with_gateway(self):
-        """Test get_discovery_urls returns gateway_url when no dashboards."""
-        config = ClientConfig(gateway_url="http://localhost:8080")
+    def test_get_discovery_urls_with_dashboard_url(self):
+        """Test get_discovery_urls returns dashboard_url when no dashboard_urls."""
+        config = ClientConfig(dashboard_url="http://localhost:8080")
         assert config.get_discovery_urls() == ["http://localhost:8080"]
 
     def test_get_discovery_urls_with_dashboards(self):
         """Test get_discovery_urls returns dashboard_urls when set."""
         config = ClientConfig(
-            gateway_url="http://localhost:8080",
+            dashboard_url="http://localhost:8080",
             dashboard_urls=["http://dashboard-a:8000", "http://dashboard-b:8000"],
         )
         urls = config.get_discovery_urls()
         assert urls == ["http://dashboard-a:8000", "http://dashboard-b:8000"]
+
+    def test_get_gateway_url(self):
+        """Test get_gateway_url constructs correct URL."""
+        config = ClientConfig(dashboard_url="http://localhost:8000")
+        assert (
+            config.get_gateway_url("trial-123")
+            == "http://localhost:8000/api/trials/trial-123"
+        )
+
+    def test_get_gateway_url_strips_trailing_slash(self):
+        """Test get_gateway_url strips trailing slash from dashboard_url."""
+        config = ClientConfig(dashboard_url="http://localhost:8000/")
+        assert (
+            config.get_gateway_url("trial-123")
+            == "http://localhost:8000/api/trials/trial-123"
+        )
 
 
 class TestLoadConfig:
@@ -61,14 +77,14 @@ class TestLoadConfig:
         """Test loading with no overrides."""
         with patch.dict(os.environ, {}, clear=True):
             config = load_config()
-            assert config.gateway_url == DEFAULT_GATEWAY_URL
+            assert config.dashboard_url == DEFAULT_DASHBOARD_URL
             assert config.dashboard_urls == []
             assert config.timeout == 30.0
 
-    def test_explicit_gateway_url(self):
-        """Test explicit gateway_url argument takes priority."""
-        config = load_config(gateway_url="http://explicit:8080")
-        assert config.gateway_url == "http://explicit:8080"
+    def test_explicit_dashboard_url(self):
+        """Test explicit dashboard_url argument takes priority."""
+        config = load_config(dashboard_url="http://explicit:8080")
+        assert config.dashboard_url == "http://explicit:8080"
 
     def test_explicit_dashboard_urls(self):
         """Test explicit dashboard_urls argument takes priority."""
@@ -85,11 +101,11 @@ class TestLoadConfig:
         config = load_config(timeout=60.0)
         assert config.timeout == 60.0
 
-    def test_env_var_gateway_url(self):
-        """Test DOJOZERO_GATEWAY_URL environment variable."""
-        with patch.dict(os.environ, {"DOJOZERO_GATEWAY_URL": "http://env:8080"}):
+    def test_env_var_dashboard_url(self):
+        """Test DOJOZERO_DASHBOARD_URL environment variable."""
+        with patch.dict(os.environ, {"DOJOZERO_DASHBOARD_URL": "http://env:8080"}):
             config = load_config()
-            assert config.gateway_url == "http://env:8080"
+            assert config.dashboard_url == "http://env:8080"
 
     def test_env_var_dashboard_urls(self):
         """Test DOJOZERO_DASHBOARD_URLS environment variable."""
@@ -117,12 +133,12 @@ class TestLoadConfig:
 
     def test_explicit_overrides_env_var(self):
         """Test explicit argument overrides environment variable."""
-        with patch.dict(os.environ, {"DOJOZERO_GATEWAY_URL": "http://env:8080"}):
-            config = load_config(gateway_url="http://explicit:8080")
-            assert config.gateway_url == "http://explicit:8080"
+        with patch.dict(os.environ, {"DOJOZERO_DASHBOARD_URL": "http://env:8080"}):
+            config = load_config(dashboard_url="http://explicit:8080")
+            assert config.dashboard_url == "http://explicit:8080"
 
     def test_config_file_not_found(self):
         """Test gracefully handles missing config file."""
         with patch.dict(os.environ, {}, clear=True):
             config = load_config(config_file=Path("/nonexistent/config.yaml"))
-            assert config.gateway_url == DEFAULT_GATEWAY_URL
+            assert config.dashboard_url == DEFAULT_DASHBOARD_URL

@@ -169,3 +169,6 @@ dojozero-store
 
 # Package lock files
 package-lock.json
+
+# logs
+/logs/

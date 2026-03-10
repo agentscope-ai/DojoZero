@@ -1,6 +1,6 @@
 """DojoZero Client - Python SDK for external agents.
 
-Standalone mode (dojo0 run --enable-gateway):
+Standalone mode (dojo0 run):
 
     from dojozero_client import DojoClient
 
@@ -13,7 +13,7 @@ Standalone mode (dojo0 run --enable-gateway):
         async for event in trial.events():
             ...
 
-Dashboard mode (dojo0 serve --enable-gateway):
+Dashboard mode (dojo0 serve):
 
     from dojozero_client import DojoClient
 
@@ -36,6 +36,7 @@ from dojozero_client._client import (
     DojoClient,
     EventEnvelope,
     GatewayInfo,
+    Holding,
     Odds,
     TrialConnection,
     TrialEndedEvent,
@@ -52,6 +53,7 @@ from dojozero_client._daemon import (
     DaemonState,
     get_daemon_status,
     is_daemon_running,
+    list_running_trials,
     stop_daemon,
 )
 from dojozero_client._exceptions import (
@@ -82,6 +84,7 @@ __all__ = [
     "BetResult",
     "EventEnvelope",
     "GatewayInfo",
+    "Holding",
     "Odds",
     "TrialEndedEvent",
     "TrialMetadata",
@@ -95,6 +98,7 @@ __all__ = [
     "DaemonState",
     "get_daemon_status",
     "is_daemon_running",
+    "list_running_trials",
     "stop_daemon",
     # Transport (advanced use)
     "GatewayTransport",

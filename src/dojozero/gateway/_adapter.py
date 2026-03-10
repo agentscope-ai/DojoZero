@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -53,6 +54,7 @@ class ExternalAgentState:
     """
 
     agent_id: str  # Canonical ID (verified if authenticated)
+    session_key: str = ""  # Session key for secure reconnection/unregistration
     display_name: str | None = None  # Human-readable name
     persona: str | None = None  # Persona tag (e.g., "degen", "whale", "shark")
     model: str | None = None  # Model name (e.g., "gpt-4", "qwen3-max")
@@ -134,8 +136,11 @@ class ExternalAgentAdapter:
     ) -> AgentRegistrationResponse:
         """Register an external agent.
 
-        Creates account in broker and prepares for subscription.
+        Creates account in broker (or reuses existing) and prepares for subscription.
         All identity/metadata fields come from the verified API key.
+
+        Supports reconnection: if agent has an existing account (e.g., after
+        disconnect or dashboard restart), they can rejoin with their balance intact.
 
         Args:
             agent_id: Unique agent identifier (canonical ID from API key)
@@ -151,20 +156,33 @@ class ExternalAgentAdapter:
             Registration response with agent details
 
         Raises:
-            ValueError: If agent already registered
+            ValueError: If agent already connected (active SSE session)
         """
         if agent_id in self._agents:
-            raise ValueError(f"Agent {agent_id} already registered")
+            raise ValueError(f"Agent {agent_id} already connected")
 
         # Use broker's default balance if not specified
         balance = initial_balance or self._broker.initial_balance
 
-        # Create account in broker
-        await self._broker.create_account(agent_id, Decimal(balance))
+        # Check if account exists (reconnection case)
+        if self._broker.has_account(agent_id):
+            logger.info(
+                "Agent %s reconnecting with existing account",
+                agent_id,
+            )
+        else:
+            # New agent: create account in broker (mark as external)
+            await self._broker.create_account(
+                agent_id, Decimal(balance), is_external=True
+            )
+
+        # Generate session key for secure reconnection/unregistration
+        session_key = secrets.token_urlsafe(32)
 
         # Create agent state with all identity fields
         state = ExternalAgentState(
             agent_id=agent_id,
+            session_key=session_key,
             display_name=display_name,
             persona=persona,
             model=model,
@@ -186,6 +204,7 @@ class ExternalAgentAdapter:
 
         return AgentRegistrationResponse(
             agent_id=agent_id,
+            session_key=session_key,
             display_name=display_name,
             persona=persona,
             model=model,
@@ -197,26 +216,107 @@ class ExternalAgentAdapter:
             authenticated=authenticated,
         )
 
-    async def unregister_agent(self, agent_id: str) -> bool:
+    async def reconnect_agent(
+        self,
+        agent_id: str,
+        session_key: str,
+        display_name: str | None = None,
+        persona: str | None = None,
+        model: str | None = None,
+        model_display_name: str | None = None,
+        cdn_url: str | None = None,
+    ) -> AgentRegistrationResponse:
+        """Reconnect an existing agent using session key.
+
+        Validates that the session key matches the one stored for this agent,
+        then allows the client to resume their session.
+
+        Args:
+            agent_id: Agent ID to reconnect
+            session_key: Session key from original registration
+            display_name: Human-readable name (from API key identity)
+            persona: Persona tag (from API key identity)
+            model: Model name (from API key identity)
+            model_display_name: Human-readable model name (from API key identity)
+            cdn_url: Avatar image URL (from API key identity)
+
+        Returns:
+            Registration response with agent details (same session key)
+
+        Raises:
+            ValueError: If agent not found or session key doesn't match
+        """
+        state = self._agents.get(agent_id)
+        if state is None:
+            raise ValueError(f"Agent {agent_id} not registered")
+
+        if not secrets.compare_digest(state.session_key, session_key):
+            raise ValueError("Invalid session key")
+
+        # Update activity timestamp
+        state.last_activity_at = datetime.now(timezone.utc)
+
+        # Get current balance from broker
+        balance = self._broker.initial_balance
+        if self._broker.has_account(agent_id):
+            account = self._broker._accounts.get(agent_id)
+            if account:
+                balance = str(account.balance)
+
+        logger.info("Agent %s reconnected with session key", agent_id)
+
+        return AgentRegistrationResponse(
+            agent_id=agent_id,
+            session_key=state.session_key,  # Return same session key
+            display_name=display_name or state.display_name,
+            persona=persona or state.persona,
+            model=model or state.model,
+            model_display_name=model_display_name or state.model_display_name,
+            cdn_url=cdn_url or state.cdn_url,
+            trial_id=self._trial_id,
+            balance=balance,
+            registered_at=state.registered_at,
+            authenticated=state.authenticated,
+        )
+
+    async def unregister_agent(
+        self, agent_id: str, session_key: str | None = None
+    ) -> bool:
         """Unregister an external agent.
 
-        Cleans up subscription and removes from tracking.
+        Cleans up subscription, removes from tracking, and deletes broker account.
 
         Args:
             agent_id: Agent to unregister
+            session_key: Session key for verification (required if agent has one)
 
         Returns:
             True if agent was found and removed
+
+        Raises:
+            ValueError: If session key doesn't match
         """
-        state = self._agents.pop(agent_id, None)
+        state = self._agents.get(agent_id)
         if state is None:
             return False
+
+        # Verify session key if agent has one
+        if state.session_key and session_key:
+            if not secrets.compare_digest(state.session_key, session_key):
+                raise ValueError("Invalid session key")
+        elif state.session_key and not session_key:
+            raise ValueError("Session key required")
+
+        self._agents.pop(agent_id, None)
 
         # Cleanup subscription
         if state.subscription:
             await self._data_hub.subscription_manager.unsubscribe(
                 state.subscription.subscription_id
             )
+
+        # Delete broker account so agent can rejoin
+        await self._broker.delete_account(agent_id)
 
         logger.info("Unregistered external agent: %s", agent_id)
         return True
@@ -604,10 +704,17 @@ class ExternalAgentAdapter:
                 if account is None:
                     continue
 
-                # Get agent state for display_name and authenticated status
+                # Get agent state for display_name (if currently connected)
                 agent_state = self._agents.get(agent_id)
                 display_name = agent_state.display_name if agent_state else None
-                authenticated = agent_state.authenticated if agent_state else False
+
+                # Use agent_state.authenticated if connected, otherwise fall back to
+                # account.is_external (persisted) - external agents are authenticated
+                # by definition since API key is required to create the account
+                if agent_state is not None:
+                    authenticated = agent_state.authenticated
+                else:
+                    authenticated = account.is_external
 
                 results.append(
                     AgentResult(

@@ -78,7 +78,7 @@ def create_mock_gateway_app(trial_id: str = "demo-trial"):
         "bets": [],
     }
 
-    @app.post("/api/v1/register")
+    @app.post("/register")
     async def register(request: Request):
         data = await request.json()
         agent_id = data.get("agentId", "unknown")
@@ -99,7 +99,7 @@ def create_mock_gateway_app(trial_id: str = "demo-trial"):
             "registeredAt": state["agents"][agent_id]["registered_at"],
         }
 
-    @app.get("/api/v1/trial")
+    @app.get("/trial")
     async def get_trial():
         return {
             "trialId": trial_id,
@@ -111,7 +111,7 @@ def create_mock_gateway_app(trial_id: str = "demo-trial"):
             "gameTime": datetime.now(timezone.utc).isoformat(),
         }
 
-    @app.get("/api/v1/odds/current")
+    @app.get("/odds/current")
     async def get_odds(request: Request):
         agent_id = request.headers.get("X-Agent-ID", "")
         if agent_id not in state["agents"]:
@@ -134,7 +134,7 @@ def create_mock_gateway_app(trial_id: str = "demo-trial"):
             "awayTeam": "Celtics",
         }
 
-    @app.post("/api/v1/bets")
+    @app.post("/bets")
     async def place_bet(request: Request):
         agent_id = request.headers.get("X-Agent-ID", "")
         if agent_id not in state["agents"]:
@@ -190,13 +190,13 @@ def create_mock_gateway_app(trial_id: str = "demo-trial"):
         )
         return bet
 
-    @app.get("/api/v1/bets")
+    @app.get("/bets")
     async def get_bets(request: Request):
         agent_id = request.headers.get("X-Agent-ID", "")
         agent_bets = [b for b in state["bets"] if b["agentId"] == agent_id]
         return {"bets": agent_bets}
 
-    @app.get("/api/v1/balance")
+    @app.get("/balance")
     async def get_balance(request: Request):
         agent_id = request.headers.get("X-Agent-ID", "")
         if agent_id not in state["agents"]:
@@ -215,7 +215,7 @@ def create_mock_gateway_app(trial_id: str = "demo-trial"):
             "holdings": {},
         }
 
-    @app.get("/api/v1/events/stream")
+    @app.get("/events/stream")
     async def stream_events(request: Request):
         agent_id = request.headers.get("X-Agent-ID", "")
         if agent_id not in state["agents"]:
@@ -347,9 +347,9 @@ async def run_mock_dashboard(
 ) -> tuple[asyncio.Task, asyncio.Event, Any]:
     """Start a mock dashboard server with gateway routing (dashboard mode).
 
-    This simulates `dojo0 serve --enable-gateway` by providing:
-    - GET /api/gateway - List available trials
-    - /api/gateway/{trial_id}/... - Route to trial's gateway
+    This simulates `dojo0 serve` by providing:
+    - GET /api/gateways - List available trials
+    - /api/trials/{trial_id}/... - Route to trial's gateway
 
     Returns:
         Tuple of (server_task, ready_event, server)
@@ -370,16 +370,16 @@ async def run_mock_dashboard(
     # Main dashboard app
     dashboard = FastAPI(title="Demo Dashboard")
 
-    @dashboard.get("/api/gateway")
+    @dashboard.get("/api/gateways")
     async def list_gateways():
         """List available trial gateways."""
         gateways = [
-            {"trial_id": tid, "endpoint": f"/api/gateway/{tid}"} for tid in trial_ids
+            {"trial_id": tid, "endpoint": f"/api/trials/{tid}"} for tid in trial_ids
         ]
         return {"gateways": gateways, "count": len(gateways)}
 
     @dashboard.api_route(
-        "/api/gateway/{trial_id}/{path:path}",
+        "/api/trials/{trial_id}/{path:path}",
         methods=["GET", "POST", "PUT", "DELETE"],
     )
     async def route_to_gateway(trial_id: str, path: str, request: Request):
