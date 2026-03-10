@@ -1002,6 +1002,8 @@ def register_websocket_endpoints(app: FastAPI) -> None:
                                 data={"items": filtered_seek},
                             )
                             await websocket.send_text(snapshot_msg.model_dump_json())
+                            # Auto-resume after seek to ensure continuous playback
+                            controller.resume()
                             LOGGER.debug(
                                 "Replay: Seeked to play_index %d for trial '%s'",
                                 play_index,

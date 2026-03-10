@@ -891,6 +891,7 @@ def _compute_replay_meta(
     Scans through items once to build:
     - play_item_indices: mapping from play_index to item_index
     - periods: list of PeriodInfo with play counts per period
+    - meta event indices: agent_initialize, game_initialize, game_start, odds_update
 
     Args:
         items: List of serialized span dicts with "category" and "data" keys
@@ -903,11 +904,27 @@ def _compute_replay_meta(
     period_play_counts: dict[int, int] = {}  # period -> play count
     period_start_indices: dict[int, int] = {}  # period -> first play index
 
+    # Meta event indices
+    agent_initialize_item_index: int | None = None
+    game_initialize_item_index: int | None = None
+    game_start_item_index: int | None = None
+    odds_update_indices: list[int] = []
+
     current_period: int = 1  # Default period
 
     for item_index, item in enumerate(items):
         category = item.get("category", "")
         data = item.get("data", {})
+
+        # Track meta event indices
+        if category == "agent_initialize":
+            agent_initialize_item_index = item_index
+        elif category == "game_initialize":
+            game_initialize_item_index = item_index
+        elif category == "game_start":
+            game_start_item_index = item_index
+        elif category == "odds_update":
+            odds_update_indices.append(item_index)
 
         # Track core category items (plays)
         if category in core_categories:
@@ -940,6 +957,10 @@ def _compute_replay_meta(
         total_play_count=len(play_item_indices),
         play_item_indices=play_item_indices,
         periods=periods,
+        agent_initialize_item_index=agent_initialize_item_index,
+        game_initialize_item_index=game_initialize_item_index,
+        game_start_item_index=game_start_item_index,
+        odds_update_indices=odds_update_indices,
     )
 
 
