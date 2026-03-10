@@ -833,8 +833,25 @@ class TrialHandler:
             ],
         }
 
-    def get_status(self) -> dict[str, Any]:
-        """Get current trial status."""
+    async def get_status(self) -> dict[str, Any]:
+        """Get current trial status with fresh balance from server."""
+        # Refresh balance from server if connected
+        if self._trial:
+            try:
+                balance = await self._trial.get_balance()
+                self._state.balance = balance.balance
+                self._state.holdings = [
+                    {
+                        "event_id": h.event_id,
+                        "selection": h.selection,
+                        "bet_type": h.bet_type,
+                        "shares": h.shares,
+                    }
+                    for h in balance.holdings
+                ]
+                self._save_state()
+            except Exception as e:
+                logger.warning("Failed to refresh balance: %s", e)
         return self._state.to_dict()
 
     def get_events(self, count: int = 20) -> list[dict[str, Any]]:
@@ -1071,7 +1088,7 @@ class UnifiedDaemon:
     async def _handle_status(self, trial_id: str | None = None) -> dict[str, Any]:
         """Get trial status."""
         handler = self._get_handler(trial_id)
-        return handler.get_status()
+        return await handler.get_status()
 
     async def _handle_list(self) -> dict[str, Any]:
         """List active trials."""
