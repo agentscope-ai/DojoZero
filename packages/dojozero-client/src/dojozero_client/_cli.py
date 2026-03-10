@@ -243,6 +243,29 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"Balance: ${balance:.2f}")
     print(f"Last Update: {state.get('last_updated', 'never')}")
 
+    # Show bet history
+    bets_file = state_dir / "bets.jsonl"
+    if bets_file.exists():
+        lines = bets_file.read_text().strip().split("\n")
+        bets = []
+        for line in lines:
+            if line:
+                try:
+                    bets.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        if bets:
+            total_wagered = sum(b.get("amount", 0) for b in bets)
+            print(f"\nBets ({len(bets)}, ${total_wagered:.2f} wagered):")
+            for b in bets:
+                amt = b.get("amount", 0)
+                market = b.get("market", "?")
+                selection = b.get("selection", "?")
+                prob = b.get("probability", 0)
+                ts = b.get("placed_at", "")[:16]  # Trim to minute
+                prob_str = f" @ {prob:.0%}" if prob else ""
+                print(f"  ${amt:.0f} on {selection} ({market}){prob_str} - {ts}")
+
     return 0
 
 
@@ -412,6 +435,7 @@ def _update_local_state_after_bet(
             "market": bet_data.get("market"),
             "selection": bet_data.get("selection"),
             "amount": float(bet_data.get("amount", 0)),
+            "probability": float(bet_data.get("probability", 0)),
             "status": bet_data.get("status", "placed"),
             "placed_at": datetime.now().isoformat(),
         }
