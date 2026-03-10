@@ -54,10 +54,10 @@ class TestDaemonConfig:
         config = DaemonConfig(trial_id="test-trial", state_dir=custom_dir)
         assert config.state_dir == custom_dir
 
-    def test_default_gateway_url(self):
-        """Test default gateway URL."""
+    def test_default_api_key(self):
+        """Test default API key is empty."""
         config = DaemonConfig(trial_id="test")
-        assert config.gateway_url == "http://localhost:8080"
+        assert config.api_key == ""
 
 
 class TestDaemonState:
@@ -72,7 +72,6 @@ class TestDaemonState:
             status="connected",
             balance=1000.0,
             last_event_sequence=42,
-            gateway_url="http://localhost:8000/api/trials/test-trial",
         )
         data = state.to_dict()
         assert data["trial_id"] == "test-trial"
@@ -81,7 +80,7 @@ class TestDaemonState:
         assert data["status"] == "connected"
         assert data["balance"] == 1000.0
         assert data["last_event_sequence"] == 42
-        assert data["gateway_url"] == "http://localhost:8000/api/trials/test-trial"
+        assert "gateway_url" not in data
 
     def test_from_dict(self):
         """Test deserialization from dict."""
@@ -92,7 +91,6 @@ class TestDaemonState:
             "status": "connected",
             "balance": 500.0,
             "last_event_sequence": 100,
-            "gateway_url": "http://localhost:8080/api/trials/test-trial",
         }
         state = DaemonState.from_dict(data)
         assert state.trial_id == "test-trial"
@@ -101,17 +99,15 @@ class TestDaemonState:
         assert state.status == "connected"
         assert state.balance == 500.0
         assert state.last_event_sequence == 100
-        assert state.gateway_url == "http://localhost:8080/api/trials/test-trial"
 
-    def test_from_dict_without_gateway_url(self):
-        """Test deserialization without gateway_url or session_key (backward compat)."""
+    def test_from_dict_defaults(self):
+        """Test deserialization with minimal data uses defaults."""
         data = {
             "trial_id": "test-trial",
             "status": "connected",
         }
         state = DaemonState.from_dict(data)
         assert state.trial_id == "test-trial"
-        assert state.gateway_url == ""  # Default empty string
         assert state.session_key == ""  # Default empty string
 
 
@@ -293,7 +289,6 @@ class TestTrialHandlerGetStatus:
                 client = MagicMock()
                 handler = TrialHandler(
                     trial_id="test-trial",
-                    gateway_url="http://localhost:8080",
                     api_key="test-key",
                     client=client,
                 )
@@ -334,7 +329,6 @@ class TestTrialHandlerGetStatus:
                 client = MagicMock()
                 handler = TrialHandler(
                     trial_id="test-trial",
-                    gateway_url="http://localhost:8080",
                     api_key="test-key",
                     client=client,
                 )
@@ -358,7 +352,6 @@ class TestTrialHandlerGetStatus:
                 client = MagicMock()
                 handler = TrialHandler(
                     trial_id="test-trial",
-                    gateway_url="http://localhost:8080",
                     api_key="test-key",
                     client=client,
                 )

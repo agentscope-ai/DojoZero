@@ -20,7 +20,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from dojozero_client._client import DojoClient, EventEnvelope
-from dojozero_client._config import CONFIG_DIR, PID_FILE, SOCKET_PATH, TRIALS_DIR
+from dojozero_client._config import (
+    CONFIG_DIR,
+    PID_FILE,
+    SOCKET_PATH,
+    TRIALS_DIR,
+    load_config,
+)
 from dojozero_client._credentials import load_api_key
 from dojozero_client._rpc import RPCError, RPCServer
 
@@ -96,7 +102,6 @@ class DaemonConfig:
     """
 
     trial_id: str
-    gateway_url: str = "http://localhost:8080"
     api_key: str = ""
     state_dir: Path = field(default_factory=_unset_state_dir)
     strategy: str | None = None
@@ -137,7 +142,6 @@ class DaemonState:
     last_updated: str = ""
     game_state: dict[str, Any] = field(default_factory=_default_game_state)
     current_odds: dict[str, Any] = field(default_factory=_default_current_odds)
-    gateway_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -152,7 +156,6 @@ class DaemonState:
             "last_updated": self.last_updated,
             "game_state": self.game_state,
             "current_odds": self.current_odds,
-            "gateway_url": self.gateway_url,
         }
 
     @classmethod
@@ -169,7 +172,6 @@ class DaemonState:
             last_updated=data.get("last_updated", ""),
             game_state=data.get("game_state", {}),
             current_odds=data.get("current_odds", {}),
-            gateway_url=data.get("gateway_url", ""),
         )
 
 
@@ -180,10 +182,7 @@ class Daemon:
     and optionally executes betting strategies.
 
     Usage:
-        config = DaemonConfig(
-            trial_id="lal-bos-2026-02-23",
-            gateway_url="http://localhost:8000",
-        )
+        config = DaemonConfig(trial_id="lal-bos-2026-02-23")
         daemon = Daemon(config)
         await daemon.start()
     """
@@ -202,6 +201,7 @@ class Daemon:
         self.strategy: Strategy | None = None
         self._state = DaemonState()
         self._stop_event: asyncio.Event | None = None
+        self._seen_uids: set[str] = set()
 
     async def start(self) -> None:
         """Start the daemon main loop."""
@@ -215,10 +215,11 @@ class Daemon:
             )
 
         self.running = True
+        gateway_url = load_config().get_gateway_url(self.config.trial_id)
         logger.info(
             "Starting daemon for trial %s at %s",
             self.config.trial_id,
-            self.config.gateway_url,
+            gateway_url,
         )
 
         # Check for existing state to resume from
@@ -233,10 +234,13 @@ class Daemon:
                     "Resuming from sequence %d (from previous session)", resume_sequence
                 )
 
+        # Seed seen UIDs from existing events.jsonl to prevent duplicates on reconnect
+        self._seen_uids = self._load_seen_uids()
+
         try:
             async with (
                 self.client.connect_trial(
-                    gateway_url=self.config.gateway_url,
+                    gateway_url=gateway_url,
                     api_key=self.config.api_key,
                     initial_balance=1000.0,  # Default balance for new agents
                     session_key=stored_session_key,  # Use stored session key for reconnection
@@ -264,7 +268,6 @@ class Daemon:
                         for h in balance.holdings
                     ],
                     last_event_sequence=resume_sequence,  # Preserve sequence
-                    gateway_url=self.config.gateway_url,
                 )
                 self._save_state()
                 logger.info("Connected as agent %s", trial.agent_id)
@@ -302,6 +305,13 @@ class Daemon:
         self, trial: "TrialConnection", event: EventEnvelope
     ) -> None:
         """Process an incoming event."""
+        # Skip events already seen (replayed on reconnect)
+        uid = event.payload.get("uid", "")
+        if uid and uid in self._seen_uids:
+            return
+        if uid:
+            self._seen_uids.add(uid)
+
         # Convert to dict for logging and strategy
         event_dict = {
             "type": event.event_type or event.payload.get("eventType", ""),
@@ -473,6 +483,21 @@ class Daemon:
             return json.loads(state_file.read_text())
         return {}
 
+    def _load_seen_uids(self) -> set[str]:
+        """Load UIDs from existing events.jsonl for dedup on reconnect."""
+        uids: set[str] = set()
+        events_file = self.state_dir / "events.jsonl"
+        if events_file.exists():
+            for line in events_file.read_text().strip().split("\n"):
+                if line:
+                    try:
+                        uid = json.loads(line).get("payload", {}).get("uid", "")
+                        if uid:
+                            uids.add(uid)
+                    except json.JSONDecodeError:
+                        continue
+        return uids
+
     def _append_event(self, event: dict[str, Any]) -> None:
         """Append event to event log."""
         events_file = self.state_dir / "events.jsonl"
@@ -643,7 +668,6 @@ class TrialHandler:
     def __init__(
         self,
         trial_id: str,
-        gateway_url: str,
         api_key: str,
         client: DojoClient,
         filters: list[str] | None = None,
@@ -652,13 +676,11 @@ class TrialHandler:
 
         Args:
             trial_id: Trial identifier
-            gateway_url: Gateway URL for this trial
             api_key: API key for authentication
             client: Shared DojoClient instance
             filters: Event type filters
         """
         self.trial_id = trial_id
-        self.gateway_url = gateway_url
         self.api_key = api_key
         self.client = client
         self.filters = filters or ["event.*", "odds.*"]
@@ -671,6 +693,7 @@ class TrialHandler:
         self._context_manager: Any = None  # The async context manager
         self._event_task: asyncio.Task[None] | None = None
         self._running = False
+        self._seen_uids: set[str] = set()
 
     @property
     def agent_id(self) -> str:
@@ -686,6 +709,9 @@ class TrialHandler:
         """Connect to the trial and start event streaming."""
         if self._running:
             return
+
+        # Seed seen UIDs from existing events.jsonl to prevent duplicates on reconnect
+        self._seen_uids = self._load_seen_uids()
 
         # Check for existing state to resume from
         resume_sequence = 0
@@ -705,8 +731,9 @@ class TrialHandler:
         )
 
         # Connect to trial using async context manager
+        gateway_url = load_config().get_gateway_url(self.trial_id)
         self._context_manager = self.client.connect_trial(
-            gateway_url=self.gateway_url,
+            gateway_url=gateway_url,
             api_key=self.api_key,
             initial_balance=1000.0,
             session_key=stored_session_key,
@@ -738,7 +765,6 @@ class TrialHandler:
                 for h in balance.holdings
             ],
             last_event_sequence=resume_sequence,
-            gateway_url=self.gateway_url,
         )
         self._save_state()
         logger.info("Trial %s: Connected as agent %s", self.trial_id, trial.agent_id)
@@ -889,6 +915,13 @@ class TrialHandler:
 
     async def _handle_event(self, event: EventEnvelope) -> None:
         """Process an incoming event."""
+        # Skip events already seen (replayed on reconnect)
+        uid = event.payload.get("uid", "")
+        if uid and uid in self._seen_uids:
+            return
+        if uid:
+            self._seen_uids.add(uid)
+
         event_dict = {
             "type": event.event_type or event.payload.get("event_type", ""),
             "payload": event.payload,
@@ -938,6 +971,21 @@ class TrialHandler:
         if state_file.exists():
             return json.loads(state_file.read_text())
         return {}
+
+    def _load_seen_uids(self) -> set[str]:
+        """Load UIDs from existing events.jsonl for dedup on reconnect."""
+        uids: set[str] = set()
+        events_file = self.state_dir / "events.jsonl"
+        if events_file.exists():
+            for line in events_file.read_text().strip().split("\n"):
+                if line:
+                    try:
+                        uid = json.loads(line).get("payload", {}).get("uid", "")
+                        if uid:
+                            uids.add(uid)
+                    except json.JSONDecodeError:
+                        continue
+        return uids
 
     def _append_event(self, event: dict[str, Any]) -> None:
         """Append event to event log."""
@@ -1037,7 +1085,7 @@ class UnifiedDaemon:
     # -------------------------------------------------------------------------
 
     async def _handle_join(
-        self, trial_id: str, gateway_url: str, filters: list[str] | None = None
+        self, trial_id: str, filters: list[str] | None = None
     ) -> dict[str, Any]:
         """Join a trial."""
         if trial_id in self._trials:
@@ -1052,7 +1100,6 @@ class UnifiedDaemon:
 
         handler = TrialHandler(
             trial_id=trial_id,
-            gateway_url=gateway_url,
             api_key=self._api_key,
             client=self._client,
             filters=filters,

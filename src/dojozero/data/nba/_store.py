@@ -378,16 +378,19 @@ class NBAStore(DataStore):
                     period = 4  # NBA regulation
                     game_clock = "0:00"
 
-                # Skip emission if period is still 0 after fallback and game had PBP
-                # tracking active. This prevents post-game garbage data from being emitted.
-                # Note: If PBP was never available, period=0 is expected (pre-game or boxscore-only).
-                if not period and self._state.is_pbp_available(game_id):
+                # Skip emission if game hasn't started (period=0 with no scores).
+                # Also skip if period=0 but PBP was available (post-game garbage data).
+                if not period and (
+                    (home_score == 0 and away_score == 0)
+                    or self._state.is_pbp_available(game_id)
+                ):
                     logger.debug(
-                        "Skipping game update with invalid period=0 for game %s "
-                        "(PBP was available, scores: %d-%d)",
+                        "Skipping game update with period=0 for game %s "
+                        "(scores: %d-%d, pbp_available: %s)",
                         game_id,
                         home_score,
                         away_score,
+                        self._state.is_pbp_available(game_id),
                     )
                 else:
                     game_time_utc = status_data.get("date", "") or ""
