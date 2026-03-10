@@ -4,12 +4,14 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 from dojozero_client._daemon import (
     DaemonConfig,
     DaemonState,
+    TrialHandler,
     _trial_state_dir,
     get_daemon_status,
     is_daemon_running,
@@ -278,3 +280,102 @@ class TestUnifiedDaemonHelpers:
                 result = stop_unified_daemon()
                 # Returns False because os.kill fails
                 assert result is False
+
+
+class TestTrialHandlerGetStatus:
+    """Tests for TrialHandler.get_status() balance refresh."""
+
+    @pytest.mark.asyncio
+    async def test_get_status_refreshes_balance_when_connected(self):
+        """Test get_status fetches fresh balance from server when connected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("dojozero_client._daemon.TRIALS_DIR", Path(tmpdir)):
+                client = MagicMock()
+                handler = TrialHandler(
+                    trial_id="test-trial",
+                    gateway_url="http://localhost:8080",
+                    api_key="test-key",
+                    client=client,
+                )
+
+                # Set initial cached state
+                handler._state.balance = 1000.0
+                handler._state.status = "connected"
+
+                # Mock the trial connection with fresh balance
+                mock_holding = MagicMock()
+                mock_holding.event_id = "event-1"
+                mock_holding.selection = "home"
+                mock_holding.bet_type = "moneyline"
+                mock_holding.shares = 10.0
+
+                mock_balance = MagicMock()
+                mock_balance.balance = 750.0  # Server has different balance
+                mock_balance.holdings = [mock_holding]
+
+                mock_trial = AsyncMock()
+                mock_trial.get_balance = AsyncMock(return_value=mock_balance)
+                handler._trial = mock_trial
+
+                # Call get_status
+                status = await handler.get_status()
+
+                # Should have refreshed balance from server
+                assert status["balance"] == 750.0
+                assert handler._state.balance == 750.0
+                assert len(status["holdings"]) == 1
+                assert status["holdings"][0]["event_id"] == "event-1"
+
+    @pytest.mark.asyncio
+    async def test_get_status_returns_cached_when_not_connected(self):
+        """Test get_status returns cached state when not connected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("dojozero_client._daemon.TRIALS_DIR", Path(tmpdir)):
+                client = MagicMock()
+                handler = TrialHandler(
+                    trial_id="test-trial",
+                    gateway_url="http://localhost:8080",
+                    api_key="test-key",
+                    client=client,
+                )
+
+                # Set cached state
+                handler._state.balance = 1000.0
+                handler._state.status = "disconnected"
+                handler._trial = None  # Not connected
+
+                # Call get_status
+                status = await handler.get_status()
+
+                # Should return cached balance
+                assert status["balance"] == 1000.0
+
+    @pytest.mark.asyncio
+    async def test_get_status_returns_cached_on_refresh_failure(self):
+        """Test get_status returns cached state when refresh fails."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("dojozero_client._daemon.TRIALS_DIR", Path(tmpdir)):
+                client = MagicMock()
+                handler = TrialHandler(
+                    trial_id="test-trial",
+                    gateway_url="http://localhost:8080",
+                    api_key="test-key",
+                    client=client,
+                )
+
+                # Set cached state
+                handler._state.balance = 1000.0
+                handler._state.status = "connected"
+
+                # Mock trial that raises on get_balance
+                mock_trial = AsyncMock()
+                mock_trial.get_balance = AsyncMock(
+                    side_effect=Exception("Connection error")
+                )
+                handler._trial = mock_trial
+
+                # Call get_status - should not raise
+                status = await handler.get_status()
+
+                # Should return cached balance
+                assert status["balance"] == 1000.0
