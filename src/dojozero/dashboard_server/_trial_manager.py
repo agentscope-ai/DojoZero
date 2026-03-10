@@ -6,7 +6,7 @@ Extracted from core/_dashboard_server.py for better separation of concerns.
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -206,8 +206,12 @@ class TrialManager:
             metadata: dict[str, Any] = {}
             if isinstance(spec.metadata, dict):
                 metadata = spec.metadata
-            elif hasattr(spec.metadata, "model_dump"):
+            elif hasattr(spec.metadata, "model_dump"):  # Pydantic
                 metadata = spec.metadata.model_dump()
+            elif is_dataclass(spec.metadata) and not isinstance(
+                spec.metadata, type
+            ):  # Dataclass instance
+                metadata = asdict(spec.metadata)
 
             # Create gateway app (note: lifespan won't run since we're not using uvicorn)
             app = create_gateway_app(
@@ -233,6 +237,30 @@ class TrialManager:
                 authenticator=self._authenticator or NoOpAuthenticator(),
                 metadata=metadata,
             )
+
+            # Ensure broker has event initialized from metadata if missing
+            # This handles cases where broker was restored from checkpoint without GameInitializeEvent
+            if broker._event is None and metadata:
+                event_id = metadata.get("espn_game_id", trial_id)
+                home_team = metadata.get("home_team_name", "")
+                away_team = metadata.get("away_team_name", "")
+                if home_team and away_team:
+                    broker.ensure_event_initialized(
+                        event_id=event_id,
+                        home_team=home_team,
+                        away_team=away_team,
+                    )
+                    self._logger.info(
+                        "Initialized broker event from metadata for trial '%s': %s vs %s",
+                        trial_id,
+                        home_team,
+                        away_team,
+                    )
+                else:
+                    self._logger.warning(
+                        "Cannot initialize broker event: missing team names for trial '%s'",
+                        trial_id,
+                    )
 
             # Set state on app for request handlers to access
             app.state.gateway_state = gateway_state

@@ -14,7 +14,7 @@ import json
 import logging
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict
 
@@ -181,6 +181,52 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             "present" if self._event else "none",
             len(self._bets),
         )
+
+    def ensure_event_initialized(
+        self,
+        event_id: str,
+        home_team: str,
+        away_team: str,
+        game_time: datetime | None = None,
+    ) -> bool:
+        """Ensure a betting event exists, creating one from metadata if needed.
+
+        This method is called by the gateway when the broker's _event is None
+        but trial metadata is available. This handles cases where:
+        - The broker was restored from checkpoint without receiving GameInitializeEvent
+        - A timing issue prevented the broker from receiving the initial event
+
+        Returns:
+            True if event was created, False if event already existed
+        """
+        if self._event is not None:
+            logger.debug(
+                "Event already initialized: event_id=%s, skipping metadata initialization",
+                self._event.event_id,
+            )
+            return False
+
+        # Create event from metadata
+        actual_game_time = game_time or datetime.now(timezone.utc)
+        betting_event = BettingEvent(
+            event_id=event_id,
+            home_team=home_team,
+            away_team=away_team,
+            game_time=actual_game_time,
+            status=EventStatus.SCHEDULED,
+            home_probability=None,
+            away_probability=None,
+            last_odds_update=None,
+        )
+
+        self._event = betting_event
+        logger.info(
+            "Initialized event from metadata: event_id=%s, %s vs %s (probabilities pending)",
+            event_id,
+            home_team,
+            away_team,
+        )
+        return True
 
     async def register_agents(self, agents: Sequence[Agent]) -> None:
         """Register agents and create their accounts"""
