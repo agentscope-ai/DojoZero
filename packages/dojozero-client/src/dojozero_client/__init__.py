@@ -1,30 +1,19 @@
 """DojoZero Client - Python SDK for external agents.
 
-Standalone mode (dojo0 run):
+Usage:
 
-    from dojozero_client import DojoClient
+    from dojozero_client import DojoClient, load_config
 
     client = DojoClient()
+    config = load_config()
+
+    # Gateway URL is derived from dashboard_url + trial_id
+    gateway_url = config.get_gateway_url("my-trial")
 
     async with client.connect_trial(
-        gateway_url="http://localhost:8080",
-        agent_id="my-agent",
+        gateway_url=gateway_url,
+        api_key="sk-agent-xxx",
     ) as trial:
-        async for event in trial.events():
-            ...
-
-Dashboard mode (dojo0 serve):
-
-    from dojozero_client import DojoClient
-
-    client = DojoClient()
-
-    # Discover available trials
-    gateways = await client.list_gateways("http://localhost:8000")
-
-    # Connect using same connect_trial method
-    gateway_url = f"http://localhost:8000{gateways[0].endpoint}"
-    async with client.connect_trial(gateway_url, agent_id="my-agent") as trial:
         async for event in trial.events():
             ...
 """

@@ -95,14 +95,6 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # Check config setup
-    if not has_config() and not args.gateway:
-        print(
-            "No configuration found. Run 'dojozero-agent config --show' to set up.",
-            file=sys.stderr,
-        )
-        return 1
-
     api_key = (
         args.api_key
         or os.environ.get("DOJOZERO_AGENT_API_KEY", "")
@@ -118,16 +110,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # Determine gateway URL: explicit flag > constructed from config
-    if args.gateway:
-        gateway_url = args.gateway
-    else:
-        client_config = load_config()
-        gateway_url = client_config.get_gateway_url(args.trial_id)
-
     daemon_config = DaemonConfig(
         trial_id=args.trial_id,
-        gateway_url=gateway_url,
         api_key=api_key,
         state_dir=state_dir,
         strategy=args.strategy,
@@ -147,8 +131,6 @@ def cmd_start(args: argparse.Namespace) -> int:
             str(state_dir),
             "start",
             args.trial_id,
-            "--gateway",
-            daemon_config.gateway_url,
         ]
         # Note: API key is NOT passed via CLI for security (visible in ps).
         # Child process reads from credentials file or DOJOZERO_AGENT_API_KEY env var.
@@ -245,9 +227,10 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     # Fetch fresh balance from server if possible
     balance = state.get("balance", 0)
-    gateway_url = state.get("gateway_url")
+    trial_id_val = state.get("trial_id")
     agent_id = state.get("agent_id")
-    if gateway_url and agent_id:
+    if trial_id_val and agent_id:
+        gateway_url = load_config().get_gateway_url(trial_id_val)
         fresh_balance = _fetch_server_balance(gateway_url, agent_id)
         if fresh_balance is not None:
             balance = fresh_balance
@@ -327,7 +310,7 @@ def cmd_bet(args: argparse.Namespace) -> int:
         print("No active trial. Use 'start <trial-id>' first.", file=sys.stderr)
         return 1
 
-    actual_trial_id = state.get("trial_id", trial_id)
+    actual_trial_id: str = state.get("trial_id", trial_id or "")
 
     # Try unified daemon RPC first (keeps local state in sync)
     if is_unified_daemon_running():
@@ -350,9 +333,7 @@ def cmd_bet(args: argparse.Namespace) -> int:
     # Fallback to direct REST API (legacy per-trial daemon mode)
     import httpx
 
-    gateway_url = state.get("gateway_url") or os.environ.get(
-        "DOJOZERO_GATEWAY_URL", "http://localhost:8000"
-    )
+    gateway_url = load_config().get_gateway_url(actual_trial_id)
     agent_id = state.get("agent_id", "")
 
     try:
@@ -522,7 +503,28 @@ def cmd_bets(args: argparse.Namespace) -> int:
 
 
 def cmd_list(_: argparse.Namespace) -> int:
-    """List all running trials."""
+    """List all running trials with fresh balances."""
+    # Try RPC first for live data with refreshed balances
+    if is_unified_daemon_running():
+        client = RPCClient(SOCKET_PATH)
+        try:
+            result = client.call_sync("list")
+            trials = result.get("trials", {})
+
+            if not trials:
+                print("No trials connected")
+                return 0
+
+            print(f"Running trials ({len(trials)}):")
+            for trial_id, info in trials.items():
+                status = "connected" if info.get("connected") else "disconnected"
+                balance = info.get("balance", 0)
+                print(f"  {trial_id}: {status}, balance=${balance:.2f}")
+            return 0
+        except (RPCError, ConnectionError):
+            pass  # Fall back to disk-based status
+
+    # Fall back to reading from disk (may be stale)
     running = list_running_trials()
 
     if not running:
@@ -751,7 +753,6 @@ def cmd_join(args: argparse.Namespace) -> int:
         result = client.call_sync(
             "join",
             trial_id=args.trial_id,
-            gateway_url=args.gateway,
         )
         print(f"Joined trial {args.trial_id} as {result.get('agent_id')}")
         return 0
@@ -891,11 +892,6 @@ def create_parser() -> argparse.ArgumentParser:
     # start
     p_start = subparsers.add_parser("start", help="Start daemon for a trial")
     p_start.add_argument("trial_id", help="Trial ID to connect to")
-    p_start.add_argument(
-        "--gateway",
-        "-g",
-        help="Gateway URL (optional: auto-constructed from dashboard_url in config.yaml)",
-    )
     p_start.add_argument(
         "--api-key",
         help="API key for authentication (required, or set $DOJOZERO_AGENT_API_KEY)",
@@ -1058,12 +1054,6 @@ def create_parser() -> argparse.ArgumentParser:
     # join - join a trial via daemon RPC
     p_join = subparsers.add_parser("join", help="Join a trial (via unified daemon)")
     p_join.add_argument("trial_id", help="Trial ID to join")
-    p_join.add_argument(
-        "--gateway",
-        "-g",
-        required=True,
-        help="Gateway URL for this trial",
-    )
     p_join.set_defaults(func=cmd_join)
 
     # leave - leave a trial via daemon RPC
