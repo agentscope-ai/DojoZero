@@ -201,6 +201,7 @@ class Daemon:
         self.strategy: Strategy | None = None
         self._state = DaemonState()
         self._stop_event: asyncio.Event | None = None
+        self._seen_uids: set[str] = set()
 
     async def start(self) -> None:
         """Start the daemon main loop."""
@@ -232,6 +233,9 @@ class Daemon:
                 logger.info(
                     "Resuming from sequence %d (from previous session)", resume_sequence
                 )
+
+        # Seed seen UIDs from existing events.jsonl to prevent duplicates on reconnect
+        self._seen_uids = self._load_seen_uids()
 
         try:
             async with (
@@ -301,6 +305,13 @@ class Daemon:
         self, trial: "TrialConnection", event: EventEnvelope
     ) -> None:
         """Process an incoming event."""
+        # Skip events already seen (replayed on reconnect)
+        uid = event.payload.get("uid", "")
+        if uid and uid in self._seen_uids:
+            return
+        if uid:
+            self._seen_uids.add(uid)
+
         # Convert to dict for logging and strategy
         event_dict = {
             "type": event.event_type or event.payload.get("eventType", ""),
@@ -471,6 +482,21 @@ class Daemon:
         if state_file.exists():
             return json.loads(state_file.read_text())
         return {}
+
+    def _load_seen_uids(self) -> set[str]:
+        """Load UIDs from existing events.jsonl for dedup on reconnect."""
+        uids: set[str] = set()
+        events_file = self.state_dir / "events.jsonl"
+        if events_file.exists():
+            for line in events_file.read_text().strip().split("\n"):
+                if line:
+                    try:
+                        uid = json.loads(line).get("payload", {}).get("uid", "")
+                        if uid:
+                            uids.add(uid)
+                    except json.JSONDecodeError:
+                        continue
+        return uids
 
     def _append_event(self, event: dict[str, Any]) -> None:
         """Append event to event log."""
@@ -667,6 +693,7 @@ class TrialHandler:
         self._context_manager: Any = None  # The async context manager
         self._event_task: asyncio.Task[None] | None = None
         self._running = False
+        self._seen_uids: set[str] = set()
 
     @property
     def agent_id(self) -> str:
@@ -682,6 +709,9 @@ class TrialHandler:
         """Connect to the trial and start event streaming."""
         if self._running:
             return
+
+        # Seed seen UIDs from existing events.jsonl to prevent duplicates on reconnect
+        self._seen_uids = self._load_seen_uids()
 
         # Check for existing state to resume from
         resume_sequence = 0
@@ -885,6 +915,13 @@ class TrialHandler:
 
     async def _handle_event(self, event: EventEnvelope) -> None:
         """Process an incoming event."""
+        # Skip events already seen (replayed on reconnect)
+        uid = event.payload.get("uid", "")
+        if uid and uid in self._seen_uids:
+            return
+        if uid:
+            self._seen_uids.add(uid)
+
         event_dict = {
             "type": event.event_type or event.payload.get("event_type", ""),
             "payload": event.payload,
@@ -934,6 +971,21 @@ class TrialHandler:
         if state_file.exists():
             return json.loads(state_file.read_text())
         return {}
+
+    def _load_seen_uids(self) -> set[str]:
+        """Load UIDs from existing events.jsonl for dedup on reconnect."""
+        uids: set[str] = set()
+        events_file = self.state_dir / "events.jsonl"
+        if events_file.exists():
+            for line in events_file.read_text().strip().split("\n"):
+                if line:
+                    try:
+                        uid = json.loads(line).get("payload", {}).get("uid", "")
+                        if uid:
+                            uids.add(uid)
+                    except json.JSONDecodeError:
+                        continue
+        return uids
 
     def _append_event(self, event: dict[str, Any]) -> None:
         """Append event to event log."""

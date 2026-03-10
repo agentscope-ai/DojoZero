@@ -30,6 +30,7 @@ from abc import ABC
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal, TypeVar
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -483,6 +484,7 @@ class DataEvent(BaseModel, ABC):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     event_type: str = ""  # Narrowed to Literal on concrete subclasses
+    uid: str = Field(default_factory=lambda: uuid4().hex)
 
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     game_timestamp: datetime | None = None
