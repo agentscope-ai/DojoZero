@@ -209,9 +209,11 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     print(f"Trial: {state.get('trial_id', 'unknown')}")
     print(f"Agent: {state.get('agent_id', 'unknown')}")
-    print(
-        f"Status: {state.get('status', 'unknown')} {'(running)' if running else '(stopped)'}"
-    )
+    status_label = state.get("status", "unknown")
+    if running:
+        print(f"Status: {status_label} (daemon running)")
+    else:
+        print(f"Status: {status_label} (daemon not running)")
 
     if game_state:
         home = game_state.get("home_score", "?")
@@ -537,6 +539,12 @@ def cmd_list(_: argparse.Namespace) -> int:
         if state:
             status = state.get("status", "unknown")
             balance = state.get("balance", 0)
+            agent_id = state.get("agent_id")
+            if agent_id:
+                gateway_url = load_config().get_gateway_url(trial_id)
+                fresh = _fetch_server_balance(gateway_url, agent_id)
+                if fresh is not None:
+                    balance = fresh
             print(f"  {trial_id}: {status}, balance=${balance:.2f}")
         else:
             print(f"  {trial_id}: (status unknown)")
