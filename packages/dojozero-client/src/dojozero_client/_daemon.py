@@ -1091,13 +1091,15 @@ class UnifiedDaemon:
         return await handler.get_status()
 
     async def _handle_list(self) -> dict[str, Any]:
-        """List active trials."""
+        """List active trials with fresh balances."""
         trials = {}
         for trial_id, handler in self._trials.items():
+            # get_status() refreshes balance from server
+            status = await handler.get_status()
             trials[trial_id] = {
                 "agent_id": handler.agent_id,
                 "connected": handler.is_connected,
-                "balance": handler._state.balance,
+                "balance": status["balance"],
             }
         return {"trials": trials}
 
