@@ -19,8 +19,10 @@ from dojozero.data._factory import build_runtime_context
 # Import factories to ensure they are registered
 import dojozero.data.nba._factory  # noqa: F401
 import dojozero.data.websearch._factory  # noqa: F401
+import dojozero.data.socialmedia  # noqa: F401
 import dojozero.data.polymarket._factory  # noqa: F401
 from dojozero.data.websearch._events import WebSearchEventMixin
+from dojozero.data.socialmedia._events import SocialMediaEventMixin
 from dojozero.nba._agent import (
     BettingAgent,
 )
@@ -76,6 +78,7 @@ class NBATrialParams(BaseModel):
             "injury_report",
             "power_ranking",
             "expert_prediction",
+            "twitter_top_tweets",
         ],
         description="List of canonical event type suffixes (e.g., 'espn_game_update'). 'event.' prefix added automatically.",
     )
@@ -199,8 +202,17 @@ async def _build_trial_spec(
             suffix for suffix in event_type_suffixes if suffix in _stats_suffixes
         ]
 
-        # If either websearch or stats are needed, populate shared game context fields
-        if websearch_suffixes or stats_suffixes:
+        # Check which event types need social media collection (match a SocialMediaEventMixin subclass)
+        _sm_suffixes = {
+            cls.model_fields["event_type"].default.removeprefix("event.")  # type: ignore[attr-defined]
+            for cls in SocialMediaEventMixin.__subclasses__()
+        }
+        socialmedia_suffixes = [
+            suffix for suffix in event_type_suffixes if suffix in _sm_suffixes
+        ]
+
+        # If websearch, stats, or socialmedia are needed, populate shared game context fields
+        if websearch_suffixes or stats_suffixes or socialmedia_suffixes:
             cfg["game_id"] = params.espn_game_id
             if home_team_name:
                 cfg["home_team_name"] = home_team_name
@@ -218,6 +230,9 @@ async def _build_trial_spec(
             cfg["away_team_id"] = away_team_id
             cfg["season_year"] = season_year
             cfg["season_type"] = season_type
+
+        if socialmedia_suffixes:
+            cfg["socialmedia_event_types"] = socialmedia_suffixes
 
         return cfg
 
@@ -441,6 +456,7 @@ register_trial_builder(
                     "power_ranking",
                     "expert_prediction",
                     "pregame_stats",
+                    "twitter_top_tweets",
                 ],
             },
             {

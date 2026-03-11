@@ -89,6 +89,11 @@ from dojozero.data.websearch import (
     WebSearchAPI,
     WebSearchStore,
 )
+from dojozero.data.socialmedia import (
+    SocialMediaAPI,
+    SocialMediaStore,
+    TwitterTopTweetsEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +221,10 @@ __all__ = [
     "ExpertPredictionEvent",
     "WebSearchAPI",
     "WebSearchStore",
+    # Social Media
+    "TwitterTopTweetsEvent",
+    "SocialMediaAPI",
+    "SocialMediaStore",
     # Stats Insights (ESPN)
     "PreGameStatsEvent",
 ]

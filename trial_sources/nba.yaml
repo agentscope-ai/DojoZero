@@ -37,7 +37,8 @@ config:
       - power_ranking
       - expert_prediction
       - pregame_stats
-
+      - twitter_top_tweets
+      
     # Game lifecycle
     - id: game_lifecycle_stream
       event_types:

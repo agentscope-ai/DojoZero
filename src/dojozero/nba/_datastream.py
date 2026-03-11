@@ -13,6 +13,7 @@ from dojozero.data._streams import DataHubDataStream as BaseDataHubDataStream
 from dojozero.data.websearch._api import WebSearchAPI
 from dojozero.data.websearch._context import GameContext
 from dojozero.data.websearch._events import WebSearchEventMixin
+from dojozero.data.socialmedia._events import SocialMediaEventMixin
 
 if TYPE_CHECKING:
     from dojozero.data.espn._api import ESPNExternalAPI
@@ -31,6 +32,26 @@ def _resolve_websearch_classes(
     """
     matched: list[type[WebSearchEventMixin]] = []
     for cls in WebSearchEventMixin.__subclasses__():
+        event_type = cls.model_fields["event_type"].default  # type: ignore[attr-defined]
+        if (
+            isinstance(event_type, str)
+            and event_type.removeprefix("event.") in suffixes
+        ):
+            matched.append(cls)
+    return matched
+
+
+def _resolve_socialmedia_classes(
+    suffixes: set[str],
+) -> list[type[SocialMediaEventMixin]]:
+    """Resolve event type suffixes to SocialMediaEventMixin subclasses.
+
+    Discovers classes via ``SocialMediaEventMixin.__subclasses__()`` and matches
+    their ``event_type`` default (e.g. ``"event.twitter_top_tweets"``) against the
+    provided suffixes (e.g. ``{"twitter_top_tweets"}``).
+    """
+    matched: list[type[SocialMediaEventMixin]] = []
+    for cls in SocialMediaEventMixin.__subclasses__():
         event_type = cls.model_fields["event_type"].default  # type: ignore[attr-defined]
         if (
             isinstance(event_type, str)
@@ -65,6 +86,9 @@ class NBAPreGameBettingDataHubDataStreamConfig(_ActorIdConfig, total=False):
     stats_event_types: list[
         str
     ]  # Canonical suffixes that need ESPN stats (e.g., ["pregame_stats"])
+    socialmedia_event_types: list[
+        str
+    ]  # Social media event types (e.g., ["twitter_top_tweets"])
     home_team_id: str  # ESPN team ID for home team
     away_team_id: str  # ESPN team ID for away team
     season_year: int
@@ -92,6 +116,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         game_context: GameContext | None = None,
         websearch_event_types: list[str] | None = None,
         stats_event_types: list[str] | None = None,
+        socialmedia_event_types: list[str] | None = None,
         espn_api: "ESPNExternalAPI | None" = None,
         sport_type: str = "",
     ) -> None:
@@ -107,6 +132,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         self._game_context = game_context
         self._websearch_event_types = set(websearch_event_types or [])
         self._stats_event_types = set(stats_event_types or [])
+        self._socialmedia_event_types = set(socialmedia_event_types or [])
         self._espn_api = espn_api
         self._search_initialized = False
 
@@ -122,19 +148,22 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             self._websearch_event_types and self._search_api and self._game_context
         )
         has_stats = self._stats_event_types and self._espn_api and self._game_context
-        if (has_websearch or has_stats) and self._hub:
+        has_socialmedia = self._socialmedia_event_types and self._game_context
+        if (has_websearch or has_stats or has_socialmedia) and self._hub:
             self._hub.add_on_game_initialized(self._on_game_initialized)
 
     async def _on_game_initialized(self, _game_id: str) -> None:
         """Hub callback: run pre-game data fetching while stores are paused."""
         if not self._search_initialized:
             self._search_initialized = True
-            # Run web searches and stats fetch concurrently
+            # Run web searches, stats fetch, and social media collection concurrently
             tasks: list[asyncio.Task[None]] = []
             if self._websearch_event_types and self._search_api:
                 tasks.append(asyncio.create_task(self._run_web_searches()))
             if self._stats_event_types and self._espn_api and self._game_context:
                 tasks.append(asyncio.create_task(self._run_stats_fetch()))
+            if self._socialmedia_event_types and self._game_context:
+                tasks.append(asyncio.create_task(self._run_social_media_collection()))
             if tasks:
                 await asyncio.gather(*tasks)
 
@@ -223,6 +252,89 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
         )
 
     _STATS_FETCH_TIMEOUT: float = 60.0
+    _SOCIAL_MEDIA_TIMEOUT: float = 120.0
+
+    async def _run_social_media_collection(self) -> None:
+        """Trigger social media collection for all configured event classes in parallel.
+
+        Uses X API to fetch tweets from curated watchlist accounts.
+        """
+        assert self._game_context is not None
+        game_context = self._game_context
+
+        # Create SocialMediaAPI instance
+        from dojozero.data.socialmedia._api import SocialMediaAPI
+
+        try:
+            social_api = SocialMediaAPI()
+        except (ImportError, ValueError) as e:
+            logger.error("Failed to create SocialMediaAPI: %s", e)
+            return
+
+        # Resolve event classes from mixin subclass tree
+        event_classes = _resolve_socialmedia_classes(self._socialmedia_event_types)
+        logger.info(
+            "stream '%s' triggering %d social media collections in parallel",
+            self.actor_id,
+            len(event_classes),
+        )
+
+        async def _fetch_one(
+            event_cls: type[SocialMediaEventMixin],
+        ) -> DataEvent | None:
+            try:
+                logger.info(
+                    "stream '%s' running %s.from_social_media()",
+                    self.actor_id,
+                    event_cls.__name__,
+                )
+                event = await asyncio.wait_for(
+                    event_cls.from_social_media(
+                        api=social_api,
+                        context=game_context,
+                    ),
+                    timeout=self._SOCIAL_MEDIA_TIMEOUT,
+                )
+                if event and isinstance(event, DataEvent):
+                    return event
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "stream '%s' timed out fetching %s after %.0fs",
+                    self.actor_id,
+                    event_cls.__name__,
+                    self._SOCIAL_MEDIA_TIMEOUT,
+                )
+            except Exception as e:
+                logger.error(
+                    "stream '%s' failed to fetch %s: %s",
+                    self.actor_id,
+                    event_cls.__name__,
+                    e,
+                    exc_info=True,
+                )
+            return None
+
+        # Run all collections concurrently
+        results = await asyncio.gather(*[_fetch_one(cls) for cls in event_classes])
+
+        # Publish results sequentially to the hub
+        succeeded = 0
+        for event_cls, event in zip(event_classes, results):
+            if event and self._hub:
+                await self._hub.receive_event(event)
+                succeeded += 1
+                logger.info(
+                    "stream '%s' published %s event",
+                    self.actor_id,
+                    event_cls.__name__,
+                )
+
+        logger.info(
+            "stream '%s' social media collections complete: %d/%d succeeded",
+            self.actor_id,
+            succeeded,
+            len(event_classes),
+        )
 
     async def _run_stats_fetch(self) -> None:
         """Fetch pre-game stats from ESPN API and publish to hub."""
@@ -296,9 +408,10 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
 
         ws_event_types = config.get("websearch_event_types", [])
         stats_event_types = config.get("stats_event_types", [])
+        sm_event_types = config.get("socialmedia_event_types", [])
 
         # Build GameContext if any pregame data fetching is needed
-        if ws_event_types or stats_event_types:
+        if ws_event_types or stats_event_types or sm_event_types:
             game_context = GameContext(
                 sport=context.sport_type,
                 home_team=config.get("home_team_name", ""),
@@ -314,7 +427,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
                 venue_timezone=config.get("venue_timezone", ""),
             )
 
-        if ws_event_types:
+        if ws_event_types or sm_event_types:
             search_api = WebSearchAPI()
 
         if stats_event_types:
@@ -338,6 +451,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             game_context=game_context,
             websearch_event_types=ws_event_types,
             stats_event_types=stats_event_types,
+            socialmedia_event_types=sm_event_types,
             espn_api=espn_api,
             sport_type=context.sport_type,
         )
