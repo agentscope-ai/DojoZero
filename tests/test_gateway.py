@@ -926,10 +926,17 @@ class TestGitHubAgentAuthenticator:
 
     def test_looks_like_github_token(self):
         """Test token prefix detection."""
+        # Classic PAT
         assert GitHubAgentAuthenticator.looks_like_github_token("ghp_abc123")
+        # Fine-grained PAT
         assert GitHubAgentAuthenticator.looks_like_github_token("github_pat_abc123")
+        assert GitHubAgentAuthenticator.looks_like_github_token(
+            "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"
+        )
+        # Non-GitHub tokens
         assert not GitHubAgentAuthenticator.looks_like_github_token("sk-agent-abc")
         assert not GitHubAgentAuthenticator.looks_like_github_token("random-key")
+        assert not GitHubAgentAuthenticator.looks_like_github_token("github_abc")
 
     @pytest.mark.asyncio
     async def test_validate_non_github_token_returns_none(self):
@@ -1017,6 +1024,85 @@ class TestGitHubAgentAuthenticator:
         auth._session = mock_session
 
         identity = await auth.validate("ghp_invalid123")
+        assert identity is None
+
+        await auth.close()
+
+    @pytest.mark.asyncio
+    async def test_validate_github_pat_fine_grained_token_success(self):
+        """Test successful validation with github_pat_ prefix (fine-grained token)."""
+        auth = GitHubAgentAuthenticator()
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(
+            return_value={
+                "login": "fineuser",
+                "name": "Fine Grained User",
+                "avatar_url": "https://avatars.githubusercontent.com/u/456",
+            }
+        )
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        auth._session = mock_session
+
+        token = "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"
+        identity = await auth.validate(token)
+        assert identity is not None
+        assert identity.agent_id == "gh:fineuser"
+        assert identity.display_name == "Fine Grained User"
+        assert identity.metadata is not None
+        assert identity.metadata["auth_method"] == "github_pat"
+
+        await auth.close()
+
+    @pytest.mark.asyncio
+    async def test_validate_github_pat_fine_grained_token_cached(self):
+        """Test caching works with github_pat_ prefix."""
+        auth = GitHubAgentAuthenticator()
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(
+            return_value={"login": "cachedpat", "name": "Cached PAT"}
+        )
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        auth._session = mock_session
+
+        token = "github_pat_XXXXXXXXXXXX_YYYYYYYYYYYY"
+        identity1 = await auth.validate(token)
+        identity2 = await auth.validate(token)
+
+        assert identity1 == identity2
+        assert mock_session.get.call_count == 1
+
+        await auth.close()
+
+    @pytest.mark.asyncio
+    async def test_validate_github_pat_fine_grained_token_api_failure(self):
+        """Test API failure with github_pat_ prefix returns None."""
+        auth = GitHubAgentAuthenticator()
+
+        mock_response = AsyncMock()
+        mock_response.status = 403
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        auth._session = mock_session
+
+        identity = await auth.validate("github_pat_expired_or_revoked")
         assert identity is None
 
         await auth.close()
