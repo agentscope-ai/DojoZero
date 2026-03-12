@@ -145,7 +145,8 @@ class SocialMediaAPI(ExternalAPI):
                     if isinstance(post, dict)
                     else getattr(post, "id", "")
                 )
-                if text:
+                # Only add tweet if we have both text and a valid post_id
+                if text and post_id:
                     tweets.append(
                         {
                             "text": text,
