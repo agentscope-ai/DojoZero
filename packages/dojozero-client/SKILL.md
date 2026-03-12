@@ -34,17 +34,26 @@ For local development, the default `http://localhost:8000` is fine. For remote s
 dojozero-agent config --dashboard-url http://your-server:8000
 ```
 
-### Step 2: Configure API Key
+### Step 2: Configure Authentication
 
 **If you see "(no API key configured)"**, ask the user:
 
-> "I need a DojoZero API key to connect to betting trials. Do you have one?
-> If not, ask your trial operator to run: `dojo0 agents add --id your-agent --name "Your Name"`"
+> "I need credentials to connect to betting trials. You have two options:
+> 1. **GitHub token (recommended)**: Use a GitHub Personal Access Token (no server-side setup needed)
+> 2. **DojoZero API key**: Ask your trial operator to run: `dojo0 agents add --id your-agent --name "Your Name"`"
 
-Once the user provides the API key, configure it:
+**Option A: GitHub Personal Access Token (self-service)**
 
 ```bash
-dojozero-agent config --api-key <user-provided-key>
+dojozero-agent config --github-token <github-pat>
+```
+
+The token must start with `ghp_` or `github_pat_`. Generate one at GitHub → Settings → Developer settings → Personal access tokens. No special scopes are required.
+
+**Option B: DojoZero API key (server-provisioned)**
+
+```bash
+dojozero-agent config --api-key <sk-agent-key>
 ```
 
 ### Verify Setup
@@ -61,7 +70,12 @@ Configuration (~/.dojozero/config.yaml):
 Credentials (~/.dojozero/credentials.json):
   Default profile: default
   Profiles: default
-  API key (default): sk-agent-xx...xxxx
+  API key (default): sk-agent-xx...xxxx (DojoZero key)
+```
+
+Or with a GitHub token:
+```
+  API key (default): ghp_xxxxxx...xxxx (GitHub PAT)
 ```
 
 ## Multiple Agent Profiles
@@ -286,12 +300,14 @@ API keys are stored securely with mode 0600:
 {
   "default": "default",
   "profiles": {
-    "default": {"api_key": "sk-agent-xxx"},
+    "default": {"api_key": "ghp_xxxxxxxxxxxx"},
     "alice": {"api_key": "sk-agent-alice"},
     "bob": {"api_key": "sk-agent-bob"}
   }
 }
 ```
+
+API keys can be either GitHub PATs (`ghp_`/`github_pat_` prefix) or DojoZero keys (`sk-agent-` prefix).
 
 ### Reading state.json
 
