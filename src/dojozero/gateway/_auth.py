@@ -12,6 +12,7 @@ The AgentAuthenticator protocol allows plugging in different backends:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -24,7 +25,7 @@ from fastapi import Header, HTTPException
 from dojozero.gateway._models import ErrorCodes, ErrorDetail, ErrorResponse
 
 if TYPE_CHECKING:
-    pass
+    import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -490,6 +491,154 @@ class LocalAgentAuthenticator:
 
 
 # =============================================================================
+# GitHub PAT Authenticator
+# =============================================================================
+
+_GITHUB_PAT_PREFIXES = ("ghp_", "github_pat_")
+
+
+class GitHubAgentAuthenticator:
+    """Authenticator that validates GitHub Personal Access Tokens.
+
+    Calls the GitHub API to verify the token and derive agent identity
+    from the GitHub user profile. Results are cached by token hash
+    to avoid repeated API calls (especially important for high-latency
+    regions like China).
+
+    Agent IDs are prefixed with ``gh:`` to avoid collision with
+    locally-provisioned IDs.
+    """
+
+    GITHUB_API_URL = "https://api.github.com/user"
+    CACHE_TTL_SECONDS = 3600  # 1 hour
+
+    def __init__(self, cache_ttl: int | None = None) -> None:
+        self._cache: dict[str, tuple[AgentIdentity, float]] = {}
+        self._cache_ttl = cache_ttl if cache_ttl is not None else self.CACHE_TTL_SECONDS
+        self._session: aiohttp.ClientSession | None = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            import aiohttp
+
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    @staticmethod
+    def _hash_token(token: str) -> str:
+        return hashlib.sha256(token.encode()).hexdigest()
+
+    @staticmethod
+    def looks_like_github_token(token: str) -> bool:
+        """Return True if *token* has a GitHub PAT prefix."""
+        return any(token.startswith(p) for p in _GITHUB_PAT_PREFIXES)
+
+    def _get_cached(self, token_hash: str) -> AgentIdentity | None:
+        entry = self._cache.get(token_hash)
+        if entry is None:
+            return None
+        identity, cached_at = entry
+        if time.time() - cached_at > self._cache_ttl:
+            del self._cache[token_hash]
+            return None
+        return identity
+
+    async def validate(self, api_key: str) -> AgentIdentity | None:
+        """Validate a GitHub PAT and return agent identity.
+
+        Returns None for tokens that don't look like GitHub PATs or
+        that fail GitHub API validation.
+        """
+        if not self.looks_like_github_token(api_key):
+            return None
+
+        token_hash = self._hash_token(api_key)
+        cached = self._get_cached(token_hash)
+        if cached is not None:
+            return cached
+
+        try:
+            session = await self._get_session()
+            async with session.get(
+                self.GITHUB_API_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=__import__("aiohttp").ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning(
+                        "GitHub API returned %d for PAT validation", resp.status
+                    )
+                    return None
+                data = await resp.json()
+        except Exception:
+            logger.exception("GitHub API call failed during PAT validation")
+            return None
+
+        login: str = data.get("login", "")
+        if not login:
+            return None
+
+        identity = AgentIdentity(
+            agent_id=f"gh:{login}",
+            display_name=data.get("name") or login,
+            cdn_url=data.get("avatar_url"),
+            metadata={"github_login": login, "auth_method": "github_pat"},
+        )
+
+        self._cache[token_hash] = (identity, time.time())
+        logger.info("GitHub PAT validated for user %s", login)
+        return identity
+
+    def is_enabled(self) -> bool:
+        """Always enabled — validation is gated on token prefix."""
+        return True
+
+    async def close(self) -> None:
+        """Close the underlying HTTP session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+
+
+# =============================================================================
+# Composite Authenticator
+# =============================================================================
+
+
+class CompositeAuthenticator:
+    """Routes validation to the appropriate backend by token prefix.
+
+    - Tokens starting with ``ghp_`` or ``github_pat_`` go to GitHub.
+    - Everything else goes to the local YAML authenticator.
+    """
+
+    def __init__(
+        self,
+        local: LocalAgentAuthenticator | None = None,
+        github: GitHubAgentAuthenticator | None = None,
+    ) -> None:
+        self._local = local
+        self._github = github or GitHubAgentAuthenticator()
+
+    async def validate(self, api_key: str) -> AgentIdentity | None:
+        if GitHubAgentAuthenticator.looks_like_github_token(api_key):
+            return await self._github.validate(api_key)
+        if self._local:
+            return await self._local.validate(api_key)
+        return None
+
+    def is_enabled(self) -> bool:
+        local_ok = self._local.is_enabled() if self._local else False
+        return local_ok or self._github.is_enabled()
+
+    async def close(self) -> None:
+        """Close underlying resources."""
+        await self._github.close()
+
+
+# =============================================================================
 # No-op Authenticator (allows all, for backwards compatibility)
 # =============================================================================
 
@@ -792,6 +941,8 @@ __all__ = [
     "AgentKeyManager",
     "AuthConfig",
     "AuthProvider",
+    "CompositeAuthenticator",
+    "GitHubAgentAuthenticator",
     "LocalAgentAuthenticator",
     "NoOpAuthenticator",
     "create_auth_dependency",

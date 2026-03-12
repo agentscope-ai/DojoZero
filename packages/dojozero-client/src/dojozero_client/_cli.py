@@ -677,6 +677,15 @@ def cmd_daemon_stop(_: argparse.Namespace) -> int:
         return 1
 
 
+def _detect_token_type(key: str) -> str:
+    """Detect the type of API key/token."""
+    if key.startswith("ghp_") or key.startswith("github_pat_"):
+        return "GitHub PAT"
+    if key.startswith("sk-agent-"):
+        return "DojoZero key"
+    return "unknown"
+
+
 def cmd_config(args: argparse.Namespace) -> int:
     """Configure credentials and settings."""
     profile = _get_profile(args)
@@ -708,6 +717,13 @@ def cmd_config(args: argparse.Namespace) -> int:
         save_config(dashboard_url=args.dashboard_url)
         print("Dashboard URL saved to ~/.dojozero/config.yaml")
         print(f"  dashboard_url: {args.dashboard_url}")
+        return 0
+
+    # Save GitHub token as API key
+    if getattr(args, "github_token", None):
+        save_api_key(args.github_token, profile=profile)
+        profile_msg = f" (profile: {profile})" if profile else ""
+        print(f"GitHub token saved to ~/.dojozero/credentials.json{profile_msg}")
         return 0
 
     # Save API key
@@ -746,8 +762,9 @@ def cmd_config(args: argparse.Namespace) -> int:
                 key = load_api_key(profile=profile)
                 if key:
                     masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
+                    token_type = _detect_token_type(key)
                     print(f"  Profile: {profile}")
-                    print(f"  API key: {masked}")
+                    print(f"  API key: {masked} ({token_type})")
                 else:
                     print(f"  Profile '{profile}' not found")
                     return 1
@@ -758,7 +775,8 @@ def cmd_config(args: argparse.Namespace) -> int:
                 key = load_api_key()
                 if key:
                     masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
-                    print(f"  API key ({default}): {masked}")
+                    token_type = _detect_token_type(key)
+                    print(f"  API key ({default}): {masked} ({token_type})")
         return 0
 
     print("Usage:")
@@ -1065,6 +1083,10 @@ def create_parser() -> argparse.ArgumentParser:
     p_config.add_argument(
         "--api-key",
         help="Set API key (stored securely in ~/.dojozero/credentials.json)",
+    )
+    p_config.add_argument(
+        "--github-token",
+        help="Set GitHub Personal Access Token as API key",
     )
     p_config.add_argument(
         "--show",
