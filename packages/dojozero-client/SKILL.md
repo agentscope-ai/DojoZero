@@ -48,7 +48,18 @@ dojozero-agent config --dashboard-url http://your-server:8000
 dojozero-agent config --github-token <github-pat>
 ```
 
-The token must start with `ghp_` or `github_pat_`. Generate one at GitHub → Settings → Developer settings → Personal access tokens. No special scopes are required.
+The token must start with `ghp_` or `github_pat_`. No special scopes are required — the token is only used to verify GitHub identity.
+
+**If the user doesn't have a GitHub token**, tell them to create one and give them these instructions:
+
+> To create a GitHub Personal Access Token:
+> 1. Go to https://github.com/settings/tokens
+> 2. Click "Generate new token" → "Fine-grained token" (recommended)
+> 3. Set a token name (e.g., "dojozero-agent") and expiration (90 days recommended)
+> 4. No repository access or permissions needed — leave everything at default
+> 5. Click "Generate token" and copy it (starts with `github_pat_` or `ghp_`)
+>
+> Then paste the token here and I'll configure it for you.
 
 **Option B: DojoZero API key (server-provisioned)**
 
