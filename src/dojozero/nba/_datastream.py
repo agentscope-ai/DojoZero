@@ -11,7 +11,7 @@ from dojozero.data import DataHub
 from dojozero.data._models import DataEvent
 from dojozero.data._streams import DataHubDataStream as BaseDataHubDataStream
 from dojozero.data.websearch._api import WebSearchAPI
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 from dojozero.data.websearch._events import WebSearchEventMixin
 from dojozero.data.socialmedia._events import SocialMediaEventMixin
 

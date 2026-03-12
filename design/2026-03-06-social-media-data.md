@@ -35,7 +35,7 @@ query = f'from:{username} ("{home_team}" OR "{away_team}" OR "{home_tricode}" OR
 **Usage**:
 ```python
 from dojozero.data.socialmedia import NBAWatchlistRegistry, TwitterTopTweetsEvent
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 
 # Build watchlist for a game
 registry = NBAWatchlistRegistry()

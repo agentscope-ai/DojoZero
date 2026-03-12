@@ -5,7 +5,7 @@ import os
 from typing import Any
 
 from dojozero.data._stores import ExternalAPI
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 
 # Try to load .env file if python-dotenv is available
 try:
@@ -131,7 +131,7 @@ class SocialMediaAPI(ExternalAPI):
             # No results, return empty list
             return []
         except Exception:
-            # Log error but continue with other accounts
+            # No results, return empty list
             return []
 
         return tweets

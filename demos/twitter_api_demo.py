@@ -19,7 +19,7 @@ except ImportError:
 
 from xdk import Client
 
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 from dojozero.data._utils import summarize_content
 from dojozero.data.socialmedia import NBAWatchlistRegistry
 

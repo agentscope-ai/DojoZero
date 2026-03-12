@@ -11,6 +11,7 @@ from dojozero.data._models import (
     OddsUpdateEvent,
 )
 from dojozero.data.nba._events import NBAGameUpdateEvent, NBAPlayEvent
+from dojozero.data.socialmedia._formatters import SOCIALMEDIA_EVENT_FORMATTERS
 from dojozero.data.websearch._formatters import WEBSEARCH_EVENT_FORMATTERS
 from dojozero.betting._models import BetExecutedPayload, BetSettledPayload
 from dojozero.betting._formatters import (
@@ -124,6 +125,8 @@ def _format_default(event: DataEvent) -> str:
 _EVENT_FORMATTERS: dict[str, Any] = {
     # Shared web search event formatters
     **WEBSEARCH_EVENT_FORMATTERS,
+    # Shared social media event formatters
+    **SOCIALMEDIA_EVENT_FORMATTERS,
     "game_initialize": _format_game_initialize,
     "game_start": _format_game_start,
     "game_result": _format_game_result,

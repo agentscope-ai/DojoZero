@@ -6,7 +6,7 @@ from dojozero.data._models import DataEvent
 from dojozero.data._stores import DataStore, ExternalAPI
 from dojozero.data.socialmedia._api import SocialMediaAPI
 from dojozero.data.socialmedia._events import TwitterTopTweetsEvent
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 
 
 class SocialMediaStore(DataStore):

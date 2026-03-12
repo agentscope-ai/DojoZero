@@ -1,7 +1,7 @@
 """Web Search-specific data infrastructure components."""
 
 from dojozero.data.websearch._api import TavilySearchAdapter, WebSearchAPI
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 from dojozero.data.websearch._events import (
     ExpertPredictionEvent,
     InjuryReportEvent,
