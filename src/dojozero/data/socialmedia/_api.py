@@ -73,17 +73,6 @@ class SocialMediaAPI(ExternalAPI):
         - Betting/analytics: filter by both team names and tricodes
         - Official team accounts: filter by opponent + game-relevant terms, exclude RTs
         - Beat reporters: exclude RTs and replies to keep original reporting only
-
-        Args:
-            username: Twitter username to search
-            description: Account description (used to determine search strategy)
-            home_team: Home team name
-            away_team: Away team name
-            home_tricode: Home team tricode
-            away_tricode: Away team tricode
-
-        Returns:
-            X API search query string
         """
         if "Betting/analytics analyst" in description:
             return (
@@ -122,15 +111,6 @@ class SocialMediaAPI(ExternalAPI):
         - Betting/analytics: filter by both team names and tricodes
         - Official team accounts: filter by opponent + game-relevant terms, exclude RTs
         - Beat reporters: exclude RTs and replies to keep original reporting only
-
-        Args:
-            username: Twitter username to search
-            description: Account description (used to determine search strategy)
-            home_team: Home team name
-            away_team: Away team name
-            home_tricode: Home team tricode
-            away_tricode: Away team tricode
-            max_results: Maximum number of tweets to fetch per account (default: 10)
 
         Returns:
             List of tweet dictionaries with 'text', 'url', 'username', 'tweet_id' keys

@@ -43,15 +43,7 @@ class SocialMediaStore(DataStore):
         summarize_timeout: float = 60.0,
         **search_params: Any,
     ) -> None:
-        """Trigger a social media search and emit events with summarization.
-
-        Args:
-            context: GameContext with team/date info
-            max_tweets_per_account: Maximum tweets to fetch per account (default: 10)
-            account_timeout: Timeout per account API call in seconds (default: 30.0)
-            summarize_timeout: Timeout for summarization in seconds (default: 60.0)
-            **search_params: Additional search parameters (currently unused)
-        """
+        """Trigger a social media search and emit events with summarization."""
         assert self._api is not None, "API must be initialized"
         assert isinstance(self._api, SocialMediaAPI), "API must be SocialMediaAPI"
 
@@ -71,11 +63,7 @@ class SocialMediaStore(DataStore):
         self,
         data: dict[str, Any],
     ) -> Sequence[DataEvent]:
-        """Parse Social Media API response into DataEvents.
-
-        Note: This method is kept for backward compatibility but is not used
-        by search() which calls from_social_media() directly for summarization.
-        """
+        """Parse Social Media API response into DataEvents."""
         from datetime import datetime, timezone
 
         query = data.get("query", "")
