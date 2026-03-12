@@ -31,6 +31,42 @@ def create_x_api_client() -> Client:
     return Client(bearer_token=bearer_token)
 
 
+def build_search_query(
+    username: str,
+    description: str,
+    home_team: str,
+    away_team: str,
+    home_tricode: str,
+    away_tricode: str,
+) -> str:
+    """Build a tailored search query based on account type.
+
+    - Betting/analytics: filter by both team names and tricodes
+    - Official team accounts: filter by opponent + game-relevant terms, exclude RTs
+    - Beat reporters: exclude RTs and replies to keep original reporting only
+    """
+    if "Betting/analytics analyst" in description:
+        return (
+            f"from:{username} "
+            f'("{home_team}" OR "{away_team}" OR "{home_tricode}" OR "{away_tricode}")'
+        )
+
+    if "official team account" in description:
+        # Determine which team is the opponent
+        if home_tricode in description or home_team.lower() in description.lower():
+            opponent, opp_tri = away_team, away_tricode
+        else:
+            opponent, opp_tri = home_team, home_tricode
+        return (
+            f"from:{username} -is:retweet "
+            f'("{opponent}" OR "{opp_tri}" OR injury OR lineup OR '
+            f"status OR starting OR tonight OR gameday)"
+        )
+
+    # Beat reporters — original, non-reply tweets are almost always team news
+    return f"from:{username} -is:retweet -is:reply"
+
+
 def search_account_posts(
     client: Client,
     username: str,
@@ -40,11 +76,9 @@ def search_account_posts(
     home_tricode: str = "",
     away_tricode: str = "",
 ) -> list[dict]:
-    # For betting/analytics accounts, add team keywords to filter relevant tweets
-    if "Betting/analytics analyst" in description and home_team and away_team:
-        query = f'from:{username} ("{home_team}" OR "{away_team}" OR "{home_tricode}" OR "{away_tricode}")'
-    else:
-        query = f"from:{username}"
+    query = build_search_query(
+        username, description, home_team, away_team, home_tricode, away_tricode
+    )
     tweets = []
 
     try:
@@ -80,11 +114,11 @@ def search_account_posts(
                     }
                 )
     except StopIteration:
-        # No results, return empty list
         return []
     except Exception as e:
         print(f"  [DEBUG] {type(e).__name__}: {e}")
         return []
+
     print(tweets)
     return tweets
 
@@ -180,11 +214,11 @@ async def main():
 
     context = GameContext(
         sport="nba",
-        home_team="Rockets",
-        away_team="Nuggets",
-        home_tricode="HOU",
-        away_tricode="DEN",
-        game_date="2026-03-11",
+        home_team="76ers",
+        away_team="Pistons",
+        home_tricode="PHI",
+        away_tricode="DET",
+        game_date="2026-03-12",
     )
 
     await fetch_game_tweets(client, context)

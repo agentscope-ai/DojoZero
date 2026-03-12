@@ -59,6 +59,53 @@ class SocialMediaAPI(ExternalAPI):
             self._client = XClient(bearer_token=self.bearer_token)
         return self._client
 
+    @staticmethod
+    def _build_search_query(
+        username: str,
+        description: str,
+        home_team: str,
+        away_team: str,
+        home_tricode: str,
+        away_tricode: str,
+    ) -> str:
+        """Build a tailored search query based on account type.
+
+        - Betting/analytics: filter by both team names and tricodes
+        - Official team accounts: filter by opponent + game-relevant terms, exclude RTs
+        - Beat reporters: exclude RTs and replies to keep original reporting only
+
+        Args:
+            username: Twitter username to search
+            description: Account description (used to determine search strategy)
+            home_team: Home team name
+            away_team: Away team name
+            home_tricode: Home team tricode
+            away_tricode: Away team tricode
+
+        Returns:
+            X API search query string
+        """
+        if "Betting/analytics analyst" in description:
+            return (
+                f"from:{username} "
+                f'("{home_team}" OR "{away_team}" OR "{home_tricode}" OR "{away_tricode}")'
+            )
+
+        if "official team account" in description:
+            # Determine which team is the opponent
+            if home_tricode in description or home_team.lower() in description.lower():
+                opponent, opp_tri = away_team, away_tricode
+            else:
+                opponent, opp_tri = home_team, home_tricode
+            return (
+                f"from:{username} -is:retweet "
+                f'("{opponent}" OR "{opp_tri}" OR injury OR lineup OR '
+                f"status OR starting OR tonight OR gameday)"
+            )
+
+        # Beat reporters — original, non-reply tweets are almost always team news
+        return f"from:{username} -is:retweet -is:reply"
+
     def _search_account_posts(
         self,
         username: str,
@@ -71,7 +118,10 @@ class SocialMediaAPI(ExternalAPI):
     ) -> list[dict[str, Any]]:
         """Search recent posts from a specific account.
 
-        For betting/analytics accounts, adds team keywords to filter relevant tweets.
+        Uses tailored search queries based on account type:
+        - Betting/analytics: filter by both team names and tricodes
+        - Official team accounts: filter by opponent + game-relevant terms, exclude RTs
+        - Beat reporters: exclude RTs and replies to keep original reporting only
 
         Args:
             username: Twitter username to search
@@ -85,12 +135,9 @@ class SocialMediaAPI(ExternalAPI):
         Returns:
             List of tweet dictionaries with 'text', 'url', 'username', 'tweet_id' keys
         """
-        # For betting/analytics accounts, add team keywords to filter relevant tweets
-        if "Betting/analytics analyst" in description and home_team and away_team:
-            query = f'from:{username} ("{home_team}" OR "{away_team}" OR "{home_tricode}" OR "{away_tricode}")'
-        else:
-            query = f"from:{username}"
-
+        query = self._build_search_query(
+            username, description, home_team, away_team, home_tricode, away_tricode
+        )
         tweets = []
 
         try:
