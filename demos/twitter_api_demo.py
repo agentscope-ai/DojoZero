@@ -113,10 +113,8 @@ def search_account_posts(
                         "url": f"https://x.com/{username}/status/{post_id}",
                     }
                 )
-    except StopIteration:
-        return []
     except Exception as e:
-        print(f"  [DEBUG] {type(e).__name__}: {e}")
+        print(f"Error: {type(e).__name__}: {e}")
         return []
 
     print(tweets)

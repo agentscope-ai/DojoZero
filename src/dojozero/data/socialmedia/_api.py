@@ -174,9 +174,6 @@ class SocialMediaAPI(ExternalAPI):
                             "tweet_id": post_id,
                         }
                     )
-        except StopIteration:
-            # No results, return empty list
-            return []
         except Exception:
             # No results, return empty list
             return []
