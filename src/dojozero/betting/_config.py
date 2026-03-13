@@ -46,6 +46,27 @@ class TrialBrokerConfig(BaseModel):
     )
 
 
-__all__ = [
-    "TrialBrokerConfig",
-]
+MEMORY_SUMMARY_PROMPT = """\
+You are a memory compressor for a sports forecasting AI. Summarize the conversation below into a concise context block under 1500 tokens.
+
+Include ONLY sections with relevant content:
+
+[Pre-Game Analysis]
+- Injuries, lineup, form, rest/schedule, line movement, key matchups
+
+[Game Progress]
+- Score, period/time, momentum shifts, foul trouble/absences
+
+[Betting Record]
+- Selection | Amount | Probability | Outcome | Reasoning
+
+[Market Context]
+- Latest probabilities & notable odds movements
+
+Rules:
+- Never omit numbers (scores, odds, amounts).
+- Never invent facts not in the conversation.
+- Keep total output under 1500 tokens.
+"""
+
+__all__ = ["TrialBrokerConfig", "MEMORY_SUMMARY_PROMPT"]

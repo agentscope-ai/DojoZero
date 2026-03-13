@@ -10,7 +10,6 @@ import inspect
 import json
 import logging
 from collections import deque
-from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Sequence, TypedDict
 
 from agentscope.agent import ReActAgent
@@ -28,6 +27,7 @@ from dojozero.agents import (
 )
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
+from dojozero.betting._config import MEMORY_SUMMARY_PROMPT
 from dojozero.data._models import DataEvent, EventTypes, extract_game_id
 from dojozero.betting._models import (
     ReasoningStep,
@@ -334,14 +334,13 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Memory compression settings
         self._event_history: deque[str] = deque(maxlen=1000)
         self._compressed_context: str | None = None
-        self._compression_threshold: int = 20
+        self._last_summarized_event_count: int = (
+            0  # len(_event_history) at last summary
+        )
+        self._memory_token_threshold: int = 9000
         self._head_events: int = 10
         self._tail_events: int = 10
         self._max_event_chars: int = 200
-
-        # Throttle settings for odds updates (at most once per cooldown period)
-        self._odds_update_cooldown = timedelta(minutes=3)
-        self._last_odds_update_time: datetime | None = None
 
     @property
     def name(self) -> str:
@@ -407,6 +406,10 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             ]
         )
 
+    def _estimate_memory_tokens(self, messages: list[dict]) -> int:
+        """Rough token estimate for a list of memory messages."""
+        return len(json.dumps(messages, default=str)) // 4
+
     async def _get_bet_history_summary(self) -> str:
         """Get bet history from broker operator if available."""
         for op in self._operator_registry.values():
@@ -428,28 +431,106 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                     logger.warning("Failed to get bet history: %s", e)
         return "No betting history available."
 
-    async def _offload(self) -> None:
-        """Compress memory by summarizing events and clearing assistant messages.
+    def _build_summary_request(self) -> list[dict] | None:
+        """Build the LLM summarization request from event history.
 
-        Compression strategy:
-        1. Build sparse summary from _event_history: first N + last N events + ellipsis
-        2. Get bet history from broker (replaces assistant action memory)
-        3. Store compressed context for injection in next _process_events call
-        4. Clear ReActAgent memory
+        Uses incremental summarization: only events added since the last summary
+        are included as new content; the previous compressed summary (if any) is
+        provided as prior context so the LLM can produce an updated summary
+        without re-reading the full event history.
+
+        Returns None if there is nothing to summarize.
+        """
+        all_events = list(self._event_history)
+        # Only events added after the last summary
+        new_events = all_events[self._last_summarized_event_count :]
+        if not new_events and not self._compressed_context:
+            return None
+
+        transcript = "\n".join(new_events) if new_events else ""
+
+        prior_context_block = ""
+        if self._compressed_context:
+            prior_context_block = (
+                "---PREVIOUS SUMMARY---\n"
+                f"{self._compressed_context}\n"
+                "---END PREVIOUS SUMMARY---\n\n"
+            )
+
+        new_events_block = ""
+        if transcript:
+            new_events_block = (
+                "---NEW EVENTS SINCE LAST SUMMARY---\n"
+                f"{transcript}\n"
+                "---END NEW EVENTS---\n\n"
+            )
+
+        if not prior_context_block and not new_events_block:
+            return None
+
+        return [
+            {
+                "role": "user",
+                "content": (
+                    f"{MEMORY_SUMMARY_PROMPT}\n\n"
+                    f"{prior_context_block}"
+                    f"{new_events_block}"
+                    "Provide the updated compressed summary:"
+                ),
+            }
+        ]
+
+    async def _offload(self) -> None:
+        """Compress memory using LLM summarization, with sparse-summary fallback.
+
+        Strategy:
+        1. Capture current agent memory(betting and event history) as a transcript
+        2. Call LLM to produce a structured summary (pre-game analysis, game
+           progress, betting record, market context)
+        3. Fall back to the sparse first-N/last-N event summary on LLM failure
+        4. Append broker bet history and store as _compressed_context
+        5. Clear ReActAgent memory
 
         Note: Events are added to _event_history in _process_events BEFORE
         prepending compressed context, to avoid nesting/duplication.
         """
-        # Build compressed context
-        events_summary = self._build_events_summary()
+
+        summary_label = "[Memory Summary]"
+        try:
+            summary_request = self._build_summary_request()
+            if summary_request:
+                model = self._react_agent.model
+                original_stream = model.stream
+                model.stream = False
+                try:
+                    resp = await model(summary_request)
+                finally:
+                    model.stream = original_stream
+                resp_content = getattr(resp, "content", None)
+                events_summary, _ = _parse_response_content(resp_content)
+                if not events_summary:
+                    raise ValueError("LLM returned empty summary")
+            else:
+                events_summary = ""
+        except Exception as e:
+            logger.warning(
+                "agent '%s' LLM summarization failed, using sparse fallback: %s",
+                self.actor_id,
+                e,
+            )
+            events_summary = self._build_events_summary()
+            summary_label = "[Historical Event Summary]"
         bet_history = await self._get_bet_history_summary()
 
         self._compressed_context = (
-            "[Historical Event Summary]\n"
+            f"{summary_label}\n"
             f"{events_summary}\n\n"
             "[Your Betting History]\n"
             f"{bet_history}"
         )
+
+        # Record how many events from _event_history are covered by this summary
+        self._last_summarized_event_count = len(self._event_history)
 
         # Clear the ReActAgent's memory
         self._react_agent.memory = InMemoryMemory()
@@ -631,44 +712,33 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         return "\n".join(lines)
 
-    def _filter_throttled_events(
+    def _filter_excluded_events(
         self, events: list[StreamEvent[Any]]
     ) -> list[StreamEvent[Any]]:
-        """Filter out events that should be throttled.
+        """Filter out events that should not wake the agent.
 
-        Currently throttles ODDS_UPDATE events to at most once per cooldown period.
-        Uses event timestamps (not wall-clock time) so backtest replay works correctly.
+        ODDS_UPDATE events are excluded because odds are now pull-based: the agent
+        reads current odds by calling get_event() rather than being pushed them.
 
         Args:
             events: List of events to filter
 
         Returns:
-            Filtered list of events (throttled events removed)
+            Filtered list of events (excluded events removed)
         """
         filtered: list[StreamEvent[Any]] = []
 
         for event in events:
             payload = event.payload
 
-            # Check if this is an OddsUpdateEvent that should be throttled
             if isinstance(payload, DataEvent):
                 event_type = getattr(payload, "event_type", None)
                 if event_type == EventTypes.ODDS_UPDATE:
-                    # Use event timestamp for cooldown (works for both live and backtest)
-                    event_time = payload.timestamp
-                    if (
-                        self._last_odds_update_time
-                        and (event_time - self._last_odds_update_time)
-                        < self._odds_update_cooldown
-                    ):
-                        logger.debug(
-                            "agent '%s' throttling odds_update (last update: %s ago)",
-                            self.actor_id,
-                            event_time - self._last_odds_update_time,
-                        )
-                        continue  # Skip this event
-                    # Update last processed time with event timestamp
-                    self._last_odds_update_time = event_time
+                    logger.debug(
+                        "agent '%s' ignoring odds_update event (pull-based via get_event)",
+                        self.actor_id,
+                    )
+                    continue
 
             filtered.append(event)
 
@@ -683,10 +753,10 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         if not events:
             return
 
-        # Apply throttling filter BEFORE any processing
-        events = self._filter_throttled_events(events)
+        # Apply event filter BEFORE any processing
+        events = self._filter_excluded_events(events)
         if not events:
-            logger.debug("agent '%s' all events throttled, skipping", self.actor_id)
+            logger.debug("agent '%s' all events filtered, skipping", self.actor_id)
             return
 
         # Update event count
@@ -713,8 +783,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             input_content = (
                 f"{self._compressed_context}\n\n[New Events]\n{input_content}"
             )
-            # Clear compressed context after use
-            self._compressed_context = None
 
         # Log event processing with stream count summary
         logger.info(
@@ -779,9 +847,11 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 **(bet or {}),
             )
             self._emit_response_span(response_message)
-
-        # Compact memory for next iteration
-        if len(memory_after_dicts) >= self._compression_threshold:
+        # Compact memory for next iteration when context becomes too large
+        if (
+            self._estimate_memory_tokens(memory_after_dicts)
+            >= self._memory_token_threshold
+        ):
             await self._offload()
 
         logger.info(
