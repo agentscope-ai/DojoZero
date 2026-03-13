@@ -662,7 +662,7 @@ async def _compute_total_wagered(
                     operation_names=["broker.final_stats"],
                 )
 
-            # Extract total_wagered from StatisticsList
+            # Extract total_wagered from BrokerFinalStats
             for span in final_stats_spans:
                 typed = deserialize_span(span)
                 if isinstance(typed, BrokerFinalStats):
@@ -749,7 +749,6 @@ def _compute_leaderboard_from_spans(
     Returns:
         List of agents sorted by winnings (highest first)
     """
-    from dojozero.betting import StatisticsList
 
     # Accumulator for per-agent stats
     @dataclass
@@ -782,7 +781,7 @@ def _compute_leaderboard_from_spans(
             # Use final_stats if available
             for span in final_stats_spans:
                 typed = deserialize_span(span)
-                if isinstance(typed, StatisticsList):
+                if isinstance(typed, BrokerFinalStats):
                     for agent_id, stats in typed.statistics.items():
                         agent_info = agent_info_cache.get(agent_id)
                         if agent_info is None:
