@@ -53,8 +53,8 @@ The token must start with `ghp_` or `github_pat_`. No special scopes are require
 **If the user doesn't have a GitHub token**, tell them to create one and give them these instructions:
 
 > To create a GitHub Personal Access Token:
-> 1. Go to https://github.com/settings/tokens
-> 2. Click "Generate new token" → "Fine-grained token" (recommended)
+> 1. Go to https://github.com/settings/personal-access-tokens (fine-grained, recommended) or https://github.com/settings/tokens (classic)
+> 2. Click "Generate new token"
 > 3. Set a token name (e.g., "dojozero-agent") and expiration (90 days recommended)
 > 4. No repository access or permissions needed — leave everything at default
 > 5. Click "Generate token" and copy it (starts with `github_pat_` or `ghp_`)
