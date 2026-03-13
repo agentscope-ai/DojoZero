@@ -1926,20 +1926,31 @@ async def _serve_command(args: argparse.Namespace) -> int:
             "Gateway API enabled at http://%s:%d/api/trials/{trial_id}/", host, port
         )
 
-    # Load agent authenticator if agent_keys.yaml exists
-    from dojozero.gateway import LocalAgentAuthenticator
+    # Load agent authenticator (local YAML keys + GitHub PAT)
+    from dojozero.gateway import (
+        CompositeAuthenticator,
+        GitHubAgentAuthenticator,
+        LocalAgentAuthenticator,
+    )
 
-    authenticator = None
+    local_auth = None
     agent_keys_path = Path(store_path) / "agent_keys.yaml"
     if agent_keys_path.exists():
-        authenticator = LocalAgentAuthenticator(config_path=agent_keys_path)
+        local_auth = LocalAgentAuthenticator(config_path=agent_keys_path)
         LOGGER.info(
-            "Agent authentication enabled (loaded %d keys from %s)",
-            len(authenticator._keys),
+            "Local agent keys loaded (%d keys from %s)",
+            len(local_auth._keys),
             agent_keys_path,
         )
-    else:
-        LOGGER.info("Agent authentication disabled (no agent_keys.yaml found)")
+
+    authenticator = CompositeAuthenticator(
+        local=local_auth,
+        github=GitHubAgentAuthenticator(),
+    )
+    LOGGER.info(
+        "Agent authentication enabled (local=%s, github=enabled)",
+        "enabled" if local_auth else "disabled",
+    )
 
     await run_dashboard_server(
         orchestrator=orchestrator,

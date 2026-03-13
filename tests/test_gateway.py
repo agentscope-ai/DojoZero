@@ -32,6 +32,8 @@ from dojozero.gateway._auth import (
     AgentKeyManager,
     AuthConfig,
     AuthProvider,
+    CompositeAuthenticator,
+    GitHubAgentAuthenticator,
     LocalAgentAuthenticator,
     NoOpAuthenticator,
 )
@@ -917,6 +919,269 @@ class TestNoOpAuthenticator:
         """Test that NoOpAuthenticator is never enabled."""
         auth = NoOpAuthenticator()
         assert auth.is_enabled() is False
+
+
+class TestGitHubAgentAuthenticator:
+    """Tests for GitHubAgentAuthenticator."""
+
+    def test_looks_like_github_token(self):
+        """Test token prefix detection."""
+        # Classic PAT
+        assert GitHubAgentAuthenticator.looks_like_github_token("ghp_abc123")
+        # Fine-grained PAT
+        assert GitHubAgentAuthenticator.looks_like_github_token("github_pat_abc123")
+        assert GitHubAgentAuthenticator.looks_like_github_token(
+            "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"
+        )
+        # Non-GitHub tokens
+        assert not GitHubAgentAuthenticator.looks_like_github_token("sk-agent-abc")
+        assert not GitHubAgentAuthenticator.looks_like_github_token("random-key")
+        assert not GitHubAgentAuthenticator.looks_like_github_token("github_abc")
+
+    @pytest.mark.asyncio
+    async def test_validate_non_github_token_returns_none(self):
+        """Non-GitHub tokens should return None without calling API."""
+        auth = GitHubAgentAuthenticator()
+        result = await auth.validate("sk-agent-abc123")
+        assert result is None
+        await auth.close()
+
+    @pytest.mark.asyncio
+    async def test_validate_github_token_success(self):
+        """Test successful GitHub PAT validation via mocked API."""
+        auth = GitHubAgentAuthenticator()
+
+        # Mock the aiohttp session
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(
+            return_value={
+                "login": "testuser",
+                "name": "Test User",
+                "avatar_url": "https://avatars.githubusercontent.com/u/123",
+            }
+        )
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        auth._session = mock_session
+
+        identity = await auth.validate("ghp_test123456")
+        assert identity is not None
+        assert identity.agent_id == "gh:testuser"
+        assert identity.display_name == "Test User"
+        assert identity.cdn_url == "https://avatars.githubusercontent.com/u/123"
+        assert identity.metadata is not None
+        assert identity.metadata["github_login"] == "testuser"
+        assert identity.metadata["auth_method"] == "github_pat"
+
+        await auth.close()
+
+    @pytest.mark.asyncio
+    async def test_validate_github_token_cached(self):
+        """Test that repeated validation uses cache."""
+        auth = GitHubAgentAuthenticator()
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(
+            return_value={"login": "cached_user", "name": "Cached"}
+        )
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        auth._session = mock_session
+
+        # First call hits API
+        identity1 = await auth.validate("ghp_cachetest123")
+        # Second call should use cache (mock.get only called once)
+        identity2 = await auth.validate("ghp_cachetest123")
+
+        assert identity1 == identity2
+        assert mock_session.get.call_count == 1
+
+        await auth.close()
+
+    @pytest.mark.asyncio
+    async def test_validate_github_token_api_failure(self):
+        """Test that API failure returns None."""
+        auth = GitHubAgentAuthenticator()
+
+        mock_response = AsyncMock()
+        mock_response.status = 401
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        auth._session = mock_session
+
+        identity = await auth.validate("ghp_invalid123")
+        assert identity is None
+
+        await auth.close()
+
+    @pytest.mark.asyncio
+    async def test_validate_github_pat_fine_grained_token_success(self):
+        """Test successful validation with github_pat_ prefix (fine-grained token)."""
+        auth = GitHubAgentAuthenticator()
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(
+            return_value={
+                "login": "fineuser",
+                "name": "Fine Grained User",
+                "avatar_url": "https://avatars.githubusercontent.com/u/456",
+            }
+        )
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        auth._session = mock_session
+
+        token = "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"
+        identity = await auth.validate(token)
+        assert identity is not None
+        assert identity.agent_id == "gh:fineuser"
+        assert identity.display_name == "Fine Grained User"
+        assert identity.metadata is not None
+        assert identity.metadata["auth_method"] == "github_pat"
+
+        await auth.close()
+
+    @pytest.mark.asyncio
+    async def test_validate_github_pat_fine_grained_token_cached(self):
+        """Test caching works with github_pat_ prefix."""
+        auth = GitHubAgentAuthenticator()
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(
+            return_value={"login": "cachedpat", "name": "Cached PAT"}
+        )
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        auth._session = mock_session
+
+        token = "github_pat_XXXXXXXXXXXX_YYYYYYYYYYYY"
+        identity1 = await auth.validate(token)
+        identity2 = await auth.validate(token)
+
+        assert identity1 == identity2
+        assert mock_session.get.call_count == 1
+
+        await auth.close()
+
+    @pytest.mark.asyncio
+    async def test_validate_github_pat_fine_grained_token_api_failure(self):
+        """Test API failure with github_pat_ prefix returns None."""
+        auth = GitHubAgentAuthenticator()
+
+        mock_response = AsyncMock()
+        mock_response.status = 403
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        auth._session = mock_session
+
+        identity = await auth.validate("github_pat_expired_or_revoked")
+        assert identity is None
+
+        await auth.close()
+
+    def test_is_enabled_always_true(self):
+        """GitHub authenticator is always enabled."""
+        auth = GitHubAgentAuthenticator()
+        assert auth.is_enabled() is True
+
+
+class TestCompositeAuthenticator:
+    """Tests for CompositeAuthenticator."""
+
+    @pytest.mark.asyncio
+    async def test_routes_github_token_to_github(self):
+        """GitHub tokens should be routed to GitHub authenticator."""
+        local = LocalAgentAuthenticator(
+            keys={"sk-agent-local": AgentIdentity(agent_id="local-agent")}
+        )
+        github = GitHubAgentAuthenticator()
+
+        # Mock GitHub validation
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(
+            return_value={"login": "ghuser", "name": "GH User"}
+        )
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.closed = False
+        github._session = mock_session
+
+        composite = CompositeAuthenticator(local=local, github=github)
+
+        identity = await composite.validate("ghp_test123")
+        assert identity is not None
+        assert identity.agent_id == "gh:ghuser"
+
+        await composite.close()
+
+    @pytest.mark.asyncio
+    async def test_routes_local_token_to_local(self):
+        """Local tokens should be routed to local authenticator."""
+        local = LocalAgentAuthenticator(
+            keys={"sk-agent-local": AgentIdentity(agent_id="local-agent")}
+        )
+        composite = CompositeAuthenticator(local=local)
+
+        identity = await composite.validate("sk-agent-local")
+        assert identity is not None
+        assert identity.agent_id == "local-agent"
+
+        await composite.close()
+
+    @pytest.mark.asyncio
+    async def test_unknown_token_returns_none(self):
+        """Unknown tokens should return None."""
+        composite = CompositeAuthenticator(local=None)
+
+        identity = await composite.validate("unknown-key")
+        assert identity is None
+
+        await composite.close()
+
+    def test_is_enabled_with_local(self):
+        """Enabled when local has keys."""
+        local = LocalAgentAuthenticator(
+            keys={"sk-agent-x": AgentIdentity(agent_id="x")}
+        )
+        composite = CompositeAuthenticator(local=local)
+        assert composite.is_enabled() is True
+
+    def test_is_enabled_github_only(self):
+        """Enabled even without local (GitHub always enabled)."""
+        composite = CompositeAuthenticator(local=None)
+        assert composite.is_enabled() is True
 
 
 class TestAgentKeyEntry:
