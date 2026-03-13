@@ -34,7 +34,7 @@ from dojozero.data._utils import (
     initialize_dashscope,
 )
 from dojozero.data.websearch._api import WebSearchAPI
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 
 logger = logging.getLogger(__name__)
 

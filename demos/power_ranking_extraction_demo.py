@@ -11,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from dojozero.data.websearch._api import WebSearchAPI
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 from dojozero.data.websearch._events import PowerRankingEvent
 
 

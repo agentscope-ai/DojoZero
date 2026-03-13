@@ -1,6 +1,6 @@
 """Tests for web search event team filtering logic."""
 
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 from dojozero.data.websearch._events import _filter_teams
 
 

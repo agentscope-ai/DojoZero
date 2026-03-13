@@ -14,8 +14,9 @@ Event Hierarchy:
     │       │   ├── InjuryReportEvent
     │       │   ├── PowerRankingEvent
     │       │   └── ExpertPredictionEvent
-    │       └── StatsInsightEvent — insights derived from stats APIs
-    │           └── PreGameStatsEvent (unified pregame stats)
+    │       ├── StatsInsightEvent — insights derived from stats APIs
+    │       │   └── PreGameStatsEvent (unified pregame stats)
+    │       └── TwitterTopTweetsEvent — insights derived from X/Twitter API (watchlist-based)
     └── (future non-sport events)
 
 Value Objects:
@@ -394,6 +395,7 @@ class EventTypes(str, Enum):
     INJURY_REPORT = "event.injury_report"
     POWER_RANKING = "event.power_ranking"
     EXPERT_PREDICTION = "event.expert_prediction"
+    TWITTER_TOP_TWEETS = "event.twitter_top_tweets"
 
     # =========================================================================
     # Stats Insights (ESPN API-derived)

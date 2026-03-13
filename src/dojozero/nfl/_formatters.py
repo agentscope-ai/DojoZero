@@ -16,6 +16,7 @@ from dojozero.data.nfl._events import (
     NFLGameUpdateEvent,
     NFLPlayEvent,
 )
+from dojozero.data.socialmedia._formatters import SOCIALMEDIA_EVENT_FORMATTERS
 from dojozero.data.websearch._formatters import WEBSEARCH_EVENT_FORMATTERS
 from dojozero.betting._models import BetExecutedPayload, BetSettledPayload
 from dojozero.betting._formatters import (
@@ -187,6 +188,8 @@ def _format_default(event: DataEvent) -> str:
 _EVENT_FORMATTERS: dict[str, Any] = {
     # Shared web search event formatters
     **WEBSEARCH_EVENT_FORMATTERS,
+    # Shared social media event formatters
+    **SOCIALMEDIA_EVENT_FORMATTERS,
     # Unified lifecycle events
     "game_initialize": _format_nfl_game_initialize,
     "game_start": _format_nfl_game_start,

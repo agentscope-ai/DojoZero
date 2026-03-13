@@ -1,14 +1,18 @@
-"""Game context for web search template rendering."""
+"""Game context for data operations across all modules.
+
+Shared context object used by websearch, socialmedia, nba, nfl, and other modules
+for game-related data operations.
+"""
 
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class GameContext:
-    """Lightweight game context for rendering search query templates.
+    """Lightweight game context for game-related data operations.
 
     Constructed from BettingTrialMetadata at trial build time and passed
-    to event classes for query construction.
+    to event classes and API adapters for query construction and data fetching.
     """
 
     sport: str = ""

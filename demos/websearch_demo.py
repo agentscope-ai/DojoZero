@@ -11,7 +11,7 @@ import asyncio
 
 from dojozero.data import DataHub, WebSearchAPI
 from dojozero.data._models import DataEvent
-from dojozero.data.websearch._context import GameContext
+from dojozero.data._context import GameContext
 from dojozero.data.websearch._events import (
     InjuryReportEvent,
     PowerRankingEvent,
