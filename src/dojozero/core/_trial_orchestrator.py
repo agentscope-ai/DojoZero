@@ -41,7 +41,11 @@ from ._runtime import (
     LocalActorRuntimeProvider,
 )
 from ._metadata import BaseTrialMetadata, MetadataT
-from ._types import RuntimeContext, JSONDict
+from ._types import RuntimeContext, JSONDict, StreamEvent
+
+# Forward reference for type annotation
+if False:
+    pass
 
 LOGGER = logging.getLogger("dojozero.orchestrator")
 
@@ -182,6 +186,7 @@ class TrialSpec(Generic[MetadataT]):
         data_streams: Specifications for data stream actors
         operators: Specifications for operator actors
         agents: Specifications for agent actors
+        social_board: Optional shared social board for multi-agent communication
         resume_from_checkpoint_id: Optional checkpoint ID to resume from
         resume_from_latest: Whether to resume from the latest checkpoint
         builder_name: Name of the trial builder (for looking up context_builder)
@@ -192,6 +197,9 @@ class TrialSpec(Generic[MetadataT]):
     data_streams: Sequence[DataStreamSpec[Any]] = ()
     operators: Sequence[OperatorSpec[Any]] = ()
     agents: Sequence[AgentSpec[Any]] = ()
+    social_board: Any | None = (
+        None  # SocialBoard instance, using Any to avoid circular import
+    )
     resume_from_checkpoint_id: str | None = None
     resume_from_latest: bool = False
     builder_name: str | None = None
@@ -847,6 +855,181 @@ class TrialOrchestrator:
             agents,
             operators,
         )
+        # Wire social board if present (multi-agent communication)
+        if spec.social_board is not None:
+            await self._wire_agent_social_boards(
+                spec.agents,
+                agents,
+                spec.social_board,
+                operators,
+            )
+
+    def _build_hot_topics_trigger(
+        self,
+        social_board: Any,
+        agents: Mapping[str, Agent[Any]],
+        trial_id: str,
+        system_summary_provider: Callable[[], str | None] | None = None,
+    ) -> Callable[[], Awaitable[None]]:
+        """Build async callback that generates hot topics and pushes to all agents.
+
+        The returned callback reads recent social board messages, calls the LLM
+        to produce a short hot-topics list, then broadcasts a HotTopicsEvent
+        to every agent via handle_stream_event. Used when message count hits
+        a multiple of hot_topics_interval (e.g. every 20 posts).
+
+        Args:
+            social_board: Shared social board to read recent messages from.
+            agents: Mapping of agent_id to Agent for broadcasting the event.
+            trial_id: Trial ID to attach to the HotTopicsEvent.
+
+        Returns:
+            An async callable with no arguments that performs the generation
+            and broadcast. Safe to call; logs and returns on LLM or API errors.
+        """
+        import re
+        import time
+
+        from dojozero.agents import HotTopicsEvent
+        from dojozero.betting._config import HOT_TOPICS_PROMPT
+        from dojozero.data._utils import call_dashscope_model, initialize_dashscope
+
+        async def _trigger() -> None:
+            try:
+                initialize_dashscope()
+            except (ImportError, ValueError) as e:
+                LOGGER.warning("Hot topics skipped (Dashscope not available): %s", e)
+                return
+            # Use any agent to read; we want recent messages from all
+            recent = social_board.read_messages("", limit=50, exclude_own=False)
+            if not recent:
+                LOGGER.debug("Hot topics skipped: no recent messages on social board")
+                return
+            recent_text = "\n".join(
+                f"[{m.agent_id}]: {m.content}" for m in reversed(recent)
+            )
+            prompt = HOT_TOPICS_PROMPT.format(recent_messages=recent_text)
+            try:
+                response = await call_dashscope_model(prompt, model="qwen-turbo")
+            except Exception as e:
+                LOGGER.warning("Hot topics LLM call failed: %s", e)
+                return
+            text = (response.get("output") or {}).get("text", "") or ""
+            # Parse numbered lines (1. topic, 2. topic, ...)
+            topics: list[str] = []
+            for line in text.strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                m = re.match(r"^\d+[\.\)]\s*(.+)", line)
+                if m:
+                    topics.append(m.group(1).strip())
+                else:
+                    topics.append(line)
+            if not topics:
+                LOGGER.debug(
+                    "Hot topics skipped: LLM returned no parseable topics (raw length=%d)",
+                    len(text),
+                )
+                return
+            # Optionally prepend a synthetic system summary topic (e.g., bet distribution)
+            if system_summary_provider is not None:
+                try:
+                    system_line = system_summary_provider()
+                except Exception as e:  # pragma: no cover - defensive logging
+                    LOGGER.debug(
+                        "Hot topics system summary provider failed: %s",
+                        e,
+                    )
+                    system_line = None
+                if system_line:
+                    topics.insert(0, f"[System] {system_line}")
+            LOGGER.info(
+                "Hot topics generated and pushed to %d agents: %s",
+                len(agents),
+                "; ".join(topics[:]),
+            )
+            event = HotTopicsEvent(
+                trial_id=trial_id,
+                topics=tuple(topics[:10]),
+                generated_at=time.time(),
+            )
+            stream_event = StreamEvent(
+                stream_id="social_board",
+                payload=event,
+            )
+            for agent in agents.values():
+                try:
+                    await agent.handle_stream_event(stream_event)
+                except Exception as e:
+                    LOGGER.warning(
+                        "Failed to push hot topics to agent %s: %s",
+                        getattr(agent, "actor_id", agent),
+                        e,
+                    )
+
+        return _trigger
+
+    async def _wire_agent_social_boards(
+        self,
+        agent_specs: Sequence[AgentSpec[Any]],
+        agents: Mapping[str, Agent[Any]],
+        social_board: Any,  # SocialBoard instance
+        operators: Mapping[str, Operator[Any]],
+    ) -> None:
+        """Wire agents to the shared social board.
+
+        Each agent registers with the social board to get post_message and
+        read_messages tools. If hot_topics_interval is used, every N messages
+        an LLM-generated hot topics list is pushed to all agents as a StreamEvent.
+        """
+        trial_id = getattr(social_board, "trial_id", "")
+        hot_topics_interval = 20
+
+        # Use betting_broker for hot-topics system summary when present
+        _BROKER_OPERATOR_ID = "betting_broker"
+        system_summary_provider: Callable[[], str | None] | None = None
+        broker = operators.get(_BROKER_OPERATOR_ID)
+        if broker is not None and callable(
+            getattr(broker, "get_bet_distribution_summary", None)
+        ):
+            op = broker
+
+            def _provider() -> str | None:
+                try:
+                    return op.get_bet_distribution_summary()  # type: ignore[no-any-return]
+                except Exception as e:  # pragma: no cover - defensive
+                    LOGGER.debug(
+                        "Hot topics system summary from %s failed: %s",
+                        _BROKER_OPERATOR_ID,
+                        e,
+                    )
+                    return None
+
+            system_summary_provider = _provider
+
+        hot_topics_trigger = self._build_hot_topics_trigger(
+            social_board,
+            agents,
+            trial_id,
+            system_summary_provider=system_summary_provider,
+        )
+        payload = (social_board, hot_topics_interval, hot_topics_trigger)
+        for agent_spec in agent_specs:
+            agent = agents.get(agent_spec.actor_id)
+            if agent is None:
+                raise OrchestratorError(
+                    f"agent '{agent_spec.actor_id}' missing from runtime registry"
+                )
+
+            # Check if agent has register_social_board method
+            if hasattr(agent, "register_social_board"):
+                await self._invoke_registration(
+                    agent,
+                    "register_social_board",
+                    payload,
+                    actor_id=agent_spec.actor_id,
+                )
 
     async def _wire_operator_agents(
         self,
@@ -1323,6 +1506,7 @@ class TrialOrchestrator:
             data_streams=tuple(
                 replace(stream, resume_state=None) for stream in spec.data_streams
             ),
+            social_board=spec.social_board,
             resume_from_checkpoint_id=None,
             resume_from_latest=False,
             builder_name=spec.builder_name,
@@ -1349,6 +1533,7 @@ class TrialOrchestrator:
                 replace(stream, resume_state=state_map.get(stream.actor_id))
                 for stream in spec.data_streams
             ),
+            social_board=spec.social_board,
             resume_from_checkpoint_id=None,
             resume_from_latest=False,
             builder_name=spec.builder_name,
