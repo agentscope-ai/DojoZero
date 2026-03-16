@@ -1836,6 +1836,64 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         recent_bet_ids = reversed(bet_ids[-limit:])
         return [self._bets[bet_id] for bet_id in recent_bet_ids]
 
+    def get_bet_distribution_summary(self) -> str | None:
+        """Return a short summary of current moneyline bet distribution for the active event.
+
+        The summary aggregates active and pending MONEYLINE bets for the current event_id,
+        grouped by selection (home vs away). It reports how many distinct agents are on
+        each side and the total amount wagered per side.
+
+        Returns:
+            Human-readable summary string, or None if there is no current event
+            or no relevant bets to report.
+        """
+        event = self._event
+        if event is None:
+            return None
+
+        event_id = event.event_id
+        # Collect bet IDs for this event from active and pending maps
+        bet_ids: set[str] = set()
+        bet_ids.update(self._event_active_bets.get(event_id, set()))
+        bet_ids.update(self._event_pending_orders.get(event_id, set()))
+        if not bet_ids:
+            return None
+
+        home_agents: set[str] = set()
+        away_agents: set[str] = set()
+        home_total = Decimal("0")
+        away_total = Decimal("0")
+
+        for bet_id in bet_ids:
+            bet = self._bets.get(bet_id)
+            if bet is None:
+                continue
+            if bet.bet_type != BetType.MONEYLINE:
+                continue
+            if bet.selection == "home":
+                home_agents.add(bet.agent_id)
+                home_total += bet.amount
+            elif bet.selection == "away":
+                away_agents.add(bet.agent_id)
+                away_total += bet.amount
+
+        if not home_agents and not away_agents:
+            return None
+
+        # Build concise summary string
+        home_part = (
+            f"{len(home_agents)} agent(s) on {event.home_team} (total {home_total:.2f})"
+            if home_agents or home_total > 0
+            else f"0 agent(s) on {event.home_team}"
+        )
+        away_part = (
+            f"{len(away_agents)} agent(s) on {event.away_team} (total {away_total:.2f})"
+            if away_agents or away_total > 0
+            else f"0 agent(s) on {event.away_team}"
+        )
+
+        return f"{home_part}; {away_part}"
+
     async def get_statistics(self, agent_id: str) -> Statistics:
         """Calculate performance metrics for an agent"""
         all_bet_ids = (

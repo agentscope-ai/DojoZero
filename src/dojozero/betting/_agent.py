@@ -10,7 +10,7 @@ import inspect
 import json
 import logging
 from collections import deque
-from typing import Any, Callable, Mapping, Sequence, TypedDict
+from typing import Any, Callable, Mapping, Sequence, TypedDict, cast
 
 from agentscope.agent import ReActAgent
 from agentscope.formatter import FormatterBase
@@ -29,6 +29,7 @@ from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEven
 from dojozero.core._tracing import create_span_from_event, emit_span
 from dojozero.betting._config import MEMORY_SUMMARY_PROMPT
 from dojozero.data._models import DataEvent, EventTypes, extract_game_id
+from dojozero.agents import HotTopicsEvent, SocialBoard, format_hot_topics_for_llm
 from dojozero.betting._models import (
     ReasoningStep,
     ToolCallStep,
@@ -342,6 +343,8 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         self._tail_events: int = 10
         self._max_event_chars: int = 200
 
+        self._social_board: SocialBoard | None = None
+
     @property
     def name(self) -> str:
         """Agent name from the internal ReActAgent."""
@@ -522,12 +525,23 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             summary_label = "[Historical Event Summary]"
         bet_history = await self._get_bet_history_summary()
 
-        self._compressed_context = (
-            f"{summary_label}\n"
-            f"{events_summary}\n\n"
-            "[Your Betting History]\n"
-            f"{bet_history}"
-        )
+        context_parts = [
+            f"{summary_label}",
+            events_summary,
+            "",
+            "[Your Betting History]",
+            bet_history,
+        ]
+
+        if self._social_board is not None:
+            social_digest = self._social_board.digest(self.actor_id, limit=5)
+            if social_digest:
+                context_parts.append("")
+                context_parts.append(social_digest)
+
+        self._compressed_context = "\n".join(context_parts)
+        # Record how many events from _event_history are covered by this summary
+        self._last_summarized_event_count = len(self._event_history)
 
         # Record how many events from _event_history are covered by this summary
         self._last_summarized_event_count = len(self._event_history)
@@ -562,11 +576,22 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             raise ValueError(f"Missing 'llm' config for agent {actor_id}")
         model_type = llm_config.get("model_type", "openai")
         model_name = llm_config.get("model_name", "")
+        base_sys_prompt = config.get("sys_prompt", "")
+        identity_lines = [
+            "[Agent Identity]",
+            f"Your agent id is {actor_id}.",
+        ]
+        identity_prompt = "\n".join(identity_lines)
+        sys_prompt = (
+            f"{base_sys_prompt}\n\n{identity_prompt}"
+            if base_sys_prompt
+            else identity_prompt
+        )
         return cls(
             actor_id=actor_id,
             trial_id=context.trial_id,
             name=config.get("name", actor_id),
-            sys_prompt=config.get("sys_prompt", ""),
+            sys_prompt=sys_prompt,
             model=create_model(llm_config),
             formatter=create_formatter(model_type, model_name),
         )
@@ -596,6 +621,85 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         if all_tools:
             self.toolkit = create_toolkit(all_tools)
+
+    async def register_social_board(
+        self,
+        board_or_args: SocialBoard | Sequence[Any],
+        current_round: int = 0,
+    ) -> None:
+        """Register social board and add social tools to toolkit.
+
+        Args:
+            board_or_args: SocialBoard instance, or tuple (board, hot_topics_interval,
+                hot_topics_trigger) when wired by orchestrator with hot-topics feature.
+            current_round: Current trial round (for cooldown tracking)
+        """
+        if isinstance(board_or_args, (list, tuple)) and len(board_or_args) >= 1:
+            board = cast(SocialBoard, board_or_args[0])
+            hot_topics_interval = (
+                int(board_or_args[1]) if len(board_or_args) > 1 else 20
+            )
+            hot_topics_trigger = board_or_args[2] if len(board_or_args) > 2 else None
+        else:
+            board = cast(SocialBoard, board_or_args)
+            hot_topics_interval = 20
+            hot_topics_trigger = None
+
+        self._social_board = board
+
+        from dojozero.agents import create_social_board_tools
+
+        def _bind_agent_id(func):
+            """Wrap function to inject agent_id as first argument.
+
+            The wrapper removes injected parameters from the expected schema so
+            that the toolkit doesn't expose internal fields to the agent.
+            """
+            import functools
+
+            @functools.wraps(func)
+            async def wrapper(**kwargs):
+                if "current_round" in inspect.signature(func).parameters:
+                    kwargs["current_round"] = self._event_count
+                return await func(self.actor_id, **kwargs)
+
+            # Remove injected params from signature for toolkit schema generation
+            original_sig = inspect.signature(func)
+            new_params = [
+                p
+                for name, p in original_sig.parameters.items()
+                if name not in {"agent_id", "current_round"}
+            ]
+            wrapper.__signature__ = original_sig.replace(parameters=new_params)  # type: ignore
+            return wrapper
+
+        social_tools = create_social_board_tools(
+            board,
+            hot_topics_interval=hot_topics_interval,
+            hot_topics_trigger=hot_topics_trigger,
+        )
+        existing_tools = list(self.toolkit.tools.keys())
+        for original_func in social_tools:
+            bound_func = _bind_agent_id(original_func)
+            tool_name = bound_func.__name__
+            if tool_name not in existing_tools:
+                self.toolkit.register_tool_function(bound_func)
+                logger.info(
+                    "agent '%s' registered social tool '%s'",
+                    self.actor_id,
+                    tool_name,
+                )
+
+        # Initialize agent's last post round in board
+        board.agent_last_post_round[self.actor_id] = (
+            current_round - board.cooldown_rounds
+        )
+
+        logger.info(
+            "agent '%s' registered social board (trial_id=%s)",
+            self.actor_id,
+            board.trial_id,
+        )
 
     @property
     def operators(self) -> tuple[str, ...]:
@@ -691,6 +795,8 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             # Single event: format directly
             event = events[0]
             payload = event.payload
+            if isinstance(payload, HotTopicsEvent):
+                return format_hot_topics_for_llm(payload)
             if _is_formattable_payload(payload):
                 return self._event_formatter(payload)
             else:
@@ -701,7 +807,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         for event in events:
             payload = event.payload
-            if _is_formattable_payload(payload):
+            if isinstance(payload, HotTopicsEvent):
+                formatted = format_hot_topics_for_llm(payload)
+            elif _is_formattable_payload(payload):
                 formatted = self._event_formatter(payload)
             else:
                 formatted = (
@@ -765,7 +873,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # update event history
         for event in events:
             payload = event.payload
-            if _is_formattable_payload(payload):
+            if isinstance(payload, HotTopicsEvent):
+                formatted = format_hot_topics_for_llm(payload)
+            elif _is_formattable_payload(payload):
                 formatted = self._event_formatter(payload)
             else:
                 formatted = (
@@ -789,7 +899,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             "agent '%s' processing %d event(s) from streams: {%s}",
             self.actor_id,
             len(events),
-            input_content[:500],  # Truncate for logging
+            input_content,  # Truncate for logging
         )
 
         msg = Msg(name="event_push", content=input_content, role="user")
@@ -831,7 +941,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             trigger = ""
             if events:
                 last_payload = events[-1].payload
-                if _is_formattable_payload(last_payload):
+                if isinstance(last_payload, HotTopicsEvent):
+                    trigger = format_hot_topics_for_llm(last_payload)
+                elif _is_formattable_payload(last_payload):
                     trigger = self._event_formatter(last_payload)
 
             # Emit agent response span with structured message (includes bet fields if present)
