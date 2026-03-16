@@ -957,14 +957,16 @@ class TrialOrchestrator:
                 stream_id="social_board",
                 payload=event,
             )
-            for agent in agents.values():
-                try:
-                    await agent.handle_stream_event(stream_event)
-                except Exception as e:
+            coros = [
+                agent.handle_stream_event(stream_event) for agent in agents.values()
+            ]
+            results = await asyncio.gather(*coros, return_exceptions=True)
+            for agent, result in zip(agents.values(), results):
+                if isinstance(result, Exception):
                     LOGGER.warning(
                         "Failed to push hot topics to agent %s: %s",
                         getattr(agent, "actor_id", agent),
-                        e,
+                        result,
                     )
 
         return _trigger
