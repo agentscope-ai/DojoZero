@@ -76,10 +76,36 @@ config:
       - game_update_stream
 
     agents:
-    - id: basic_agent
-      persona: basic
+    - id: degen_agent
+      persona: degen
       class: BettingAgent
-      persona_config_path: agents/personas/basic.yaml
+      persona_config_path: agents/personas/degen.yaml
+      llm_config_path: agents/llms/all.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_lifecycle_stream
+      - play_by_play_stream
+    - id: mystic_agent
+      persona: mystic
+      class: BettingAgent
+      persona_config_path: agents/personas/mystic.yaml
+      llm_config_path: agents/llms/all.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_lifecycle_stream
+      - play_by_play_stream
+    - id: pundit_agent
+      persona: pundit
+      class: BettingAgent
+      persona_config_path: agents/personas/pundit.yaml
       llm_config_path: agents/llms/all.yaml
       operators:
       - betting_broker
