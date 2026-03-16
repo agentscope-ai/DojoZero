@@ -76,6 +76,7 @@ config:
 
     agents:
     - id: basic_agent
+      persona: basic
       class: BettingAgent
       persona_config_path: agents/personas/basic.yaml
       llm_config_path: agents/llms/all.yaml
@@ -88,6 +89,7 @@ config:
       - game_lifecycle_stream
       - nfl_play_stream
     - id: shark_agent
+      persona: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
       llm_config_path: agents/llms/all.yaml
@@ -100,6 +102,7 @@ config:
       - game_lifecycle_stream
       - nfl_play_stream
     - id: sheep_agent
+      persona: sheep
       class: BettingAgent
       persona_config_path: agents/personas/sheep.yaml
       llm_config_path: agents/llms/all.yaml
@@ -112,6 +115,7 @@ config:
       - game_lifecycle_stream
       - nfl_play_stream
     - id: whale_agent
+      persona: whale
       class: BettingAgent
       persona_config_path: agents/personas/whale.yaml
       llm_config_path: agents/llms/all.yaml
