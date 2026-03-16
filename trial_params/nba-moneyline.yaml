@@ -26,7 +26,7 @@ scenario:
     # Live game data
     - id: game_update_stream
       event_types:
-      - espn_game_update
+      - nba_game_update
 
     - id: odds_update_stream
       event_types:
@@ -34,7 +34,7 @@ scenario:
 
     - id: play_by_play_stream
       event_types:
-      - espn_play
+      - nba_play
 
     operators:
     - id: betting_broker

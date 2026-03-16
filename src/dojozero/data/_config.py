@@ -60,7 +60,7 @@ class TrialDataStreamConfig(BaseModel):
     )
     event_types: list[str] = Field(
         default_factory=list,
-        description="Event type suffixes this stream subscribes to (e.g., 'injury_report', 'espn_game_update').",
+        description="Event type suffixes this stream subscribes to (e.g., 'injury_report', 'nba_game_update').",
     )
 
 

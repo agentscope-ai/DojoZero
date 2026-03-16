@@ -85,7 +85,7 @@ class NFLTrialParams(BaseModel):
             "power_ranking",
             "expert_prediction",
         ],
-        description="List of canonical event type suffixes (e.g., 'espn_game_update'). 'event.' prefix added automatically.",
+        description="List of canonical event type suffixes (e.g., 'nfl_game_update'). 'event.' prefix added automatically.",
     )
 
     # Operators configuration (optional, hierarchical)
