@@ -21,6 +21,39 @@ from dojozero.agents._toolkit import tool
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of social messages to keep in memory per SocialBoard.
+# Older messages are discarded when this cap is exceeded to avoid
+# unbounded growth and excessive memory usage in long-running trials.
+DEFAULT_MAX_SOCIAL_MESSAGES = 5000
+
+
+class _CappedMessageList(list):
+    """List subclass that caps the number of stored messages.
+    Behaves like a regular list but automatically discards the oldest
+    entries when the configured maximum size is exceeded.
+    """
+
+    def _prune(self) -> None:
+        max_messages = DEFAULT_MAX_SOCIAL_MESSAGES
+        if max_messages is None:
+            return
+        extra = len(self) - max_messages
+        if extra > 0:
+            # Remove the oldest messages to keep the most recent ones.
+            del self[:extra]
+
+    def append(self, item) -> None:  # type: ignore[override]
+        super().append(item)
+        self._prune()
+
+    def extend(self, iterable) -> None:  # type: ignore[override]
+        super().extend(iterable)
+        self._prune()
+
+    def insert(self, index, item) -> None:  # type: ignore[override]
+        super().insert(index, item)
+        self._prune()
+
 
 @dataclass(slots=True, frozen=True)
 class SocialMessage:
@@ -114,15 +147,14 @@ class SocialBoard:
         trial_id: Trial ID this board belongs to
         messages: List of all messages posted (in chronological order)
         max_message_chars: Maximum characters per message (default: 200)
-        cooldown_seconds: Minimum seconds between posts per agent (default: 0)
-        cooldown_rounds: Minimum rounds between posts per agent (default: 5)
+        cooldown_rounds: Minimum rounds between posts per agent (default: 0).
+            Rate limiting is implemented purely in terms of rounds, not time.
         agent_last_post_round: Track last post round for each agent
     """
 
     trial_id: str
-    messages: list[SocialMessage] = field(default_factory=list)
+    messages: list[SocialMessage] = field(default_factory=_CappedMessageList)
     max_message_chars: int = 200
-    cooldown_seconds: float = 0
     cooldown_rounds: int = 0
     agent_last_post_round: dict[str, int] = field(default_factory=dict)
     _lock: Any = field(default_factory=lambda: None, repr=False, init=False)
@@ -131,6 +163,33 @@ class SocialBoard:
         """Initialize lock for thread safety."""
         import threading
 
+        self._lock = threading.Lock()
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Return state for pickling, excluding the non-picklable lock.
+        The lock is treated as transient and will be recreated in __setstate__.
+        """
+        # Support both regular and slots-based dataclasses
+        if hasattr(self, "__dict__"):
+            state: dict[str, Any] = self.__dict__.copy()
+        else:
+            # Fallback for slots; only include known attributes
+            slots = getattr(self, "__slots__", ())
+            state = {name: getattr(self, name) for name in slots if name != "_lock"}
+        # Remove the non-picklable lock if present
+        state.pop("_lock", None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Restore state after unpickling and recreate the lock."""
+        import threading
+
+        if hasattr(self, "__dict__"):
+            self.__dict__.update(state)
+        else:
+            for name, value in state.items():
+                setattr(self, name, value)
+        # Recreate the transient lock
         self._lock = threading.Lock()
 
     def post_message(
@@ -322,7 +381,6 @@ def create_social_board_tools(
         """Check what other agents are saying right now.
 
         Use this BEFORE making decisions - see their takes, spot opportunities, and stay in the loop.
-        Returns up to 10 most recent messages.
 
         Args:
             limit: Number of messages to read (default: 10)

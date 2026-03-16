@@ -43,9 +43,6 @@ from ._runtime import (
 from ._metadata import BaseTrialMetadata, MetadataT
 from ._types import RuntimeContext, JSONDict, StreamEvent
 
-# Forward reference for type annotation
-if False:
-    pass
 
 LOGGER = logging.getLogger("dojozero.orchestrator")
 
@@ -197,8 +194,10 @@ class TrialSpec(Generic[MetadataT]):
     data_streams: Sequence[DataStreamSpec[Any]] = ()
     operators: Sequence[OperatorSpec[Any]] = ()
     agents: Sequence[AgentSpec[Any]] = ()
-    social_board: Any | None = (
-        None  # SocialBoard instance, using Any to avoid circular import
+    social_board: Any | None = field(
+        default=None,
+        compare=False,
+        repr=False,
     )
     resume_from_checkpoint_id: str | None = None
     resume_from_latest: bool = False

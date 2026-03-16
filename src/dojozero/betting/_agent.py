@@ -540,8 +540,6 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 context_parts.append(social_digest)
 
         self._compressed_context = "\n".join(context_parts)
-        # Record how many events from _event_history are covered by this summary
-        self._last_summarized_event_count = len(self._event_history)
 
         # Record how many events from _event_history are covered by this summary
         self._last_summarized_event_count = len(self._event_history)
@@ -899,7 +897,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             "agent '%s' processing %d event(s) from streams: {%s}",
             self.actor_id,
             len(events),
-            input_content,  # Truncate for logging
+            input_content[0:500],  # Truncate for logging
         )
 
         msg = Msg(name="event_push", content=input_content, role="user")
