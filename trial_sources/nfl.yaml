@@ -75,9 +75,36 @@ config:
       - nfl_game_update_stream
 
     agents:
-    - id: basic_agent
+    - id: degen_agent
+      persona: degen
       class: BettingAgent
-      persona_config_path: agents/personas/basic.yaml
+      persona_config_path: agents/personas/degen.yaml
+      llm_config_path: agents/llms/all.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
+      - game_lifecycle_stream
+      - nfl_play_stream
+    - id: mystic_agent
+      persona: mystic
+      class: BettingAgent
+      persona_config_path: agents/personas/mystic.yaml
+      llm_config_path: agents/llms/all.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
+      - game_lifecycle_stream
+      - nfl_play_stream
+    - id: pundit_agent
+      persona: pundit
+      class: BettingAgent
+      persona_config_path: agents/personas/pundit.yaml
       llm_config_path: agents/llms/all.yaml
       operators:
       - betting_broker
@@ -88,6 +115,7 @@ config:
       - game_lifecycle_stream
       - nfl_play_stream
     - id: shark_agent
+      persona: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
       llm_config_path: agents/llms/all.yaml
@@ -100,6 +128,7 @@ config:
       - game_lifecycle_stream
       - nfl_play_stream
     - id: sheep_agent
+      persona: sheep
       class: BettingAgent
       persona_config_path: agents/personas/sheep.yaml
       llm_config_path: agents/llms/all.yaml
@@ -112,6 +141,7 @@ config:
       - game_lifecycle_stream
       - nfl_play_stream
     - id: whale_agent
+      persona: whale
       class: BettingAgent
       persona_config_path: agents/personas/whale.yaml
       llm_config_path: agents/llms/all.yaml
