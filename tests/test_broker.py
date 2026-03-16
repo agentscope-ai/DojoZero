@@ -2393,6 +2393,131 @@ class TestMultipleSpreadsTotals:
         )  # 1/1.95
 
 
+class TestBetDistributionSummary:
+    """Tests for get_bet_distribution_summary aggregation and formatting."""
+
+    async def test_no_active_event_returns_none(self, broker_with_agent) -> None:
+        broker, _agent = broker_with_agent
+
+        # Ensure no current event
+        broker._event = None  # type: ignore[assignment]
+        summary = broker.get_bet_distribution_summary()
+        assert summary is None
+
+    async def test_no_relevant_bets_returns_none(self, broker_with_agent) -> None:
+        broker, agent = broker_with_agent
+
+        # Initialize event but do not place any bets
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        summary = broker.get_bet_distribution_summary()
+        assert summary is None
+
+    async def test_mixed_pending_and_active_moneyline_bets(
+        self, broker_with_agent
+    ) -> None:
+        broker, agent = broker_with_agent
+
+        # Initialize event and odds
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=OddsUpdateEvent(
+                game_id="test_event",
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Agent1: active home bet
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestMoneyline(
+                amount=Decimal("100.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+            ),
+        )
+
+        # Agent2: active away bet
+        agent2 = MockAgent(actor_id="agent2")
+        await broker.register_agents([agent2])  # type: ignore[arg-type]
+        await broker.place_bet(
+            agent2.actor_id,
+            BetRequestMoneyline(
+                amount=Decimal("50.00"),
+                selection="away",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+            ),
+        )
+
+        # Agent1: pending home bet (limit order that should remain pending)
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestMoneyline(
+                amount=Decimal("25.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.LIMIT,
+                limit_probability=Decimal("0.60"),
+            ),
+        )
+
+        # Sanity check: we have both active and pending bets
+        active_home = [
+            b
+            for b in await broker.get_active_bets(agent.actor_id)
+            if b.bet_type == BetType.MONEYLINE and b.selection == "home"
+        ]
+        assert active_home
+        pending_agent1 = await broker.get_pending_orders(agent.actor_id)
+        assert pending_agent1
+
+        summary = broker.get_bet_distribution_summary()
+        assert summary is not None
+        # Expected format (from implementation):
+        # "<home_part>; <away_part>"
+        # where home_part/away_part look like:
+        #   "{n} agent(s) on <TEAM> (total XX.XX)"
+        # One agent on home (agent1), one agent on away (agent2)
+        assert "1 agent(s) on Lakers" in summary
+        assert "1 agent(s) on Warriors" in summary
+        # Totals should aggregate amounts per side (home: 100 + 25, away: 50)
+        assert "total 125.00" in summary
+        assert "total 50.00" in summary
+
+
 # =============================================================================
 # Agent Tools Configuration Tests
 # =============================================================================
