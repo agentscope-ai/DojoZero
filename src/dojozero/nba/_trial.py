@@ -80,7 +80,7 @@ class NBATrialParams(BaseModel):
             "expert_prediction",
             "twitter_top_tweets",
         ],
-        description="List of canonical event type suffixes (e.g., 'espn_game_update'). 'event.' prefix added automatically.",
+        description="List of canonical event type suffixes (e.g., 'nba_game_update'). 'event.' prefix added automatically.",
     )
 
     # Operators configuration (optional, hierarchical)
@@ -465,7 +465,7 @@ register_trial_builder(
             },
             {
                 "id": "game_update_stream",
-                "event_types": ["espn_game_update"],
+                "event_types": ["nba_game_update"],
             },
             {
                 "id": "odds_update_stream",
@@ -473,7 +473,7 @@ register_trial_builder(
             },
             {
                 "id": "play_by_play_stream",
-                "event_types": ["espn_play"],
+                "event_types": ["nba_play"],
             },
         ],
         "operators": [
