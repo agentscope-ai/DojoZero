@@ -193,13 +193,14 @@ def get_log_count(
         response = client.get_logs(request)
 
         if response is not None:
-            for log in response.get_logs():
-                if "cnt" in log:
-                    return int(log["cnt"])
+            logs = response.get_logs()
+            if logs:
+                cnt = logs[0].get_contents().get("cnt", "0")
+                return int(cnt)
 
         return 0
     except Exception as e:
-        logger.debug("Could not get log count: %s", e)
+        logger.warning("Could not get log count: %s: %s", type(e).__name__, e)
         return None
 
 
@@ -340,13 +341,20 @@ def main() -> int:
     print(f"  Query:     {query}")
     print()
 
-    # Try to get log count
+    # Poll the logstore to get an accurate count of affected logs
+    print("Querying log count...")
     count = get_log_count(
         endpoint, project, logstore, from_time, to_time, ak_id, ak_secret, query=query
     )
     if count is not None:
-        print(f"  Estimated logs to delete: {count:,}")
-        print()
+        print(f"  Logs matching query: {count:,}")
+    else:
+        print("  Could not determine log count.")
+    print()
+
+    if count == 0:
+        print("No logs match the query. Nothing to delete.")
+        return 0
 
     print("WARNING: This operation is DESTRUCTIVE and CANNOT be undone!")
     print()
@@ -365,17 +373,16 @@ def main() -> int:
     print()
 
     # Perform deletion
-    if delete_logs(
+    if not delete_logs(
         endpoint, project, logstore, from_time, to_time, ak_id, ak_secret, query=query
     ):
-        print()
-        print("Log deletion request submitted successfully.")
-        print(
-            "Note: Deletion is asynchronous and may take several minutes to complete."
-        )
-        return 0
-    else:
         return 1
+
+    print()
+    print("Log deletion request submitted successfully.")
+    print("Note: Deletion is asynchronous and may take several minutes to complete.")
+
+    return 0
 
 
 if __name__ == "__main__":
