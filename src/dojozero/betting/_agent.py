@@ -340,7 +340,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         self._memory_token_threshold: int = 9000
         self._head_events: int = 10
         self._tail_events: int = 10
-        self._max_event_chars: int = 200
+        self._max_event_chars: int = 1000
 
     @property
     def name(self) -> str:
