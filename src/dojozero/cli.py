@@ -194,9 +194,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run backtesting from historical event files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Run backtesting from JSONL event files.\n\n"
-        "Supports multiple files via glob patterns and OSS URLs:\n"
-        "  Local files:  outputs/2025-01-*/*.jsonl\n"
-        "  OSS files:    oss://bucket/prefix/*.jsonl\n\n"
+        "Supports multiple files via glob patterns:\n"
+        "  Local files:  outputs/2025-01-*/*.jsonl\n\n"
         "Files are processed sequentially in sorted order.",
     )
     backtest_parser.add_argument(
@@ -205,8 +204,8 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="+",
         required=True,
         dest="event_files",
-        help="Path(s) to JSONL event file(s). Supports glob patterns (e.g., 'outputs/*/*.jsonl') "
-        "and OSS URLs (e.g., 'oss://bucket/prefix/*.jsonl'). Multiple patterns can be specified.",
+        help="Path(s) to JSONL event file(s). Supports glob patterns (e.g., 'outputs/*/*.jsonl'). "
+        "Multiple patterns can be specified.",
     )
     backtest_parser.add_argument(
         "--params",
@@ -323,13 +322,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default="http://localhost:4318",
         help="OTLP endpoint for Jaeger trace ingestion (default: http://localhost:4318). "
         "Only used when --trace-backend=jaeger.",
-    )
-    serve_parser.add_argument(
-        "--oss-backup",
-        dest="oss_backup",
-        action="store_true",
-        help="Enable OSS backup for trial data (events JSONL). "
-        "Requires DOJOZERO_OSS_BUCKET and DOJOZERO_OSS_ENDPOINT env vars.",
     )
     serve_parser.add_argument(
         "--trial-source",
@@ -1355,124 +1347,42 @@ def _resolve_event_files(
     Supports:
     - Local file paths: outputs/game.jsonl
     - Local glob patterns: outputs/*/*.jsonl, outputs/2025-01-*/*.jsonl
-    - OSS URLs: oss://bucket/prefix/file.jsonl
-    - OSS glob patterns: oss://bucket/prefix/*.jsonl
 
     Args:
-        patterns: List of file patterns or OSS URLs
-        temp_dir: Temporary directory for downloading OSS files (created if None)
+        patterns: List of file patterns
+        temp_dir: Unused (kept for API compatibility)
 
     Returns:
         List of resolved local file paths (sorted)
 
     Raises:
-        DojoZeroCLIError: If no files match or OSS access fails
+        DojoZeroCLIError: If no files match
     """
     import glob
-    import tempfile
 
     resolved_files: list[Path] = []
-    oss_temp_dir = temp_dir
-
-    # Check if any OSS patterns exist and initialize client once before the loop
-    oss_patterns = [p for p in patterns if p.startswith("oss://")]
-    oss_client = None
-    if oss_patterns:
-        # Extract bucket name from the first OSS pattern for client initialization
-        first_oss_url = oss_patterns[0][6:]  # Remove "oss://"
-        parts = first_oss_url.split("/", 1)
-        if len(parts) < 2:
-            raise DojoZeroCLIError(f"Invalid OSS URL format: {oss_patterns[0]}")
-        bucket_name = parts[0]
-
-        try:
-            from dojozero.utils.oss import OSSClient
-
-            oss_client = OSSClient.from_env(bucket_name=bucket_name)
-        except ImportError:
-            raise DojoZeroCLIError(
-                "OSS support requires oss2 package. Install with: pip install oss2"
-            )
-        except ValueError as e:
-            raise DojoZeroCLIError(f"OSS configuration error: {e}")
 
     for pattern in patterns:
-        if pattern.startswith("oss://"):
-            # Parse OSS URL: oss://bucket/prefix/path/*.jsonl
-            # Format: oss://bucket/key or oss://bucket/prefix/*.jsonl
-            url_path = pattern[6:]  # Remove "oss://"
-            parts = url_path.split("/", 1)
-            if len(parts) < 2:
-                raise DojoZeroCLIError(f"Invalid OSS URL format: {pattern}")
-
-            bucket_name = parts[0]
-            oss_key_pattern = parts[1]
-
-            assert oss_client is not None  # Initialized above
-
-            # Create temp directory for OSS downloads if not provided
-            if oss_temp_dir is None:
-                oss_temp_dir = Path(tempfile.mkdtemp(prefix="dojozero_backtest_"))
-                LOGGER.info("Created temp directory for OSS files: %s", oss_temp_dir)
-
-            # Check if pattern contains glob characters
-            if "*" in oss_key_pattern or "?" in oss_key_pattern:
-                # List files matching the pattern
-                # Extract the prefix (non-glob part) for efficient listing
-                prefix_parts = []
-                for part in oss_key_pattern.split("/"):
-                    if "*" in part or "?" in part:
-                        break
-                    prefix_parts.append(part)
-                oss_prefix = "/".join(prefix_parts)
-
-                matching_keys = oss_client.list_files(oss_prefix, oss_key_pattern)
-                if not matching_keys:
-                    LOGGER.warning("No OSS files match pattern: %s", pattern)
-                    continue
-
-                LOGGER.info(
-                    "Found %d OSS files matching %s", len(matching_keys), pattern
-                )
-
-                # Download each matching file, preserving directory structure
-                for oss_key in matching_keys:
-                    local_path = oss_temp_dir / oss_key
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    oss_client.download_file(oss_key, local_path)
-                    resolved_files.append(local_path)
-            else:
-                # Single file - download directly, preserving directory structure
-                local_path = oss_temp_dir / oss_key_pattern
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    oss_client.download_file(oss_key_pattern, local_path)
-                    resolved_files.append(local_path)
-                except Exception as e:
-                    raise DojoZeroCLIError(
-                        f"Failed to download OSS file {pattern}: {e}"
-                    )
+        # Local file or glob pattern
+        if "*" in pattern or "?" in pattern:
+            # Glob pattern
+            matched = glob.glob(pattern, recursive=True)
+            if not matched:
+                LOGGER.warning("No local files match pattern: %s", pattern)
+                continue
+            LOGGER.info("Found %d local files matching %s", len(matched), pattern)
+            for match in matched:
+                path = Path(match)
+                if path.is_file():
+                    resolved_files.append(path)
         else:
-            # Local file or glob pattern
-            if "*" in pattern or "?" in pattern:
-                # Glob pattern
-                matched = glob.glob(pattern, recursive=True)
-                if not matched:
-                    LOGGER.warning("No local files match pattern: %s", pattern)
-                    continue
-                LOGGER.info("Found %d local files matching %s", len(matched), pattern)
-                for match in matched:
-                    path = Path(match)
-                    if path.is_file():
-                        resolved_files.append(path)
-            else:
-                # Single file
-                path = Path(pattern)
-                if not path.exists():
-                    raise DojoZeroCLIError(f"Event file not found: {pattern}")
-                if not path.is_file():
-                    raise DojoZeroCLIError(f"Not a file: {pattern}")
-                resolved_files.append(path)
+            # Single file
+            path = Path(pattern)
+            if not path.exists():
+                raise DojoZeroCLIError(f"Event file not found: {pattern}")
+            if not path.is_file():
+                raise DojoZeroCLIError(f"Not a file: {pattern}")
+            resolved_files.append(path)
 
     if not resolved_files:
         raise DojoZeroCLIError(f"No event files found matching patterns: {patterns}")
@@ -1865,7 +1775,6 @@ async def _serve_command(args: argparse.Namespace) -> int:
     port = args.port
     trace_backend = getattr(args, "trace_backend", None)
     trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
-    oss_backup = getattr(args, "oss_backup", False)
     service_name = getattr(args, "service_name", "dojozero")
     trial_source_files: list[str] = getattr(args, "trial_sources", []) or []
     auto_resume = not getattr(args, "no_auto_resume", False)
@@ -1913,8 +1822,6 @@ async def _serve_command(args: argparse.Namespace) -> int:
 
     if trace_backend == "sls":
         LOGGER.info("Trace backend: SLS (using env vars for configuration)")
-        if oss_backup:
-            LOGGER.info("OSS backup enabled for trial data")
     elif trace_backend == "jaeger":
         LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_ingest_endpoint)
     else:
@@ -1959,7 +1866,6 @@ async def _serve_command(args: argparse.Namespace) -> int:
         port=port,
         trace_backend=trace_backend,
         trace_ingest_endpoint=trace_ingest_endpoint,
-        oss_backup=oss_backup,
         service_name=service_name,
         initial_trial_sources=initial_trial_sources if initial_trial_sources else None,
         auto_resume=auto_resume,

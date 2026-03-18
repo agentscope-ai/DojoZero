@@ -136,7 +136,6 @@ class DashboardServerState:
     trial_manager: TrialManager
     schedule_manager: Any | None = None  # ScheduleManager, lazy import
     trace_backend: str | None = None
-    oss_backup: bool = False
     data_dir: Path | None = None  # Base directory for trial data files
     imported_modules: set[str] = field(default_factory=set)
     import_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -257,7 +256,6 @@ def create_dashboard_app(
     scheduler_store: SchedulerStore,
     trace_backend: str | None = None,
     trace_ingest_endpoint: str | None = None,
-    oss_backup: bool = False,
     max_concurrent_trials: int = 20,
     service_name: str = "dojozero",
     initial_trial_sources: list[InitialTrialSourceDict] | None = None,
@@ -274,7 +272,6 @@ def create_dashboard_app(
         scheduler_store: SchedulerStore instance for schedule persistence
         trace_backend: Trace backend type ("jaeger" or "sls"), or None to disable tracing
         trace_ingest_endpoint: OTLP endpoint for Jaeger (only used when trace_backend="jaeger")
-        oss_backup: Enable OSS backup for trial data when trials complete
         max_concurrent_trials: Maximum number of concurrent running trials (default 20)
         service_name: Service name for tracing
         initial_trial_sources: List of trial source configurations to register on startup
@@ -305,7 +302,6 @@ def create_dashboard_app(
         trial_manager = TrialManager(
             orchestrator=orchestrator,
             max_concurrent=max_concurrent_trials,
-            oss_backup=oss_backup,
             auto_resume=auto_resume,
             stale_threshold_hours=stale_threshold_hours,
             gateway_router=gateway_router,
@@ -326,7 +322,6 @@ def create_dashboard_app(
             trial_manager=trial_manager,
             schedule_manager=schedule_manager,
             trace_backend=trace_backend,
-            oss_backup=oss_backup,
             data_dir=Path(data_dir).resolve() if data_dir else None,
         )
 
@@ -911,30 +906,10 @@ def create_dashboard_app(
                 status_code=404,
             )
 
-        # OSS backup if enabled
-        oss_uploaded = False
-        if state.oss_backup:
-            from ._trial_manager import upload_trial_to_oss
-
-            # Get persistence_file from trial metadata
-            try:
-                trial_status = state.orchestrator.get_trial_status(trial_id)
-                persistence_file_path = trial_status.metadata.get("persistence_file")
-                if persistence_file_path and isinstance(persistence_file_path, str):
-                    persistence_file = Path(persistence_file_path)
-                    oss_uploaded = upload_trial_to_oss(trial_id, persistence_file)
-                else:
-                    LOGGER.warning(
-                        "OSS backup enabled but no persistence_file in trial metadata"
-                    )
-            except Exception as e:
-                LOGGER.error("Failed to upload trial %s to OSS: %s", trial_id, e)
-
         return JSONResponse(
             content={
                 "id": status.trial_id,
                 "phase": status.phase.value,
-                "oss_uploaded": oss_uploaded,
             }
         )
 
@@ -1375,7 +1350,6 @@ async def run_dashboard_server(
     port: int = 8000,
     trace_backend: str | None = None,
     trace_ingest_endpoint: str | None = None,
-    oss_backup: bool = False,
     max_concurrent_trials: int = 20,
     service_name: str = "dojozero",
     initial_trial_sources: list[InitialTrialSourceDict] | None = None,
@@ -1394,7 +1368,6 @@ async def run_dashboard_server(
         port: Port to listen on
         trace_backend: Trace backend type ("jaeger" or "sls"), or None to disable tracing
         trace_ingest_endpoint: OTLP endpoint for Jaeger (only used when trace_backend="jaeger")
-        oss_backup: Enable OSS backup for trial data when trials complete
         max_concurrent_trials: Maximum number of concurrent running trials (default 20)
         service_name: Service name for tracing
         initial_trial_sources: List of trial source configurations to register on startup
@@ -1412,7 +1385,6 @@ async def run_dashboard_server(
         scheduler_store=scheduler_store,
         trace_backend=trace_backend,
         trace_ingest_endpoint=trace_ingest_endpoint,
-        oss_backup=oss_backup,
         max_concurrent_trials=max_concurrent_trials,
         service_name=service_name,
         initial_trial_sources=initial_trial_sources,

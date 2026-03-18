@@ -11,13 +11,12 @@ Orchestrates betting trials for NBA games:
 
 When using --server flag, trials are submitted to a Dashboard Server which handles:
 - SLS trace export (via --otlp-endpoint on server)
-- OSS backup (via --oss-backup on server)
 
 Usage:
-    # Local mode (no SLS/OSS integration)
+    # Local mode (no SLS integration)
     python nba_trial_runner.py run --data-dir outputs
 
-    # Server mode (with SLS/OSS via Dashboard Server)
+    # Server mode (with SLS via Dashboard Server)
     # First start: dojo0 serve --otlp-endpoint https://... --trace-backend sls
     python nba_trial_runner.py run --data-dir outputs --server http://localhost:8000
 """
@@ -78,7 +77,7 @@ class GameTrialManager:
             game_date: Date string (YYYY-MM-DD) for date-organized structure
             log_level: Logging level for subprocess (default: INFO)
             server: Dashboard Server URL (e.g., http://localhost:8000). If provided,
-                    trials are submitted to the server which handles SLS/OSS.
+                    trials are submitted to the server which handles SLS.
         """
         self.game = game
         self.game_id = str(game.get("gameId", ""))
@@ -334,7 +333,7 @@ class GameTrialManager:
         ]
 
         # If server is specified, submit to Dashboard Server
-        # Server handles SLS trace export and OSS backup
+        # Server handles SLS trace export
         if self.server:
             cmd.extend(["--server", self.server])
 
@@ -764,7 +763,7 @@ async def run_trial_for_game(
         data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
                   If None, use defaults: configs/ and outputs/
         log_level: Logging level for subprocess
-        server: Dashboard Server URL for SLS/OSS integration
+        server: Dashboard Server URL for SLS integration
 
     Returns:
         List with single GameTrialManager instance, or empty list if game not found
@@ -836,7 +835,7 @@ async def run_trials_for_date(
         data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
                   If None, use defaults: configs/ and outputs/
         log_level: Logging level for subprocess
-        server: Dashboard Server URL for SLS/OSS integration
+        server: Dashboard Server URL for SLS integration
 
     Returns:
         List of GameTrialManager instances
@@ -926,7 +925,7 @@ async def run_trials(
                 await manager.monitor_trial()
 
                 # Log final status
-                # Note: SLS trace export and OSS backup are handled by Dashboard Server
+                # Note: SLS trace export is handled by Dashboard Server
                 manager.log_status()
 
             except Exception as e:
@@ -1114,7 +1113,7 @@ def main() -> int:
         default=None,
         help="Dashboard Server URL (e.g., http://localhost:8000). "
         "When specified, trials are submitted to the server which handles "
-        "SLS trace export and OSS backup.",
+        "SLS trace export.",
     )
     run_parser.add_argument(
         "--max-concurrent-starts",

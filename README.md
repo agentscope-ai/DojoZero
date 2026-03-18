@@ -109,8 +109,8 @@ dojo0 run --params trial_params/nba-moneyline.yaml --trial-id test --server http
 # With SLS trace backend (production - Alibaba Cloud)
 dojo0 serve --trace-backend sls
 
-# With OSS backup for event data
-dojo0 serve --trace-backend sls --oss-backup
+# With SLS trace backend
+dojo0 serve --trace-backend sls
 
 # With trial sources for automatic scheduling (supports glob patterns)
 dojo0 serve --trace-backend jaeger --trial-source "trial_sources/*.yaml"
@@ -128,7 +128,6 @@ CLI options:
 - `--trace-backend {jaeger,sls}` - Trace backend type
 - `--trace-ingest-endpoint` - OTLP endpoint for Jaeger (default: http://localhost:4318)
 - `--service-name` - Service name for traces (default: dojozero)
-- `--oss-backup` - Enable OSS backup (requires `DOJOZERO_OSS_BUCKET`, `DOJOZERO_OSS_ENDPOINT`)
 - `--trial-source` - Path or glob pattern for trial source YAML files (repeatable)
 - `--no-auto-resume` - Disable automatic resuming of interrupted trials
 - `--stale-threshold-hours` - Skip resuming trials with checkpoints older than this (default: 24.0)
@@ -270,10 +269,6 @@ dojo0 backtest \
   --params trial_params/nba-moneyline.yaml \
   --speed 2.0
 
-# OSS files (requires oss2 package)
-dojo0 backtest \
-  --events "oss://bucket/prefix/*.jsonl" \
-  --params trial_params/nba-moneyline.yaml
 
 # Submit to Dashboard Server
 dojo0 backtest \
@@ -283,7 +278,7 @@ dojo0 backtest \
 ```
 
 CLI options:
-- `--events` - Path(s) to JSONL event files (supports glob patterns and OSS URLs)
+- `--events` - Path(s) to JSONL event files (supports glob patterns)
 - `--params` - Trial params YAML file
 - `--speed` - Playback speed multiplier (default: 1.0 = real-time)
 - `--max-sleep` - Maximum sleep between events in seconds (default: 20.0)

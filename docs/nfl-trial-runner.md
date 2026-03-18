@@ -48,7 +48,6 @@ python deploy/run_daily_trials.py configs/nfl-game.yaml --date 2025-01-12
 ### Environment Variables
 
 - `DATA_DIR` - Output directory for trial data (default: `data/nfl`)
-- `OSS_UPLOAD` - Set to "true" to enable OSS upload
 
 ### Custom Config
 
@@ -115,9 +114,6 @@ Options:
   --pre-start-hours     Hours before kickoff to start (default: 1.0)
   --check-interval      Status check interval in seconds (default: 60.0)
   --log-level           DEBUG, INFO, WARNING, ERROR
-  --oss-upload          Upload files to OSS after completion
-  --oss-bucket          Override OSS bucket name
-  --oss-prefix          Override OSS prefix
 ```
 
 ## Backtest from File

@@ -37,7 +37,6 @@ from dateutil import parser
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dojozero.data.nfl._api import NFLExternalAPI
-from dojozero.utils.oss import OSSClient
 
 logger = logging.getLogger(__name__)
 
@@ -354,9 +353,6 @@ class NFLGameTrialManager:
         data_dir: Path | None = None,
         game_date: str | None = None,
         log_level: str = "INFO",
-        oss_upload: bool = False,
-        oss_bucket: str | None = None,
-        oss_prefix: str | None = None,
         server: str | None = None,
         custom_trial_id: str | None = None,
     ):
@@ -370,10 +366,7 @@ class NFLGameTrialManager:
             data_dir: If provided, use {data_dir}/{date}/{event_id}.yaml
             game_date: Date string (YYYY-MM-DD) for date-organized structure
             log_level: Logging level for subprocess (default: INFO)
-            oss_upload: Whether to upload files to OSS after trial completion
-            oss_bucket: Override OSS bucket name (default: from env)
-            oss_prefix: Override OSS prefix (default: from env)
-            server: Dashboard Server URL for SLS/OSS integration
+            server: Dashboard Server URL for SLS integration
             custom_trial_id: Custom trial ID (if None, auto-generate)
         """
         self.game = game
@@ -384,9 +377,6 @@ class NFLGameTrialManager:
         self.data_dir = data_dir
         self.game_date = game_date
         self.log_level = log_level
-        self.oss_upload = oss_upload
-        self.oss_bucket = oss_bucket
-        self.oss_prefix = oss_prefix
         self.server = server
         self.custom_trial_id = custom_trial_id
 
@@ -784,67 +774,6 @@ class NFLGameTrialManager:
         if self._logger:
             self._logger.info(status_msg)
 
-    def upload_to_oss(self) -> list[str]:
-        """Upload trial files to OSS.
-
-        Returns:
-            List of uploaded OSS keys
-        """
-        if not self.oss_upload:
-            return []
-
-        uploaded_keys: list[str] = []
-
-        try:
-            client = OSSClient.from_env(
-                bucket_name=self.oss_bucket,
-                prefix=self.oss_prefix,
-            )
-
-            # Determine OSS key prefix (mirror local structure)
-            if self.game_date:
-                oss_key_prefix = f"nfl/{self.game_date}"
-            else:
-                oss_key_prefix = "nfl"
-
-            # Upload config file
-            if self.config_file and self.config_file.exists():
-                oss_key = f"{oss_key_prefix}/{self.event_id}.yaml"
-                key = client.upload_file(self.config_file, oss_key)
-                uploaded_keys.append(key)
-                self.log(logging.INFO, "Uploaded config to OSS: %s", key)
-
-            # Upload events file (JSONL)
-            if self.events_file and self.events_file.exists():
-                oss_key = f"{oss_key_prefix}/{self.event_id}.jsonl"
-                key = client.upload_file(self.events_file, oss_key)
-                uploaded_keys.append(key)
-                self.log(logging.INFO, "Uploaded events to OSS: %s", key)
-
-            # Upload log file
-            if self.log_file and self.log_file.exists():
-                oss_key = f"{oss_key_prefix}/{self.event_id}.log"
-                key = client.upload_file(self.log_file, oss_key)
-                uploaded_keys.append(key)
-                self.log(logging.INFO, "Uploaded log to OSS: %s", key)
-
-            self.log(
-                logging.INFO,
-                "Successfully uploaded %d files to OSS for game %s",
-                len(uploaded_keys),
-                self.event_id,
-            )
-
-        except (ValueError, FileNotFoundError, OSError) as e:
-            self.log(
-                logging.ERROR,
-                "Failed to upload files to OSS for game %s: %s",
-                self.event_id,
-                e,
-            )
-
-        return uploaded_keys
-
 
 async def run_trials_for_date(
     game_date: datetime | str,
@@ -853,9 +782,6 @@ async def run_trials_for_date(
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
     log_level: str = "INFO",
-    oss_upload: bool = False,
-    oss_bucket: str | None = None,
-    oss_prefix: str | None = None,
     server: str | None = None,
 ) -> list[NFLGameTrialManager]:
     """Run trials for all NFL games on a given date.
@@ -867,10 +793,7 @@ async def run_trials_for_date(
         check_interval_seconds: Interval to check game status
         data_dir: If provided, organize files by date
         log_level: Logging level
-        oss_upload: Whether to upload files to OSS after trial completion
-        oss_bucket: Override OSS bucket name
-        oss_prefix: Override OSS prefix
-        server: Dashboard Server URL for SLS/OSS integration
+        server: Dashboard Server URL for SLS integration
 
     Returns:
         List of NFLGameTrialManager instances
@@ -902,9 +825,6 @@ async def run_trials_for_date(
             data_dir=data_dir,
             game_date=date_str if data_dir else None,
             log_level=log_level,
-            oss_upload=oss_upload,
-            oss_bucket=oss_bucket,
-            oss_prefix=oss_prefix,
             server=server,
         )
         managers.append(manager)
@@ -923,9 +843,6 @@ async def run_trials_for_week(
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
     log_level: str = "INFO",
-    oss_upload: bool = False,
-    oss_bucket: str | None = None,
-    oss_prefix: str | None = None,
     server: str | None = None,
 ) -> list[NFLGameTrialManager]:
     """Run trials for all NFL games in a given week.
@@ -938,10 +855,7 @@ async def run_trials_for_week(
         check_interval_seconds: Interval to check game status
         data_dir: If provided, organize files by date
         log_level: Logging level
-        oss_upload: Whether to upload files to OSS after trial completion
-        oss_bucket: Override OSS bucket name
-        oss_prefix: Override OSS prefix
-        server: Dashboard Server URL for SLS/OSS integration
+        server: Dashboard Server URL for SLS integration
 
     Returns:
         List of NFLGameTrialManager instances
@@ -972,9 +886,6 @@ async def run_trials_for_week(
             data_dir=data_dir,
             game_date=game_date if data_dir else None,
             log_level=log_level,
-            oss_upload=oss_upload,
-            oss_bucket=oss_bucket,
-            oss_prefix=oss_prefix,
             server=server,
         )
         managers.append(manager)
@@ -992,9 +903,6 @@ async def run_trial_for_event(
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
     log_level: str = "INFO",
-    oss_upload: bool = False,
-    oss_bucket: str | None = None,
-    oss_prefix: str | None = None,
     server: str | None = None,
     custom_trial_id: str | None = None,
 ) -> list[NFLGameTrialManager]:
@@ -1007,10 +915,7 @@ async def run_trial_for_event(
         check_interval_seconds: Interval to check game status
         data_dir: If provided, organize files by date
         log_level: Logging level
-        oss_upload: Whether to upload files to OSS after trial completion
-        oss_bucket: Override OSS bucket name
-        oss_prefix: Override OSS prefix
-        server: Dashboard Server URL for SLS/OSS integration
+        server: Dashboard Server URL for SLS integration
         custom_trial_id: Custom trial ID (if None, auto-generate)
 
     Returns:
@@ -1111,9 +1016,6 @@ async def run_trial_for_event(
             data_dir=data_dir,
             game_date=game_date if data_dir else None,
             log_level=log_level,
-            oss_upload=oss_upload,
-            oss_bucket=oss_bucket,
-            oss_prefix=oss_prefix,
             server=server,
             custom_trial_id=custom_trial_id,
         )
@@ -1161,10 +1063,6 @@ async def run_trials(
                         return
 
                 await manager.monitor_trial()
-
-                # Upload to OSS if enabled
-                if manager.oss_upload:
-                    manager.upload_to_oss()
 
                 manager.log_status()
 
@@ -1385,29 +1283,12 @@ def main() -> int:
         help="Logging level (default: INFO)",
     )
     run_parser.add_argument(
-        "--oss-upload",
-        action="store_true",
-        help="Upload files to OSS after trial completion",
-    )
-    run_parser.add_argument(
-        "--oss-bucket",
-        type=str,
-        default=None,
-        help="Override OSS bucket name (default: from DOJOZERO_OSS_BUCKET env var)",
-    )
-    run_parser.add_argument(
-        "--oss-prefix",
-        type=str,
-        default=None,
-        help="Override OSS prefix (default: from DOJOZERO_OSS_PREFIX env var)",
-    )
-    run_parser.add_argument(
         "--server",
         type=str,
         default=None,
         help="Dashboard Server URL (e.g., http://localhost:8000). "
         "When specified, trials are submitted to the server which handles "
-        "SLS trace export and OSS backup.",
+        "SLS trace export.",
     )
     run_parser.add_argument(
         "--max-concurrent-starts",
@@ -1474,9 +1355,6 @@ def main() -> int:
                         check_interval_seconds=args.check_interval,
                         data_dir=args.data_dir,
                         log_level=args.log_level,
-                        oss_upload=args.oss_upload,
-                        oss_bucket=args.oss_bucket,
-                        oss_prefix=args.oss_prefix,
                         server=args.server,
                         custom_trial_id=args.trial_id,
                     )
@@ -1491,9 +1369,6 @@ def main() -> int:
                         check_interval_seconds=args.check_interval,
                         data_dir=args.data_dir,
                         log_level=args.log_level,
-                        oss_upload=args.oss_upload,
-                        oss_bucket=args.oss_bucket,
-                        oss_prefix=args.oss_prefix,
                         server=args.server,
                     )
                 )
@@ -1507,9 +1382,6 @@ def main() -> int:
                         check_interval_seconds=args.check_interval,
                         data_dir=args.data_dir,
                         log_level=args.log_level,
-                        oss_upload=args.oss_upload,
-                        oss_bucket=args.oss_bucket,
-                        oss_prefix=args.oss_prefix,
                         server=args.server,
                     )
                 )

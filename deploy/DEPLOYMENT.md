@@ -43,7 +43,7 @@ Two containers run separately for NBA (port 8001) and NFL (port 8002). Each auto
 │             │                 │    │             │                 │
 │             ▼                 │    │             ▼                 │
 │  ┌────────┬────────┬───────┐  │    │  ┌────────┬────────┬───────┐  │
-│  │  SLS   │  OSS   │ JSONL │  │    │  │  SLS   │  OSS   │ JSONL │  │
+│  │  SLS   │ JSONL │  │    │  │  SLS   │ JSONL │  │
 │  └────────┴────────┴───────┘  │    │  └────────┴────────┴───────┘  │
 └───────────────────────────────┘    └───────────────────────────────┘
                 │                                │
@@ -137,9 +137,6 @@ Copy `deploy/.env.template` to `.env` and fill in:
 | `DOJOZERO_SLS_ENDPOINT` | Yes | SLS endpoint (e.g., `cn-wulanchabu.log.aliyuncs.com`) |
 | `DOJOZERO_SLS_PROJECT` | Yes | SLS project name |
 | `DOJOZERO_SLS_LOGSTORE` | Yes | SLS logstore (default: `dojozero-traces`) |
-| `DOJOZERO_OSS_ENDPOINT` | Yes | OSS endpoint |
-| `DOJOZERO_OSS_BUCKET` | Yes | OSS bucket name |
-| `DOJOZERO_OSS_PREFIX` | No | Key prefix (e.g., `prod/`) |
 | `TZ` | No | Timezone (default: `UTC`) |
 
 ### Trial Source Configuration
@@ -154,13 +151,13 @@ check_interval_seconds: 60.0   # Check game status every minute
 auto_stop_on_completion: true  # Stop when game ends
 ```
 
-### Common SLS/OSS Endpoints
+### Common SLS Endpoints
 
-| Region | SLS Endpoint | OSS Endpoint |
-|--------|--------------|--------------|
-| China (Hangzhou) | `cn-hangzhou.log.aliyuncs.com` | `oss-cn-hangzhou.aliyuncs.com` |
-| China (Shanghai) | `cn-shanghai.log.aliyuncs.com` | `oss-cn-shanghai.aliyuncs.com` |
-| China (Wulanchabu) | `cn-wulanchabu.log.aliyuncs.com` | `oss-cn-wulanchabu.aliyuncs.com` |
+| Region | SLS Endpoint |
+|--------|--------------|
+| China (Hangzhou) | `cn-hangzhou.log.aliyuncs.com` |
+| China (Shanghai) | `cn-shanghai.log.aliyuncs.com` |
+| China (Wulanchabu) | `cn-wulanchabu.log.aliyuncs.com` |
 
 ---
 
@@ -241,7 +238,6 @@ docker system prune -f
 # Backup outputs directory
 tar -czf backup-$(date +%Y%m%d).tar.gz outputs/
 
-# Note: Event data is also backed up to OSS automatically when trials stop
 ```
 
 ### Check Trial Data
@@ -286,14 +282,13 @@ docker logs dojozero-nfl | grep -i "sync\|espn\|schedule"
 ls -la trial_sources/
 ```
 
-### SLS/OSS connection issues
+### SLS connection issues
 
 ```bash
 # Validate credentials
 python tools/validate_alicloud_access.py --verbose
 
 # Check endpoints match region
-# SLS and OSS should be in same region for best performance
 ```
 
 ### Health check failing

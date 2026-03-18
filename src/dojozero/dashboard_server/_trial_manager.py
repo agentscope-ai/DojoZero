@@ -83,7 +83,6 @@ class TrialManager:
         self,
         orchestrator: TrialOrchestrator,
         max_concurrent: int = 20,
-        oss_backup: bool = False,
         auto_resume: bool = True,
         stale_threshold_hours: float = 24.0,
         checkpoint_interval_seconds: float = 300.0,
@@ -96,7 +95,6 @@ class TrialManager:
         Args:
             orchestrator: TrialOrchestrator instance for launching trials
             max_concurrent: Maximum number of concurrent running trials
-            oss_backup: Enable OSS backup when trials complete
             auto_resume: Automatically resume interrupted trials on startup
             stale_threshold_hours: Skip resuming trials older than this (hours)
             checkpoint_interval_seconds: Interval for periodic checkpointing (default 5 min)
@@ -110,7 +108,6 @@ class TrialManager:
         """
         self._orchestrator = orchestrator
         self._max_concurrent = max_concurrent
-        self._oss_backup = oss_backup
         self._auto_resume = auto_resume
         self._stale_threshold_hours = stale_threshold_hours
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
@@ -1215,10 +1212,6 @@ class TrialManager:
             except TrialNotFoundError:
                 queued.phase = QueuedTrialPhase.COMPLETED
 
-            # OSS backup if enabled
-            if self._oss_backup and queued.phase == QueuedTrialPhase.COMPLETED:
-                self._upload_to_oss(trial_id, queued.spec)
-
             self._logger.info(
                 "Trial '%s' finished with phase: %s", trial_id, queued.phase.value
             )
@@ -1260,60 +1253,9 @@ class TrialManager:
             if gateway_registered:
                 await self._signal_trial_ended_and_cleanup(trial_id, queued.phase)
 
-    def _upload_to_oss(self, trial_id: str, spec: TrialSpec) -> None:
-        """Upload trial data to OSS if configured."""
-        persistence_file_path = spec.metadata.get("persistence_file")
-        if persistence_file_path and isinstance(persistence_file_path, str):
-            persistence_file = Path(persistence_file_path)
-            upload_trial_to_oss(trial_id, persistence_file)
-
-
-# Lazy import for OSS to avoid import errors if oss2 not installed
-_oss_client = None
-
-
-def upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
-    """Upload trial data to OSS.
-
-    Args:
-        trial_id: Trial identifier
-        persistence_file: Path to the persistence JSONL file
-
-    Returns:
-        True if upload succeeded, False otherwise
-    """
-    global _oss_client
-
-    if not persistence_file or not persistence_file.exists():
-        LOGGER.warning("No persistence file to upload for trial %s", trial_id)
-        return False
-
-    try:
-        from dojozero.utils.oss import OSSClient
-
-        if _oss_client is None:
-            _oss_client = OSSClient.from_env()
-
-        # Upload with key: trials/{trial_id}/events.jsonl
-        oss_key = f"trials/{trial_id}/events.jsonl"
-        full_key = _oss_client.upload_file(persistence_file, oss_key)
-        LOGGER.info("Uploaded trial data to OSS: %s", full_key)
-        return True
-
-    except ImportError:
-        LOGGER.warning("OSS backup requested but oss2 package not installed")
-        return False
-    except ValueError as e:
-        LOGGER.warning("OSS backup failed - configuration error: %s", e)
-        return False
-    except Exception as e:
-        LOGGER.error("OSS backup failed for trial %s: %s", trial_id, e)
-        return False
-
 
 __all__ = [
     "QueuedTrial",
     "QueuedTrialPhase",
     "TrialManager",
-    "upload_trial_to_oss",
 ]

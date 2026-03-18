@@ -92,7 +92,7 @@ export DOJOZERO_SLS_LOGSTORE=dojozero-traces
 
 Run Dashboard Server with SLS:
 ```bash
-dojo0 serve --trace-backend sls --oss-backup
+dojo0 serve --trace-backend sls
 ```
 
 Run Arena Server with SLS:
@@ -105,7 +105,7 @@ dojo0 arena --trace-backend sls
 **Option 1: Via Dashboard Server (recommended for production)**
 ```bash
 # Terminal 1: Start Dashboard Server with SLS
-dojo0 serve --trace-backend sls --oss-backup
+dojo0 serve --trace-backend sls
 
 # Terminal 2: Run trial
 dojo0 run --params config.yaml --server http://localhost:8000
@@ -153,7 +153,6 @@ cd frontend && npm run dev
 |------|-------------|
 | `--trace-backend` | `jaeger` or `sls` (required for tracing) |
 | `--trace-ingest-endpoint` | OTLP endpoint for Jaeger (default: http://localhost:4318) |
-| `--oss-backup` | Enable OSS backup for trial data |
 
 ### `dojo0 arena`
 
