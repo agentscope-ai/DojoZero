@@ -4,7 +4,7 @@ scenario:
     espn_game_id: 'your_espn_game_id'  # ESPN game ID for the NFL game
 
     hub:
-      persistence_file: outputs/nfl_betting_events.jsonl
+      persistence_file: outputs/nfl_betting_events-{espn_game_id}.jsonl
 
     data_streams:
     - id: pre_game_insights_stream
