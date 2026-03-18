@@ -1,13 +1,12 @@
 scenario:
   name: nba
   config:
-    espn_game_id: '401810490'  # ESPN game ID - overridden by nba_trial_runner.py
+    espn_game_id: 'your_espn_game_id'  # ESPN game ID for the NBA game
 
     hub:
       persistence_file: outputs/nba_betting_events.jsonl
 
     data_streams:
-    # Pre-game insights: each event class owns search → LLM → typed event lifecycle
     - id: pre_game_insights_stream
       event_types:
       - injury_report

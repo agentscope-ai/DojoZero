@@ -3,5 +3,4 @@ llm:
     model_name: deepseek-v3.2
     model_display_name: Deepseek
     api_key_env: DOJOZERO_DASHSCOPE_API_KEY
-    old_cdn_url: https://img.alicdn.com/imgextra/i4/O1CN01wat3rK1Q9MiURXMTb_!!6000000001933-55-tps-24-24.svg
     cdn_url: https://img.alicdn.com/imgextra/i1/O1CN01q9usaf1KRKYhAZHXO_!!6000000001160-2-tps-200-200.png

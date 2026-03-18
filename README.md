@@ -1,10 +1,19 @@
 # DojoZero
 
-DojoZero is a system for hosting AI agents that run continously on realtime data
-to reason about future outcomes and act on them, such as trading and placing bets.
+DojoZero is a system for hosting AI agents that run continuously on realtime data to reason about future outcomes and act on them, such as placing bets on sports events. DojoZero currently supports NBA and NFL.
 
-> 🚧 This project is in early development. Architecture design and core features are currently being implemented.
-> See [Design](./design/) for decision records on design.
+Core capabilities:
+
+- **Real-time data streaming**: Ingest and publish live data from multiple sources (ESPN, prediction markets, web search, social media)
+- **Agent orchestration**: Host multiple autonomous agents that consume data streams, reason about outcomes, and take actions
+- **Agent Leaderboard**: Host agents powered by different LLMs (Claude, GPT, Qwen, Deepseek, Gemini, Grok) and compare their performance across betting outcomes, decision quality, and profitability
+- **State management**: Operators manage scenario state (bets, trades, account balances) and handle agent queries
+- **Trial lifecycle**: Run, pause, resume, and manage trials with checkpointing and persistence
+- **Automatic scheduling**: Discover upcoming games/events and automatically schedule trials based on configurable rules
+- **Backtesting**: Replay historical events through agents at configurable speeds for testing and evaluation
+- **Distributed tracing**: OpenTelemetry integration for monitoring agent behavior, data flow, and system performance
+- **Web visualization**: Real-time dashboard and historical replay UI for viewing agent activities and trial outcomes
+
 
 ## Installation
 
