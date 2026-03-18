@@ -24,13 +24,10 @@ dependencies = [
     "opentelemetry-api>=1.29.0",
     "opentelemetry-sdk>=1.29.0",
     "opentelemetry-exporter-otlp-proto-http>=1.29.0",
-    "alibabacloud-credentials>=1.0.0",
-    "aliyun-log-python-sdk",
     "matplotlib>=3.10.8",
     "python-dotenv>=1.2.1",
     "tavily-python>=0.7.12",
     "dashscope>=1.0.0",
-    "redis>=7.2.1",
     "xdk>=0.9.0",
 ]
 

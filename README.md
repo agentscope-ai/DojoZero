@@ -106,12 +106,6 @@ dojo0 run --params trial_params/nba-moneyline.yaml --trial-id test --server http
 ### Dashboard Server Options
 
 ```bash
-# With SLS trace backend (production - Alibaba Cloud)
-dojo0 serve --trace-backend sls
-
-# With SLS trace backend
-dojo0 serve --trace-backend sls
-
 # With trial sources for automatic scheduling (supports glob patterns)
 dojo0 serve --trace-backend jaeger --trial-source "trial_sources/*.yaml"
 
@@ -125,7 +119,7 @@ dojo0 serve --store-directory ./my-store --runtime-provider ray --ray-config ray
 CLI options:
 - `--host` - Host address (default: 127.0.0.1)
 - `--port` - Port (default: 8000)
-- `--trace-backend {jaeger,sls}` - Trace backend type
+- `--trace-backend jaeger` - Trace backend type (Jaeger)
 - `--trace-ingest-endpoint` - OTLP endpoint for Jaeger (default: http://localhost:4318)
 - `--service-name` - Service name for traces (default: dojozero)
 - `--trial-source` - Path or glob pattern for trial source YAML files (repeatable)
@@ -183,18 +177,6 @@ Trials without checkpoints cannot be safely resumed and are marked as FAILED. Tr
 
 To disable this behavior, use `--no-auto-resume`. To adjust the staleness threshold, use `--stale-threshold-hours`.
 
-### SLS Configuration (Production)
-
-For Alibaba Cloud deployments, set these environment variables:
-
-```bash
-export DOJOZERO_SLS_PROJECT="your-project"
-export DOJOZERO_SLS_ENDPOINT="cn-hangzhou.log.aliyuncs.com"
-export DOJOZERO_SLS_LOGSTORE="dojozero-traces"
-```
-
-Credentials are resolved via env vars, `~/.alibabacloud/credentials`, or ECS RAM role.
-
 ### Proxy Configuration
 
 To route ESPN API requests through a proxy (useful for geo-restricted access or corporate networks), set the `DOJOZERO_PROXY_URL` environment variable:
@@ -221,19 +203,16 @@ The Arena Server (`dojo0 arena`) serves the web UI and streams real-time data to
 # Local development with Jaeger
 dojo0 arena --trace-backend jaeger
 
-# With SLS as trace source (production)
-dojo0 arena --trace-backend sls
-
 # Production deployment (serves both API and frontend, default: 127.0.0.1:3001)
 cd frontend && npm run build
-dojo0 arena --trace-backend sls --static-dir ./frontend/dist
+dojo0 arena --trace-backend jaeger --static-dir ./frontend/dist
 
 # With custom cache settings from YAML config
-dojo0 arena --trace-backend sls --config configs/arena-server.yaml
+dojo0 arena --trace-backend jaeger --config configs/arena-server.yaml
 ```
 
 CLI options:
-- `--trace-backend {jaeger,sls}` - Trace backend type (required)
+- `--trace-backend jaeger` - Trace backend type (required)
 - `--host` - Host address (default: 127.0.0.1)
 - `--port` - Port (default: 3001)
 - `--trace-query-endpoint` - Jaeger Query API endpoint (default: http://localhost:16686)

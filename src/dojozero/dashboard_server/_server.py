@@ -12,7 +12,6 @@ Refactored from core/_dashboard_server.py to separate server code from core abst
 
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -40,11 +39,7 @@ from dojozero.core._registry import (
 )
 from dojozero.core._tracing import (
     OTelSpanExporter,
-    SLSLogExporter,
-    get_sls_exporter_headers,
-    get_sls_log_exporter,
     set_otel_exporter,
-    set_sls_log_exporter,
 )
 from dojozero.core._types import RuntimeContext
 
@@ -80,7 +75,9 @@ class BacktestConfig(BaseModel):
     trial_id: str  # Reference a previous trial to replay its events
     speed: float = 1.0
     max_sleep: float = 20.0
-    emit_traces: bool = False  # Emit data events to SLS with rebased timestamps
+    emit_traces: bool = (
+        False  # Emit data events to trace backend with rebased timestamps
+    )
 
 
 # Backward compatibility alias (deprecated)
@@ -234,23 +231,6 @@ async def _launch_backtest_trial(
         raise
 
 
-def _get_sls_otlp_endpoint() -> str:
-    """Construct SLS OTLP endpoint from environment variables."""
-    project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
-    endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
-
-    if not project:
-        raise ValueError(
-            "SLS backend requires DOJOZERO_SLS_PROJECT environment variable"
-        )
-    if not endpoint:
-        raise ValueError(
-            "SLS backend requires DOJOZERO_SLS_ENDPOINT environment variable"
-        )
-
-    return f"https://{project}.{endpoint}"
-
-
 def create_dashboard_app(
     orchestrator: TrialOrchestrator,
     scheduler_store: SchedulerStore,
@@ -270,7 +250,7 @@ def create_dashboard_app(
     Args:
         orchestrator: TrialOrchestrator instance for trial management
         scheduler_store: SchedulerStore instance for schedule persistence
-        trace_backend: Trace backend type ("jaeger" or "sls"), or None to disable tracing
+        trace_backend: Trace backend type ("jaeger"), or None to disable tracing
         trace_ingest_endpoint: OTLP endpoint for Jaeger (only used when trace_backend="jaeger")
         max_concurrent_trials: Maximum number of concurrent running trials (default 20)
         service_name: Service name for tracing
@@ -283,10 +263,6 @@ def create_dashboard_app(
         authenticator: AgentAuthenticator for validating agent API keys. If None and
             agent_keys.yaml exists, uses LocalAgentAuthenticator. Otherwise NoOpAuthenticator.
 
-    For SLS backend, configuration comes from environment variables:
-        DOJOZERO_SLS_PROJECT: SLS project name
-        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
-        DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
 
     # Create gateway router early so it can be passed to TrialManager
@@ -383,47 +359,9 @@ def create_dashboard_app(
                         e,
                     )
 
-        # Initialize OTel exporter based on backend
+        # Initialize OTel exporter for Jaeger
         otel_exporter = None
-        if trace_backend == "sls":
-            # SLS backend: construct endpoint from env vars
-            otlp_endpoint = _get_sls_otlp_endpoint()
-            headers = get_sls_exporter_headers()
-            if headers:
-                LOGGER.info("SLS authentication headers configured")
-            else:
-                LOGGER.warning(
-                    "SLS backend selected but credentials not configured. "
-                    "Configure via: 1) Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID), "
-                    "2) ~/.alibabacloud/credentials file, or 3) ECS RAM role."
-                )
-
-            otel_exporter = OTelSpanExporter(otlp_endpoint, headers=headers)
-            otel_exporter.start()
-            set_otel_exporter(otel_exporter)
-            LOGGER.info("OTel exporter configured: %s (backend: sls)", otlp_endpoint)
-
-            # Also initialize SLS Log exporter for flat field indexing
-            sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
-            sls_endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
-            sls_logstore = os.environ.get("DOJOZERO_SLS_LOGSTORE", "")
-            if sls_project and sls_endpoint and sls_logstore:
-                sls_log_exporter = SLSLogExporter(
-                    project=sls_project,
-                    endpoint=sls_endpoint,
-                    logstore=sls_logstore,
-                    service_name=service_name,
-                )
-                sls_log_exporter.start()
-                set_sls_log_exporter(sls_log_exporter)
-                LOGGER.info(
-                    "SLS Log exporter configured: %s/%s (flat fields)",
-                    sls_project,
-                    sls_logstore,
-                )
-
-        elif trace_backend == "jaeger":
-            # Jaeger or SLS backend: use provided endpoint or default
+        if trace_backend == "jaeger":
             otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
             otel_exporter = OTelSpanExporter(
                 otlp_endpoint, service_name=service_name, headers=None
@@ -431,7 +369,7 @@ def create_dashboard_app(
             otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info(
-                "OTel exporter configured: %s (backend: jaeger or sls, service_name: %s)",
+                "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
                 otlp_endpoint,
                 service_name,
             )
@@ -484,15 +422,10 @@ def create_dashboard_app(
         except Exception as e:
             LOGGER.error("Error during trial cleanup: %s", e)
 
-        # Shutdown exporters
+        # Shutdown OTel exporter
         if otel_exporter is not None:
             otel_exporter.shutdown()
             set_otel_exporter(None)
-
-        sls_log_exp = get_sls_log_exporter()
-        if sls_log_exp is not None:
-            sls_log_exp.shutdown()
-            set_sls_log_exporter(None)
 
         LOGGER.info("Dashboard Server shutdown complete")
 
@@ -1366,7 +1299,7 @@ async def run_dashboard_server(
         scheduler_store: SchedulerStore instance for schedule persistence
         host: Host to bind to
         port: Port to listen on
-        trace_backend: Trace backend type ("jaeger" or "sls"), or None to disable tracing
+        trace_backend: Trace backend type ("jaeger"), or None to disable tracing
         trace_ingest_endpoint: OTLP endpoint for Jaeger (only used when trace_backend="jaeger")
         max_concurrent_trials: Maximum number of concurrent running trials (default 20)
         service_name: Service name for tracing

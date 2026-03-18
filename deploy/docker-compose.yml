@@ -33,7 +33,7 @@ services:
       dojo0 serve
       --host 0.0.0.0
       --port 8000
-      --trace-backend sls
+      --trace-backend jaeger
       --trial-source trial_sources/nba.yaml
     logging:
       driver: json-file
@@ -70,7 +70,7 @@ services:
       dojo0 serve
       --host 0.0.0.0
       --port 8000
-      --trace-backend sls
+      --trace-backend jaeger
       --trial-source trial_sources/nfl.yaml
     logging:
       driver: json-file

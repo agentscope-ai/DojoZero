@@ -19,7 +19,7 @@ python tools/nba_trial_runner.py list --start-date 2025-12-10 --end-date 2025-12
 
 ### Run Trials
 
-**Local mode (no SLS):**
+**Local mode (no trace export):**
 ```bash
 # Run trials for today's games
 python tools/nba_trial_runner.py run --data-dir data/nba-betting
@@ -31,10 +31,10 @@ python tools/nba_trial_runner.py run --data-dir data/nba-betting --date 2025-12-
 python tools/nba_trial_runner.py run --data-dir data/nba-betting --game-id 0062500001
 ```
 
-**Server mode (with SLS trace export):**
+**Server mode (with trace export to Jaeger):**
 ```bash
-# Terminal 1: Start Dashboard Server with SLS (config from env vars)
-dojo0 serve --trace-backend sls
+# Terminal 1: Start Dashboard Server with Jaeger
+dojo0 serve --trace-backend jaeger
 
 # Terminal 2: Run trials
 python tools/nba_trial_runner.py run \
@@ -50,7 +50,7 @@ python tools/nba_trial_runner.py run \
 - `--pre-start-hours`: Hours before game to start (default: 2.0)
 - `--check-interval`: Status check interval in seconds (default: 60.0)
 - `--log-level`: DEBUG, INFO, WARNING, ERROR (default: INFO)
-- `--server`: Dashboard Server URL for SLS integration
+- `--server`: Dashboard Server URL for trace export
 
 ## Output Structure
 
@@ -72,7 +72,7 @@ data/nba-betting/2025-12-16/
 
 ### With `--server` flag:
 - Trials are submitted to Dashboard Server via `dojo0 run --server`
-- Dashboard Server exports traces to SLS in real-time
+- Dashboard Server exports traces to Jaeger in real-time
 
 ## Backtest
 

@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import importlib
 import logging
-import os
 import signal
 import sys
 from dataclasses import dataclass
@@ -113,10 +112,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--trace-backend",
         dest="trace_backend",
-        choices=["jaeger", "sls"],
-        help="Trace backend type for local run. Use 'jaeger' for local development, "
-        "'sls' for Alibaba Cloud Simple Log Service (uses env vars). "
-        "Ignored when --server is specified.",
+        choices=["jaeger"],
+        help="Trace backend type for local run (jaeger). Ignored when --server is specified.",
     )
     run_parser.add_argument(
         "--trace-ingest-endpoint",
@@ -236,7 +233,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         dest="emit_traces",
-        help="Emit data events to the trace backend (SLS/Jaeger) with rebased timestamps "
+        help="Emit data events to the trace backend (Jaeger) with rebased timestamps "
         "so replay trials are visible in Arena UI. Requires --trace-backend.",
     )
     backtest_parser.add_argument(
@@ -247,9 +244,8 @@ def _build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument(
         "--trace-backend",
         dest="trace_backend",
-        choices=["jaeger", "sls"],
-        help="Trace backend type for local backtest. Use 'jaeger' for local development, "
-        "'sls' for Alibaba Cloud Simple Log Service (uses env vars). "
+        choices=["jaeger"],
+        help="Trace backend type for local backtest (jaeger). "
         "Ignored when --server is specified.",
     )
     backtest_parser.add_argument(
@@ -306,9 +302,8 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument(
         "--trace-backend",
         dest="trace_backend",
-        choices=["jaeger", "sls"],
-        help="Trace backend type. Use 'jaeger' for local development, "
-        "'sls' for Alibaba Cloud Simple Log Service (uses env vars).",
+        choices=["jaeger"],
+        help="Trace backend type (jaeger).",
     )
     serve_parser.add_argument(
         "--service-name",
@@ -398,23 +393,21 @@ def _build_parser() -> argparse.ArgumentParser:
     arena_parser.add_argument(
         "--trace-backend",
         dest="trace_backend",
-        choices=["jaeger", "sls"],
+        choices=["jaeger"],
         required=True,
-        help="Trace backend type. Use 'jaeger' for local development, "
-        "'sls' for Alibaba Cloud Simple Log Service (uses env vars).",
+        help="Trace backend type (jaeger).",
     )
     arena_parser.add_argument(
         "--service-name",
         dest="service_name",
         default="dojozero",
-        help="Service name for trace queries (default: dojozero). Use to isolate multiple arena servers.",
+        help="Service name for trace queries (default: dojozero).",
     )
     arena_parser.add_argument(
         "--trace-query-endpoint",
         dest="trace_query_endpoint",
         default="http://localhost:16686",
-        help="Jaeger Query API endpoint (default: http://localhost:16686). "
-        "Only used when --trace-backend=jaeger.",
+        help="Jaeger Query API endpoint (default: http://localhost:16686).",
     )
     arena_parser.add_argument(
         "--static-dir",
@@ -422,47 +415,6 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Path to built static assets to serve (optional).",
-    )
-    arena_parser.add_argument(
-        "--redis-url",
-        dest="redis_url",
-        default=None,
-        help="Redis URL for fast startup (e.g., redis://host:6379/0). "
-        "Can also be set via DOJOZERO_REDIS_URL env var.",
-    )
-
-    # Sync Service command
-    sync_parser = subparsers.add_parser(
-        "sync-service",
-        help="Start the SLS to Redis sync service",
-        description="Launch the Sync Service that continuously syncs data from SLS to Redis. "
-        "Arena Server can then use Redis for fast startup.",
-    )
-    sync_parser.add_argument(
-        "--redis-url",
-        dest="redis_url",
-        default=None,
-        help="Redis URL (e.g., redis://host:6379/0). Required if DOJOZERO_REDIS_URL not set.",
-    )
-    sync_parser.add_argument(
-        "--sync-interval",
-        dest="sync_interval",
-        type=float,
-        default=5.0,
-        help="Sync interval in seconds (default: 5.0).",
-    )
-    sync_parser.add_argument(
-        "--lookback-days",
-        dest="lookback_days",
-        type=int,
-        default=90,
-        help="Lookback period in days for trial data (default: 90).",
-    )
-    sync_parser.add_argument(
-        "--service-name",
-        dest="service_name",
-        default="dojozero",
-        help="Service name for SLS queries (default: dojozero).",
     )
 
     # List trials command
@@ -808,11 +760,11 @@ def _setup_otel_exporter(
     trace_ingest_endpoint: str | None,
     service_name: str = "dojozero",
 ) -> Any:
-    """Set up OTel exporter based on trace backend configuration.
+    """Set up OTel exporter for Jaeger trace backend.
 
     Args:
-        trace_backend: Backend type ("sls" or "jaeger") or None to disable
-        trace_ingest_endpoint: OTLP endpoint for jaeger backend
+        trace_backend: Backend type ("jaeger") or None to disable
+        trace_ingest_endpoint: OTLP endpoint for Jaeger (default: http://localhost:4318)
         service_name: Service name for trace attribution
 
     Returns:
@@ -824,78 +776,29 @@ def _setup_otel_exporter(
 
     from dojozero.core._tracing import (
         OTelSpanExporter,
-        SLSLogExporter,
-        get_sls_exporter_headers,
         set_otel_exporter,
-        set_sls_log_exporter,
     )
 
-    if trace_backend == "sls":
-        import os
-
-        # Construct SLS OTLP endpoint from environment variables
-        sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
-        sls_endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
-        if not sls_project or not sls_endpoint:
-            raise DojoZeroCLIError(
-                "SLS trace backend requires DOJOZERO_SLS_PROJECT and "
-                "DOJOZERO_SLS_ENDPOINT environment variables"
-            )
-        otlp_endpoint = f"https://{sls_project}.{sls_endpoint}"
-        headers = get_sls_exporter_headers()
-        otel_exporter = OTelSpanExporter(
-            otlp_endpoint, service_name=service_name, headers=headers
+    if trace_backend != "jaeger":
+        raise DojoZeroCLIError(
+            f"Unsupported trace backend: {trace_backend}. Only 'jaeger' is supported."
         )
-        otel_exporter.start()
-        set_otel_exporter(otel_exporter)
-        LOGGER.info(
-            "OTel exporter configured: %s (backend: sls, service_name: %s)",
-            otlp_endpoint,
-            service_name,
-        )
-
-        # Also initialize SLS Log exporter for flat field indexing
-        sls_logstore = os.environ.get("DOJOZERO_SLS_LOGSTORE", "")
-        if sls_logstore:
-            sls_log_exporter = SLSLogExporter(
-                project=sls_project,
-                endpoint=sls_endpoint,
-                logstore=sls_logstore,
-                service_name=service_name,
-            )
-            sls_log_exporter.start()
-            set_sls_log_exporter(sls_log_exporter)
-            LOGGER.info(
-                "SLS Log exporter configured: %s/%s (flat fields)",
-                sls_project,
-                sls_logstore,
-            )
-        else:
-            LOGGER.warning(
-                "DOJOZERO_SLS_LOGSTORE not set - spans will only be exported via OTLP. "
-                "Set DOJOZERO_SLS_LOGSTORE for flat field indexing and better querying."
-            )
-
-        return otel_exporter
-    elif trace_backend == "jaeger":
-        otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
-        otel_exporter = OTelSpanExporter(
-            otlp_endpoint, service_name=service_name, headers=None
-        )
-        otel_exporter.start()
-        set_otel_exporter(otel_exporter)
-        LOGGER.info(
-            "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
-            otlp_endpoint,
-            service_name,
-        )
-        return otel_exporter
-    else:
-        raise DojoZeroCLIError(f"Unsupported trace backend: {trace_backend}")
+    otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
+    otel_exporter = OTelSpanExporter(
+        otlp_endpoint, service_name=service_name, headers=None
+    )
+    otel_exporter.start()
+    set_otel_exporter(otel_exporter)
+    LOGGER.info(
+        "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
+        otlp_endpoint,
+        service_name,
+    )
+    return otel_exporter
 
 
 def _shutdown_otel_exporter(otel_exporter: Any) -> None:
-    """Shutdown OTel and SLS exporters and clear global references.
+    """Shutdown OTel exporter and clear global reference.
 
     Args:
         otel_exporter: The OTelSpanExporter instance to shutdown
@@ -903,22 +806,11 @@ def _shutdown_otel_exporter(otel_exporter: Any) -> None:
     if otel_exporter is None:
         return
 
-    from dojozero.core._tracing import (
-        get_sls_log_exporter,
-        set_otel_exporter,
-        set_sls_log_exporter,
-    )
+    from dojozero.core._tracing import set_otel_exporter
 
     otel_exporter.shutdown()
     set_otel_exporter(None)
     LOGGER.info("OTel exporter shutdown complete")
-
-    # Shutdown SLS log exporter if configured
-    sls_log_exporter = get_sls_log_exporter()
-    if sls_log_exporter is not None:
-        sls_log_exporter.shutdown()
-        set_sls_log_exporter(None)
-        LOGGER.info("SLS Log exporter shutdown complete")
 
 
 def _default_example_filename(builder_name: str) -> str:
@@ -1820,9 +1712,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
     if initial_trial_sources:
         LOGGER.info("Initial trial sources: %d", len(initial_trial_sources))
 
-    if trace_backend == "sls":
-        LOGGER.info("Trace backend: SLS (using env vars for configuration)")
-    elif trace_backend == "jaeger":
+    if trace_backend == "jaeger":
         LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_ingest_endpoint)
     else:
         LOGGER.info("No trace backend configured - traces will not be exported")
@@ -2310,18 +2200,12 @@ async def _arena_command(args: argparse.Namespace) -> int:
     trace_query_endpoint = args.trace_query_endpoint
     static_dir = getattr(args, "static_dir", None)
     service_name = args.service_name
-    redis_url = getattr(args, "redis_url", None)
 
     LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
-    if trace_backend == "sls":
-        LOGGER.info("Trace backend: SLS (using env vars for configuration)")
-    else:
-        LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_query_endpoint)
+    LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_query_endpoint)
     LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
     if static_dir:
         LOGGER.info("Static files: %s", static_dir)
-    if redis_url or os.getenv("DOJOZERO_REDIS_URL"):
-        LOGGER.info("Redis: enabled (fast startup)")
 
     await run_arena_server(
         config=config,
@@ -2331,54 +2215,7 @@ async def _arena_command(args: argparse.Namespace) -> int:
         trace_query_endpoint=trace_query_endpoint,
         static_dir=static_dir,
         service_name=service_name,
-        redis_url=redis_url,
     )
-    return 0
-
-
-async def _sync_service_command(args: argparse.Namespace) -> int:
-    """Handle sync-service command - start SLS to Redis sync service."""
-    from dojozero.sync_service import SyncService
-    from dojozero.sync_service._redis_client import RedisClient
-    from dojozero.arena_server._cache import CacheConfig
-    from dojozero.core._tracing import create_trace_reader
-
-    # Get Redis URL (required)
-    redis_url = args.redis_url or os.getenv("DOJOZERO_REDIS_URL")
-    if not redis_url:
-        raise DojoZeroCLIError(
-            "Redis URL is required. Provide via --redis-url or DOJOZERO_REDIS_URL env var."
-        )
-
-    # Create trace reader (always SLS for sync service)
-    trace_reader = create_trace_reader(
-        backend="sls",
-        service_name=args.service_name,
-    )
-
-    # Create Redis client
-    redis_client = RedisClient(redis_url=redis_url)
-
-    # Create config
-    config = CacheConfig(
-        refresh_interval=args.sync_interval,
-        trials_lookback_days=args.lookback_days,
-    )
-
-    # Create and start sync service
-    service = SyncService(
-        trace_reader=trace_reader,
-        redis_client=redis_client,
-        config=config,
-    )
-
-    safe_url = redis_url.split("@")[-1] if "@" in redis_url else redis_url
-    LOGGER.info("Starting Sync Service")
-    LOGGER.info("Redis URL: %s", safe_url)
-    LOGGER.info("Sync interval: %s seconds", args.sync_interval)
-    LOGGER.info("Lookback days: %s", args.lookback_days)
-
-    await service.start()
     return 0
 
 
@@ -2523,8 +2360,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(_serve_command(args))
         if args.command == "arena":
             return asyncio.run(_arena_command(args))
-        if args.command == "sync-service":
-            return asyncio.run(_sync_service_command(args))
         if args.command == "list-trials":
             return asyncio.run(_list_trials_command(args))
         if args.command == "list-sources":

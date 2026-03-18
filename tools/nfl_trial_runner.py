@@ -366,7 +366,7 @@ class NFLGameTrialManager:
             data_dir: If provided, use {data_dir}/{date}/{event_id}.yaml
             game_date: Date string (YYYY-MM-DD) for date-organized structure
             log_level: Logging level for subprocess (default: INFO)
-            server: Dashboard Server URL for SLS integration
+            server: Dashboard Server URL for trace export
             custom_trial_id: Custom trial ID (if None, auto-generate)
         """
         self.game = game
@@ -793,7 +793,7 @@ async def run_trials_for_date(
         check_interval_seconds: Interval to check game status
         data_dir: If provided, organize files by date
         log_level: Logging level
-        server: Dashboard Server URL for SLS integration
+        server: Dashboard Server URL for trace export
 
     Returns:
         List of NFLGameTrialManager instances
@@ -855,7 +855,7 @@ async def run_trials_for_week(
         check_interval_seconds: Interval to check game status
         data_dir: If provided, organize files by date
         log_level: Logging level
-        server: Dashboard Server URL for SLS integration
+        server: Dashboard Server URL for trace export
 
     Returns:
         List of NFLGameTrialManager instances
@@ -915,7 +915,7 @@ async def run_trial_for_event(
         check_interval_seconds: Interval to check game status
         data_dir: If provided, organize files by date
         log_level: Logging level
-        server: Dashboard Server URL for SLS integration
+        server: Dashboard Server URL for trace export
         custom_trial_id: Custom trial ID (if None, auto-generate)
 
     Returns:
@@ -1288,7 +1288,7 @@ def main() -> int:
         default=None,
         help="Dashboard Server URL (e.g., http://localhost:8000). "
         "When specified, trials are submitted to the server which handles "
-        "SLS trace export.",
+        "Trace export to Jaeger.",
     )
     run_parser.add_argument(
         "--max-concurrent-starts",
