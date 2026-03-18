@@ -2,9 +2,7 @@ scenario:
   name: nba
   config:
     espn_game_id: 'your_espn_game_id'  # ESPN game ID for the NBA game
-
-    # IMPORTANT: Replace {espn_game_id} with the actual game ID above to avoid conflicts
-    # Each game should use a unique persistence file to prevent reading stale game-end events
+    
     hub:
       persistence_file: outputs/nba_betting_events-{espn_game_id}.jsonl
 

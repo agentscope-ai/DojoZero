@@ -4,7 +4,7 @@
 Orchestrates betting trials for NFL games:
 - Checks ESPN API for games on a given date or week
 - Sets up separate trial/config for each game
-- Starts trial before game kickoff time
+- Starts trial shortly before kickoff (default 0.1 hours)
 - Runs agents that analyze data and place bets
 - Runs until game concludes
 - Persists all events to event files (for backtesting)
@@ -348,7 +348,7 @@ class NFLGameTrialManager:
         self,
         game: dict[str, Any],
         base_config: Path,
-        pre_start_hours: float = 1.0,
+        pre_start_hours: float = 0.1,
         check_interval_seconds: float = 60.0,
         data_dir: Path | None = None,
         game_date: str | None = None,
@@ -361,7 +361,7 @@ class NFLGameTrialManager:
         Args:
             game: Game dictionary from ESPN API
             base_config: Path to base config template
-            pre_start_hours: Hours before game to start trial (default: 1.0)
+            pre_start_hours: Hours before game to start trial (default: 0.1)
             check_interval_seconds: Interval to check game status (default: 60.0)
             data_dir: If provided, use {data_dir}/{date}/{event_id}.yaml
             game_date: Date string (YYYY-MM-DD) for date-organized structure
@@ -493,7 +493,7 @@ class NFLGameTrialManager:
             self._logger.log(level, message, *args)
 
     def calculate_start_time(self) -> datetime | None:
-        """Calculate when to start the trial (before kickoff).
+        """Calculate when to start the trial (pre_start_hours before kickoff).
 
         Returns:
             Start time in UTC, or None if game time unavailable
@@ -778,7 +778,7 @@ class NFLGameTrialManager:
 async def run_trials_for_date(
     game_date: datetime | str,
     base_config: Path,
-    pre_start_hours: float = 1.0,
+    pre_start_hours: float = 0.1,
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
     log_level: str = "INFO",
@@ -789,7 +789,7 @@ async def run_trials_for_date(
     Args:
         game_date: Date to run trials for
         base_config: Path to base config template
-        pre_start_hours: Hours before game to start trial
+        pre_start_hours: Hours before game to start trial (default: 0.1)
         check_interval_seconds: Interval to check game status
         data_dir: If provided, organize files by date
         log_level: Logging level
@@ -839,7 +839,7 @@ async def run_trials_for_week(
     week: int,
     base_config: Path,
     season_type: int = 2,
-    pre_start_hours: float = 1.0,
+    pre_start_hours: float = 0.1,
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
     log_level: str = "INFO",
@@ -851,7 +851,7 @@ async def run_trials_for_week(
         week: Week number
         base_config: Path to base config template
         season_type: 1=preseason, 2=regular, 3=postseason
-        pre_start_hours: Hours before game to start trial
+        pre_start_hours: Hours before game to start trial (default: 0.1)
         check_interval_seconds: Interval to check game status
         data_dir: If provided, organize files by date
         log_level: Logging level
@@ -899,7 +899,7 @@ async def run_trials_for_week(
 async def run_trial_for_event(
     event_id: str,
     base_config: Path,
-    pre_start_hours: float = 1.0,
+    pre_start_hours: float = 0.1,
     check_interval_seconds: float = 60.0,
     data_dir: Path | None = None,
     log_level: str = "INFO",
@@ -911,7 +911,7 @@ async def run_trial_for_event(
     Args:
         event_id: ESPN event ID
         base_config: Path to base config template
-        pre_start_hours: Hours before game to start trial
+        pre_start_hours: Hours before game to start trial (default: 0.1)
         check_interval_seconds: Interval to check game status
         data_dir: If provided, organize files by date
         log_level: Logging level
@@ -1266,8 +1266,8 @@ def main() -> int:
     run_parser.add_argument(
         "--pre-start-hours",
         type=float,
-        default=1.0,
-        help="Hours before kickoff to start trial (default: 1.0)",
+        default=0.1,
+        help="Hours before kickoff to start trial (default: 0.1)",
     )
     run_parser.add_argument(
         "--check-interval",
