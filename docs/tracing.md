@@ -2,45 +2,9 @@
 
 DojoZero uses OpenTelemetry for distributed tracing with Jaeger as the trace backend.
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         WRITE PATH                               │
-│                                                                  │
-│  ┌──────────────┐              ┌──────────────┐    OTLP     ┌─────────┐
-│  │ Trial Runner │ ──────────▶  │  Dashboard   │ ─────────▶  │ Jaeger  │
-│  │ --server     │              │  Server      │   export    │         │
-│  └──────────────┘              └──────────────┘             └─────────┘
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                         READ PATH                                │
-│                                                                  │
-│  ┌──────────────┐    REST/WS    ┌──────────────┐   query     ┌─────────┐
-│  │  Frontend    │ ◀──────────▶  │   Arena      │ ◀─────────  │ Jaeger  │
-│  │  (React)     │               │   Server     │             │         │
-│  └──────────────┘               └──────────────┘             └─────────┘
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
-```
-
 ## Backend: Jaeger
 
-Install Jaeger all-in-one ([download page](https://www.jaegertracing.io/download/)):
-
-```bash
-# Option 1: Homebrew (macOS)
-brew install jaegertracing/tap/jaeger-all-in-one
-jaeger-all-in-one
-
-# Option 2: Docker
-docker run -d --name jaeger \
-  -p 16686:16686 \
-  -p 4318:4318 \
-  jaegertracing/all-in-one:latest
-```
+Install Jaeger: [https://www.jaegertracing.io/](https://www.jaegertracing.io/)
 
 Run Dashboard Server with Jaeger:
 ```bash

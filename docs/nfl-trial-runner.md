@@ -25,13 +25,17 @@ python tools/nfl_trial_runner.py run --week 18
 ### Run Trial for Specific Event
 
 ```bash
+python tools/nfl_trial_runner.py run --game-id 401772976
+# alias also supported:
 python tools/nfl_trial_runner.py run --event-id 401772976
 ```
 
 ### List Games
 
 ```bash
-python tools/nfl_trial_runner.py list --date 2025-01-12
+python tools/nfl_trial_runner.py list
+python tools/nfl_trial_runner.py list --start-date 2025-01-12
+python tools/nfl_trial_runner.py list --start-date 2025-01-12 --end-date 2025-01-19
 python tools/nfl_trial_runner.py list --week 18
 ```
 
@@ -47,7 +51,8 @@ python deploy/run_daily_trials.py configs/nfl-game.yaml --date 2025-01-12
 
 ### Environment Variables
 
-- `DATA_DIR` - Output directory for trial data (default: `data/nfl`)
+- Runner-specific output is controlled with `--data-dir`.
+- API/model credentials are configured in `.env` (see [`docs/configuration.md`](./configuration.md)).
 
 ### Custom Config
 
@@ -59,32 +64,45 @@ python tools/nfl_trial_runner.py run --config /path/to/custom-config.yaml
 
 ```yaml
 scenario:
-  name: nfl-game
+  name: nfl
   config:
-    event_id: '401772976'  # ESPN event ID
+    espn_game_id: "401772976"  # ESPN event ID
     hub:
-      persistence_file: outputs/nfl_events.jsonl
+      persistence_file: outputs/nfl_betting_events-{espn_game_id}.jsonl
 ```
 
 ### Optional Parameters
 
 ```yaml
 scenario:
-  name: nfl-game
+  name: nfl
   config:
-    event_id: '401772976'
+    espn_game_id: "401772976"
     hub:
-      persistence_file: outputs/nfl_events.jsonl
-    # Polling intervals (seconds)
-    scoreboard_poll_interval: 60
-    summary_poll_interval: 30
-    plays_poll_interval: 10
-    # Custom data streams (defaults to all if omitted)
+      persistence_file: outputs/nfl_betting_events-{espn_game_id}.jsonl
+    # Custom streams/operators/agents can be defined as needed.
     data_streams:
+      - id: pre_game_insights_stream
+        event_types:
+          - injury_report
+          - power_ranking
+          - expert_prediction
+          - pregame_stats
+          - twitter_top_tweets
+      - id: game_lifecycle_stream
+        event_types:
+          - game_initialize
+          - game_start
+          - game_result
+      - id: nfl_game_update_stream
+        event_types:
+          - nfl_game_update
+      - id: nfl_odds_update_stream
+        event_types:
+          - odds_update
       - id: nfl_play_stream
-        event_type: nfl_play
-      - id: nfl_drive_stream
-        event_type: nfl_drive
+        event_types:
+          - nfl_play
 ```
 
 ## Event Types
@@ -107,13 +125,16 @@ python tools/nfl_trial_runner.py run --help
 Options:
   --date DATE           Date to run trials for (YYYY-MM-DD)
   --week WEEK           NFL week number (1-18 for regular season)
-  --season-type {1,2,3} 1=preseason, 2=regular, 3=postseason
-  --event-id EVENT_ID   Specific ESPN event ID
+  --season-type {1,2,3} Season type: 1=preseason, 2=regular, 3=postseason
+  --game-id/--event-id  Specific ESPN game/event ID
   --config CONFIG       Path to trial config template
   --data-dir DATA_DIR   Data directory for output
-  --pre-start-hours     Hours before kickoff to start (default: 1.0)
+  --pre-start-hours     Hours before kickoff to start (default: 0.1)
   --check-interval      Status check interval in seconds (default: 60.0)
   --log-level           DEBUG, INFO, WARNING, ERROR
+  --server              Dashboard Server URL for server mode
+  --max-concurrent-starts  Max trial startups in parallel (default: 10)
+  --trial-id            Custom trial ID override
 ```
 
 ## Backtest from File
@@ -135,3 +156,8 @@ Events are persisted to JSONL format:
 ```
 
 Files are saved to `{data-dir}/{date}/{event_id}.jsonl`.
+
+## See Also
+
+- [`README.md`](../README.md) for concise runner quick start
+- [`docs/running-trials.md`](./running-trials.md) for trial orchestration workflows

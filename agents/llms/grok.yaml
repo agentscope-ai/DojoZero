@@ -1,7 +1,0 @@
-llm:
-  - model_type: openai
-    model_name: grok-4-1-fast-reasoning
-    api_key_env: DOJOZERO_MODEL_API_KEY
-    model_display_name: Grok
-    base_url_env: DOJOZERO_OPENAI_BASE_URL
-    cdn_url: https://img.alicdn.com/imgextra/i4/O1CN016klbRN1YHcmmotXbI_!!6000000003034-2-tps-200-200.png

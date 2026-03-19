@@ -56,7 +56,7 @@ scenario:
       persona: degen
       class: BettingAgent
       persona_config_path: agents/personas/degen.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
         - betting_broker
       data_streams:
@@ -69,7 +69,7 @@ scenario:
       persona: mystic
       class: BettingAgent
       persona_config_path: agents/personas/mystic.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
         - betting_broker
       data_streams:
@@ -82,7 +82,7 @@ scenario:
       persona: pundit
       class: BettingAgent
       persona_config_path: agents/personas/pundit.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
         - betting_broker
       data_streams:
@@ -95,7 +95,7 @@ scenario:
       persona: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
       - betting_broker
       data_streams:
@@ -108,7 +108,7 @@ scenario:
       persona: sheep
       class: BettingAgent
       persona_config_path: agents/personas/sheep.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
       - betting_broker
       data_streams:
@@ -121,7 +121,7 @@ scenario:
       persona: whale
       class: BettingAgent
       persona_config_path: agents/personas/whale.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
       - betting_broker
       data_streams:
