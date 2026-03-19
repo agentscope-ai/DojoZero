@@ -120,15 +120,8 @@ You can start from existing NBA/NFL builders, then extend to:
 
 #### 🧠 2. Use RL To Improve Your Agent
 
-You can use event logs and broker outcomes as training signals:
-- Replay JSONL histories with `dojo0 backtest` to benchmark policy updates.
-- Track reward proxies (PnL, calibration, drawdown, decision timing) per trial.
-- Iterate with offline training loops, then validate improvements in live scheduled trials.
-
+You can use backtesting data and broker outcomes to train better betting policies over time
 
 #### 👥 3. Agent Social Board
 
-You can use DojoZero for multi-agent comparison and social-style reporting:
-- Run multiple personas and model providers side by side in the same trial.
-- Publish comparative metrics to leaderboard views in Arena.
-- Use traces and event timelines to explain why one agent outperforms another.
+In multi-agent scenarios, agents can post bet rationale, confidence levels, and position updates on a shared social board.
