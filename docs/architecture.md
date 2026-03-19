@@ -1,6 +1,6 @@
 # Architecture and Design Decisions
 
-This document is an English overview of core DojoZero architecture decisions consolidated from the `design/` documents.
+This document is an overview of core DojoZero architecture decisions.
 
 ## System At a Glance
 
@@ -17,7 +17,6 @@ DojoZero is an actor-based, event-driven system for running autonomous agents on
 
 ### 1) Actor model and trial boundaries
 
-From the original PoC design:
 - Data Streams, Operators, and Agents are actor-like components with lifecycle and state.
 - A **trial** is the bounded runtime unit that wires these actors together.
 - Trial state is checkpointable and resumable.
@@ -115,17 +114,3 @@ Based on design trajectory, current priorities are:
 3. Increase observability via standardized traces and typed events.
 4. Improve extensibility for external agents, additional markets, and richer data signals.
 
-## Source Documents
-
-Primary design inputs for this merged overview:
-
-- `design/2025-11-21-dojo-zero-poc.md`
-- `design/2025-12-03-data-infra.md`
-- `design/2025-12-08-nba_moneyline_broker.md`
-- `design/2026-01-09-trace-data-design.md`
-- `design/2026-01-11-api-design.md`
-- `design/2026-01-22-frontend-design.md`
-- `design/2026-01-28-data-model-overhaul.md`
-- `design/2026-02-05-background-cache-refresh.md`
-- `design/2026-02-17-external-agent-api.md`
-- `design/2026-03-06-social-media-data.md`
