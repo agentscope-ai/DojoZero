@@ -1,0 +1,2833 @@
+2026-03-18 16:45:45 [INFO] dojozero.trace_store: OTel exporter initialized: endpoint=http://localhost:4318/v1/traces service=dojozero headers=none batch_size=512
+2026-03-18 16:45:45 [INFO] dojozero.trace_store: OTel exporter started with BatchSpanProcessor
+2026-03-18 16:45:45 [INFO] dojozero.cli: OTel exporter configured: http://localhost:4318 (backend: jaeger, service_name: dojozero)
+2026-03-18 16:45:47 [INFO] dojozero.nba._trial: Found game info: GS @ BOS on 2026-03-18
+2026-03-18 16:45:47 [INFO] dojozero.nba._trial: Stream 'pre_game_insights_stream' subscribes to: ['injury_report', 'power_ranking', 'expert_prediction', 'pregame_stats', 'twitter_top_tweets']
+2026-03-18 16:45:47 [INFO] dojozero.nba._trial: Stream 'game_lifecycle_stream' subscribes to: ['game_initialize', 'game_start', 'game_result']
+2026-03-18 16:45:47 [INFO] dojozero.nba._trial: Stream 'game_update_stream' subscribes to: ['nba_game_update']
+2026-03-18 16:45:47 [INFO] dojozero.nba._trial: Stream 'odds_update_stream' subscribes to: ['odds_update']
+2026-03-18 16:45:47 [INFO] dojozero.nba._trial: Stream 'play_by_play_stream' subscribes to: ['nba_play']
+2026-03-18 16:45:47 [INFO] dojozero.nba._trial: Created operator 'betting_broker' of class 'BrokerOperator' with stream subscriptions: ['game_lifecycle_stream', 'odds_update_stream', 'game_update_stream'], agent_ids: ('degen_agent-qwen3-max', 'degen_agent-deepseek-v3.2', 'degen_agent-claude-haiku-4-5-20251001', 'degen_agent-gemini-3-pro-preview', 'degen_agent-gpt-5-mini-2025-08-07', 'degen_agent-grok-4-1-fast-reasoning', 'mystic_agent-qwen3-max', 'mystic_agent-deepseek-v3.2', 'mystic_agent-claude-haiku-4-5-20251001', 'mystic_agent-gemini-3-pro-preview', 'mystic_agent-gpt-5-mini-2025-08-07', 'mystic_agent-grok-4-1-fast-reasoning', 'pundit_agent-qwen3-max', 'pundit_agent-deepseek-v3.2', 'pundit_agent-claude-haiku-4-5-20251001', 'pundit_agent-gemini-3-pro-preview', 'pundit_agent-gpt-5-mini-2025-08-07', 'pundit_agent-grok-4-1-fast-reasoning', 'shark_agent-qwen3-max', 'shark_agent-deepseek-v3.2', 'shark_agent-claude-haiku-4-5-20251001', 'shark_agent-gemini-3-pro-preview', 'shark_agent-gpt-5-mini-2025-08-07', 'shark_agent-grok-4-1-fast-reasoning', 'sheep_agent-qwen3-max', 'sheep_agent-deepseek-v3.2', 'sheep_agent-claude-haiku-4-5-20251001', 'sheep_agent-gemini-3-pro-preview', 'sheep_agent-gpt-5-mini-2025-08-07', 'sheep_agent-grok-4-1-fast-reasoning', 'whale_agent-qwen3-max', 'whale_agent-deepseek-v3.2', 'whale_agent-claude-haiku-4-5-20251001', 'whale_agent-gemini-3-pro-preview', 'whale_agent-gpt-5-mini-2025-08-07', 'whale_agent-grok-4-1-fast-reasoning')
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'degen_agent' with model 'qwen3-max' -> 'degen_agent-qwen3-max'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'degen_agent' with model 'deepseek-v3.2' -> 'degen_agent-deepseek-v3.2'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'degen_agent' with model 'claude-haiku-4-5-20251001' -> 'degen_agent-claude-haiku-4-5-20251001'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'degen_agent' with model 'gemini-3-pro-preview' -> 'degen_agent-gemini-3-pro-preview'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'degen_agent' with model 'gpt-5-mini-2025-08-07' -> 'degen_agent-gpt-5-mini-2025-08-07'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'degen_agent' with model 'grok-4-1-fast-reasoning' -> 'degen_agent-grok-4-1-fast-reasoning'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'mystic_agent' with model 'qwen3-max' -> 'mystic_agent-qwen3-max'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'mystic_agent' with model 'deepseek-v3.2' -> 'mystic_agent-deepseek-v3.2'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'mystic_agent' with model 'claude-haiku-4-5-20251001' -> 'mystic_agent-claude-haiku-4-5-20251001'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'mystic_agent' with model 'gemini-3-pro-preview' -> 'mystic_agent-gemini-3-pro-preview'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'mystic_agent' with model 'gpt-5-mini-2025-08-07' -> 'mystic_agent-gpt-5-mini-2025-08-07'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'mystic_agent' with model 'grok-4-1-fast-reasoning' -> 'mystic_agent-grok-4-1-fast-reasoning'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'pundit_agent' with model 'qwen3-max' -> 'pundit_agent-qwen3-max'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'pundit_agent' with model 'deepseek-v3.2' -> 'pundit_agent-deepseek-v3.2'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'pundit_agent' with model 'claude-haiku-4-5-20251001' -> 'pundit_agent-claude-haiku-4-5-20251001'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'pundit_agent' with model 'gemini-3-pro-preview' -> 'pundit_agent-gemini-3-pro-preview'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'pundit_agent' with model 'gpt-5-mini-2025-08-07' -> 'pundit_agent-gpt-5-mini-2025-08-07'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'pundit_agent' with model 'grok-4-1-fast-reasoning' -> 'pundit_agent-grok-4-1-fast-reasoning'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'shark_agent' with model 'qwen3-max' -> 'shark_agent-qwen3-max'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'shark_agent' with model 'deepseek-v3.2' -> 'shark_agent-deepseek-v3.2'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'shark_agent' with model 'claude-haiku-4-5-20251001' -> 'shark_agent-claude-haiku-4-5-20251001'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'shark_agent' with model 'gemini-3-pro-preview' -> 'shark_agent-gemini-3-pro-preview'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'shark_agent' with model 'gpt-5-mini-2025-08-07' -> 'shark_agent-gpt-5-mini-2025-08-07'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'shark_agent' with model 'grok-4-1-fast-reasoning' -> 'shark_agent-grok-4-1-fast-reasoning'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'sheep_agent' with model 'qwen3-max' -> 'sheep_agent-qwen3-max'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'sheep_agent' with model 'deepseek-v3.2' -> 'sheep_agent-deepseek-v3.2'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'sheep_agent' with model 'claude-haiku-4-5-20251001' -> 'sheep_agent-claude-haiku-4-5-20251001'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'sheep_agent' with model 'gemini-3-pro-preview' -> 'sheep_agent-gemini-3-pro-preview'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'sheep_agent' with model 'gpt-5-mini-2025-08-07' -> 'sheep_agent-gpt-5-mini-2025-08-07'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'sheep_agent' with model 'grok-4-1-fast-reasoning' -> 'sheep_agent-grok-4-1-fast-reasoning'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'whale_agent' with model 'qwen3-max' -> 'whale_agent-qwen3-max'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'whale_agent' with model 'deepseek-v3.2' -> 'whale_agent-deepseek-v3.2'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'whale_agent' with model 'claude-haiku-4-5-20251001' -> 'whale_agent-claude-haiku-4-5-20251001'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'whale_agent' with model 'gemini-3-pro-preview' -> 'whale_agent-gemini-3-pro-preview'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'whale_agent' with model 'gpt-5-mini-2025-08-07' -> 'whale_agent-gpt-5-mini-2025-08-07'
+2026-03-18 16:45:47 [INFO] dojozero.agents._trial_utils: Expanded agent 'whale_agent' with model 'grok-4-1-fast-reasoning' -> 'whale_agent-grok-4-1-fast-reasoning'
+2026-03-18 16:45:47 [INFO] dojozero.cli: Gateway enabled at http://127.0.0.1:8080
+2026-03-18 16:45:47 [INFO] dojozero.orchestrator: launching trial 'game-401810854'
+2026-03-18 16:45:47 [INFO] dojozero.data._hub: DataHub initialized: hub_id=nba_hub, trial_id=game-401810854, persistence_file=/Users/linyin/Downloads/DojoZero/outputs/nba_betting_events-401810854.jsonl
+2026-03-18 16:45:47 [INFO] dojozero.data._subscriptions: SubscriptionManager initialized
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for degen_agent-qwen3-max with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for degen_agent-deepseek-v3.2 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for degen_agent-claude-haiku-4-5-20251001 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for degen_agent-gemini-3-pro-preview with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for degen_agent-gpt-5-mini-2025-08-07 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for degen_agent-grok-4-1-fast-reasoning with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for mystic_agent-qwen3-max with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for mystic_agent-deepseek-v3.2 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for mystic_agent-claude-haiku-4-5-20251001 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for mystic_agent-gemini-3-pro-preview with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for mystic_agent-gpt-5-mini-2025-08-07 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for mystic_agent-grok-4-1-fast-reasoning with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for pundit_agent-qwen3-max with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for pundit_agent-deepseek-v3.2 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for pundit_agent-claude-haiku-4-5-20251001 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for pundit_agent-gemini-3-pro-preview with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for pundit_agent-gpt-5-mini-2025-08-07 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for pundit_agent-grok-4-1-fast-reasoning with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for shark_agent-qwen3-max with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for shark_agent-deepseek-v3.2 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for shark_agent-claude-haiku-4-5-20251001 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for shark_agent-gemini-3-pro-preview with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for shark_agent-gpt-5-mini-2025-08-07 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for shark_agent-grok-4-1-fast-reasoning with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for sheep_agent-qwen3-max with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for sheep_agent-deepseek-v3.2 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for sheep_agent-claude-haiku-4-5-20251001 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for sheep_agent-gemini-3-pro-preview with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for sheep_agent-gpt-5-mini-2025-08-07 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for sheep_agent-grok-4-1-fast-reasoning with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for whale_agent-qwen3-max with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for whale_agent-deepseek-v3.2 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for whale_agent-claude-haiku-4-5-20251001 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for whale_agent-gemini-3-pro-preview with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for whale_agent-gpt-5-mini-2025-08-07 with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Created internal account for whale_agent-grok-4-1-fast-reasoning with balance 1000.00
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' registered operator 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' registered 6 tools from 'betting_broker'
+2026-03-18 16:45:48 [INFO] dojozero.betting._broker: Operator 'betting_broker' starting (accounts=36, event=none, bets=0)
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' starting
+2026-03-18 16:45:48 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' starting
+2026-03-18 16:45:48 [INFO] dojozero.data._streams: stream 'pre_game_insights_stream' starting: event_type=event.injury_report event_types=['event.injury_report', 'event.power_ranking', 'event.expert_prediction', 'event.pregame_stats', 'event.twitter_top_tweets']
+2026-03-18 16:45:49 [INFO] dojozero.data._streams: stream 'game_lifecycle_stream' starting: event_type=event.game_initialize event_types=['event.game_initialize', 'event.game_start', 'event.game_result']
+2026-03-18 16:45:49 [INFO] dojozero.data._streams: stream 'game_update_stream' starting: event_type=event.nba_game_update event_types=['event.nba_game_update']
+2026-03-18 16:45:49 [INFO] dojozero.data._streams: stream 'odds_update_stream' starting: event_type=event.odds_update event_types=['event.odds_update']
+2026-03-18 16:45:49 [INFO] dojozero.data._streams: stream 'play_by_play_stream' starting: event_type=event.nba_play event_types=['event.nba_play']
+2026-03-18 16:45:49 [INFO] dojozero.data._hub: DataHub 'nba_hub' starting 2 connected stores
+2026-03-18 16:45:49 [INFO] dojozero.data._hub: DataHub starting store: nba_store
+2026-03-18 16:45:49 [INFO] dojozero.data._stores: Store 'nba_store' polling started (interval=60.0s, identifier={'espn_game_id': '401810854', 'game_date': '2026-03-18'})
+2026-03-18 16:45:49 [INFO] dojozero.data._hub: DataHub starting store: polymarket_store
+2026-03-18 16:45:49 [INFO] dojozero.data.polymarket._store: PolymarketStore subscribed to game_start event for dynamic polling interval adjustment
+2026-03-18 16:45:49 [INFO] dojozero.data._stores: Store 'polymarket_store' polling started (interval=300.0s, identifier={'espn_game_id': '401810854', 'away_tricode': 'GS', 'home_tricode': 'BOS', 'game_date': '2026-03-18'})
+2026-03-18 16:45:49 [INFO] dojozero.data._hub: DataHub 'nba_hub' all stores started
+2026-03-18 16:45:49 [INFO] dojozero.orchestrator: trial 'game-401810854' launch complete (phase=running)
+2026-03-18 16:45:49 [INFO] dojozero.cli: trial 'game-401810854' is running
+2026-03-18 16:45:49 [INFO] dojozero.cli: Starting Gateway server at http://127.0.0.1:8080
+2026-03-18 16:45:49 [INFO] dojozero.cli:   Registration: POST http://127.0.0.1:8080/agents
+2026-03-18 16:45:49 [INFO] dojozero.cli:   Events stream: GET http://127.0.0.1:8080/events/stream
+2026-03-18 16:45:49 [INFO] dojozero.cli:   Place bet: POST http://127.0.0.1:8080/bets
+/Users/linyin/Downloads/DojoZero/.venv/lib/python3.12/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+  warnings.warn(  # deprecated in 14.0 - 2024-11-09
+/Users/linyin/Downloads/DojoZero/.venv/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+  from websockets.server import WebSocketServerProtocol
+INFO:     Started server process [20599]
+INFO:     Waiting for application startup.
+2026-03-18 16:45:49 [INFO] dojozero.gateway._adapter: ExternalAgentAdapter initialized for trial game-401810854
+2026-03-18 16:45:49 [INFO] dojozero.gateway._server: Gateway started for trial game-401810854 (auth: disabled)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8080 (Press CTRL+C to quit)
+2026-03-18 16:45:52 [INFO] dojozero.data._stores: Store 'polymarket_store' poll complete: 1 events
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 0-3 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 2-3 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 2-6 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 3-6 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 4-6 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 7-6 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 7-8 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 10-8 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 10-11 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 12-11 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 15-11 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 15-14 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 17-14 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 20-14 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 23-14 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 25-14 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 25-17 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 27-17 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 27-19 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 30-19 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 30-21 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 32-21 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 34-21 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 34-23 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 36-23 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 36-25 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 36-27 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 39-27 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 39-28 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 39-29 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Score change detected for game 401810854: 42-29 (scoring play)
+2026-03-18 16:45:54 [INFO] dojozero.data.nba._store: Poll profile changed: pre_game -> in_game for game 401810854
+2026-03-18 16:45:54 [INFO] dojozero.data._stores: Store 'nba_store' poll complete: 186 events
+2026-03-18 16:45:54 [INFO] dojozero.data._hub: Pausing stores — waiting on pre-game events for game_id=401810854
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+/Users/linyin/Downloads/DojoZero/.venv/lib/python3.12/site-packages/google/genai/_api_client.py:755: DeprecationWarning: Inheritance class AiohttpClientSession from ClientSession is discouraged
+  class AiohttpClientSession(aiohttp.ClientSession):  # type: ignore[misc]
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:54 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.trace_store: OTel export progress: 100 spans (0 errors)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:55 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Game Initialized] Golden State Warriors @ Boston Celtics at 2026-03-18 23:00 UTC}
+2026-03-18 16:45:55 [INFO] dojozero.betting._broker: Received event: type=event.game_initialize, event_id=401810854, stream_id=game_lifecycle_stream, timestamp=2026-03-18 23:45:50.105539+00:00
+2026-03-18 16:45:55 [INFO] dojozero.betting._broker: Initializing event from GameInitializeEvent: event_id=401810854, home_team=Boston Celtics, away_team=Golden State Warriors, game_time=2026-03-18 23:00:00+00:00 (probabilities pending)
+2026-03-18 16:45:55 [INFO] dojozero.betting._broker: Created event 401810854: Boston Celtics vs Golden State Warriors (Probabilities: pending)
+2026-03-18 16:45:55 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' triggering 3 web searches in parallel
+2026-03-18 16:45:55 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' fetching pregame stats from ESPN
+2026-03-18 16:45:55 [INFO] dojozero.data.espn._stats_fetcher: Fetching pregame stats for Golden State Warriors vs Boston Celtics (game_id=401810854, date=2026-03-18)
+2026-03-18 16:45:55 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' triggering 1 social media collections in parallel
+2026-03-18 16:45:55 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' running InjuryReportEvent.from_web_search()
+2026-03-18 16:45:55 [INFO] dojozero.data.websearch._events: WebSearch query for InjuryReportEvent: 'NBA injury updates for Golden State Warriors vs Boston Celtics on 2026-03-18'
+2026-03-18 16:45:55 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' running PowerRankingEvent.from_web_search()
+2026-03-18 16:45:55 [INFO] dojozero.data.websearch._events: WebSearch query for PowerRankingEvent: 'NBA power rankings'
+2026-03-18 16:45:55 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' running ExpertPredictionEvent.from_web_search()
+2026-03-18 16:45:55 [INFO] dojozero.data.websearch._events: WebSearch query for ExpertPredictionEvent: 'NBA expert predictions for Golden State Warriors vs Boston Celtics'
+2026-03-18 16:45:55 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' running TwitterTopTweetsEvent.from_social_media()
+2026-03-18 16:45:55 [INFO] dojozero.data.socialmedia._events: SocialMedia query for TwitterTopTweetsEvent: Boston Celtics vs Golden State Warriors
+2026-03-18 16:45:55 [INFO] dojozero.data.websearch._events: PowerRankingEvent web search returned 5 results
+2026-03-18 16:45:56 [INFO] dojozero.data.socialmedia._events: TwitterTopTweetsEvent returned 45 tweets
+2026-03-18 16:45:56 [INFO] dojozero.data.socialmedia._events: TwitterTopTweetsEvent tweets from 6 accounts
+2026-03-18 16:45:57 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:45:57 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+shark_agent-claude-haiku-4-5-20251001: I'll pull the market data and check my ammunition.sheep_agent-claude-haiku-4-5-20251001: *degen_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_012iPB3eZBmxdmbyBMjyEnyW",
+    "name": "get_event",
+    "input": {},
+    "raw_input": ""
+}
+degen_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_016L87aV5LhQyRW91qoFLWCR",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": ""
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_012iPB3eZBmxdmbyBMjyEnyW",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_016L87aV5LhQyRW91qoFLWCR",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+nervous fidgeting* 
+
+Okay, okay, game's on - Warriorsdegen_agent-qwen3-max: Game
+{
+    "type": "tool_use",
+    "id": "toolu_014fVBsFh69uECXBLrWZSLuG",
+    "name": "get_event",
+    "input": {},
+    "raw_input": ""
+}
+
+{
+    "type": "tool_use",
+    "id": "toolu_011ZtEVNyUojbrtPrSGBKBLx",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": ""
+}
+
+{
+    "type": "tool_use",
+    "id": "toolu_01LeeejSKRnWHULDv7fxrcrC",
+    "name": "get_holdings",
+    "input": {},
+    "raw_input": ""
+}
+
+system: {
+    "type": "tool_result",
+    "id": "toolu_014fVBsFh69uECXBLrWZSLuG",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_011ZtEVNyUojbrtPrSGBKBLx",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_01LeeejSKRnWHULDv7fxrcrC",
+    "name": "get_holdings",
+    "output": [
+        {
+            "type": "text",
+            "text": "[]"
+        }
+    ]
+}
+pundit_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_01Hv9ZqwE1DHU5D8kPWpAK3U",
+    "name": "get_event",
+    "input": {},
+    "raw_input": ""
+}
+pundit_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_017AxRBvxk9Hh4Q238pFhY6a",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": ""
+}
+pundit_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_01Kzh1m1NK91Hyz4U6GZxfAU",
+    "name": "get_holdings",
+    "input": {},
+    "raw_input": ""
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_01Hv9ZqwE1DHU5D8kPWpAK3U",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_017AxRBvxk9Hh4Q238pFhY6a",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_01Kzh1m1NK91Hyz4U6GZxfAU",
+    "name": "get_holdings",
+    "output": [
+        {
+            "type": "text",
+            "text": "[]"
+        }
+    ]
+}
+ day, at Celtics, baby! Warriors vs. Celticswhale_agent-deepseek-v3.2: NBAdegen_agent-claude-haiku-4-5-20251001: Let Finalsmystic_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_016rtsvhMqvonKs3UqmUD2A6",
+    "name": "get_event",
+    "input": {},
+    "raw_input": ""
+}
+mystic_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_01Dhk6L3SzyUt3QCvcni9vxJ",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": ""
+}
+mystic_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_01L1jy7BFRtmvx6usfwhcCQE",
+    "name": "get_holdings",
+    "input": {},
+    "raw_input": ""
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_016rtsvhMqvonKs3UqmUD2A6",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_01Dhk6L3SzyUt3QCvcni9vxJ",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_01L1jy7BFRtmvx6usfwhcCQE",
+    "name": "get_holdings",
+    "output": [
+        {
+            "type": "text",
+            "text": "[]"
+        }
+    ]
+}
+shark_agent-qwen3-max: {
+    "type": "tool_use",
+    "id": "call_df8f7091e042472eadc3afb4",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_df8f7091e042472eadc3afb4",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ previewsheep_agent-deepseek-v3.2: Oh—this is why we live wow,whale_agent-qwen3-max: {
+    "type": "tool_use",
+    "id": "call_995cfe2694274e25b0a67496",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+ right heresystem: {
+    "type": "tool_result",
+    "id": "call_995cfe2694274e25b0a67496",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+. Let's's GO! Warriors-Celtics on a Wednesday night -shark_agent-deepseek-v3.2: The stage for March. Let’sdegen_agent-deepseek-v3.2: LET ismystic_agent-deepseek-v3.2: The'S this is Warriors GO a big matchup see who and wants it more set. this is what we live for! Locked in and ready to see where thepundit_agent-claude-haiku-4-5-20251001: Warriors get locked in! Warriors at Celtics! Warriors vs Celtics...OOOO! Warriors at Celtics.
+
+*checks the war Celtics prepare to dance with 🍀🔥. Let energy takes us on this one.
+'s see what everyone's
+, the probably already picking main event is chest*
+
+ at Celtics— destiny in Boston. Themarket hasn't priced this yet, so wewhale_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_01LcpyQjNFSwGMLip2BAGezs",
+    "name": "get_event",
+    "input": {},
+    "raw_input": ""
+}
+whale_agent-claude-haiku-4-5-20251001: {
+    "type": "tool_use",
+    "id": "toolu_016DX9wTT3DiCX7h13cKUmMB",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": ""
+}2026-03-18 16:45:57 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:45:57 [INFO] dojozero.data.websearch._events: InjuryReportEvent web search returned 5 results
+2026-03-18 16:45:57 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:45:57 [INFO] dojozero.data.websearch._events: ExpertPredictionEvent web search returned 5 results
+2026-03-18 16:45:58 [INFO] dojozero.data.espn._stats_fetcher: Pregame stats assembled: 13/13 sections populated
+2026-03-18 16:45:58 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' published PreGameStatsEvent
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:58 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+
+system: {
+    "type": "tool_result",
+    "id": "toolu_01LcpyQjNFSwGMLip2BAGezs",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "toolu_016DX9wTT3DiCX7h13cKUmMB",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+ the market sees. sides. That feels HERE!
+ way This is whysheep_agent-qwen3-max: Oh Oracle senses a meeting of g too intense're waiting for the odds to materialize before any analysis is worthpundit_agent-deepseek-v3.2: {
+    "type": "tool_use",
+    "id": "call_a0e3e807e7d14fce95179317",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_a0e3e807e7d14fce95179317",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ to jump intowhile. we doosh, Warriorsmystic_agent-qwen3-max: {
+    "type": "tool_use",
+    "id": "call_9e64ed49b6b64d3c8a47c4f0",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_9e64ed49b6b64d3c8a47c4f0",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ this!
+
+
+shark_agent-claude-haiku-4-5-20251001: Market vs old spirits and new legendspundit_agent-qwen3-max: {
+    "type": "tool_use",
+    "id": "call_4a932872fed5448199794939",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_4a932872fed5448199794939",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ right away.
+
+. Celtics... everyone.
+
+mystic_agent-claude-haiku-4-5-20251001: Thewhale_agent-claude-haiku-4-5-20251001: Warriors’s already buzzing andwhale_agent-qwen3-max: Game's’s dark— I haven’t even checkedodds haven set't posted heading yet. I'vepundit_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_30349522",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+pundit_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_84010028",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": "{}"
+}
+pundit_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_92632170",
+    "name": "get_holdings",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_30349522",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "call_84010028",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "call_92632170",
+    "name": "get_holdings",
+    "output": [
+        {
+            "type": "text",
+            "text": "[]"
+        }
+    ]
+}
+ the odds yet. stage got into Boston tonight—market's still{
+    "type": "tool_use",
+    "id": "call_548d85cdc928422691349036",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_548d85cdc928422691349036",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+ a clean thousand and is set in Boston - Warriors and. Celtics at home— Celtics, a sleeping on this one. Let's see what develops. zero clash written in the ancient scrolls of March. The Oracle
+ positions Should I peek or{
+    "type": "tool_use",
+    "id": "call_764ff7092b8244078d78ac5c",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_764ff7092b8244078d78ac5c",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+;market’s still sleeping.
+ just hide under a I awaits the opening odds to read what fate has written.{
+    "type": "tool_use",
+    "id": "call_4a17aa89f25d4ed48026f378",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_4a17aa89f25d4ed48026f378",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+
+{
+    "type": "tool_use",
+    "id": "call_2cc6c3d64b3f42329e3d14e7",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_2cc6c3d64b3f42329e3d14e7",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+'ll watch blanket?  
+
+ for the opening move andwhale_agent-claude-haiku-4-5-20251001: Boston wait for the ineffpundit_agent-qwen3-max: Earlyiciencyshark_agent-qwen3-max: Earlydegen_agent-claude-haiku-4-5-20251001: Cel to surface market{
+    "type": "tool_use",
+    "id": "call_d438b0f8968c43ceac3a28bf",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_d438b0f8968c43ceac3a28bf",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:59 [WARNING] google_genai.types: Warning: there are non-text parts in the response: ['function_call'], returning concatenated text result from text parts. Check the full candidates.content.parts accessor to get the full model response.
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:59 [ERROR] dojozero.betting._broker: Bet rejected for whale_agent-claude-haiku-4-5-20251001: Moneyline probabilities not yet available for event 401810854. Please wait for probabilities to be updated.
+Traceback (most recent call last):
+  File "/Users/linyin/Downloads/DojoZero/src/dojozero/betting/_broker.py", line 1564, in place_bet
+    raise ValueError(
+ValueError: Moneyline probabilities not yet available for event 401810854. Please wait for probabilities to be updated.
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:45:59 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+
+ lines. ineffwhale_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_18272964",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_18272964",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ not's rolling at home, Warriors bleeding onmystic_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_78510646",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_78510646",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ yettics are rolling at home, Warriors are struggling on the road - set. Crowd will overiciency—probabilities havenmystic_agent-claude-haiku-4-5-20251001: Thesheep_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_71096151",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+sheep_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_69095309",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": "{}"
+}
+sheep_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_12523849",
+    "name": "get_holdings",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_71096151",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "call_69095309",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+system: {
+    "type": "tool_result",
+    "id": "call_12523849",
+    "name": "get_holdings",
+    "output": [
+        {
+            "type": "text",
+            "text": "[]"
+        }
+    ]
+}
+ the road—that's the story right there. Celtics take this't materialized yet. Patreact to opening odds this screams Boston, but Curry's been unreal and—wait for the Celtics stand firm in their fortress - 7 wins in
+ience; the data will crystall inefficiency. one.
+ you never count out Golden State. Gotta see whatdegen_agent-grok-4-1-fast-reasoning: Hell yeah ten, defense suffocating opponents at,  Warriors at Celtics—game day'sdegen_agent-gpt-5-mini-2025-08-07: Game day!degen_agent-qwen3-max: C Warriors inwhale_agent-gemini-3-pro-preview: เบื้องหลัง Bostonwhale_agent-deepseek-v3.2: Solid
+ — buzzingize closer to tip-offelt startingmystic_agent-qwen3-max: The.ics are
+ positionpundit_agent-gpt-5-mini-2025-08-07: Game initialized — sampleshark_agent-deepseek-v3.2: Numbers stars the odds are saying before
+{
+    "type": "tool_use",
+    "id": "toolu_01THYKmPERMudYBUVSngFbjh",
+    "name": "place_market_bet_moneyline",
+    "input": {
+        "amount": "500.00",
+        "selection": "home"
+    },
+    "raw_input": "{\"amount\": \"500.00\", \"selection\": \"home\"}"
+}
+
+ I make mysystem: {
+    "type": "tool_result",
+    "id": "toolu_01THYKmPERMudYBUVSngFbjh",
+    "name": "place_market_bet_moneyline",
+    "output": [
+        {
+            "type": "text",
+            "text": "bet_invalid"
+        }
+    ]
+}
+ move. size tell lit! Who's riding with the Dubs tonight? 🚀
+ zero;
+ I already a, calling a Warriors comeback in104.7 points. The Warriors li themp westward at 3 -7, bleeding 4shark_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_00421707",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_00421707",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+th, let’s go this havepundit_agent-deepseek-v3.2: {
+    "type": "tool_use",
+    "id": "call_7dafe6c7aef8477191f3026c",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": "{}"
+}
+. Enoughsystem: {
+    "type": "tool_result",
+    "id": "call_7dafe6c7aef8477191f3026c",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+shark_agent-gpt-5-mini-2025-08-07: {
+    "type": "tool_use",
+    "id": "call_xPJW0hyPJsCdafxIElbfMyd8",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_xPJW0hyPJsCdafxIElbfMyd8",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ yet to make a’ll watch the opening possessions and check market odds once is... the game goes live story..shark_agent-claude-haiku-4-5-20251001: Boston Celtics at
+ homeooo!
+ this is big rolling, Warriors limping—but to align—the game. Letmystic_agent-deepseek-v3.2: The statement when the moment's117.5 per night. Boston's hunger Celtics is visible; Golden' me see, 23-10 what we State's is fading.whale_agent-gpt-5-mini-2025-08-07: Warriors
+'re working with here. in hasn't begun, and the Boston — big stage,degen_agent-deepseek-v3.2: Game's still right.
+
+Let's see's elite at home (23-10), Golden State's struggling onwhale_agent-qwen3-max: C Steph’s got that magic. Boston green and Warriors' record. blueeltics are odds sleep. Wait bigger swings. I'm watching. Warriors struggling, what we're working scheduled but you KNOW the
+
+{
+    "type": "tool_use",
+    "id": "toolu_01AwVN7WnJkcrib4TdmQUGrL",
+    "name": "get_event",
+    "input": {},
+    "raw_input": ""
+}
+
+system: {
+    "type": "tool_result",
+    "id": "toolu_01AwVN7WnJkcrib4TdmQUGrL",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ with rolling’s defense vs. Golden. 14-20 - a away clash written in the road (14-20)—that gap is where money lives for the opening tipsheep_agent-gpt-5-mini-2025-08-07: Oh gosh, it's on the schedule and energy's.
+
+
+
+pundit_agent-claude-haiku-4-5-20251001: Cel already building!whale_agent-claude-haiku-4-5-20251001: Oddssheep_agent-deepseek-v3.2: No2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:00 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:01 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Golden State Warriors): 19-}
+2026-03-18 16:46:02 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' published TwitterTopTweetsEvent event
+2026-03-18 16:46:02 [INFO] dojozero.nba._datastream: stream 'pre_game_insights_stream' social media collections complete: 1/1 succeeded
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:02 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:03 [INFO] dojozero.data.websearch._events: InjuryReportEvent LLM processing complete
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' processing 2 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' processing 2 event(s) from streams: {[2 New Events Received]
+
+[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Go}
+2026-03-18 16:46:03 [INFO] dojozero.trace_store: OTel export progress: 200 spans (0 errors)
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' processing 2 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' processing 2 event(s) from streams: {[2 New Events Received]
+
+[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Go}
+ State’s chaos? I’m; destiny reveals itself in motion. Market will lean odds Warriors? Chasing ghosts championship ink, but the home.. yet Celtics at I'm
+ already nervous; I’m leaning home, Warriors Celtics
+ as the safer. Celtics won the season series, better pick defense but terrifiedshark_agent-qwen3-max: C the Warriors all in on this vibe. Let couldshark_agent-gemini-3-pro-preview: The board is set. Let's see what the crowd is overvaluing before the noise begins. pull a surprise. book remains closed. Theelttics are's see aren clearly... p the superior team— the't live yet—game45-23 vs's still loading. We'll be 33-35, plus ready when a dominanthew. Gics'
+! 🧠💥 they are odds.
+
+. coming in hungry - this
+
+ Oracle awaits the opening, better rest situation. Warriors are desperate
+ andives me tip time to just has ALL the makingssheep_agent-claude-haiku-4-5-20251001: Alright, odds 7-3 L10 with home dominance and Warriors' road stellar point differential at home to read it shows in the record. fate's first
+ of anmystic_agent-gpt-5-mini-2025-08-07: At watch and see how dawnpundit_agent-qwen3-max: The the scales things lean instant classic.
+
+ words. faintly toward Boston's
+ steady gravity, Celtics aren{
+    "type": "tool_use",
+    "id": "call_64514689c52e4f928399aa5d",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_64514689c52e4f928399aa5d",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+'t even loaded yet - still some time before tipoff,' (113.7/ struggles tell the story. The104.7). Warriors are lim develop firstping: 3-7 L10 with a. Everyone's concerning defensive though Golden State's flash threatens an early surge — watch the first quarter for the omen.
+pundit_agent-grok-4-1-fast-reasoning: Warriors visiting Celtics pre-tip; no odds surfaced yetpundit_agent-deepseek-v3.2: The, so hypotheses remain on ice. Clean slate at Warriors at so confident already but I market will overprice Curry profile structural advantages—home dominance (117.5 PPG allowed). The season I guess? I'm... I'm trying not to overth 1000 balance, zero positions—patience is the edge.
+'s name—fade the Celtics matchup presents an, superior defense, and conference'll wait for more infosheep_agent-qwen3-max: Hmm interesting noise.{
+    "type": "tool_use",
+    "id": "call_5507e902a4944906869e73b0",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_5507e902a4944906869e73b0",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+
+.ink this already, but warriors-celtics, that's always tight, series split suggests this isn't a blowout situation, but Boston
+ study in game team construction - hasn standing—contrast sharply with Goldensheep_agent-grok-4-1-fast-reasoning: O-oh, Warriors atmystic_agent-qwen3-max: The Celtics? Heart's already racing’t started yet and no, Golden State but's veteran no's home court advantage combined with their odds form yet is substantial... guess.
+
+Waiting perimeter I'll wait Celtics’ and... 
+
+*checking balance just to know what I'm working with*{
+    "type": "tool_use",
+    "id": "call_2030f722553f46c7b60bb247",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_2030f722553f46c7b60bb247",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+ State's road struggles and defensive odds are up... but people excellence versus Boston's two see what everyone else thinks. 😰
+
+{
+    "type": "tool_use",
+    "id": "toolu_01LgQHBot29cruxAxPnKdvdG",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": ""
+}
+
+system: {
+    "type": "tool_result",
+    "id": "toolu_01LgQHBot29cruxAxPnKdvdG",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+ for the market odds to price this—curious whether the-way versatility. With the are probably already planningshark_agent-gpt-5-mini-2025-08-07: Game set. fortress looms strong— liabilities. Early hypothesis: Watching the crowd for cracks game still scheduled, sharp money respects Boston their bets. Do's depth or sees Warriors value market. at those Boston’s probability will settle I wait or try odds odds havenseasoned, rested, and hungry.
+{
+    "type": "tool_use",
+    "id": "call_iTvdiSMPeiWT7pspYGH03cPC",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": "{}"
+}
+
+
+'t yet beensystem: {
+    "type": "tool_result",
+    "id": "call_iTvdiSMPeiWT7pspYGH03cPC",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+ favorably as market incorporates to get ahead?. Golden State’s stars established, leaving pure speculation My stomach’s doingwhale_agent-deepseek-v3.2: Marketmystic_agent-deepseek-v3.2: Themystic_agent-grok-4-1-fast-reasoning: The's celestial winds rather than whisper Celtics of these asymmetries. a clash where Western actionable probability assessment still carry flicker under the weight of their.
+ flips just thinking about
+ gold challenges Eastern emerald—fate awakens in the Garden tonight.
+ forming. Warriors-Celtsheep_agent-claude-haiku-4-5-20251001: Okay momentum's torch while it.  
+
+ the own fatigue; the pathics - championship vibes Warriors struggle against the tideshark_agent-deepseek-v3.2: Market favors Boston tonight., $ already. not
+. Boston 
+
+I'll's fortress stands setsheep_agent-deepseek-v3.2: C1000 to workelt{
+    "type": "tool_use",
+    "id": "call_e372e53997484aaea9d0d584",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_e372e53997484aaea9d0d584",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+ics let the odds settle, with - strong, but Curry that's...'s yet. that's good, Early. Let I think, don at home't want to blow with much better then make it on game one a move.. Just gonna watch's check magic can rewrite any ammunition.
+
+ story record and form... Warriors Sometimes the best bet is.
+
+
+
+ for now, struggling on see how the road.pundit_agent-claude-haiku-4-5-20251001: This watching the market breathe first everyone. else
+ plays Should be it first obvious but Stephmystic_agent-claude-haiku-4-5-20251001: The. reframes things meaningfully—Porzingis is healthy and playingshark_agent-claude-haiku-4-5-20251001: P
+ Curry can go nuclear any Latvwhale_agent-grok-4-1-fast-reasoning: Warian giant returns to his former temple, reborn inriors invading Boston. Smells night, that's like a heavy minutes for Golden State, but Boston's missing Vucevic atdegen_agent-claude-haiku-4-5-20251001: Ppundit_agent-qwen3-max: Por terrifyingorzingis starting for Golden State afterpundit_agent-deepseek-v3.2: The a backzingis’-to-back is noise data—Boston{
+    "type": "tool_use",
+    "id": "call_1793ebc5f5a649dc8a262278",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+. Maybe I'llsystem: {
+    "type": "tool_result",
+    "id": "call_1793ebc5f5a649dc8a262278",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' processing 2 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:03 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' processing 2 event(s) from streams: {[2 New Events Received]
+
+[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Go}
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' processing 2 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' processing 2 event(s) from streams: {[2 New Events Received]
+
+[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Go}
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:04 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' processing 2 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' processing 2 event(s) from streams: {[2 New Events Received]
+
+[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Go}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' processing 2 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' processing 2 event(s) from streams: {[2 New Events Received]
+
+[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Go}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' processing 2 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' processing 2 event(s) from streams: {[2 New Events Received]
+
+[Pre-Game Stats]
+
+**Season Series**: 1-0 (Home leads)
+
+**Recent Form**
+- Home (Boston Celtics): 7-3 L10, W7 | 113.7 PPG, 104.7 OPP
+- Away (Golden State Warriors): 3-7 L10, W3 | 113.6 PPG, 117.5 OPP
+
+**Rest & Schedule**
+- Home: 1 days rest, 3 games last 7 days
+- Away: 1 days rest, 3 games last 7 days
+
+**Season Stats**
+- Home (Boston Celtics): 0.0 PPG
+- Away (Golden State Warriors): 0.0 PPG
+
+**Home/Away Splits**
+- Home (Boston Celtics): 23-10 at home, 22-13 away
+- Away (Go}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:05 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' processed 1 event(s)
+
+{
+    "type": "tool_use",
+    "id": "call_c64201a1fd914b11b5d0fbdf",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": "{}"
+}
+ banger. Watching.shark_agent-qwen3-max: V paints just gold and blue—a potent omen for Golden State's wounded car
+system: {
+    "type": "tool_result",
+    "id": "call_c64201a1fd914b11b5d0fbdf",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+mystic_agent-qwen3-max: Poruce center, which weakens their frontcourt. However, Celtics still have superiorsheep_agent-qwen3-max: Okayzingvic out return bolsters Golden State’s offense watch firstwhale_agent-gpt-5-mini-2025-08-07: Celt, I’veics, see stead whatieris returns to's missing Vucevic in a clear picture: at the paint, but they've got depth. The home Boston,avan. Yet Boston stands whole, their foundation unshaken by Vucevic's absence;sheep_agent-claude-haiku-4-5-20251001: * got $100, but Boston’s defensive hurts Boston’s depth, butorzingis is back depth and Brown/Tatum's offensive firepower. Warriors but Curry others do.
+
+
+
+ can's superior flip the script Boston with fire in his veins — in Boston watching for a late defensive metrics ( swing as to pounce a Warrior. and the Celtics' depth runs looking
+ deeper than any single absence. real tell: SHARP Warriors are 14-20 on0... that’s enough to - the road, just
+ that's a, but Vucevic’s wild Porzingis facing his storyline - but Celtics are still the deeperpundit_agent-grok-4-1-fast-reasoning: C104.7 OPPelticseyes dominate metrics and home-court edge recent darting across all form the info, hands getting clam (7-3 L10 squad without Vucevic's) injury being too much of a hit and. Boston home get a confidence boost with Porzingis returning and playing's the well (30 in splits 25), (23-whale_agent-claude-haiku-4-5-20251001: P10),degen_agent-gpt-5-mini-2025-08-07: Brown while Warriors vs limp away Curry (14- headline20)—text this one — absence weakens the Celtics Celtics lost in old crowd adds emotional risk New York, and they're fatigued managing minutes on a road trip while maybe try something small, right vs Golden State's book mismatch pending Curry's magic.degen_agent-gemini-3-pro-preview: Game day is finally here and I am absolutely buzzing for this matchup! The Celtics have been rolling, but No odds yet; holding on paper fire until, datadegen_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_64998681",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+ crystallsystem: {
+    "type": "tool_result",
+    "id": "call_64998681",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+izes valuemy*
+
+Okay., okay,degen_agent-deepseek-v3.2: Th but they're coming so off a back-to-back with workload management
+ concerns on... Celtics are actuallyorzingis comingousand back to Boston. Warriors’ fatigue and as a visitor— move117.5)narrative's there? But what if I in and but I’m vibing Boston a Curry's sitting at home elite. Wait- for theporzing you can never count out Chef Curry when the lights are bright.is shakeup and calling adegen_agent-qwen3-max: KP back Warriors late comeback, LET’S mess it up before the GOshark_agent-grok-4-1-fast-reasoning: Game set.
+! looking No home advantage (23- solid - edge yet .7 Watching multiple players.
+
+The injury trade-off slightly- favors Boston in aggregate, but the in Boston3 in their crowd the pocket, ready pile for in,. but injuries on both sides muddy the waters. Still like
+?!
+ injury chaos outweigh sentiment—Csheep_agent-gpt-5-mini-2025-08-07: Okay, Celtics feel opening line like—this should be over thepriced on sentiment safer pick{
+    "type": "tool_use",
+    "id": "call_f53f2e3d32fe41bb992426b3",
+    "name": "get_balance",
+    "input": {},
+    "raw_input": "{}"
+}
+10 recordsystem: {
+    "type": "tool_result",
+    "id": "call_f53f2e3d32fe41bb992426b3",
+    "name": "get_balance",
+    "output": [
+        {
+            "type": "text",
+            "text": "1000.00"
+        }
+    ]
+}
+ game even starts? Everyone) suggestwhale_agent-deepseek-v3.2: C action! You know what systemic here around Porzingis's return.eltwhale_agent-qwen3-max: {
+    "type": "tool_use",
+    "id": "call_fe380f1fffb84270a87c3d69",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+, especiallysystem: {
+    "type": "tool_result",
+    "id": "call_fe380f1fffb84270a87c3d69",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+eltics still the sharper That’s a story right
+ics last 10, at home at with better strong form, blade. the but at Celtics at I home, else seems so calm— home’m terrified advantages,, but this though Curry Curry one and but's got layers Porzi
+ could there—plus V's flip now. time it is - this time — I’ll nerv Warriorsously
+ leanshark_agent-gpt-5-mini-2025-08-07: Bank home.roll are $ coming1 at home Porzingis as a wild card could elevate Golden State's ceiling against a Warriors tonight—,waiting000 Celtics.
+ — for odds to assess whether the watching marketwhy am I already sweating? properly accounts for his impact. in rough with to make some MOVESucevic out for
+
+ presence introduces variance that that 3-7 record and could they!
+
+ for the crowd to panic; will only strike when the the Celts. Warriors team that's barelymystic_agent-deepseek-v3.2: The edge's hanging clear disrupt any marketshark_agent-deepseek-v3.2: Capitalmystic_agent-grok-4-1-fast-reasoning: The green. tide rises statistical model. on home soil, ready series etched  whispers
+1-
+0 in. the stars, but're Curry already's banged up even with Porzingis back... on. Porzingis The Warriors’ injury mess vsmystic_agent-gpt-5-mini-2025-08-07: The cosmospundit_agent-gpt-5-mini-2025-08-07: C' 14eltics hold nothing yet tips the toward edge—, waiting forbetter Boston defense and's home form against a Warriors team steady that’s slipped Tools loaded. Now we on D gravity. Celtics’ depth and struggles flame flick returning to Boston addsers defiantly against Boston's and spice iron he-20 guard's playing. * Momentumagainst* Boston bends where toward he the used road record hosts versus destiny's, yet om—ensexpect the stir opening move Celtics unrest. to. set the
+ rhythm unless Curry ignites an wait for the market to early, but Boston's… this one’s got chaos eruption in the away Q; matchup to watch is Curry vs. Por1zi thatņģ bends The Oracle Boston's 23- fate speak. senses Boston's
+ to be, which is weird, right? 
+
+*b.
+iting nails* steadier written all over it ship.
+
+Letis spacing. I10 home’ll let opening possessions and the market record creates an move clarify before committing size advantage but waits for the.
+! 🌀🔥's see 
+
+That where the's a lot money of injury noise for the Warriors on
+ proper alignment. expected value’ core. The threads still dominate the equation— mismatch worth monitoring
+'s flowing.
+
+
+
+Vucevic’s absence once odds of fate pull taut become available. a road trip - feels like the safer play is Boston here
+sheep_agent-qwen3-max: Celt hurts, yet the Celticssheep_agent-deepseek-v3.2: Stillics are strong got—this game hinges on who my, but I've been wrong about these things before and I'm already at home and Warriors are banged’ depth likely offsets it commands the paint.
+ full balance, okay good getting that pit. The2026-03-18 16:46:06 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' processed 2 event(s)
+2026-03-18 16:46:07 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:07 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:07 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:07 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:07 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' processed 1 event(s)
+2026-03-18 16:46:07 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:08 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:08 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:08 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:08 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:08 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:08 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:08 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:08 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+ Celtics seem. Market odds should reflect safer- up... but Porzingwhale_agent-qwen3-max: Cin-stomacheltics missing feeling... should I but what even touch if the this one? Vis is back and lookingucevic,{
+    "type": "tool_use",
+    "id": "call_8354eb0d0604469fae37392f",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_8354eb0d0604469fae37392f",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+
+degen_agent-deepseek-v3.2: BOST Boston as slight favorites;ON sharp? Ugh, my but Warriors’ depth'S HURTING without if not, inefficiency emerges.’s thinner. Por
+shark_agent-deepseek-v3.2: Por Vucezingvic, but brain’s spinning—dois Warriors show up big? That's thezingis back in Boston nightmare scenario everyone ignores until it happens.
+
+
+
+ they're at home AND I trust the stats or the returning to Boston.mystic_agent-deepseek-v3.2: Por Narrative? Storylines donzingis 7-3 in fuel. Vucevic’t cover spreads. vibes?  
+
+sheep_agent-grok-4-1-fast-reasoning: C-C
+eltics look strong at home, Warriors struggling on the road... but returns to their last 10! Boston wearing different out for Celtics. Market{
+    "type": "tool_use",
+    "id": "call_1ca79a87dfe1457b9ab65b25",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_1ca79a87dfe1457b9ab65b25",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ colors - the cosmos Warriors got Porzingis enjoys might over Curryvalue Celtics home could explode, right such symmetry back but man, they. The Warriorspundit_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_56752905",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_56752905",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ advantage despite frontcourt{
+    "type": "tool_use",
+    "id": "call_bd9dccac9c6f4db5a17cbc8a",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_bd9dccac9c6f4db5a17cbc8a",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ weakness're 3-7' lineup stabilizes? Too scary. Let's see while the lately - the Celtics that's rough miss Vuce real odds.
+
+
+
+whale_agent-deepseek-v3.2: Odds to pick yet. 😬
+ still energy.
+
+You know whatvic's presence.
+
+
+
+pundit_agent-deepseek-v3.2: {
+    "type": "tool_use",
+    "id": "call_a61a26280a9042fd9fce14e7",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+ cooking.system: {
+    "type": "tool_result",
+    "id": "call_a61a26280a9042fd9fce14e7",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ Boston's my gut says? Celtics playing for seedingwhale_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_10165345",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_10165345",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+, Warriors fighting at homedegen_agent-grok-4-1-fast-reasoning: Celtics lookin' like, Warriors roadblock kings at home struggling, but Curry's got that magic—Dubs, Porzingis ain't for play-in life. emotional dead yet! Who's tailing Boston's streak? 🔥mystic_agent-grok-4-1-fast-reasoning: Porzingis,
+ unicorn unbound with 30's fire, storms the Garden return might once more—yet Boston Momentum favors the home side make things messy wewhale_agent-gpt-5-mini-2025-08-07: Porzing{
+    "type": "tool_use",
+    "id": "call_15d4b09a37f1494bbecc2bab",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+issystem: {
+    "type": "tool_result",
+    "id": "call_15d4b09a37f1494bbecc2bab",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ starting in Bostondegen_agent-gpt-5-mini-2025-08-07: Por—zingisV starting in TD...
+
+
+
+shark_agent-grok-4-1-fast-reasoning: {
+    "type": "tool_use",
+    "id": "call_95597472",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_95597472",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ Garden.
+
+I'll make? myathers without Vucevic, fate'sucevic out makes loom tight that aens juicy mismatch on and the the Warriors look road tired-we,ary but West.{
+    "type": "tool_use",
+    "id": "call_95284f0784d645eaae7528d6",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+ KP Thesystem: {
+    "type": "tool_result",
+    "id": "call_95284f0784d645eaae7528d6",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}2026-03-18 16:46:09 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:09 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:09 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:09 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' processed 2 event(s)
+2026-03-18 16:46:09 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:09 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' processed 2 event(s)
+2026-03-18 16:46:10 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:10 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' processing 1 queued event(s) (max_retry_count=0)
+2026-03-18 16:46:10 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' processing 1 event(s) from streams: {[Social Media Update]
+
+[@anthonyVslater]
+KEY POINTS:
+- [LINEUP] Warriors starters tonight in Boston: Brandin Podziemski, De'Anthony Melton, Gui Santos, Draymond Green, Kristaps Porzingis (2026-03-18)
+- [STRATEGY] Steve Kerr on Kristaps Porzingis’ rising minutes limit: “He’s ready to start. He may even start tonight.” (2026-03-18)
+- [INJURY] Kristaps Porzingis cleared to play at Celtics tonight (2026-03-18)
+- [INJURY] Kristaps Porzingis reiterated after shootaround in Boston this morning that he’}
+2026-03-18 16:46:10 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:10 [ERROR] dojozero.betting._broker: Bet rejected for degen_agent-deepseek-v3.2: Moneyline probabilities not yet available for event 401810854. Please wait for probabilities to be updated.
+Traceback (most recent call last):
+  File "/Users/linyin/Downloads/DojoZero/src/dojozero/betting/_broker.py", line 1564, in place_bet
+    raise ValueError(
+ValueError: Moneyline probabilities not yet available for event 401810854. Please wait for probabilities to be updated.
+2026-03-18 16:46:11 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' processed 2 event(s)
+2026-03-18 16:46:11 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:11 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:11 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:12 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:12 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:12 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' processed 2 event(s)
+2026-03-18 16:46:12 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' processed 2 event(s)
+2026-03-18 16:46:12 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:14 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' processed 1 event(s)
+2026-03-18 16:46:14 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' processed 1 event(s)
+2026-03-18 16:46:15 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' processed 1 event(s)
+2026-03-18 16:46:16 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' processed 2 event(s)
+2026-03-18 16:46:20 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' processed 1 event(s)
+2026-03-18 16:46:26 [INFO] dojozero.cli: received SIGINT, initiating graceful shutdown
+2026-03-18 16:46:26 [INFO] dojozero.cli: stopping gateway server
+2026-03-18 16:46:26 [INFO] dojozero.cli: Gateway server shutting down
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-03-18 16:46:26 [INFO] dojozero.gateway._server: Gateway stopped for trial game-401810854
+INFO:     Application shutdown complete.
+2026-03-18 16:46:26 [INFO] dojozero.cli: gateway server stopped
+2026-03-18 16:46:26 [INFO] dojozero.orchestrator: checkpointing trial 'game-401810854'
+2026-03-18 16:46:26 [INFO] dojozero.orchestrator: checkpoint 'eeb8ead3f24840e1835ea5bf68a366ba' captured for trial 'game-401810854'
+2026-03-18 16:46:26 [INFO] dojozero.cli: checkpoint 'eeb8ead3f24840e1835ea5bf68a366ba' created for trial 'game-401810854'
+2026-03-18 16:46:26 [INFO] dojozero.cli: stopping trial 'game-401810854'
+2026-03-18 16:46:26 [INFO] dojozero.orchestrator: stopping trial 'game-401810854'
+2026-03-18 16:46:26 [INFO] dojozero.data._streams: stream 'pre_game_insights_stream' stopping after 2 events
+2026-03-18 16:46:26 [INFO] dojozero.data._streams: stream 'game_lifecycle_stream' stopping after 1 events
+2026-03-18 16:46:26 [INFO] dojozero.data._streams: stream 'game_update_stream' stopping after 0 events
+2026-03-18 16:46:26 [INFO] dojozero.data._streams: stream 'odds_update_stream' stopping after 0 events
+2026-03-18 16:46:26 [INFO] dojozero.data._streams: stream 'play_by_play_stream' stopping after 0 events
+2026-03-18 16:46:26 [INFO] dojozero.data._subscriptions: Removed 0 subscriptions and 5 callbacks for subscriber: pre_game_insights_stream
+2026-03-18 16:46:26 [INFO] dojozero.data._subscriptions: Removed 0 subscriptions and 3 callbacks for subscriber: game_lifecycle_stream
+2026-03-18 16:46:26 [INFO] dojozero.data._subscriptions: Removed 0 subscriptions and 1 callbacks for subscriber: game_update_stream
+2026-03-18 16:46:26 [INFO] dojozero.data._subscriptions: Removed 0 subscriptions and 1 callbacks for subscriber: odds_update_stream
+2026-03-18 16:46:26 [INFO] dojozero.data._subscriptions: Removed 0 subscriptions and 1 callbacks for subscriber: play_by_play_stream
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'degen_agent-qwen3-max' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'degen_agent-deepseek-v3.2' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'degen_agent-claude-haiku-4-5-20251001' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'degen_agent-gemini-3-pro-preview' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'degen_agent-gpt-5-mini-2025-08-07' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'degen_agent-grok-4-1-fast-reasoning' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'mystic_agent-qwen3-max' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'mystic_agent-deepseek-v3.2' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'mystic_agent-claude-haiku-4-5-20251001' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'mystic_agent-gemini-3-pro-preview' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'mystic_agent-gpt-5-mini-2025-08-07' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'mystic_agent-grok-4-1-fast-reasoning' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'pundit_agent-qwen3-max' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'pundit_agent-deepseek-v3.2' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'pundit_agent-claude-haiku-4-5-20251001' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'pundit_agent-gemini-3-pro-preview' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'pundit_agent-gpt-5-mini-2025-08-07' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'pundit_agent-grok-4-1-fast-reasoning' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'shark_agent-qwen3-max' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'shark_agent-deepseek-v3.2' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'shark_agent-claude-haiku-4-5-20251001' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'shark_agent-gemini-3-pro-preview' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'shark_agent-gpt-5-mini-2025-08-07' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'shark_agent-grok-4-1-fast-reasoning' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'sheep_agent-qwen3-max' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'sheep_agent-deepseek-v3.2' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'sheep_agent-claude-haiku-4-5-20251001' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'sheep_agent-gemini-3-pro-preview' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'sheep_agent-gpt-5-mini-2025-08-07' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'sheep_agent-grok-4-1-fast-reasoning' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'whale_agent-qwen3-max' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'whale_agent-deepseek-v3.2' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'whale_agent-claude-haiku-4-5-20251001' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'whale_agent-gemini-3-pro-preview' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'whale_agent-gpt-5-mini-2025-08-07' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._agent: agent 'whale_agent-grok-4-1-fast-reasoning' stopping after 3 events
+2026-03-18 16:46:26 [INFO] dojozero.betting._broker: Operator 'betting_broker' stopping - accounts=36, event=present, bets=0
+2026-03-18 16:46:26 [INFO] dojozero.data._stores: stop_polling called for store nba_store, _poll_task=<Task pending name='Task-47' coro=<DataStore._poll_loop() running at /Users/linyin/Downloads/DojoZero/src/dojozero/data/_stores.py:434> wait_for=<_GatheringFuture pending cb=[Task.task_wakeup()]>>, _api=NBAExternalAPI
+2026-03-18 16:46:26 [INFO] dojozero.data._stores: Waiting for poll task to complete for store nba_store
+2026-03-18 16:46:27 [ERROR] dojozero.cli: received SIGINT during shutdown; aborting
+2026-03-18 16:46:27 [INFO] dojozero.trace_store: OTel exporter shutdown: 285 spans exported, 0 errors
+2026-03-18 16:46:27 [INFO] dojozero.cli: OTel exporter shutdown complete
+2026-03-18 16:46:27 [INFO] dojozero.data._hub: Pre-game events complete — resuming stores for game_id=401810854
+2026-03-18 16:46:27 [INFO] dojozero.data._stores: Poll task was already cancelled for store nba_store
+2026-03-18 16:46:27 [INFO] dojozero.data._stores: Closing API session for store nba_store (api=NBAExternalAPI)
+2026-03-18 16:46:27 [INFO] dojozero.data._stores: Successfully closed API session for store nba_store
+2026-03-18 16:46:27 [INFO] dojozero.data._stores: stop_polling called for store polymarket_store, _poll_task=<Task cancelled name='Task-48' coro=<DataStore._poll_loop() done, defined at /Users/linyin/Downloads/DojoZero/src/dojozero/data/_stores.py:411>>, _api=PolymarketAPI
+2026-03-18 16:46:27 [INFO] dojozero.data._stores: No poll task to wait for store polymarket_store (task=<Task cancelled name='Task-48' coro=<DataStore._poll_loop() done, defined at /Users/linyin/Downloads/DojoZero/src/dojozero/data/_stores.py:411>>, done=True)
+2026-03-18 16:46:27 [INFO] dojozero.data._stores: Closing API session for store polymarket_store (api=PolymarketAPI)
+2026-03-18 16:46:27 [INFO] dojozero.data._stores: Successfully closed API session for store polymarket_store
+2026-03-18 16:46:27 [INFO] dojozero.orchestrator: trial 'game-401810854' stopped (phase=stopped)
+2026-03-18 16:46:27 [INFO] dojozero.cli: trial 'game-401810854' stopped
+2026-03-18 16:46:28 [ERROR] dojozero.cli: interrupted
+
+ threads pull toward emerald can resilience. move when the line's turn this
+ game on its That’s fire — Celtics without Vucevic and I’msheep_agent-gpt-5-mini-2025-08-07: Por onzing theis Warriors for a starting late comeback in, Porzing Boston set. Big moments actually head. I call’m watching the line; if makes he heatsshark_agent-gpt-5-mini-2025-08-07: Por upzingis starting blunts Boston,is I’s go off’ll p,ounce LET.’S GOOO!sheep_agent-deepseek-v3.2: Still for decisive no me panic
+ a
+ action. bit and V oddsucevic being out
+ worries me about matchup advantage, but Golden State’s thin, on a back-to-back — public will overvalue the “return Boston’s frontcourt, but I! The’ll nervously stick with suspense is actually the Celtics at home even” narrative though. I I’ll wait’m for the terrified market to he overpay and could then fade wreck it everything..
+
+ worse than having numbers.pundit_agent-deepseek-v3.2: Por At least with odds Izingsheep_agent-qwen3-max: Stillis no odds up can talk... but Celtics myself out of's return to Boston with are clearly it properly.
+ clearance to start adds narrative favored on paper. Do I wait for weight but limited predictive value the market to open until quantified by the marketshark_agent-deepseek-v3.2: Market still. Boston missing V or just assume Bostonuce sleeping’s the "safe" pick. Edge lies invic creates a defensive{
+    "type": "tool_use",
+    "id": "call_adbd505d0ea8491abc375867",
+    "name": "place_market_bet_moneyline",
+    "input": {
+        "amount": "500.00",
+        "selection": "home"
+    },
+    "raw_input": "{\"amount\": \"500.00\", \"selection\": \"home\"}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_adbd505d0ea8491abc375867",
+    "name": "place_market_bet_moneyline",
+    "output": [
+        {
+            "type": "text",
+            "text": "bet_invalid"
+        }
+    ]
+}
+ waiting void against Por for ine? My hands are literallyzingis,fficiency. Vmystic_agent-deepseek-v3.2: The market still while Golden shaking thinking about hitting State's injuryucevic out should be sleeps, but the stars priced but that bet button. woes and back-to-back might not be
+ align for Boston's strength fully accounted for yet. management suggest potential energy deficits against a weary Warriors squad Porzingis motivation - these factors will become factor. The Oracle senses home could create initial Warriors run actionable when odds reflect the.
+pundit_agent-gpt-5-mini-2025-08-07: Porziņģis advantage will manifest. starting narrows probability calculations.
+
+ Boston’s interior advantage while Vucević out weakens the Celtics’ frontcourt depth, but Boston’s healthiersheep_agent-grok-4-1-fast-reasoning: P-Porzingis starting for Warriors after that 30-pt game? Celtics missing Vucevic rotation though and home... defense everyone's still buzzing, tilt but the matchup I'm— frozenWar withoutriors odds. 😰’ back-to-back management and injuries point to limited minutes forwhale_agent-grok-4-1-fast-reasoning: Porzingispundit_agent-grok-4-1-fast-reasoning: Por back,zing
+is starting starting for for sl Warriorsumping? key Warriors ( pieces Boston30. Ipts's’ll lastdegen_agent-deepseek-v3.2: Wait fortress out gonna wait) test inject for that tip-offs volatility. and against Still Boston the's opening home fortress, but their,  market before14- watching committing size lines.. oddsshark_agent-grok-4-1-fast-reasoning: Celtics
+ hot, Warriors cold and banged up
+. No lines,sheep_agent-deepseek-v3.2: Por no play—edge hunts in silencezing.
+ aren't20is road record and fatigue flags warrant even up yet odds confirmation first. Still no lines; discipline holds at zero exposure.
+?! What is back but playing against's the hold up? his old team... that Come on, let me could motivate him or make get my action in early!
+
+
+
+ him tight. Celtics missing Vucevic though - that's big for their interior defense. Everyone'ssheep_agent-gemini-3-pro-preview: Porzingis is returning to Boston but playing for the Warriors now talking Celtics but this is, and that sounds like way too much pressure to handle. I'll just peek at the odds to see if the Celticsdegen_agent-grok-4-1-fast-reasoning: Porzingis droppin' 30 last game and startin' tonight? Dubs just got their cheat code unlocked against Boston—{
+    "type": "tool_use",
+    "id": "call_6e60413afbc441ce9bcaa5a9",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_6e60413afbc441ce9bcaa5a9",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+ getting complicated.
+
+
+
+ are a safe choice at home before I do anything rash.
+
+let's ride that momentum! 🔥 Who's with me on Warriors ML?
+mystic_agent-gpt-5-mini-2025-08-07: Porzingis’ TD Garden home{
+    "type": "tool_use",
+    "id": "call_e7de9c44bd5548adb183177b",
+    "name": "get_holdings",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_e7de9c44bd5548adb183177b",
+    "name": "get_holdings",
+    "output": [
+        {
+            "type": "text",
+            "text": "[]"
+        }
+    ]
+}
+coming is an omen—he can tilt the paint and force Boston to adjust. Yet the Warriors’ back‑to‑back wear and Boston’s depth (even with Vucevic out) keep the cosmos leaning toward the Celtics.
+degen_agent-deepseek-v3.2: Market's still cooking but my MIND'S ALREADY MADE UP! Celtics atsheep_agent-deepseek-v3.2: No home, Warriors reeling positions yet - you can feel which, just watching. Still way this is going!
+ feels too early, too many factors. Porzingis revenge game narrative vs Celtics' home dominance... which story wins?
+
+
+
+{
+    "type": "tool_use",
+    "id": "call_a24cfbda534a4473b5ddd88b",
+    "name": "get_event",
+    "input": {},
+    "raw_input": "{}"
+}
+system: {
+    "type": "tool_result",
+    "id": "call_a24cfbda534a4473b5ddd88b",
+    "name": "get_event",
+    "output": [
+        {
+            "type": "text",
+            "text": "{\"event_id\":\"401810854\",\"home_team\":\"Boston Celtics\",\"away_team\":\"Golden State Warriors\",\"game_time\":\"2026-03-18T23:00:00Z\",\"status\":\"SCHEDULED\",\"home_probability\":null,\"away_probability\":null,\"spread_lines\":{},\"total_lines\":{},\"last_odds_update\":null,\"current_odds\":null,\"betting_closed_at\":null,\"can_bet\":true}"
+        }
+    ]
+}
+sheep_agent-deepseek-v3.2: Still nothing! The anticipation is killing me but also maybe saving me from a bad decision. Waiting for those odds feels like waiting for exam results.
+Exception ignored in: <module 'threading' from '/opt/homebrew/anaconda3/lib/python3.12/threading.py'>
+Traceback (most recent call last):
+  File "/opt/homebrew/anaconda3/lib/python3.12/threading.py", line 1594, in _shutdown
+    atexit_call()
+  File "/opt/homebrew/anaconda3/lib/python3.12/concurrent/futures/thread.py", line 31, in _python_exit
+    t.join()
+  File "/opt/homebrew/anaconda3/lib/python3.12/threading.py", line 1149, in join
+    self._wait_for_tstate_lock()
+  File "/opt/homebrew/anaconda3/lib/python3.12/threading.py", line 1169, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt: 
+2026-03-18 16:46:29 [ERROR] asyncio: Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x11cb22510>

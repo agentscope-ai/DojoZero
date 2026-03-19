@@ -467,7 +467,7 @@ class TestDataHubLifecycle:
 
 
 class TestDataHubSpanEmission:
-    """Tests for SLS span emission and tag extraction."""
+    """Tests for span emission and tag extraction (trace backend)."""
 
     @pytest.fixture
     def hub_with_trial_id(self, temp_persistence_file):

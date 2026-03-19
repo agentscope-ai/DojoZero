@@ -52,6 +52,23 @@ LOGGER = logging.getLogger("dojozero.arena_server.endpoints")
 def register_rest_endpoints(app: FastAPI) -> None:
     """Register all REST API endpoints."""
 
+    @app.get("/")
+    async def root() -> JSONResponse:
+        """Root path: describe Arena API when no static frontend is mounted."""
+        return JSONResponse(
+            content={
+                "service": "DojoZero Arena Server",
+                "message": "API only. Use the frontend (npm run dev in frontend/) or query /api/trials, /api/landing, etc.",
+                "docs": "See docs/tracing.md for Arena + Jaeger setup.",
+                "endpoints": [
+                    "GET /api/trials - list trials (from Jaeger traces)",
+                    "GET /api/trials/{id} - trial details",
+                    "GET /api/landing - landing page data",
+                    "WS /ws/trials/{id}/stream - live span stream",
+                ],
+            }
+        )
+
     @app.get("/api/trials")
     async def list_trials(
         start_time: int | None = Query(
