@@ -4,7 +4,7 @@ DojoZero uses OpenTelemetry for distributed tracing with Jaeger as the trace bac
 
 ## Backend: Jaeger
 
-Install Jaeger: [https://www.jaegertracing.io/](https://www.jaegertracing.io/)
+Install and start Jaeger: [https://www.jaegertracing.io/](https://www.jaegertracing.io/)
 
 Run Dashboard Server with Jaeger:
 ```bash
@@ -39,9 +39,9 @@ dojo0 serve --trace-backend jaeger
 dojo0 run --params config.yaml --server http://localhost:8000
 ```
 
-**Option 2: Local mode (no trace export)**
+**Option 2: Standalone Useage**
 ```bash
-dojo0 run --params config.yaml
+dojo0 run --params config.yaml --trace-backend jaeger
 ```
 
 ## Arena (Frontend)
@@ -61,25 +61,18 @@ cd frontend && npm run dev
 
 ### `dojo0 serve`
 
-| Flag | Description |
+| Option | Description |
 |------|-------------|
 | `--trace-backend` | `jaeger` (required for tracing) |
 | `--trace-ingest-endpoint` | OTLP endpoint for Jaeger (default: http://localhost:4318) |
 
 ### `dojo0 arena`
 
-| Flag | Description |
+| Option | Description |
 |------|-------------|
 | `--trace-backend` | `jaeger` (required) |
 | `--trace-query-endpoint` | Jaeger Query API (default: http://localhost:16686) |
 | `--static-dir` | Path to frontend build output |
-
-## Components
-
-| Component | Description |
-|-----------|-------------|
-| `OTelSpanExporter` | Exports spans via OTLP HTTP |
-| `JaegerTraceReader` | Reads spans from Jaeger API |
 
 ## Programmatic Usage
 

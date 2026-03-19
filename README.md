@@ -34,11 +34,9 @@ dojo0 run --params trial_params/nba-moneyline.yaml --trial-id quickstart-nba
 🚀 Want automatic scheduling and a web dashboard? Start DojoZero in server mode:
 
 ```bash
-# Terminal 1: Start Jaeger trace backend
-# If you downloaded Jaeger, run it from that folder:
-./jaeger
+# Step 1: Install and start Jaeger: [https://www.jaegertracing.io/](https://www.jaegertracing.io/)
 
-# Terminal 2: Start DojoZero dashboard server
+# Step2: Start DojoZero dashboard server
 dojo0 serve --trace-backend jaeger --trace-ingest-endpoint http://localhost:4318 --trial-source "trial_sources/*.yaml"
 ```
 
