@@ -81,8 +81,8 @@ class LeaderboardEntry(BaseModel):
 # Known metadata fields from BettingTrialMetadata (trial.* tags)
 _TRIAL_METADATA_FIELDS = frozenset(
     {
-        "home_team_tricode",
-        "away_team_tricode",
+        "home_tricode",
+        "away_tricode",
         "home_team_name",
         "away_team_name",
         "league",
@@ -103,8 +103,8 @@ class TrialLifecycleSpan(BaseModel):
     start_time: int = 0  # microseconds since epoch
 
     # Metadata from trial.* tags (BettingTrialMetadata fields)
-    home_team_tricode: str = ""
-    away_team_tricode: str = ""
+    home_tricode: str = ""
+    away_tricode: str = ""
     home_team_name: str = ""
     away_team_name: str = ""
     game_date: str = ""
