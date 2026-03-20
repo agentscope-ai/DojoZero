@@ -44,7 +44,7 @@ from dojozero.betting import (
     BrokerOperatorConfig,
     TrialBrokerConfig,
 )
-from dojozero.agents import SocialBoard
+from dojozero.agents import SocialBoardActor
 
 logger = logging.getLogger(__name__)
 
@@ -375,10 +375,18 @@ async def _build_trial_spec(
         config_cache=config_cache,
     )
 
-    # Create SocialBoard if multiple agents are present (multi-agent communication)
-    social_board: SocialBoard | None = None
+    # Create SocialBoard actor if multiple agents are present (multi-agent communication)
+    social_board: OperatorSpec[Any] | None = None
     if len(agent_specs) > 1:
-        social_board = SocialBoard(trial_id=trial_id)
+        social_board_actor_id = "social_board"
+        social_board = OperatorSpec(
+            actor_id=social_board_actor_id,
+            actor_cls=SocialBoardActor,
+            config={
+                "trial_id": trial_id,
+                "actor_id": social_board_actor_id,
+            },
+        )
         logger.info(
             "Created SocialBoard for trial '%s' with %d agents",
             trial_id,

@@ -20,6 +20,8 @@ from ._social_board import (
     SocialMessage,
     create_social_board_tools,
     format_hot_topics_for_llm,
+    SocialBoardActor,
+    SocialBoardConfig,
 )
 from ._trial_utils import (
     get_expanded_agent_ids,
@@ -48,6 +50,8 @@ __all__ = [
     "SocialMessage",
     "create_social_board_tools",
     "format_hot_topics_for_llm",
+    "SocialBoardActor",
+    "SocialBoardConfig",
     # Trial utilities
     "get_expanded_agent_ids",
     "build_operator_to_agents_map",

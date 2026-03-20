@@ -15,9 +15,11 @@ Key features:
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from dojozero.agents._toolkit import tool
+from dojozero.core._actors import Actor, ActorState
+from dojozero.core._types import RuntimeContext
 
 logger = logging.getLogger(__name__)
 
@@ -318,9 +320,16 @@ class SocialBoard:
         """Deserialize board state from checkpoint."""
         import threading
 
+        messages = _CappedMessageList(
+            [SocialMessage.from_dict(m) for m in data.get("messages", [])]
+        )
+        # Ensure cap is enforced even when restoring a checkpoint that may have
+        # grown beyond the current DEFAULT_MAX_SOCIAL_MESSAGES.
+        messages._prune()
+
         board = cls(
             trial_id=data["trial_id"],
-            messages=[SocialMessage.from_dict(m) for m in data.get("messages", [])],
+            messages=messages,
             agent_last_post_round=data.get("agent_last_post_round", {}),
         )
         board._lock = threading.Lock()
@@ -400,3 +409,132 @@ def create_social_board_tools(
         return "\n".join(lines)
 
     return [post_message, read_messages]
+
+
+@dataclass
+class SocialBoardConfig:
+    """Configuration for SocialBoardActor."""
+
+    trial_id: str
+    actor_id: str | None = None
+    max_message_chars: int = 200
+    cooldown_rounds: int = 0
+    max_messages: Optional[int] = None
+
+
+class SocialBoardActor(Actor[SocialBoardConfig]):
+    """Actor wrapper for SocialBoard that integrates with the orchestrator."""
+
+    def __init__(self, config: SocialBoardConfig):
+        self.config = config
+        self._actor_id: str = (
+            config.actor_id if config.actor_id else f"social_board_{config.trial_id}"
+        )
+        self._apply_max_messages_cap()
+
+        # Orchestrator wires agents to the board before start(); board must exist here.
+        # Checkpoint resume replaces this via load_state() before start().
+        self.social_board: Optional[SocialBoard] = SocialBoard(
+            trial_id=self.config.trial_id,
+            max_message_chars=self.config.max_message_chars,
+            cooldown_rounds=self.config.cooldown_rounds,
+        )
+
+    @property
+    def actor_id(self) -> str:
+        """Stable identifier that stays constant across checkpoints."""
+
+        return self._actor_id
+
+    @property
+    def trial_id(self) -> str:
+        """Trial identifier this actor belongs to."""
+
+        return self.config.trial_id
+
+    def _apply_max_messages_cap(self) -> None:
+        global DEFAULT_MAX_SOCIAL_MESSAGES
+        if self.config.max_messages is not None:
+            DEFAULT_MAX_SOCIAL_MESSAGES = self.config.max_messages
+
+    async def start(self) -> None:
+        """Start the social board actor."""
+
+        logger.info("Starting SocialBoardActor %s", self.actor_id)
+        self._apply_max_messages_cap()
+        if self.social_board is None:
+            self.social_board = SocialBoard(
+                trial_id=self.config.trial_id,
+                max_message_chars=self.config.max_message_chars,
+                cooldown_rounds=self.config.cooldown_rounds,
+            )
+        logger.info("SocialBoardActor %s started", self.actor_id)
+
+    async def stop(self) -> None:
+        """Stop the social board actor."""
+
+        logger.info("Stopping SocialBoardActor %s", self.actor_id)
+        # No specific cleanup needed for social board
+        logger.info("SocialBoardActor %s stopped", self.actor_id)
+
+    async def save_state(self) -> ActorState:
+        """Save the current state of the social board."""
+
+        if self.social_board is None:
+            return {}
+
+        state = self.social_board.to_dict()
+        state["_actor_id"] = self.actor_id
+        return state
+
+    async def load_state(self, state: ActorState) -> None:
+        """Load a previously saved state."""
+
+        if not state:
+            return
+
+        # Update actor ID if present in state
+        if "_actor_id" in state:
+            self._actor_id = state["_actor_id"]  # type: ignore[assignment]
+
+        # Load social board state
+        self.social_board = SocialBoard.from_dict(state)  # type: ignore[arg-type]
+
+    @classmethod
+    def from_dict(
+        cls, data: Dict[str, Any], context: RuntimeContext
+    ) -> "SocialBoardActor":
+        """Create a SocialBoardActor from a dictionary."""
+
+        config_dict = {
+            k: v
+            for k, v in data.items()
+            if k
+            in [
+                "trial_id",
+                "actor_id",
+                "max_message_chars",
+                "cooldown_rounds",
+                "max_messages",
+            ]
+        }
+
+        # Use the context's trial_id if not in the config
+        if "trial_id" not in config_dict or not config_dict["trial_id"]:
+            config_dict["trial_id"] = context.trial_id
+
+        config = SocialBoardConfig(**config_dict)
+        return cls(config)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert the actor to a dictionary representation."""
+
+        result: Dict[str, Any] = {
+            "trial_id": self.config.trial_id,
+            "actor_id": self.config.actor_id,
+            "max_message_chars": self.config.max_message_chars,
+            "cooldown_rounds": self.config.cooldown_rounds,
+        }
+        if self.config.max_messages is not None:
+            result["max_messages"] = self.config.max_messages
+        return result
