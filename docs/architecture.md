@@ -1,116 +1,97 @@
 # Architecture and Design Decisions
 
-This document is an overview of core DojoZero architecture decisions.
+This document summarizes the current DojoZero architecture and core runtime behavior.
 
 ## System At a Glance
 
-DojoZero is an actor-based, event-driven system for running autonomous agents on live and replayable data:
+DojoZero is an actor-based, event-driven system for autonomous decision-making on live and replayable sports data:
 
-- **Data Streams** ingest and publish domain events
-- **Operators** manage synchronous stateful actions (for example, betting broker tools)
-- **Agents** consume events, reason, and invoke operators
-- **DataHub** routes and persists events for replay/backtesting
-- **Dashboard Server** orchestrates trial lifecycle
-- **Arena Server + UI** read traces and present live/replay views
+- **Data Streams** ingest external data and publish typed events
+- **Operators** expose stateful tools (for example, broker actions)
+- **Agents** consume events, reason with LLMs, and invoke operators
+- **DataHub** centralizes routing, persistence, ordering, dedup, and replay
+- **Dashboard Server** manages trial lifecycle and scheduling
+- **Arena Server + UI** provide read-only live/replay visualization from traces
 
 ## Foundational Decisions
 
-### 1) Actor model and trial boundaries
+### 1) Actor model and trial boundary
 
-- Data Streams, Operators, and Agents are actor-like components with lifecycle and state.
+- `Data Streams`, `Operators`, and `Agents` are actor-like components with lifecycle and state.
 - A **trial** is the bounded runtime unit that wires these actors together.
 - Trial state is checkpointable and resumable.
 
 ### 2) Event sourcing and replay
 
-From data infrastructure and trace design:
-- Event flow is centralized through DataHub.
-- Events are persisted (JSONL) to support deterministic replay/backtesting.
-- Push events are first-class replay artifacts; pull snapshots are live-only helpers.
+- Event flow is centralized through `DataHub`.
+- Events are persisted to JSONL and used as replay inputs for backtesting.
+- Replay is driven by `BacktestCoordinator` via `DataHub.start_backtest()/backtest_next()`.
+- Game/odds events are primary replay artifacts; websearch/social events are live-fetched but are replayable once emitted and persisted.
 
-### 3) Separation of concerns
+## Actor Designs
 
-The architecture separates:
-- **External API adapters** (remote IO)
-- **Data stores/processors** (poll + transform raw events)
-- **DataHub** (delivery + persistence)
-- **Operators** (domain state and side effects)
-- **Agent logic** (reasoning and decision making)
+### 1) Data Streams and event model
 
-This keeps the system extensible by sport, market type, and model provider.
+Typed events follow a clear hierarchy:
 
-## Data and Model Evolution
+- `DataEvent` (base)
+- `SportEvent` (adds sport/game identity)
+  - `GameEvent`
+    - Lifecycle: `GameInitializeEvent`, `GameStartEvent`, `GameResultEvent`
+    - Atomic: `BasePlayEvent` -> NBA/NFL play events
+    - Segment: `BaseSegmentEvent` -> `NFLDriveEvent`
+    - Snapshot: `BaseGameUpdateEvent` -> NBA/NFL game update events
+    - Odds: `OddsUpdateEvent`
+  - `PreGameInsightEvent`
+    - `WebSearchInsightEvent` (injury, ranking, expert prediction variants)
+    - `StatsInsightEvent` (`PreGameStatsEvent`)
+    - `TwitterTopTweetsEvent` (social signal)
 
-### Unified data model overhaul
+### 2) Operators
 
-A dedicated overhaul introduced:
-- Shared typed identity models (team/player/venue/odds)
-- Clear event hierarchy across NBA/NFL and pre-game insights
-- Better typing in server/API boundaries to reduce ad-hoc dict assembly
+`BrokerOperator` is the primary operator for betting workflows:
 
-Result: less schema drift, stronger contracts, and cleaner downstream UI processing.
+- Maintains agent accounts, balances, holdings, and bet history
+- Tracks single-event market lifecycle (scheduled/live/closed/settled) and real-time odds updates
+- Handles order placement, execution, and settlement
+- Supports per-trial tool allowlists to constrain agent capabilities and enable cleaner agent-performance comparison
 
-### Betting broker design
+### 3) Agents (ReAct orchestration)
 
-Broker operator decisions include:
-- Single-event interaction model exposed through tools (`get_event`, place/cancel bets, stats)
-- Support for moneyline, spread, and totals
-- Market and limit order handling with settlement lifecycle
-- Operator-level tool allowlist to constrain agent capabilities
+`BettingAgent` wraps an internal ReAct agent and adds runtime controls:
 
-## Observability and APIs
+- Subscribes to stream events and invokes registered operators
+- Formats typed events into model-ready context
+- Queues events while busy and consolidates backlog
+- Maintains memory with compression for long event sequences
+- Emits input/response spans for observability
 
-### OpenTelemetry-first tracing
+## Services and APIs
 
-DojoZero treats spans as the canonical observability and replay-friendly metadata format:
+### Dashboard Server (`dojo0 serve`)
+
+- Hosts trial management APIs (launch/stop/status/results)
+- Manages scheduling and trial source registration
+- Can launch replay/backtest-mode trials from persisted JSONL
+- Generates safe server-side persistence paths for trial data
+- Integrates tracing export for managed trials
+
+### Arena Server (`dojo0 arena`)
+
+- Read-only service built on trace data (with internal caching; no trial orchestration)
+- Provides REST + WebSocket endpoints for live stream and replay views
+- Builds trial timelines, actor actions, leaderboard/stats, and replay payloads
+- Uses replay/cache layers to reduce repeated trace-store queries
+
+## Observability
+
+### OpenTelemetry-based tracing
+
+DojoZero treats spans as canonical observability metadata:
+
 - Trial lifecycle spans (`trial.started`, `trial.stopped`)
 - Registration spans (`agent.registered`, `datastream.registered`)
-- Event/message spans (`agent.input`, `agent.response`, domain event types)
-
-Arena can reconstruct timeline and actor views from traces.
-
-### Dashboard and Arena decoupling
-
-Key API decision:
-- **Dashboard (`dojo0 serve`)** manages trials and emits traces
-- **Arena (`dojo0 arena`)** reads from trace backend and serves browser clients
-- Data plane is trace-centric, keeping UI runtime independent from trial orchestration internals
-
-### Background cache refresh in Arena
-
-A later design introduces proactive cache warming:
-- periodic refresh of REST-derived aggregates
-- incremental live trial span caching
-- replay cache for completed trials
-
-Goal: stable low-latency UX and lower trace-store burst load.
-
-## External and Multi-Agent Extensions
-
-### External agent API
-
-Design supports third-party agents via HTTP APIs (REST + SSE):
-- per-trial gateway model
-- dashboard proxy mode for multi-trial routing
-- shard-based scaling for operational isolation
-
-This allows external agents in any language to join trials without embedding into the runtime process.
-
-### Social media data stream
-
-Pregame social intelligence was introduced with:
-- curated watchlist-based account tracking
-- X API integration
-- per-account summarization and relevance filtering into compact agent-consumable signals
-
-This expands non-box-score signal coverage for agent decision making.
-
-## Current Architecture Priorities
-
-Based on design trajectory, current priorities are:
-
-1. Keep trial execution deterministic and resumable.
-2. Preserve clean boundaries between orchestration, data ingestion, and UI.
-3. Increase observability via standardized traces and typed events.
-4. Improve extensibility for external agents, additional markets, and richer data signals.
+- Agent message spans (`agent.input`, `agent.response`)
+- Broker spans (`broker.bet`, `broker.final_stats`, plus state-change spans)
+- Data event spans from `DataHub`
 
