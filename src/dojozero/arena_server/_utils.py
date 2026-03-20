@@ -116,8 +116,8 @@ def _extract_trial_info_from_spans(spans: list[SpanData]) -> dict[str, Any]:
                     latest_start_time = typed.start_time
                 metadata.update(
                     {
-                        "home_team_tricode": typed.home_team_tricode,
-                        "away_team_tricode": typed.away_team_tricode,
+                        "home_team_tricode": typed.home_tricode,
+                        "away_team_tricode": typed.away_tricode,
                         "home_team_name": typed.home_team_name,
                         "away_team_name": typed.away_team_name,
                         "game_date": typed.game_date,

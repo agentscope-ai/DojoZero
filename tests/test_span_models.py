@@ -56,8 +56,8 @@ class TestTrialLifecycleSpan:
             "trial.started",
             tags={
                 "dojozero.trial.phase": "started",
-                "trial.home_team_tricode": "BOS",
-                "trial.away_team_tricode": "TOR",
+                "trial.home_tricode": "BOS",
+                "trial.away_tricode": "TOR",
                 "trial.home_team_name": "Boston Celtics",
                 "trial.away_team_name": "Toronto Raptors",
                 "trial.game_date": "2025-03-15",
@@ -72,8 +72,8 @@ class TestTrialLifecycleSpan:
         assert isinstance(result, TrialLifecycleSpan)
         assert result.phase == "started"
         assert result.start_time == 5_000_000
-        assert result.home_team_tricode == "BOS"
-        assert result.away_team_tricode == "TOR"
+        assert result.home_tricode == "BOS"
+        assert result.away_tricode == "TOR"
         assert result.home_team_name == "Boston Celtics"
         assert result.sport_type == "nba"
         assert result.espn_game_id == "401584700"
