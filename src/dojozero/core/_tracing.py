@@ -13,6 +13,7 @@ Unified Span Protocol:
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -1118,7 +1119,6 @@ def create_trace_reader(
 
     For Jaeger backend, use trace_query_endpoint (default: http://localhost:16686).
     """
-    import os
 
     if backend == "sls":
         # For SLS, all config comes from environment variables
@@ -1180,7 +1180,6 @@ def get_sls_exporter_headers() -> dict[str, str] | None:
     Returns:
         Dict of headers for SLS authentication, or None if not configured.
     """
-    import os
 
     from ._credentials import get_credential_provider
 
@@ -1199,6 +1198,26 @@ def get_sls_exporter_headers() -> dict[str, str] | None:
     instance_id = (
         logstore.removesuffix("-traces") if logstore.endswith("-traces") else logstore
     )
+
+    # Log credential-related env vars for debugging
+    _cred_env_keys = [
+        "ALIBABA_CLOUD_ACCESS_KEY_ID",
+        "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+        "ALIBABA_CLOUD_SECURITY_TOKEN",
+        "ALIBABA_CLOUD_CREDENTIALS_FILE",
+        "ALIBABA_CLOUD_ROLE_ARN",
+        "ALIBABA_CLOUD_OIDC_PROVIDER_ARN",
+        "ALIBABA_CLOUD_OIDC_TOKEN_FILE",
+        "DOJOZERO_SLS_ENDPOINT",
+        "DOJOZERO_SLS_PROJECT",
+        "DOJOZERO_SLS_LOGSTORE",
+    ]
+    for _k in _cred_env_keys:
+        _v = os.environ.get(_k)
+        if _v:
+            LOGGER.info("  %s = %s...%s (len=%d)", _k, _v[:4], _v[-4:], len(_v))
+        else:
+            LOGGER.info("  %s = <not set>", _k)
 
     # Get credentials from provider (handles all auth methods)
     provider = get_credential_provider()
