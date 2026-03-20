@@ -45,6 +45,25 @@ TRIAL_INFO_OPERATION_NAMES = [
     "event.nfl_game_update",
 ]
 
+# Tag used by DojoZero to correlate all spans for a trial (see TrialOrchestrator, create_span_from_event).
+_TRIAL_ID_TAG = "dojozero.trial.id"
+
+
+def trial_id_for_span_grouping(span: SpanData) -> str:
+    """Return the stable trial key used to bucket spans for Arena aggregation.
+
+    OTLP export assigns each trace a random Jaeger ``traceID``; semantic trial ids live
+    on ``dojozero.trial.id``. ``list_trials`` returns the latter, so grouping only by
+    ``span.trace_id`` would drop every span during prune (trace id never matches trial id).
+    """
+    if span.tags:
+        raw = span.tags.get(_TRIAL_ID_TAG)
+        if raw is not None:
+            tid = str(raw).strip()
+            if tid:
+                return tid
+    return span.trace_id
+
 
 async def _extract_trial_info_from_traces(
     trace_reader: TraceReader,

@@ -88,6 +88,7 @@ from dojozero.arena_server._utils import (
     _compute_leaderboard_from_spans,
     _load_replay_data,
     TRIAL_INFO_OPERATION_NAMES,
+    trial_id_for_span_grouping,
 )
 from dojozero.core._models import (
     AgentAction,
@@ -510,7 +511,21 @@ class BackgroundRefresher:
 
         # 2. Fetch spans - full for initial, incremental for periodic
         now = datetime.now(timezone.utc)
-        if is_initial or self._last_span_fetch_time is None:
+        # Recover from empty span cache (e.g. OTLP traceID vs trial id mismatch) without restart.
+        span_cache_empty = bool(trial_ids) and not self._spans_by_trial
+        recovery_full = (
+            span_cache_empty
+            and not is_initial
+            and self._last_span_fetch_time is not None
+        )
+        need_full_fetch = (
+            is_initial or self._last_span_fetch_time is None or span_cache_empty
+        )
+        if need_full_fetch:
+            if recovery_full:
+                LOGGER.info(
+                    "BackgroundRefresher: Forced full fetch to repopulate empty span cache"
+                )
             # Full fetch with lookback buffer
             spans_start_dt = now - timedelta(days=self.config.trials_lookback_days + 1)
             all_spans = await self.trace_reader.get_all_spans(start_time=spans_start_dt)
@@ -520,9 +535,10 @@ class BackgroundRefresher:
                 self.config.trials_lookback_days,
             )
 
-            # Reset cached data on full fetch
+            # Reset cached span buckets; only reset agent cache on first full load
             self._spans_by_trial.clear()
-            self.cache.clear_agent_info()
+            if is_initial or self._last_span_fetch_time is None:
+                self.cache.clear_agent_info()
         else:
             # Incremental fetch since last refresh
             all_spans = await self.trace_reader.get_all_spans(
@@ -536,10 +552,10 @@ class BackgroundRefresher:
         # Update last fetch time
         self._last_span_fetch_time = now
 
-        # 3. Group new spans by trial_id and merge into cache
+        # 3. Group new spans by semantic trial id (tag) and merge into cache
         new_span_count = 0
         for span in all_spans:
-            trial_id = span.trace_id
+            trial_id = trial_id_for_span_grouping(span)
             if trial_id not in self._spans_by_trial:
                 self._spans_by_trial[trial_id] = []
             self._spans_by_trial[trial_id].append(span)

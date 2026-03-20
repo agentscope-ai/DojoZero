@@ -506,9 +506,11 @@ def create_span_from_event(
     }
     if extra_tags:
         tags.update(extra_tags)
+    # Jaeger/OTLP assigns its own trace id; Arena and tag queries use this tag.
+    tags["dojozero.trial.id"] = trial_id
 
     return SpanData(
-        trace_id=trial_id,  # Use trial_id as trace_id for correlation
+        trace_id=trial_id,  # Logical correlation (may differ from Jaeger traceID)
         span_id=uuid4().hex[:16],
         operation_name=operation_name,
         start_time=start_us,
@@ -585,6 +587,7 @@ def convert_actor_registration_to_span(
     tags: dict[str, Any] = {
         "actor.id": actor_id,
         "actor.type": actor_type,
+        "dojozero.trial.id": trial_id,
     }
 
     # Add resource.* tags from metadata
@@ -647,6 +650,7 @@ def convert_checkpoint_event_to_span(
     tags: dict[str, Any] = {
         "actor.id": event_actor_id,
         "sequence": event.get("sequence", sequence),
+        "dojozero.trial.id": trial_id,
     }
     # Add remaining event data as tags
     for key, value in event.items():
@@ -776,6 +780,7 @@ def convert_agent_message_to_span(
     tags: dict[str, Any] = {
         "actor.id": actor_id,
         "sequence": sequence,
+        "dojozero.trial.id": trial_id,
         "event.stream_id": stream_id,
         "event.role": role,
         "event.name": name,
