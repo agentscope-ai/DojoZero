@@ -105,6 +105,40 @@ def _odds_info_to_str(odds_info: OddsInfo) -> str:
     return "\n".join(lines)
 
 
+def _build_filtered_odds_str(event: BettingEvent) -> str | None:
+    """Build an odds string from an already-filtered BettingEvent."""
+    lines: list[str] = []
+
+    # Moneyline
+    if event.home_probability is not None and event.away_probability is not None:
+        lines.append(
+            f"- Home: {1 / event.home_probability:.2f} "
+            f"({event.home_probability * 100:.1f}% implied probability)"
+        )
+        lines.append(
+            f"- Away: {1 / event.away_probability:.2f} "
+            f"({event.away_probability * 100:.1f}% implied probability)"
+        )
+
+    # Spread
+    for spread_value, probs in event.spread_lines.items():
+        lines.append(
+            f"- Spread: {spread_value:+.1f} "
+            f"(Home: {1 / probs['home_probability']:.2f}, "
+            f"Away: {1 / probs['away_probability']:.2f})"
+        )
+
+    # Total
+    for total_value, probs in event.total_lines.items():
+        lines.append(
+            f"- Total: O/U {total_value:.1f} "
+            f"(Over: {1 / probs['over_probability']:.2f}, "
+            f"Under: {1 / probs['under_probability']:.2f})"
+        )
+
+    return "\n".join(lines) if lines else None
+
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -2125,39 +2159,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             if not can_bet_total:
                 filtered_event.total_lines = {}
 
-            # Keep current_odds aligned with filtered market visibility.
-            odds_lines: list[str] = []
-            if (
-                can_bet_moneyline
-                and filtered_event.home_probability is not None
-                and filtered_event.away_probability is not None
-            ):
-                odds_lines.append(
-                    f"- Home: {1 / filtered_event.home_probability:.2f} "
-                    f"({filtered_event.home_probability * 100:.1f}% implied probability)"
-                )
-                odds_lines.append(
-                    f"- Away: {1 / filtered_event.away_probability:.2f} "
-                    f"({filtered_event.away_probability * 100:.1f}% implied probability)"
-                )
+            filtered_event.current_odds = _build_filtered_odds_str(filtered_event)
 
-            if can_bet_spread:
-                for spread_value, probs in filtered_event.spread_lines.items():
-                    odds_lines.append(
-                        f"- Spread: {spread_value:+.1f} "
-                        f"(Home: {1 / probs['home_probability']:.2f}, "
-                        f"Away: {1 / probs['away_probability']:.2f})"
-                    )
-
-            if can_bet_total:
-                for total_value, probs in filtered_event.total_lines.items():
-                    odds_lines.append(
-                        f"- Total: O/U {total_value:.1f} "
-                        f"(Over: {1 / probs['over_probability']:.2f}, "
-                        f"Under: {1 / probs['under_probability']:.2f})"
-                    )
-
-            filtered_event.current_odds = "\n".join(odds_lines) if odds_lines else None
             return filtered_event.model_dump_json()
 
         @tool
