@@ -2017,6 +2017,23 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             if allowed_tools
             else None
         )
+        # Precompute market visibility once when building tools.
+        # None means all tools are allowed, so all markets are visible.
+        can_bet_moneyline = (
+            allowed_tools_set is None
+            or "place_market_bet_moneyline" in allowed_tools_set
+            or "place_limit_bet_moneyline" in allowed_tools_set
+        )
+        can_bet_spread = (
+            allowed_tools_set is None
+            or "place_market_bet_spread" in allowed_tools_set
+            or "place_limit_bet_spread" in allowed_tools_set
+        )
+        can_bet_total = (
+            allowed_tools_set is None
+            or "place_market_bet_total" in allowed_tools_set
+            or "place_limit_bet_total" in allowed_tools_set
+        )
 
         @tool
         async def get_balance() -> str:
@@ -2095,7 +2112,53 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             event = await target.get_available_event()
             if not event:
                 return "null"
-            return event.model_dump_json()
+
+            filtered_event = event.model_copy(deep=True)
+
+            if not can_bet_moneyline:
+                filtered_event.home_probability = None
+                filtered_event.away_probability = None
+
+            if not can_bet_spread:
+                filtered_event.spread_lines = {}
+
+            if not can_bet_total:
+                filtered_event.total_lines = {}
+
+            # Keep current_odds aligned with filtered market visibility.
+            odds_lines: list[str] = []
+            if (
+                can_bet_moneyline
+                and filtered_event.home_probability is not None
+                and filtered_event.away_probability is not None
+            ):
+                odds_lines.append(
+                    f"- Home: {1 / filtered_event.home_probability:.2f} "
+                    f"({filtered_event.home_probability * 100:.1f}% implied probability)"
+                )
+                odds_lines.append(
+                    f"- Away: {1 / filtered_event.away_probability:.2f} "
+                    f"({filtered_event.away_probability * 100:.1f}% implied probability)"
+                )
+
+            if can_bet_spread:
+                for spread_value, probs in filtered_event.spread_lines.items():
+                    odds_lines.append(
+                        f"- Spread: {spread_value:+.1f} "
+                        f"(Home: {1 / probs['home_probability']:.2f}, "
+                        f"Away: {1 / probs['away_probability']:.2f})"
+                    )
+
+            if can_bet_total:
+                for total_value, probs in filtered_event.total_lines.items():
+                    odds_lines.append(
+                        f"- Total: O/U {total_value:.1f} "
+                        f"(Over: {1 / probs['over_probability']:.2f}, "
+                        f"Under: {1 / probs['under_probability']:.2f})"
+                    )
+
+            filtered_event.current_odds = "\n".join(odds_lines) if odds_lines else None
+            return filtered_event.model_dump_json()
 
         @tool
         async def place_market_bet_moneyline(
