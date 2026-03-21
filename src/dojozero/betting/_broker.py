@@ -2158,7 +2158,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             if not event:
                 return "null"
 
-            filtered_event = event.model_copy(deep=True)
+            filtered_event = event.model_copy()
             filtered_event.current_odds = _build_filtered_odds_str(
                 filtered_event,
                 include_moneyline=can_bet_moneyline,
