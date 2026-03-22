@@ -37,14 +37,14 @@ services:
       - ../trial_sources:/app/trial_sources:ro
     command: >
       sh -c '
-      if [ -z "$DOJOZERO_DASHSCOPE_API_KEY" ] || [ -z "$DOJOZERO_TAVILY_API_KEY" ]; then
+      if [ -z "$$DOJOZERO_DASHSCOPE_API_KEY" ] || [ -z "$$DOJOZERO_TAVILY_API_KEY" ]; then
         echo "Missing required env vars: DOJOZERO_DASHSCOPE_API_KEY and DOJOZERO_TAVILY_API_KEY";
         echo "Please set them in .env before running a trial.";
         exit 1;
       fi;
-      echo "Running single trial with params: $DOJOZERO_TRIAL_PARAMS";
-      echo "Trial id: $DOJOZERO_TRIAL_ID";
-      dojo0 run --params "$DOJOZERO_TRIAL_PARAMS" --trial-id "$DOJOZERO_TRIAL_ID"
+      echo "Running single trial with params: $$DOJOZERO_TRIAL_PARAMS";
+      echo "Trial id: $$DOJOZERO_TRIAL_ID";
+      dojo0 run --params "$$DOJOZERO_TRIAL_PARAMS" --trial-id "$$DOJOZERO_TRIAL_ID"
       '
 
   # Jaeger v1 / jaegertracing/all-in-one is archived (EOL). v2 uses jaegertracing/jaeger.
@@ -75,9 +75,9 @@ services:
       - "${DOJOZERO_SERVE_PORT:-8000}:8000"
     environment:
       - PYTHONUNBUFFERED=1
-      # Glob or single file; CLI expands globs (see dojozero.cli _serve_command)
+      # Glob or single file; CLI expands globs (see dojozero.cli _serve_command).
+      # DOJOZERO_ENABLE_JAEGER: set in repo-root .env (env_file above), not here — ${VAR} uses docker/ as project dir.
       - DOJOZERO_TRIAL_SOURCE=${DOJOZERO_TRIAL_SOURCE:-trial_sources/*.yaml}
-      - DOJOZERO_ENABLE_JAEGER=${DOJOZERO_ENABLE_JAEGER:-0}
     volumes:
       - ../outputs:/app/outputs
       - ../data:/app/data
@@ -96,16 +96,16 @@ services:
       start_period: 15s
     command: >
       sh -c '
-      if [ -z "$DOJOZERO_DASHSCOPE_API_KEY" ] || [ -z "$DOJOZERO_TAVILY_API_KEY" ]; then
+      if [ -z "$$DOJOZERO_DASHSCOPE_API_KEY" ] || [ -z "$$DOJOZERO_TAVILY_API_KEY" ]; then
         echo "Missing required env vars: DOJOZERO_DASHSCOPE_API_KEY and DOJOZERO_TAVILY_API_KEY";
         echo "Please set them in .env before starting the dashboard server.";
         exit 1;
       fi;
       TRACE_ARGS="";
-      if [ "$DOJOZERO_ENABLE_JAEGER" = "1" ]; then
+      if [ "$$DOJOZERO_ENABLE_JAEGER" = "1" ]; then
         TRACE_ARGS="--trace-backend jaeger --trace-ingest-endpoint http://jaeger:4318";
       fi;
-      exec dojo0 serve --host 0.0.0.0 --port 8000 $TRACE_ARGS --trial-source "$DOJOZERO_TRIAL_SOURCE"
+      exec dojo0 serve --host 0.0.0.0 --port 8000 $$TRACE_ARGS --trial-source "$$DOJOZERO_TRIAL_SOURCE"
       '
 
   # Arena: trace-backed UI (optional). Mount host-built Vite output at frontend-update/dist.
@@ -142,7 +142,7 @@ services:
       else
         echo "Arena: no static UI (missing frontend-update/dist/index.html). API/WebSocket still run. Build: cd frontend-update && npm ci && VITE_API_URL=http://localhost:$$ARENA_HOST_PORT npm run build";
       fi;
-      exec dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger --trace-query-endpoint http://jaeger:16686 $STATIC_ARGS
+      exec dojo0 arena --host 0.0.0.0 --port 3001 --trace-backend jaeger --trace-query-endpoint http://jaeger:16686 $$STATIC_ARGS
       '
 
 volumes:

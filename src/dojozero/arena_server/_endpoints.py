@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -92,30 +93,42 @@ def register_rest_endpoints(app: FastAPI) -> None:
             else None
         )
 
-        # Get trial list from trace store with time range filter
-        trial_ids = await state.trace_reader.list_trials(
-            start_time=start_dt,
-            end_time=end_dt,
-            limit=limit,
-        )
-
-        # Build result with phase and metadata extracted from traces
-        result: list[TrialListItem] = []
-        for tid in trial_ids:
-            trial_info_extracted = await _extract_trial_info_from_traces(
-                state.trace_reader, tid
+        try:
+            # Get trial list from trace store with time range filter
+            trial_ids = await state.trace_reader.list_trials(
+                start_time=start_dt,
+                end_time=end_dt,
+                limit=limit,
             )
-            result.append(
-                TrialListItem(
-                    id=tid,
-                    phase=trial_info_extracted["phase"],
-                    metadata=trial_info_extracted.get("metadata", {}),
+
+            # Build result with phase and metadata extracted from traces
+            result: list[TrialListItem] = []
+            for tid in trial_ids:
+                if not tid or tid == "None":
+                    continue
+                trial_info_extracted = await _extract_trial_info_from_traces(
+                    state.trace_reader, tid
                 )
+                result.append(
+                    TrialListItem(
+                        id=tid,
+                        phase=trial_info_extracted["phase"],
+                        metadata=trial_info_extracted.get("metadata", {}),
+                    )
+                )
+
+            # jsonable_encoder tolerates odd types in metadata better than model_dump(mode="json")
+            payload = jsonable_encoder(
+                [item.model_dump(by_alias=state.by_alias) for item in result]
+            )
+        except Exception:
+            LOGGER.exception("GET /api/trials failed")
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "trial_list_failed"},
             )
 
-        return JSONResponse(
-            content=[item.model_dump(by_alias=state.by_alias) for item in result]
-        )
+        return JSONResponse(content=payload)
 
     @app.get("/api/trials/{trial_id}")
     async def get_trial(trial_id: str) -> JSONResponse:

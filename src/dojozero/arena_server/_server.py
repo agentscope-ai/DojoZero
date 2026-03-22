@@ -832,10 +832,22 @@ class BackgroundRefresher:
                         e,
                     )
             else:
-                # No spans found - set unknown phase
-                self.cache.set_trial_info(
-                    trial_id, {"phase": "unknown", "metadata": {}}
-                )
+                # Bulk fetch may omit lifecycle spans (separate traces / operation names).
+                try:
+                    trial_info = await _extract_trial_info_from_traces(
+                        self.trace_reader, trial_id
+                    )
+                    self.cache.set_trial_info(trial_id, trial_info)
+                    processed += 1
+                except Exception as e:
+                    LOGGER.warning(
+                        "BackgroundRefresher: trial_info fallback Jaeger fetch failed[%s]: %s",
+                        trial_id,
+                        e,
+                    )
+                    self.cache.set_trial_info(
+                        trial_id, {"phase": "unknown", "metadata": {}}
+                    )
 
         LOGGER.info(
             "BackgroundRefresher: Processed trial_info for %d trials",
