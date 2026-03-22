@@ -5,6 +5,8 @@
 # (trace_backend, query_endpoint, service_name) are configured via CLI arguments.
 # See: uv run dojozero arena --help
 #
+# For SLS backend, set: DOJOZERO_SLS_PROJECT, DOJOZERO_SLS_ENDPOINT, DOJOZERO_SLS_LOGSTORE
+#
 cache:
   refresh_interval: 5.0  # How often to refresh all caches (seconds)
   startup_timeout: 30.0  # Max wait for initial cache population

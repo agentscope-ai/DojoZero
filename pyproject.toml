@@ -38,9 +38,22 @@ dojo0 = "dojozero.cli:main"
 ray = [
     "ray>=2.51.1",
 ]
+alicloud = [
+    "oss2>=2.18.0",
+    "alibabacloud-credentials>=1.0.0",
+    "aliyun-log-python-sdk",
+]
+redis = [
+    "redis>=7.2.1",
+]
 
 [dependency-groups]
 dev = [
+    # Match optional extras so tests (OSS, SLS, Redis) run without extra pip flags
+    "oss2>=2.18.0",
+    "alibabacloud-credentials>=1.0.0",
+    "aliyun-log-python-sdk",
+    "redis>=7.2.1",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=1.3.0",

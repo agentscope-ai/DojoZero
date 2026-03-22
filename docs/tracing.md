@@ -1,6 +1,8 @@
 # Tracing
 
-DojoZero uses OpenTelemetry for distributed tracing with Jaeger as the trace backend.
+DojoZero uses OpenTelemetry for distributed tracing.
+
+**Install note:** **Jaeger** works with the **default** package install. **Alibaba Cloud Log Service (SLS)** as a trace backend requires optional dependencies: `pip install 'dojozero[alicloud]'` (see [`installation.md`](./installation.md)).
 
 ## Backend: Jaeger
 
@@ -27,6 +29,10 @@ dojo0 arena --trace-backend jaeger --trace-query-endpoint http://localhost:16686
 - UI: http://localhost:16686
 - OTLP HTTP: http://localhost:4318
 - Docs: https://www.jaegertracing.io/docs/
+
+## Backend: Alibaba Cloud SLS (optional)
+
+Use `--trace-backend sls` only after installing **`dojozero[alicloud]`**. Configure SLS project/endpoint/logstore via `DOJOZERO_SLS_*` (see `.env.example`). For querying traces in Arena/dashboard, the same extra is required.
 
 ## Running Trials with Tracing
 
@@ -63,14 +69,14 @@ cd frontend && npm run dev
 
 | Option | Description |
 |------|-------------|
-| `--trace-backend` | `jaeger` (required for tracing) |
+| `--trace-backend` | `jaeger` (default stack) or `sls` (needs `dojozero[alicloud]`) |
 | `--trace-ingest-endpoint` | OTLP endpoint for Jaeger (default: http://localhost:4318) |
 
 ### `dojo0 arena`
 
 | Option | Description |
 |------|-------------|
-| `--trace-backend` | `jaeger` (required) |
+| `--trace-backend` | `jaeger` or `sls` (SLS needs `dojozero[alicloud]`) |
 | `--trace-query-endpoint` | Jaeger Query API (default: http://localhost:16686) |
 | `--static-dir` | Path to frontend build output |
 

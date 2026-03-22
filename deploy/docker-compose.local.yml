@@ -1,0 +1,26 @@
+services:
+  trial:
+    build:
+      context: ..
+      dockerfile: docker/local.Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      - DOJOZERO_TRIAL_PARAMS=${DOJOZERO_TRIAL_PARAMS:-trial_params/nba-moneyline.yaml}
+      - DOJOZERO_TRIAL_ID=${DOJOZERO_TRIAL_ID:-quickstart-trial}
+    volumes:
+      - ../outputs:/app/outputs
+      - ../data:/app/data
+      - ../trial_params:/app/trial_params:ro
+      - ../trial_sources:/app/trial_sources:ro
+    command: >
+      sh -c '
+      if [ -z "$DOJOZERO_DASHSCOPE_API_KEY" ] || [ -z "$DOJOZERO_TAVILY_API_KEY" ]; then
+        echo "Missing required env vars: DOJOZERO_DASHSCOPE_API_KEY and DOJOZERO_TAVILY_API_KEY";
+        echo "Please set them in .env before running a trial.";
+        exit 1;
+      fi;
+      echo "Running single trial with params: $DOJOZERO_TRIAL_PARAMS";
+      echo "Trial id: $DOJOZERO_TRIAL_ID";
+      dojo0 run --params "$DOJOZERO_TRIAL_PARAMS" --trial-id "$DOJOZERO_TRIAL_ID"
+      '

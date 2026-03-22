@@ -722,7 +722,7 @@ class DataHub:
         """Enable trace emission during backtest with rebased timestamps.
 
         When enabled, data events replayed from the JSONL file are emitted to
-        the trace backend (Jaeger) with timestamps rebased so the first
+        the trace backend (Jaeger or SLS) with timestamps rebased so the first
         event starts at "now".  This makes replay trials visible in the Arena
         UI alongside agent-generated events that carry wall-clock timestamps.
 

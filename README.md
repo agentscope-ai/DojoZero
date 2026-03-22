@@ -10,12 +10,21 @@ DojoZero is a system for hosting AI agents that run continuously on realtime dat
 - Operate as a local CLI workflow or as long-running services with scheduling and tracing.
 - Extend scenarios with custom agents, operators, and data streams without changing the core runtime.
 
+## Installation (two options)
+
+| Track | Command | Use when |
+|--------|---------|----------|
+| **Default (open source core)** | `uv pip install .` | Trials, dashboard, **Jaeger** tracing — no Alibaba Cloud Python SDKs |
+| **+ Alibaba / Redis** | `uv pip install '.[alicloud,redis]'` | OSS backup / `oss://` paths, **`--trace-backend sls`**, sync-service **Redis** |
+
+Details, package lists, and dev setup: [`docs/installation.md`](./docs/installation.md).
+
 ## Quick Start
 
-Install and run your first trial in a few minutes. The example below uses DashScope-backed models:
+Install and run your first trial in a few minutes. The example below uses DashScope-backed models and the **default** install (Jaeger-compatible; no Alibaba wheels):
 
 ```bash
-# 1) Install runtime dependencies
+# 1) Default install (see table above for [alicloud] / [redis])
 uv pip install .
 
 # 2) Set required API keys (example)
@@ -27,7 +36,27 @@ export DOJOZERO_TAVILY_API_KEY="your_key"
 dojo0 run --params trial_params/nba-moneyline.yaml --trial-id quickstart-nba
 ```
 
-📘 For the full setup guide, including (1) environment variables, (2) trial configuration, and (3) agent configuration, see [`docs/configuration.md`](./docs/configuration.md).
+📘 For the full setup guide, including (1) environment variables, (2) trial configuration, and (3) agent configuration, see [`docs/configuration.md`](./docs/configuration.md). Install options (default vs Alibaba extras) are in [`docs/installation.md`](./docs/installation.md).
+
+## Docker: Single Trial Quick Run
+
+If you only want to run one trial (without starting long-running server mode), use the local-only compose file (separate from `deploy/`):
+
+```bash
+# 1) Prepare env
+cp .env.example .env
+# Fill DOJOZERO_DASHSCOPE_API_KEY and DOJOZERO_TAVILY_API_KEY
+
+# 2) Run one NBA trial
+docker compose -f docker/docker-compose.local.yml run --rm trial
+
+# 3) Run one NFL trial (override params + trial id)
+DOJOZERO_TRIAL_PARAMS=trial_params/nfl-moneyline.yaml \
+DOJOZERO_TRIAL_ID=quickstart-nfl \
+docker compose -f docker/docker-compose.local.yml run --rm trial
+```
+
+Output files are written to `outputs/` and `data/` on your host machine.
 
 ---
 

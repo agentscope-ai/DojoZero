@@ -2,7 +2,7 @@
 
 AI agent system for real-time data reasoning and automated betting/trading. Agents run continuously on live data streams to analyze outcomes and take actions.
 
-See [README.md](./README.md) for installation and CLI usage.
+See [README.md](./README.md) for installation and CLI usage. **Default install** excludes Alibaba Cloud wheels (`oss2`, credentials SDK, SLS SDK); use `dojozero[alicloud]` and/or `dojozero[redis]` when needed — details in [docs/installation.md](./docs/installation.md).
 
 ## Project Structure
 
@@ -30,6 +30,9 @@ src/dojozero/
 ## Development Commands
 
 ```bash
+# Install project + dev deps (includes alicloud/redis packages used in tests)
+uv sync --group dev
+
 # Run tests
 uv run pytest
 

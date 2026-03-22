@@ -1360,6 +1360,14 @@ def create_arena_app(
     # Use provided config or default for cache/query settings
     resolved_config = config if config is not None else DEFAULT_CONFIG
 
+    if trace_backend == "sls":
+        from dojozero._optional_alicloud import ensure_alibabacloud_credentials
+
+        try:
+            ensure_alibabacloud_credentials()
+        except ImportError as e:
+            raise RuntimeError(str(e)) from e
+
     # Create trace reader using CLI args
     trace_reader = create_trace_reader(
         backend=trace_backend,

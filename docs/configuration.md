@@ -37,6 +37,13 @@ cp .env.example .env
 
 Then fill only the variables your scenario needs. Never commit real credentials.
 
+### Python dependencies vs. features
+
+- **Default install** (`uv pip install .`): core trials + **Jaeger** tracing. No OSS/SLS/Redis client libraries.
+- **Alibaba / Redis extras** (`uv pip install '.[alicloud,redis]'`): needed for OSS, `--trace-backend sls`, and Redis-backed sync-service paths.
+
+See [`installation.md`](./installation.md) for the full split.
+
 Typical minimum for NBA/NFL trial usage:
 
 ```dotenv
