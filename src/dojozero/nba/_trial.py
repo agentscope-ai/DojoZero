@@ -44,6 +44,7 @@ from dojozero.betting import (
     BrokerOperatorConfig,
     TrialBrokerConfig,
 )
+from dojozero.agents import SocialBoardActor
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +375,30 @@ async def _build_trial_spec(
         config_cache=config_cache,
     )
 
+    # Create SocialBoard actor if multiple agents are present (multi-agent communication)
+    social_board: OperatorSpec[Any] | None = None
+    if len(agent_specs) > 1:
+        social_board_actor_id = "social_board"
+        social_board = OperatorSpec(
+            actor_id=social_board_actor_id,
+            actor_cls=SocialBoardActor,
+            config={
+                "trial_id": trial_id,
+                "actor_id": social_board_actor_id,
+            },
+        )
+        logger.info(
+            "Created SocialBoard for trial '%s' with %d agents",
+            trial_id,
+            len(agent_specs),
+        )
+    else:
+        logger.info(
+            "No SocialBoard for trial '%s' (agent_specs count=%d, need >1)",
+            trial_id,
+            len(agent_specs),
+        )
+
     # Build typed metadata with game information and hub config
     # This metadata is used by build_runtime_context and store factories
     metadata = BettingTrialMetadata(
@@ -402,6 +427,7 @@ async def _build_trial_spec(
         data_streams=tuple(stream_specs),
         operators=tuple(operator_specs),
         agents=tuple(agent_specs),
+        social_board=social_board,
     )
 
 

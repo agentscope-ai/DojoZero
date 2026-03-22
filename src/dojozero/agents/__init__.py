@@ -14,6 +14,15 @@ from ._config import (
     expand_agent_config,
 )
 from ._toolkit import create_toolkit, tool
+from ._social_board import (
+    HotTopicsEvent,
+    SocialBoard,
+    SocialMessage,
+    create_social_board_tools,
+    format_hot_topics_for_llm,
+    SocialBoardActor,
+    SocialBoardConfig,
+)
 from ._trial_utils import (
     get_expanded_agent_ids,
     build_operator_to_agents_map,
@@ -35,6 +44,14 @@ __all__ = [
     "create_formatter",
     "expand_agent_config",
     "tool",
+    # Social board (multi-agent communication)
+    "HotTopicsEvent",
+    "SocialBoard",
+    "SocialMessage",
+    "create_social_board_tools",
+    "format_hot_topics_for_llm",
+    "SocialBoardActor",
+    "SocialBoardConfig",
     # Trial utilities
     "get_expanded_agent_ids",
     "build_operator_to_agents_map",

@@ -69,4 +69,16 @@ Rules:
 - Keep total output under 1500 tokens.
 """
 
-__all__ = ["TrialBrokerConfig", "MEMORY_SUMMARY_PROMPT"]
+# Prompt for LLM to generate hot topics from recent social board messages (every N posts)
+HOT_TOPICS_PROMPT = """Based on the following recent messages from a multi-agent social board (sports betting context), output a short "hot topics" or "trending discussion" list. Extract 3–5 main themes or discussion points that agents are focusing on. Output only a numbered list, one topic per line, e.g.:
+1. First topic summary
+2. Second topic summary
+Do not add any other text or explanation.
+
+Recent messages:
+---
+{recent_messages}
+---
+"""
+
+__all__ = ["TrialBrokerConfig", "MEMORY_SUMMARY_PROMPT", "HOT_TOPICS_PROMPT"]
