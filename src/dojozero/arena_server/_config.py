@@ -71,6 +71,20 @@ class WebSocketConfig(BaseModel):
     )
 
 
+class SLSConfig(BaseModel):
+    """SLS-specific query configuration (used when trace_backend='sls').
+
+    Note: SLS connection settings (project, endpoint, logstore) are configured
+    via environment variables: DOJOZERO_SLS_PROJECT, DOJOZERO_SLS_ENDPOINT,
+    DOJOZERO_SLS_LOGSTORE.
+    """
+
+    page_size: int = Field(default=100, description="Page size for SLS queries")
+    max_total: int = Field(
+        default=100000, description="Safety limit for total rows fetched"
+    )
+
+
 class ArenaServerConfig(BaseModel):
     """Arena Server configuration - loadable from YAML.
 
@@ -82,6 +96,7 @@ class ArenaServerConfig(BaseModel):
     replay_cache: ReplayCacheConfig = Field(default_factory=ReplayCacheConfig)
     query_limits: QueryLimitsConfig = Field(default_factory=QueryLimitsConfig)
     websocket: WebSocketConfig = Field(default_factory=WebSocketConfig)
+    sls: SLSConfig = Field(default_factory=SLSConfig)
 
     @classmethod
     def from_yaml(cls, path: Path | str) -> "ArenaServerConfig":

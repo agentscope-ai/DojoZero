@@ -1,7 +1,7 @@
 """Arena Server package for DojoZero.
 
 This package provides the Arena Server functionality including:
-- REST API for trial/span queries from Jaeger
+- REST API for trial/span queries from Jaeger/SLS
 - WebSocket streaming for real-time span updates
 - Landing page data with caching
 - Static file serving for React frontend

@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from dojozero.arena_server._redis_reader import RedisReader
 
 from dojozero.arena_server._cache import (
     PeriodInfo,
@@ -287,7 +290,7 @@ async def _extract_bets_for_trial(
     """Extract recent bets from broker.bet spans for a specific trial.
 
     Args:
-        trace_reader: TraceReader for querying the trace store
+        trace_reader: TraceReader for querying SLS
         trial_id: Trial ID to query
         cache: Optional cache for agent info lookup
         limit: Maximum number of bets to return
@@ -984,8 +987,12 @@ async def _load_replay_data(
     trace_reader: TraceReader,
     replay_cache: ReplayCache,
     trial_id: str,
+    redis_reader: RedisReader | None = None,
 ) -> tuple[ReplayCacheEntry | None, ReplayErrorReason | Literal[""]]:
-    """Load replay data for a trial from the trace store (Jaeger).
+    """Load replay data for a trial.
+
+    When redis_reader is provided, tries loading spans from Redis first (~50-100ms)
+    before falling back to trace_reader (SLS, 10-20s).
 
     Returns:
         Tuple of (cache_entry, error_reason)
@@ -1002,12 +1009,27 @@ async def _load_replay_data(
     if cached:
         return cached, ""
 
-    # 2. Fetch spans from trace store
-    try:
-        spans = await trace_reader.get_spans(trial_id)
-    except Exception as e:
-        LOGGER.error("Failed to fetch spans for replay: %s", e)
-        return None, "trial_not_found"
+    # 2. Fetch spans - try Redis first, then fall back to trace store
+    spans: list[SpanData] = []
+
+    if redis_reader is not None:
+        try:
+            spans = await redis_reader.load_spans_for_trial(trial_id)
+            if spans:
+                LOGGER.debug(
+                    "Loaded %d spans from Redis for replay of %s",
+                    len(spans),
+                    trial_id,
+                )
+        except Exception as e:
+            LOGGER.warning("Redis load failed for replay of %s: %s", trial_id, e)
+
+    if not spans:
+        try:
+            spans = await trace_reader.get_spans(trial_id)
+        except Exception as e:
+            LOGGER.error("Failed to fetch spans for replay: %s", e)
+            return None, "trial_not_found"
 
     if not spans:
         return None, "trial_not_found"

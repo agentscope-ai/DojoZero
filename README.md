@@ -14,7 +14,7 @@ DojoZero is a system for hosting AI agents that run continuously on realtime dat
 
 | Track | Command | Use when |
 |--------|---------|----------|
-| **Default (open source core)** | `uv pip install .` | Trials, dashboard, **Jaeger** tracing — no Alibaba Cloud Python SDKs |
+| **Default (No Alibaba Cloud dependency)** | `uv pip install .` | Trials, dashboard, **Jaeger** tracing |
 | **+ Alibaba / Redis** | `uv pip install '.[alicloud,redis]'` | OSS backup / `oss://` paths, **`--trace-backend sls`**, sync-service **Redis** |
 
 Details, package lists, and dev setup: [`docs/installation.md`](./docs/installation.md).
@@ -38,9 +38,11 @@ dojo0 run --params trial_params/nba-moneyline.yaml --trial-id quickstart-nba
 
 📘 For the full setup guide, including (1) environment variables, (2) trial configuration, and (3) agent configuration, see [`docs/configuration.md`](./docs/configuration.md). Install options (default vs Alibaba extras) are in [`docs/installation.md`](./docs/installation.md).
 
-## Docker: Single Trial Quick Run
+## Docker (local)
 
-If you only want to run one trial (without starting long-running server mode), use the local-only compose file (separate from `deploy/`):
+Use [`docker/docker-compose.local.yml`](./docker/docker-compose.local.yml) (separate from Alibaba-focused [`deploy/`](./deploy/)).
+
+**One-shot trial** (`dojo0 run`):
 
 ```bash
 # 1) Prepare env
@@ -48,15 +50,36 @@ cp .env.example .env
 # Fill DOJOZERO_DASHSCOPE_API_KEY and DOJOZERO_TAVILY_API_KEY
 
 # 2) Run one NBA trial
-docker compose -f docker/docker-compose.local.yml run --rm trial
+docker compose -f docker/docker-compose.local.yml --profile trial run --rm trial
 
 # 3) Run one NFL trial (override params + trial id)
 DOJOZERO_TRIAL_PARAMS=trial_params/nfl-moneyline.yaml \
 DOJOZERO_TRIAL_ID=quickstart-nfl \
-docker compose -f docker/docker-compose.local.yml run --rm trial
+docker compose -f docker/docker-compose.local.yml --profile trial run --rm trial
 ```
 
-Output files are written to `outputs/` and `data/` on your host machine.
+**Dashboard + scheduling** (`dojo0 serve`, same idea as below but in Docker):
+
+```bash
+docker compose -f docker/docker-compose.local.yml --profile serve up -d --build
+# API: http://localhost:8000  (override host port with DOJOZERO_SERVE_PORT in .env)
+```
+
+**With Jaeger** (set `DOJOZERO_ENABLE_JAEGER=1` in `.env`, then):
+
+```bash
+docker compose -f docker/docker-compose.local.yml --profile serve --profile tracing up -d --build
+# Jaeger UI: http://localhost:16686
+```
+
+**With Arena UI** (build `frontend-update` first, then add `--profile arena` — see [`docker/README.md`](./docker/README.md)):
+
+```bash
+docker compose -f docker/docker-compose.local.yml --profile serve --profile tracing --profile arena up -d --build
+# Arena: http://localhost:3001  (or DOJOZERO_ARENA_PORT)
+```
+
+Output files go to `outputs/` and `data/` on the host. Full options and troubleshooting: [`docker/README.md`](./docker/README.md).
 
 ---
 

@@ -1,0 +1,69 @@
+# Build context is the repo root (see docker/local.Dockerfile and deploy/Dockerfile).
+# Speeds up `docker build` and avoids leaking secrets / huge trees into the daemon.
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Secrets — never send to build context
+.env
+.env.*
+!.env.example
+
+# Python
+**/__pycache__
+**/*.py[cod]
+**/*.pyo
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.pytype
+**/*.egg-info
+**/.eggs
+**/*.egg
+.venv
+venv
+.python-version
+
+# Large or runtime-generated (not used by COPY in our Dockerfiles)
+outputs/
+data/
+*.log
+backtest.log
+output_test.txt
+
+# Tests & tooling (not copied into image)
+tests/
+.pytest_cache
+.coverage
+htmlcov/
+.mypy_cache
+
+# Docs & local dev (not needed for pip install)
+docs/
+design/
+demos/
+CLAUDE.md
+
+# Other project trees not copied by current Dockerfiles
+packages/
+dojozero-store/
+frontend-update/
+tools/
+configs/
+# Alibaba / production deploy — unrelated to local image; not COPY'd by docker/local.Dockerfile
+deploy/
+# Local compose + README + Dockerfile path is via `docker build -f …` on disk, not from context
+docker/
+
+# CI / editor
+.github/
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Node / frontends if present under repo
+**/node_modules

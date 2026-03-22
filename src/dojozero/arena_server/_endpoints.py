@@ -52,23 +52,6 @@ LOGGER = logging.getLogger("dojozero.arena_server.endpoints")
 def register_rest_endpoints(app: FastAPI) -> None:
     """Register all REST API endpoints."""
 
-    @app.get("/")
-    async def root() -> JSONResponse:
-        """Root path: describe Arena API when no static frontend is mounted."""
-        return JSONResponse(
-            content={
-                "service": "DojoZero Arena Server",
-                "message": "API only. Use the frontend (npm run dev in frontend/) or query /api/trials, /api/landing, etc.",
-                "docs": "See docs/tracing.md for Arena + Jaeger setup.",
-                "endpoints": [
-                    "GET /api/trials - list trials (from Jaeger traces)",
-                    "GET /api/trials/{id} - trial details",
-                    "GET /api/landing - landing page data",
-                    "WS /ws/trials/{id}/stream - live span stream",
-                ],
-            }
-        )
-
     @app.get("/api/trials")
     async def list_trials(
         start_time: int | None = Query(
@@ -460,11 +443,17 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 - totalItems: Total number of items after filtering
         """
         state = get_server_state()
+        refresher = state.refresher
 
         cache_entry, error_reason = await _load_replay_data(
             state.trace_reader,
             state.replay_cache,
             trial_id,
+            redis_reader=(
+                refresher.redis_reader
+                if refresher is not None and refresher._use_redis
+                else None
+            ),
         )
 
         if cache_entry is None:
@@ -857,10 +846,16 @@ def register_websocket_endpoints(app: FastAPI) -> None:
         )
 
         # Load replay data (includes pre-computed meta)
+        refresher = state.refresher
         cache_entry, error_reason = await _load_replay_data(
             state.trace_reader,
             state.replay_cache,
             trial_id,
+            redis_reader=(
+                refresher.redis_reader
+                if refresher is not None and refresher._use_redis
+                else None
+            ),
         )
 
         if cache_entry is None:
