@@ -9,6 +9,7 @@ import asyncio
 import inspect
 import json
 import logging
+import time
 from collections import deque
 from typing import Any, Callable, Mapping, Sequence, TypedDict, cast
 
@@ -332,13 +333,20 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Event formatter for converting DataEvents to LLM-friendly text
         self._event_formatter = event_formatter or _default_format_event
 
+        # Event throttle: minimum seconds between LLM invocations.
+        # Events arriving during cooldown are queued and batch-processed
+        # once the cooldown expires, reducing LLM API call volume.
+        self._min_event_interval: float = 180.0
+        self._last_process_time: float = 0.0
+        self._cooldown_task: asyncio.Task[None] | None = None
+
         # Memory compression settings
         self._event_history: deque[str] = deque(maxlen=1000)
         self._compressed_context: str | None = None
         self._last_summarized_event_count: int = (
             0  # len(_event_history) at last summary
         )
-        self._memory_token_threshold: int = 9000
+        self._memory_token_threshold: int = 102400
         self._head_events: int = 10
         self._tail_events: int = 10
         self._max_event_chars: int = 1000
@@ -1010,12 +1018,66 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 )
                 return False
 
+    async def _drain_event_queue(self) -> None:
+        """Process all queued events until the queue is empty.
+
+        Caller must set ``_is_processing = True`` before invoking.
+        On exit (normal or exception) ``_is_processing`` is reset to False
+        and ``_last_process_time`` is updated so the cooldown window starts.
+        """
+        try:
+            while True:
+                async with self._processing_lock:
+                    if not self._event_queue:
+                        break
+
+                    # Take a snapshot of current queue
+                    queued_items = list(self._event_queue)
+                    self._event_queue.clear()
+
+                # Extract events and find max retry count for the batch
+                queued_events = [item[0] for item in queued_items]
+                max_retry = max(item[1] for item in queued_items)
+
+                logger.info(
+                    "agent '%s' processing %d queued event(s) (max_retry_count=%d)",
+                    self.actor_id,
+                    len(queued_events),
+                    max_retry,
+                )
+                await self._process_events_with_retry(
+                    queued_events, retry_count=max_retry
+                )
+        except Exception:
+            logger.exception(
+                "agent '%s' unexpected error in event processing loop",
+                self.actor_id,
+            )
+            raise
+        finally:
+            async with self._processing_lock:
+                self._is_processing = False
+                self._last_process_time = time.monotonic()
+
+    async def _process_after_cooldown(self, delay: float) -> None:
+        """Wait for the cooldown to expire, then drain queued events."""
+        await asyncio.sleep(delay)
+        async with self._processing_lock:
+            self._cooldown_task = None
+            if self._is_processing or not self._event_queue:
+                return
+            self._is_processing = True
+        await self._drain_event_queue()
+
     async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
         """Process incoming stream event with the ReActAgent.
 
         Event handling behavior:
         - Events are formatted to LLM-friendly text based on their type
-        - If the agent is busy processing, new events are queued
+        - If the agent is busy *or* within the cooldown window
+          (``_min_event_interval`` seconds since last processing), the event
+          is queued.  A background task is scheduled to drain the queue once
+          the cooldown expires, so events are never lost.
         - After processing completes, all queued events are consolidated
           into a single message for the next processing cycle
         - Failed events are retried up to max_event_retry_count times
@@ -1043,6 +1105,26 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 )
                 return
 
+            # -- Event throttle: enforce minimum interval between LLM calls --
+            if self._last_process_time > 0:
+                elapsed = time.monotonic() - self._last_process_time
+                if elapsed < self._min_event_interval:
+                    self._event_queue.append((event, 0))
+                    remaining = self._min_event_interval - elapsed
+                    if self._cooldown_task is None or self._cooldown_task.done():
+                        self._cooldown_task = asyncio.create_task(
+                            self._process_after_cooldown(remaining)
+                        )
+                    logger.debug(
+                        "agent '%s' throttled, queued event seq=%s "
+                        "(%.0fs remaining, queue size: %d)",
+                        self.actor_id,
+                        event.sequence,
+                        remaining,
+                        len(self._event_queue),
+                    )
+                    return
+
             # Mark as processing and queue the current event
             self._is_processing = True
 
@@ -1065,40 +1147,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             # Add current event to queue with retry_count=0
             self._event_queue.append((event, 0))
 
-        try:
-            # Process all queued events (including the current one)
-            while True:
-                async with self._processing_lock:
-                    if not self._event_queue:
-                        break
-
-                    # Take a snapshot of current queue
-                    queued_items = list(self._event_queue)
-                    self._event_queue.clear()
-
-                # Extract events and find max retry count for the batch
-                queued_events = [item[0] for item in queued_items]
-                max_retry = max(item[1] for item in queued_items)
-
-                logger.info(
-                    "agent '%s' processing %d queued event(s) (max_retry_count=%d)",
-                    self.actor_id,
-                    len(queued_events),
-                    max_retry,
-                )
-                await self._process_events_with_retry(
-                    queued_events, retry_count=max_retry
-                )
-
-        except Exception:
-            logger.exception(
-                "agent '%s' unexpected error in event processing loop",
-                self.actor_id,
-            )
-            raise
-        finally:
-            async with self._processing_lock:
-                self._is_processing = False
+        await self._drain_event_queue()
 
     async def save_state(self) -> Mapping[str, Any]:
         """Return serializable state for checkpointing."""
