@@ -42,6 +42,7 @@ except ImportError:  # pragma: no cover - ray is optional
 
 DEFAULT_IMPORTS: tuple[str, ...] = (
     "dojozero.nba",
+    "dojozero.ncaa",
     "dojozero.nfl",
 )
 DEFAULT_STORE_DIRECTORY: str = "./dojozero-store"
@@ -1831,8 +1832,68 @@ def _resolve_env_tier() -> str:
     return "daily"
 
 
+def _expand_compact_trial_source(
+    config: dict[str, Any], scenario_name: str, source_path: Path
+) -> None:
+    """Expand compact trial source config (personas + llm_config_path) into full format.
+
+    If ``config`` contains a ``personas`` key, loads the base config from
+    ``trial_sources/base/{scenario_name}.yaml`` and generates the full
+    ``scenario_config`` (data_streams, operators, agents) from it.
+
+    Modifies ``config`` in place.
+    """
+    personas: list[str] | None = config.pop("personas", None)
+    llm_config_path: str | None = config.pop("llm_config_path", None)
+    if personas is None:
+        return  # Already full format
+
+    # Resolve base config relative to trial_sources/base/
+    base_dir = source_path.parent.parent / "base"
+    base_path = base_dir / f"{scenario_name}.yaml"
+    if not base_path.exists():
+        raise DojoZeroCLIError(
+            f"Base config not found at {base_path} for scenario '{scenario_name}'"
+        )
+
+    with base_path.open("r", encoding="utf-8") as f:
+        base = yaml.safe_load(f)
+
+    # Build scenario_config from base
+    scenario_config = dict(base["scenario_config"])
+    agent_template = base["agent_template"]
+
+    # Generate agents from personas × llm_config_path
+    agents = []
+    for persona in personas:
+        agent: dict[str, Any] = {
+            "id": f"{persona}_agent",
+            "persona": persona,
+            "persona_config_path": f"agents/personas/{persona}.yaml",
+            "llm_config_path": llm_config_path or "agents/llms/all.yaml",
+        }
+        agent.update(agent_template)
+        agents.append(agent)
+    scenario_config["agents"] = agents
+
+    config["scenario_config"] = scenario_config
+
+    # Apply schedule defaults from base (tier can override)
+    for key, value in base.get("schedule", {}).items():
+        config.setdefault(key, value)
+
+
 def _load_trial_source_from_yaml(path: Path) -> InitialTrialSourceDict:
     """Load a trial source configuration from a YAML file.
+
+    Supports two formats:
+
+    **Full format** — ``config.scenario_config`` with explicit data_streams,
+    operators, and agents.
+
+    **Compact format** — ``config.personas`` and ``config.llm_config_path``.
+    The loader expands this using the base config from
+    ``trial_sources/base/{scenario_name}.yaml``.
 
     Args:
         path: Path to the YAML file
@@ -1865,11 +1926,18 @@ def _load_trial_source_from_yaml(path: Path) -> InitialTrialSourceDict:
                 f"Trial source file {path} missing required field: {field}"
             )
 
+    config = data["config"]
+    scenario_name = config.get("scenario_name", "")
+
+    # Expand compact format if personas key is present
+    if "personas" in config:
+        _expand_compact_trial_source(config, scenario_name, path)
+
     # Cast to typed dict after validation
     return InitialTrialSourceDict(
         source_id=data["source_id"],
         sport_type=data["sport_type"],
-        config=data["config"],
+        config=config,
     )
 
 

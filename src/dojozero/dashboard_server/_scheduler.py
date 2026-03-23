@@ -31,7 +31,7 @@ from dojozero.data.espn import (
 )
 from dojozero.utils import utc_to_us_date
 
-from ._game_discovery import GameInfo, NBAGameFetcher, NFLGameFetcher
+from ._game_discovery import GameInfo, NBAGameFetcher, NCAAGameFetcher, NFLGameFetcher
 from ._trial_manager import TrialManager
 from ._types import GameMetadata, ScheduledGameMetadata
 
@@ -382,6 +382,7 @@ class ScheduleManager:
 
         # Game fetchers
         self._nba_fetcher = NBAGameFetcher()
+        self._ncaa_fetcher = NCAAGameFetcher()
         self._nfl_fetcher = NFLGameFetcher()
 
     async def start(self) -> None:
@@ -567,6 +568,10 @@ class ScheduleManager:
             if not date:
                 date = datetime.now().strftime("%Y-%m-%d")
             games = await self._nba_fetcher.fetch_games_for_date(date)
+        elif sport_type == "ncaa":
+            if not date:
+                date = datetime.now().strftime("%Y-%m-%d")
+            games = await self._ncaa_fetcher.fetch_games_for_date(date)
         elif sport_type == "nfl":
             if week is not None:
                 games = await self._nfl_fetcher.fetch_games_for_week(week)
@@ -754,7 +759,7 @@ class ScheduleManager:
         if source_id in self._sources:
             raise ValueError(f"Trial source '{source_id}' already exists")
 
-        if sport_type not in ("nba", "nfl"):
+        if sport_type not in ("nba", "nfl", "ncaa"):
             raise ValueError(f"Invalid sport_type: {sport_type}")
 
         source = TrialSource(
@@ -869,6 +874,10 @@ class ScheduleManager:
             if source.sport_type == "nba":
                 # Fetch NBA games from ESPN scoreboard
                 games = await self._nba_fetcher.fetch_games_for_date(None)
+
+            elif source.sport_type == "ncaa":
+                # Fetch NCAA basketball games from ESPN scoreboard
+                games = await self._ncaa_fetcher.fetch_games_for_date(None)
 
             elif source.sport_type == "nfl":
                 # Fetch NFL games from ESPN scoreboard
@@ -1344,6 +1353,11 @@ class ScheduleManager:
         try:
             if scheduled.sport_type == "nba":
                 return await self._nba_fetcher.get_game_status_info(
+                    scheduled.game_id,
+                    scheduled.game_date,
+                )
+            elif scheduled.sport_type == "ncaa":
+                return await self._ncaa_fetcher.get_game_status_info(
                     scheduled.game_id,
                     scheduled.game_date,
                 )
