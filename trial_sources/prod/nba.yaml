@@ -26,6 +26,7 @@ sport_type: nba
 # Configuration for trials created from this source
 config:
   scenario_name: nba
+  max_concurrent_games: 0  # 0 = unlimited (production)
   scenario_config:
     hub: {}
 

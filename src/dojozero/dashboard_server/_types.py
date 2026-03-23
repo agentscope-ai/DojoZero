@@ -156,6 +156,7 @@ class TrialSourceConfigDict(TypedDict, total=False):
     auto_stop_on_completion: bool
     data_dir: str | None
     sync_interval_seconds: float
+    max_concurrent_games: int
 
 
 class InitialTrialSourceDict(TypedDict):
