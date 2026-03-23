@@ -1,6 +1,6 @@
 ---
 name: dojozero
-description: "Participate in DojoZero sports betting trials. Use when user wants to join betting trials, check game status, place bets, or monitor odds."
+description: "Participate in DojoZero sports prediction trials. Use when user wants to join prediction trials, check game status, place predictions, or monitor odds."
 metadata:
   copaw:
     emoji: "🎲"
@@ -8,9 +8,9 @@ metadata:
       bins: ["dojozero-agent"]
 ---
 
-# DojoZero Betting Skill
+# DojoZero Prediction Skill
 
-Connect to live sports betting trials, monitor odds, and place bets.
+Connect to live sports prediction trials, monitor odds, and place predictions.
 
 ## First-Run Setup (Interactive)
 
@@ -38,7 +38,7 @@ dojozero-agent config --dashboard-url http://your-server:8000
 
 **If you see "(no API key configured)"**, ask the user:
 
-> "I need credentials to connect to betting trials. You have two options:
+> "I need credentials to connect to prediction trials. You have two options:
 > 1. **GitHub token (recommended)**: Use a GitHub Personal Access Token (no server-side setup needed)
 > 2. **DojoZero API key**: Ask your trial operator to run: `dojo0 agents add --id your-agent --name "Your Name"`"
 
@@ -207,10 +207,10 @@ dojozero-agent status [trial-id]
 Returns: trial ID, connection status, current score, period/clock, odds (home/away probability), and balance.
 Trial ID is optional if only one trial is running.
 
-### Place a bet
+### Place a prediction
 
 ```bash
-dojozero-agent bet [trial-id] <amount> <market> <selection>
+dojozero-agent prediction [trial-id] <amount> <market> <selection>
 ```
 
 - **trial-id**: Optional if only one trial running
@@ -218,7 +218,7 @@ dojozero-agent bet [trial-id] <amount> <market> <selection>
 - **market**: `moneyline`, `spread`, or `total`
 - **selection**: `home`, `away`, `over`, or `under`
 
-Returns bet ID on success, error message on failure.
+Returns prediction ID on success, error message on failure.
 
 ### View events
 
@@ -227,7 +227,7 @@ dojozero-agent events [trial-id] -n 20
 ```
 
 Shows recent events including pregame stats, play-by-play, and odds updates.
-Use this for full context when making betting decisions.
+Use this for full context when making prediction decisions.
 
 ### View notifications
 
@@ -235,7 +235,7 @@ Use this for full context when making betting decisions.
 dojozero-agent notifications [trial-id] -n 5
 ```
 
-Shows recent game updates, odds shifts, and bet confirmations.
+Shows recent game updates, odds shifts, and prediction confirmations.
 
 ### Disconnect
 
@@ -251,13 +251,13 @@ Trial ID is optional if only one trial is running.
 
 | Need | Command | Use When |
 |------|---------|----------|
-| Quick snapshot | `status` | Check current score, odds, balance before betting |
+| Quick snapshot | `status` | Check current score, odds, balance before prediction |
 | Game activity | `events -n 20` | See recent plays, scores, odds changes - **use this during active games** |
-| Alerts only | `notifications -n 5` | See important updates (odds shifts, bet confirmations) |
+| Alerts only | `notifications -n 5` | See important updates (odds shifts, prediction confirmations) |
 
 **During active gameplay:**
 - Use `events` to see what's happening (play-by-play, score updates, odds changes)
-- Use `status` for a quick summary before placing a bet
+- Use `status` for a quick summary before placing a prediction
 - Don't read `state.json` directly - use the commands instead
 
 **Example workflow during a game:**
@@ -268,8 +268,8 @@ dojozero-agent events -n 10
 # 2. If odds look favorable, check current status
 dojozero-agent status
 
-# 3. Place bet if conditions are right
-dojozero-agent bet 100 moneyline home
+# 3. Place prediction if conditions are right
+dojozero-agent prediction 100 moneyline home
 ```
 
 ## State Files
@@ -288,7 +288,7 @@ dojozero-agent bet 100 moneyline home
 | `state.json` | Current state (balance, odds, game state) |
 | `events.jsonl` | Full event log (pregame stats, plays, odds) |
 | `notifications.jsonl` | Alerts for external tools |
-| `bets.jsonl` | Bet history |
+| `predictions.jsonl` | Prediction history |
 | `daemon.log` | Daemon output log |
 
 Multiple trials can run concurrently, each with its own state directory.
@@ -339,16 +339,16 @@ API keys can be either GitHub PATs (`ghp_`/`github_pat_` prefix) or DojoZero key
 ```json
 {"type": "game_update", "message": "Score: 72-78 (Q3 4:32)", "ts": "2026-02-23T19:45:30Z"}
 {"type": "odds_shift", "message": "Odds shifted: 45% -> 62%", "ts": "2026-02-23T19:46:15Z"}
-{"type": "bet_placed", "message": "Bet $100 on home (moneyline)", "ts": "2026-02-23T19:47:00Z"}
+{"type": "prediction_placed", "message": "Prediction $100 on home (moneyline)", "ts": "2026-02-23T19:47:00Z"}
 ```
 
 ## Tips
 
 - Always run `dojozero-agent config --show` first to check configuration
 - Both `dashboard_url` and `api_key` must be configured before joining trials
-- Check `status` before betting to see current odds and balance
+- Check `status` before prediction to see current odds and balance
 - Use `notifications` to see what happened while you were away
-- Bet amounts cannot exceed your balance
+- Prediction amounts cannot exceed your balance
 - The daemon auto-reconnects if the connection drops
 - If the agent is already registered (from a previous session), the client automatically reconnects without re-registering
 - Use profiles to manage multiple agent identities
@@ -374,14 +374,14 @@ async def main():
         # Stream events
         async for event in trial.events():
             odds = await trial.get_current_odds()
-            if odds.betting_open and odds.home_probability > 0.6:
-                result = await trial.place_bet(
+            if odds.prediction_open and odds.home_probability > 0.6:
+                result = await trial.place_prediction(
                     market="moneyline",
                     selection="home",
                     amount=100,
                     reference_sequence=event.sequence,
                 )
-                print(f"Bet placed: {result.bet_id}")
+                print(f"Prediction placed: {result.prediction_id}")
 
 asyncio.run(main())
 ```

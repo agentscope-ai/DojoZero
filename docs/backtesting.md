@@ -6,7 +6,7 @@ Backtesting replays historical event files through your agent stack so you can e
 
 ```bash
 dojo0 backtest \
-  --events outputs/nba_betting_events_{espn_game_id}.jsonl \
+  --events outputs/nba_prediction_events_{espn_game_id}.jsonl \
   --params trial_params/nba-moneyline.yaml \
   --speed 2.0 \
   --max-sleep 20.0
@@ -27,7 +27,7 @@ Files are processed in sorted order.
 
 ```bash
 dojo0 backtest \
-  --events outputs/nba_betting_events.jsonl \
+  --events outputs/nba_prediction_events.jsonl \
   --params trial_params/nba-moneyline.yaml \
   --server http://localhost:8000
 ```

@@ -7,7 +7,7 @@ This document summarizes the current DojoZero architecture and core runtime beha
 DojoZero is an actor-based, event-driven system for autonomous decision-making on live and replayable sports data:
 
 - **Data Streams** ingest external data and publish typed events
-- **Operators** expose stateful tools (for example, broker actions)
+- **Operators** expose stateful tools (for example, prediction actions)
 - **Agents** consume events, reason with LLMs, and invoke operators
 - **DataHub** centralizes routing, persistence, ordering, dedup, and replay
 - **Dashboard Server** manages trial lifecycle and scheduling
@@ -49,16 +49,16 @@ Typed events follow a clear hierarchy:
 
 ### 2) Operators
 
-`BrokerOperator` is the primary operator for betting workflows:
+`PredictionOperator` is the primary operator for prediction workflows:
 
-- Maintains agent accounts, balances, holdings, and bet history
+- Maintains agent accounts, balances, holdings, and prediction history
 - Tracks single-event market lifecycle (scheduled/live/closed/settled) and real-time odds updates
 - Handles order placement, execution, and settlement
 - Supports per-trial tool allowlists to constrain agent capabilities and enable cleaner agent-performance comparison
 
 ### 3) Agents (ReAct orchestration)
 
-`BettingAgent` wraps an internal ReAct agent and adds runtime controls:
+`PredictionAgent` wraps an internal ReAct agent and adds runtime controls:
 
 - Subscribes to stream events and invokes registered operators
 - Formats typed events into model-ready context
@@ -92,6 +92,6 @@ DojoZero treats spans as canonical observability metadata:
 - Trial lifecycle spans (`trial.started`, `trial.stopped`)
 - Registration spans (`agent.registered`, `datastream.registered`)
 - Agent message spans (`agent.input`, `agent.response`)
-- Broker spans (`broker.bet`, `broker.final_stats`, plus state-change spans)
+- Prediction spans (`prediction.prediction`, `prediction.final_stats`, plus state-change spans)
 - Data event spans from `DataHub`
 

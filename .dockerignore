@@ -1,4 +1,3 @@
-# Build context is the repo root (see docker/local.Dockerfile and deploy/Dockerfile).
 # Speeds up `docker build` and avoids leaking secrets / huge trees into the daemon.
 
 # VCS
@@ -35,10 +34,8 @@ output_test.txt
 
 # Tests & tooling (not copied into image)
 tests/
-.pytest_cache
 .coverage
 htmlcov/
-.mypy_cache
 
 # Docs & local dev (not needed for pip install)
 docs/
@@ -52,10 +49,12 @@ dojozero-store/
 frontend-update/
 tools/
 configs/
-# Alibaba / production deploy — unrelated to local image; not COPY'd by docker/local.Dockerfile
 deploy/
 # Local compose + README + Dockerfile path is via `docker build -f …` on disk, not from context
 docker/
+!docker/allinone.Dockerfile
+!docker/allinone/
+!docker/allinone/**
 
 # CI / editor
 .github/

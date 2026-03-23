@@ -3,26 +3,22 @@ llm:
     model_name: qwen3-max
     api_key_env: DOJOZERO_DASHSCOPE_API_KEY
     model_display_name: Qwen
-    old_cdn_url: https://img.alicdn.com/imgextra/i4/O1CN011RklS01Jiu8iNxiEc_!!6000000001063-55-tps-24-24.svg
     cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01Aw7RHL1p4f2kNbTEg_!!6000000005307-2-tps-200-200.png
   - model_type: dashscope
     model_name: deepseek-v3.2
     model_display_name: Deepseek
     api_key_env: DOJOZERO_DASHSCOPE_API_KEY
-    old_cdn_url: https://img.alicdn.com/imgextra/i4/O1CN01wat3rK1Q9MiURXMTb_!!6000000001933-55-tps-24-24.svg
     cdn_url: https://img.alicdn.com/imgextra/i1/O1CN01q9usaf1KRKYhAZHXO_!!6000000001160-2-tps-200-200.png
   - model_type: anthropic
     # model_name: claude-opus-4-5-20251101
     model_name: claude-haiku-4-5-20251001
     api_key_env: DOJOZERO_ANTHROPIC_API_KEY
     model_display_name: Claude
-    old_cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01kiSypx1Oxcwxq1bPV_!!6000000001772-55-tps-24-24.svg
     cdn_url: https://img.alicdn.com/imgextra/i3/O1CN01bbhJZa1W0YnVufCiY_!!6000000002726-2-tps-200-200.png
   # - model_type: gemini
   #   model_name: gemini-3-pro-preview
   #   api_key_env: DOJOZERO_GEMINI_API_KEY
   #   model_display_name: gemini
-  #   old_cdn_url: https://img.alicdn.com/imgextra/i4/O1CN017FCueZ1iF0gKs1l3G_!!6000000004382-55-tps-24-24.svg
   #   cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01fzpr3E1vL2uJ1WrCE_!!6000000006155-2-tps-200-200.png
   - model_type: openai
     # model_name: gpt-5.2-2025-12-11
@@ -30,12 +26,10 @@ llm:
     api_key_env: DOJOZERO_MODEL_API_KEY
     model_display_name: OpenAI
     base_url_env: DOJOZERO_OPENAI_BASE_URL
-    old_cdn_url: https://img.alicdn.com/imgextra/i1/O1CN01ESEMwe1ZfGqicfO7r_!!6000000003221-55-tps-24-24.svg
     cdn_url: https://img.alicdn.com/imgextra/i1/O1CN01UUzNlB1Di5k1MrgV8_!!6000000000249-2-tps-200-200.png
   - model_type: openai
     model_name: grok-4-1-fast-reasoning
     api_key_env: DOJOZERO_MODEL_API_KEY
     model_display_name: Grok
     base_url_env: DOJOZERO_OPENAI_BASE_URL
-    old_cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01msAuHH23CMJvdjF1u_!!6000000007219-55-tps-24-24.svg
     cdn_url: https://img.alicdn.com/imgextra/i4/O1CN016klbRN1YHcmmotXbI_!!6000000003034-2-tps-200-200.png

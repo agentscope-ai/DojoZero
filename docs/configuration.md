@@ -64,7 +64,7 @@ scenario:
   config:
     espn_game_id: "401810854"  # ESPN game ID
     hub:
-      persistence_file: outputs/nba_betting_events-{espn_game_id}.jsonl
+      persistence_file: outputs/nba_prediction_events-{espn_game_id}.jsonl
     data_streams:
       # ... stream definitions
     operators:
@@ -119,7 +119,7 @@ config:
 
 Persona files define how an agent reasons and acts. Typical fields include:
 
-- Role/identity text (what type of bettor/analyst the agent is)
+- Role/identity text (what type of predictor/analyst the agent is)
 - Risk appetite and bankroll behavior
 - Decision heuristics and tool-usage style
 - Output format conventions for consistency
