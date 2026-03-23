@@ -209,3 +209,20 @@ async def test_memory_token_threshold_default():
     """Verify the memory compression threshold is set to ~80% of 128K."""
     agent = _make_agent()
     assert agent._memory_token_threshold == 102400
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_cooldown_task():
+    """Stopping the agent should cancel any pending cooldown task."""
+    agent = _make_agent(min_event_interval=600.0)
+
+    with patch.object(agent, "_process_events_with_retry", new_callable=AsyncMock):
+        await agent.handle_stream_event(_event(0))
+        await agent.handle_stream_event(_event(1))
+
+    assert agent._cooldown_task is not None
+    assert not agent._cooldown_task.done()
+
+    await agent.stop()
+
+    assert agent._cooldown_task is None

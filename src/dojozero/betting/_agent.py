@@ -721,6 +721,13 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
     async def stop(self) -> None:
         """Stop the agent."""
+        if self._cooldown_task is not None and not self._cooldown_task.done():
+            self._cooldown_task.cancel()
+            try:
+                await self._cooldown_task
+            except asyncio.CancelledError:
+                pass
+            self._cooldown_task = None
         logger.info(
             "agent '%s' stopping after %d events", self.actor_id, self._event_count
         )
