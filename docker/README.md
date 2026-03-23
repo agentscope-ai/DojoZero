@@ -1,50 +1,52 @@
-# Local Docker
+# Docker
 
-This folder is for **local** workflows in Docker: **one-shot trials** (`dojo0 run`), **dashboard** (`dojo0 serve`), optional **Jaeger**, and optional **Arena** (`dojo0 arena` + mounted Vite build), **without** using [`deploy/`](../deploy/) (Alibaba / production-style).
+Run DojoZero in Docker on your machine. All commands below assume you are at the **repository root** (parent of `docker/`).
 
-| File | Purpose |
-|------|---------|
-| [`local.Dockerfile`](./local.Dockerfile) | Python 3.11 + `uv`: first stage installs deps from **`uv.lock`** (`uv export` → `uv pip install -r`), then copies `src/` / `agents/` / … and `uv pip install .` (better layer cache). |
-| [`docker-compose.local.yml`](./docker-compose.local.yml) | Compose **profiles**: `trial`, `serve`, `tracing` (Jaeger **v2**), **`arena`** (Arena UI/API; mounts `frontend-update/dist`). |
+**What you can run here**
+
+| Goal | What starts | Section |
+|------|-------------|---------|
+| Run a trial once, then exit | `dojo0 run` | [Single trial](#1-single-trial-dojo0-run) |
+| Long-running dashboard / API | `dojo0 serve` | [Dashboard](#2-dashboard-server-dojo0-serve) |
+| Same + trace UI (Jaeger) | `serve` + Jaeger | [Dashboard + Jaeger](#3-dashboard--jaeger-traces) |
+| Arena UI (needs traces) | `serve` + Jaeger + Arena | [Arena](#4-arena--frontend-optional) |
+
+Compose uses **profiles**: only the services you ask for are created. A plain `docker compose … config` does not start everything at once.
+
+---
 
 ## Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) with Compose v2 (`docker compose …`)
-- Compose file uses `depends_on` with `required: false` (needs a reasonably recent Compose; Docker Desktop is fine)
+1. Copy env file:
 
-Run commands from the **repository root** in the examples below (easiest for `cp .env.example .env`).  
-Bind mounts and `env_file` paths in the compose file are **relative to the compose file’s directory** (`docker/`), so `../.env` and `../outputs` still point at the repo root even if your shell `cwd` differs.
+   ```bash
+   cp .env.example .env
+   ```
 
-## Environment (`.env`)
+2. **Required** for `trial` and `serve` (put in `.env`):
 
-```bash
-cp .env.example .env
-```
+   - `DOJOZERO_DASHSCOPE_API_KEY`
+   - `DOJOZERO_TAVILY_API_KEY`
 
-Minimum for both `trial` and `serve`:
+3. Optional variables are documented in [`.env.example`](../.env.example). Handy ones:
 
-- `DOJOZERO_DASHSCOPE_API_KEY`
-- `DOJOZERO_TAVILY_API_KEY`
-
-Optional for `serve` (see comments in [`.env.example`](../.env.example)):
-
-| Variable | Default | Meaning |
+| Variable | Default | Purpose |
 |----------|---------|---------|
-| `DOJOZERO_SERVE_PORT` | `8000` | Host port mapped to dashboard `8000` |
-| `DOJOZERO_TRIAL_SOURCE` | `trial_sources/*.yaml` | Passed to `dojo0 serve --trial-source` (glob supported) |
-| `DOJOZERO_ENABLE_JAEGER` | `0` | Set `1` when using profile `tracing` to export traces to Jaeger |
-| `DOJOZERO_ARENA_PORT` | `3001` | Host port for Arena when using `--profile arena` |
+| `DOJOZERO_SERVE_PORT` | `8000` | Browser port for the dashboard |
+| `DOJOZERO_TRIAL_SOURCE` | `trial_sources/*.yaml` | What `dojo0 serve --trial-source` loads (glob OK) |
+| `DOJOZERO_ENABLE_JAEGER` | `0` | Set to `1` when using the `tracing` profile so the dashboard can export traces |
+| `DOJOZERO_ARENA_PORT` | `3001` | Browser port for Arena when using `--profile arena` |
 
-## Profiles
+---
 
-| Profile | Service | What it does |
+## Profiles (switches)
+
+| Profile | Service | In plain terms |
 |---------|---------|----------------|
-| `trial` | `trial` | Runs **`dojo0 run` once** and exits |
-| `serve` | `serve` | Runs **`dojo0 serve`** (HTTP API, scheduling, gateway) |
-| `tracing` | `jaeger` | **Jaeger v2** image **`jaegertracing/jaeger:2.16.0`** — OTLP `4317`/`4318`, UI `16686` (v1 `all-in-one` is archived) |
-| `arena` | `arena` | **`dojo0 arena`** — reads traces from Jaeger Query **`http://jaeger:16686`**, serves API/WebSocket + optional SPA from **`frontend-update/dist`** |
-
-Services are **opt-in** via profiles so a plain `docker compose … config` does not assume you want every stack piece.
+| `trial` | `trial` | One container runs **`dojo0 run`** once and stops |
+| `serve` | `serve` | **`dojo0 serve`** keeps running: HTTP API, scheduling, gateway |
+| `tracing` | `jaeger` | **Jaeger v2** (`jaegertracing/jaeger:2.16.0`): trace collector + UI on port **16686** (OTLP **4317** / **4318**). 
+| `arena` | `arena` | **`dojo0 arena`**: reads traces from Jaeger at `http://jaeger:16686`, serves API/WebSocket and (if built) the SPA from **`frontend-update/dist`** |
 
 ---
 
@@ -54,7 +56,7 @@ Services are **opt-in** via profiles so a plain `docker compose … config` does
 docker compose -f docker/docker-compose.local.yml --profile trial run --rm trial
 ```
 
-Defaults (overridable via environment on the same command line or in `.env`):
+Defaults (override in `.env` or on the command line):
 
 - `DOJOZERO_TRIAL_PARAMS` → `trial_params/nba-moneyline.yaml`
 - `DOJOZERO_TRIAL_ID` → `quickstart-trial`
@@ -67,20 +69,18 @@ DOJOZERO_TRIAL_ID=quickstart-nfl \
 docker compose -f docker/docker-compose.local.yml --profile trial run --rm trial
 ```
 
-Edit `trial_params/*.yaml` on the host; that directory is **bind-mounted** read-only.
+`trial_params/` on your machine is mounted **read-only** into the container—edit YAML on the host, no image rebuild.
 
 ---
 
 ## 2) Dashboard server (`dojo0 serve`)
 
-Starts the same dashboard flow as in the main README, but inside Docker:
-
 ```bash
 docker compose -f docker/docker-compose.local.yml --profile serve up -d --build
 ```
 
-- Dashboard: `http://localhost:${DOJOZERO_SERVE_PORT:-8000}`
-- Scheduler / store state: **named volume** `dojozero-local-schedules` → `/app/.dojozero`
+- Open: `http://localhost:${DOJOZERO_SERVE_PORT:-8000}`
+- Scheduler data lives in Docker volume **`dojozero-local-schedules`** → `/app/.dojozero`
 
 **Only NBA or only NFL** (single source file):
 
@@ -89,51 +89,51 @@ DOJOZERO_TRIAL_SOURCE=trial_sources/nba.yaml \
 docker compose -f docker/docker-compose.local.yml --profile serve up -d --build
 ```
 
-Stop:
+**Stop** (match the profiles you used):
 
 ```bash
 docker compose -f docker/docker-compose.local.yml --profile serve down
 ```
 
-If you also started **Jaeger**, use the same profiles so that container is torn down:
+If Jaeger was also running, include `tracing`:
 
 ```bash
 docker compose -f docker/docker-compose.local.yml --profile serve --profile tracing down
 ```
 
-To remove the scheduler volume and reset local schedules: add **`--volumes`** (deletes named volume `dojozero-local-schedules`).
+To **wipe scheduler state**, add `--volumes` (removes `dojozero-local-schedules`).
 
 ---
 
 ## 3) Dashboard + Jaeger traces
 
-1. In `.env` set:
+1. In `.env`:
 
    ```bash
    DOJOZERO_ENABLE_JAEGER=1
    ```
 
-2. Start both profiles:
+2. Start:
 
    ```bash
    docker compose -f docker/docker-compose.local.yml --profile serve --profile tracing up -d --build
    ```
 
-3. Open **Jaeger UI**: [http://localhost:16686](http://localhost:16686)
+3. Jaeger UI: [http://localhost:16686](http://localhost:16686)
 
-`serve` sends OTLP HTTP to `http://jaeger:4318` on the Compose network (same as [Jaeger getting started](https://www.jaegertracing.io/docs/latest/getting-started/)). The compose file pins **`jaegertracing/jaeger`** (v2); the old **`jaegertracing/all-in-one`** image was the v1 line and is no longer the supported default.
+The `serve` container sends traces to Jaeger over the Compose network (`http://jaeger:4318`), same idea as [Jaeger getting started](https://www.jaegertracing.io/docs/latest/getting-started/).
 
-If you start **`serve` without** profile `tracing`, leave `DOJOZERO_ENABLE_JAEGER=0` (or traces will fail to export).
+**Important:** If you run `serve` **without** the `tracing` profile, keep `DOJOZERO_ENABLE_JAEGER=0`; otherwise export will fail.
 
 ---
 
 ## 4) Arena + frontend (optional)
 
-Arena queries **Jaeger** for traces and exposes REST + WebSockets; the React app in [`frontend-update/`](../frontend-update/) is **built on the host** and **bind-mounted** into the container (not baked into the Python image).
+Arena needs Jaeger’s query API on the Docker network (`http://jaeger:16686`). The React app is **built on the host** and mounted into the container (not inside the Python image).
 
-### 4.1 Build the frontend (once per change)
+### Build the frontend (after UI changes)
 
-From the repo root, use a **`VITE_API_URL`** that matches how you open Arena in the browser (default compose maps **`http://localhost:3001`**):
+From repo root, `VITE_API_URL` must match how you open Arena in the browser (default compose uses **3001**):
 
 ```bash
 cd frontend-update
@@ -141,23 +141,19 @@ npm ci
 VITE_API_URL=http://localhost:3001 npm run build
 ```
 
-If you set **`DOJOZERO_ARENA_PORT`** to something other than `3001`, rebuild with that port in `VITE_API_URL` (the value is compiled into the JS bundle).
-
-### 4.2 Start Jaeger + Arena (and usually `serve`)
-
-Arena needs the **Jaeger Query API** on the Docker network (`http://jaeger:16686`). Typical stack:
+### Start stack (typical: serve + Jaeger + Arena)
 
 ```bash
 # .env: DOJOZERO_ENABLE_JAEGER=1
 docker compose -f docker/docker-compose.local.yml --profile serve --profile tracing --profile arena up -d --build
 ```
 
-- **Arena UI + API:** `http://localhost:${DOJOZERO_ARENA_PORT:-3001}`  
-- If **`frontend-update/dist/index.html`** is missing, Arena still starts (API/WebSocket only); the container logs print a build hint.
+- Arena: `http://localhost:${DOJOZERO_ARENA_PORT:-3001}`
+- If `frontend-update/dist/index.html` is missing, Arena still runs (API/WebSocket only); check container logs for the build hint.
 
-### 4.3 Stop
+### Stop
 
-Include **`arena`** (and **`tracing`**) on `down` if you started them:
+Pass the same profiles you used with `up`:
 
 ```bash
 docker compose -f docker/docker-compose.local.yml --profile serve --profile tracing --profile arena down
@@ -165,22 +161,22 @@ docker compose -f docker/docker-compose.local.yml --profile serve --profile trac
 
 ---
 
-## 5) Host mounts & outputs
+## Host folders ↔ container
 
-| Host (repo) | Container | Role |
-|-------------|-----------|------|
-| `./outputs` | `/app/outputs` | Event JSONL / persistence paths from params |
+| On your machine | In container | Notes |
+|-----------------|--------------|--------|
+| `./outputs` | `/app/outputs` | Events / persistence from trial params |
 | `./data` | `/app/data` | Data / cache |
-| `./trial_params` | `/app/trial_params` | Params (read-only) |
-| `./trial_sources` | `/app/trial_sources` | Trial source YAML (read-only) |
-| `./frontend-update/dist` | `/app/arena-static` | Arena SPA (**read-only**, **`arena` profile**); build with Vite first |
-| *(volume)* `dojozero-local-schedules` | `/app/.dojozero` | Scheduler store ( **`serve` only** ) |
+| `./trial_params` | `/app/trial_params` | Read-only |
+| `./trial_sources` | `/app/trial_sources` | Read-only |
+| `./frontend-update/dist` | `/app/arena-static` | Read-only; `arena` profile; build with Vite first |
+| Volume `dojozero-local-schedules` | `/app/.dojozero` | `serve` only |
 
 ---
 
-## 6) Rebuild images
+## Rebuild images
 
-`trial`, `serve`, and `arena` share the same image (**profiles**); enable the profiles you need when building.
+`trial`, `serve`, and `arena` use the **same** image; enable the profiles you care about when building.
 
 After `git pull` or dependency changes:
 
@@ -188,7 +184,7 @@ After `git pull` or dependency changes:
 docker compose -f docker/docker-compose.local.yml --profile trial --profile serve --profile arena build --no-cache
 ```
 
-Rebuild one service (still pass profiles so the service is part of the project):
+Single service:
 
 ```bash
 docker compose -f docker/docker-compose.local.yml --profile trial build --no-cache trial
@@ -196,45 +192,6 @@ docker compose -f docker/docker-compose.local.yml --profile serve build --no-cac
 docker compose -f docker/docker-compose.local.yml --profile arena build --no-cache arena
 ```
 
-`jaeger` uses a public image (`pull` on first `up`); no local build.
+Jaeger is a pulled public image—no local build.
 
-If **`uv export --frozen`** fails after pulling, run **`uv lock`** at the repo root and commit an updated **`uv.lock`**.
-
----
-
-## 7) What is in the image
-
-(Single `FROM` image with **ordered layers**, not a multi-stage build.)
-
-- **Layer A:** `pyproject.toml`, `uv.lock`, `README.md` → `uv export --frozen --no-dev --no-emit-project` → `uv pip install --system -r …` (third-party only).
-- **Layer B:** `src/`, `agents/`, `trial_sources/`, `trial_params/` → `uv pip install --system .` (installs `dojozero` + `dojo0`).
-
-No Alibaba extras by default. For **OSS / SLS / Redis** in the image, extend the Dockerfile (e.g. second `uv pip install` with `'.[alicloud,redis]'` or adjust `uv export` with `--extra`) — see [`docs/installation.md`](../docs/installation.md).
-
-**Build context:** [`.dockerignore`](../.dockerignore) excludes e.g. `deploy/`, `docker/`, `tests/`, `outputs/`, `data/` (smaller upload). The Dockerfile path is still `docker build -f docker/local.Dockerfile .` from the repo root; `-f` is read from disk, not from the context archive.
-
-Code under `agents/` is **not** bind-mounted; change → rebuild image.
-
----
-
-## 8) vs `deploy/`
-
-| | `docker/` | `deploy/` |
-|---|-----------|-----------|
-| Use case | Local trial + dashboard + optional Jaeger + optional Arena (mounted UI) | Alibaba (SLS, OSS, mirrors, …) |
-| Docs | This file | [`deploy/DEPLOYMENT.md`](../deploy/DEPLOYMENT.md) |
-
----
-
-## 9) Troubleshooting
-
-- **`no such service: trial`** — Add `--profile trial` (e.g. `run --rm trial`).
-- **Empty `docker compose … config` / no services** — All services use **profiles**; enable at least one profile, or nothing is selected (expected).
-- **Missing API key errors** — Fill `.env` at repo root; compose uses `env_file: ../.env` (path relative to `docker-compose.local.yml`).
-- **Jaeger enabled but no traces** — Use `--profile tracing`, ensure `DOJOZERO_ENABLE_JAEGER=1`, restart `serve`.
-- **Jaeger container left running after `down`** — You started with `--profile tracing` but ran `down` with only `--profile serve`; include **`--profile tracing`** on `down`, or `docker stop` the Jaeger container.
-- **Port 8000 in use** — Set `DOJOZERO_SERVE_PORT` in `.env` and `up` again.
-- **Build fails at `uv export --frozen`** — Run **`uv lock`** at the repo root and ensure **`uv.lock`** is committed / present in the build context (not listed in `.dockerignore`).
-- **Arena empty / errors talking to Jaeger** — Start with **`--profile tracing`** so `jaeger` is on the network; Arena uses **`http://jaeger:16686`** (Query API), not OTLP `4318`.
-- **Arena UI loads but API calls fail** — Rebuild the frontend with **`VITE_API_URL=http://localhost:<DOJOZERO_ARENA_PORT>`** matching the host port you mapped.
-- **Arena `healthcheck` slow / unhealthy** — First startup waits for cache warm-up; **`start_period: 90s`** is set. If Jaeger has no data yet, some steps may still be slow.
+If **`uv export --frozen`** fails after updating deps, run **`uv lock`** at the repo root and commit **`uv.lock`**.

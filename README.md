@@ -6,7 +6,7 @@ DojoZero is a system for hosting AI agents that run continuously on realtime dat
 
 - Build and evaluate autonomous agents on live, event-driven data streams.
 - Compare agent personas and model providers with reproducible trial workflows.
-- Run the same scenario in real-time and replay mode (backtesting) for faster iteration.
+- Run the same scenario in real-time and replay mode.
 - Operate as a local CLI workflow or as long-running services with scheduling and tracing.
 - Extend scenarios with custom agents, operators, and data streams without changing the core runtime.
 
@@ -14,14 +14,14 @@ DojoZero is a system for hosting AI agents that run continuously on realtime dat
 
 | Track | Command | Use when |
 |--------|---------|----------|
-| **Default (No Alibaba Cloud dependency)** | `uv pip install .` | Trials, dashboard, **Jaeger** tracing |
-| **+ Alibaba / Redis** | `uv pip install '.[alicloud,redis]'` | OSS backup / `oss://` paths, **`--trace-backend sls`**, sync-service **Redis** |
+| **Default (Recommended)** | `uv pip install .` | Trials, dashboard, Jaeger tracing |
+| **+ Alibaba Cloud/ Redis** | `uv pip install '.[alicloud,redis]'` | OSS backup / `oss://` paths, **`--trace-backend sls`**, sync-service Redis |
 
 Details, package lists, and dev setup: [`docs/installation.md`](./docs/installation.md).
 
-## Quick Start
+## Quick Start (local CLI)
 
-Install and run your first trial in a few minutes. The example below uses DashScope-backed models and the **default** install (Jaeger-compatible; no Alibaba wheels):
+Install and run your first trial in a few minutes. The example below uses DashScope-backed models and the **default** install:
 
 ```bash
 # 1) Default install (see table above for [alicloud] / [redis])
@@ -36,11 +36,25 @@ export DOJOZERO_TAVILY_API_KEY="your_key"
 dojo0 run --params trial_params/nba-moneyline.yaml --trial-id quickstart-nba
 ```
 
-📘 For the full setup guide, including (1) environment variables, (2) trial configuration, and (3) agent configuration, see [`docs/configuration.md`](./docs/configuration.md). Install options (default vs Alibaba extras) are in [`docs/installation.md`](./docs/installation.md).
+📘 For the full setup guide, including (1) environment variables, (2) trial configuration, and (3) agent configuration, see [`docs/configuration.md`](./docs/configuration.md). 
+## Server Mode + Tracing
 
-## Docker (local)
+Want automatic scheduling and a web dashboard directly from CLI?
 
-Use [`docker/docker-compose.local.yml`](./docker/docker-compose.local.yml) (separate from Alibaba-focused [`deploy/`](./deploy/)).
+```bash
+# 1) Install and start Jaeger: https://www.jaegertracing.io/
+
+# 2) Start DojoZero dashboard server
+dojo0 serve --trace-backend jaeger --trace-ingest-endpoint http://localhost:4318 --trial-source "trial_sources/*.yaml"
+```
+
+Then open the Jaeger UI at `http://localhost:16686` to explore traces. If Jaeger is not installed yet, follow [`docs/tracing.md`](./docs/tracing.md).
+
+---
+
+## Docker (recommended local setup)
+
+Use [`docker/docker-compose.local.yml`](./docker/docker-compose.local.yml).
 
 **One-shot trial** (`dojo0 run`):
 
@@ -58,7 +72,7 @@ DOJOZERO_TRIAL_ID=quickstart-nfl \
 docker compose -f docker/docker-compose.local.yml --profile trial run --rm trial
 ```
 
-**Dashboard + scheduling** (`dojo0 serve`, same idea as below but in Docker):
+**Dashboard + scheduling** (`dojo0 serve`):
 
 ```bash
 docker compose -f docker/docker-compose.local.yml --profile serve up -d --build
@@ -82,18 +96,6 @@ docker compose -f docker/docker-compose.local.yml --profile serve --profile trac
 Output files go to `outputs/` and `data/` on the host. Full options and troubleshooting: [`docker/README.md`](./docker/README.md).
 
 ---
-
-🚀 Want automatic scheduling and a web dashboard? Start DojoZero in server mode:
-
-```bash
-# Step 1: Install and start Jaeger: [https://www.jaegertracing.io/](https://www.jaegertracing.io/)
-
-# Step2: Start DojoZero dashboard server
-dojo0 serve --trace-backend jaeger --trace-ingest-endpoint http://localhost:4318 --trial-source "trial_sources/*.yaml"
-```
-
-Then open the Jaeger UI at `http://localhost:16686` to explore traces.
-If Jaeger is not installed yet, follow [`docs/tracing.md`](./docs/tracing.md).
 
 ## Where To Go Next
 

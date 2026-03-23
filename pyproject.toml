@@ -49,7 +49,6 @@ redis = [
 
 [dependency-groups]
 dev = [
-    # Match optional extras so tests (OSS, SLS, Redis) run without extra pip flags
     "oss2>=2.18.0",
     "alibabacloud-credentials>=1.0.0",
     "aliyun-log-python-sdk",

@@ -45,11 +45,3 @@ dojo0 backtest \
 | `--store-directory` | Store/checkpoint root |
 | `--runtime-provider` | `local` or `ray` |
 | `--ray-config` | Ray runtime config file |
-
-## Practical Workflow
-
-1. Collect live JSONL events from previous runs.
-2. Iterate agent prompt/persona/tool settings.
-3. Replay identical event files at accelerated speed.
-4. Compare output metrics.
-5. Promote promising changes to live or scheduled trials.

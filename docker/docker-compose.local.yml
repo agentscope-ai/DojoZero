@@ -1,4 +1,4 @@
-# Local Docker Compose (not for Alibaba deploy — see ../deploy/)
+# Local Docker Compose
 #
 # Compose project name → container prefix / default network (change if running multiple stacks).
 name: dojozero-local
@@ -47,7 +47,7 @@ services:
       dojo0 run --params "$$DOJOZERO_TRIAL_PARAMS" --trial-id "$$DOJOZERO_TRIAL_ID"
       '
 
-  # Jaeger v1 / jaegertracing/all-in-one is archived (EOL). v2 uses jaegertracing/jaeger.
+  # Jaeger v2 uses jaegertracing/jaeger.
   # OTLP must bind 0.0.0.0 so other containers (serve) can reach the collector.
   # Ref: https://www.jaegertracing.io/docs/latest/getting-started/
   jaeger:
