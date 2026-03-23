@@ -128,8 +128,26 @@ def load_persona_config(config_path: str | Path) -> PersonaConfig:
 def load_llm_file_config(config_path: str | Path) -> LLMFileConfig:
     """Load LLM configuration from YAML file.
 
+    Supports two formats:
+
+    1. Inline models::
+
+        llm:
+          - model_type: dashscope
+            model_name: qwen3-max
+            ...
+
+    2. Include references to other LLM config files::
+
+        include:
+          - qwen.yaml
+          - claude.yaml
+
+    Include paths are resolved relative to the config file's directory.
+    Both ``include`` and ``llm`` can coexist; included models come first.
+
     Args:
-        config_path: Path to LLM YAML config file (contains llm list)
+        config_path: Path to LLM YAML config file
 
     Returns:
         Parsed LLMFileConfig dictionary with llm as a list of LLMConfig
@@ -138,13 +156,22 @@ def load_llm_file_config(config_path: str | Path) -> LLMFileConfig:
     with path.open("r", encoding="utf-8") as f:
         data: dict[str, Any] = yaml.safe_load(f)
 
-    llm_data = data.get("llm", [])
     llm_configs: list[LLMConfig] = []
 
+    # Resolve included files first
+    includes = data.get("include", [])
+    if isinstance(includes, list):
+        for ref in includes:
+            ref_path = path.parent / ref
+            included = load_llm_file_config(ref_path)
+            llm_configs.extend(included["llm"])
+
+    # Then add inline models
+    llm_data = data.get("llm", [])
     if isinstance(llm_data, list):
         for item in llm_data:
             llm_configs.append(_parse_llm_config(item))
-    else:
+    elif llm_data:
         # Single model config (backwards compatibility)
         llm_configs.append(_parse_llm_config(llm_data))
 
