@@ -4,7 +4,9 @@ Reuses the NBA utility infrastructure since ESPN API structure is the same
 for college basketball, just with different sport/league parameters.
 """
 
+import asyncio
 import logging
+from datetime import datetime
 from typing import Any
 
 from dojozero.data._game_info import GameInfo, TeamInfo
@@ -116,4 +118,109 @@ def _extract_game_info_from_summary(
     )
 
 
-__all__ = ["get_game_info_by_id_async"]
+def _run_async(coro):  # type: ignore[no-untyped-def]
+    """Run an async coroutine from sync context."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return asyncio.run(coro)
+
+
+def get_game_info_by_id(
+    game_id: str,
+    proxy: str | None = None,
+) -> GameInfo | None:
+    """Sync version of get_game_info_by_id_async."""
+    return _run_async(get_game_info_by_id_async(game_id, proxy=proxy))
+
+
+def get_games_for_date(
+    game_date: datetime | str,
+    print_games: bool = False,
+    proxy: str | None = None,
+) -> list[dict[str, Any]]:
+    """Get NCAA games for a specific date using ESPN API.
+
+    Args:
+        game_date: Date as datetime or string in 'YYYY-MM-DD' format
+        print_games: Whether to print game information
+        proxy: Optional proxy URL
+
+    Returns:
+        List of game dicts compatible with trial runner format.
+    """
+    from dojozero.dashboard_server._game_discovery import NCAAGameFetcher
+
+    if isinstance(game_date, datetime):
+        date_str = game_date.strftime("%Y-%m-%d")
+    else:
+        date_str = str(game_date)
+
+    fetcher = NCAAGameFetcher()
+    game_infos: list[GameInfo] = _run_async(fetcher.fetch_games_for_date(date_str))
+
+    games: list[dict[str, Any]] = []
+    for gi in game_infos:
+        game_dict = gi.to_dict()
+        # Add gameTimeLTZ for trial runner compatibility
+        if gi.game_time_utc:
+            try:
+                from dateutil import tz
+
+                local_tz = tz.tzlocal()
+                game_dict["gameTimeLTZ"] = gi.game_time_utc.astimezone(local_tz)
+            except Exception:
+                game_dict["gameTimeLTZ"] = gi.game_time_utc
+        else:
+            game_dict["gameTimeLTZ"] = None
+        # Map to trial runner expected keys
+        game_dict["gameId"] = gi.game_id
+        game_dict["gameStatus"] = gi.status
+        game_dict["gameStatusText"] = gi.status_text
+        game_dict["gameTimeUTC"] = (
+            gi.game_time_utc.isoformat() if gi.game_time_utc else ""
+        )
+        game_dict["homeTeam"] = {
+            "teamId": gi.home_team.team_id,
+            "teamName": gi.home_team.name,
+            "teamCity": gi.home_team.location,
+            "teamTricode": gi.home_team.tricode,
+            "score": gi.home_team.score,
+        }
+        game_dict["awayTeam"] = {
+            "teamId": gi.away_team.team_id,
+            "teamName": gi.away_team.name,
+            "teamCity": gi.away_team.location,
+            "teamTricode": gi.away_team.tricode,
+            "score": gi.away_team.score,
+        }
+        games.append(game_dict)
+
+    if print_games:
+        print(f"Date: {date_str}")
+        print(f"Found {len(games)} game(s)\n")
+        for game in games:
+            time_str = (
+                game["gameTimeLTZ"].strftime("%Y-%m-%d %H:%M:%S %Z")
+                if game.get("gameTimeLTZ")
+                else "N/A"
+            )
+            print(
+                f"{game['gameId']}: {game['awayTeam']['teamName']} vs. "
+                f"{game['homeTeam']['teamName']} @ {time_str} "
+                f"[{game['gameStatusText']}]"
+            )
+
+    return games
+
+
+__all__ = ["get_game_info_by_id", "get_game_info_by_id_async", "get_games_for_date"]
