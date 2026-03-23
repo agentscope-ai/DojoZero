@@ -455,9 +455,132 @@ class NFLGameFetcher:
         return None
 
 
+class NCAAGameFetcher:
+    """Fetches NCAA Men's Basketball game information from ESPN API."""
+
+    async def fetch_games_for_date(
+        self,
+        date: str | None = None,
+    ) -> list[GameInfo]:
+        """Fetch NCAA basketball games for a specific date.
+
+        Args:
+            date: Date in YYYY-MM-DD format. If None, uses today's date.
+
+        Returns:
+            List of GameInfo objects.
+        """
+        api = ESPNExternalAPI(sport="basketball", league="mens-college-basketball")
+        try:
+            if date is None:
+                date = datetime.now().strftime("%Y-%m-%d")
+
+            try:
+                parsed_date = datetime.strptime(date, "%Y-%m-%d")
+                date_str = parsed_date.strftime("%Y%m%d")
+            except ValueError:
+                LOGGER.error("Invalid date format: %s", date)
+                return []
+            data = await api.fetch("scoreboard", {"dates": date_str})
+            return _parse_espn_scoreboard(data, "ncaa")
+        except Exception as e:
+            LOGGER.error("Error fetching NCAA games for %s: %s", date, e)
+            return []
+        finally:
+            await api.close()
+
+    async def fetch_games_for_date_range(
+        self,
+        start_date: str,
+        end_date: str,
+    ) -> list[GameInfo]:
+        """Fetch NCAA basketball games for a date range.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+
+        Returns:
+            List of GameInfo objects.
+        """
+        games: list[GameInfo] = []
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+
+        if start > end:
+            start, end = end, start
+
+        current = start
+        while current <= end:
+            date_str = current.strftime("%Y-%m-%d")
+            day_games = await self.fetch_games_for_date(date_str)
+            games.extend(day_games)
+            current += timedelta(days=1)
+
+        return games
+
+    async def get_game_status(
+        self, game_id: str, game_date: str | None = None
+    ) -> int | None:
+        """Get current status of a game.
+
+        Args:
+            game_id: ESPN event ID
+            game_date: Date of the game (YYYY-MM-DD). If None, searches recent dates.
+
+        Returns:
+            Game status (1=scheduled, 2=in_progress, 3=finished, 4=postponed, 5=cancelled)
+            or None if not found.
+        """
+        result = await self.get_game_status_info(game_id, game_date)
+        return result[0] if result else None
+
+    async def get_game_status_info(
+        self, game_id: str, game_date: str | None = None
+    ) -> tuple[int, str] | None:
+        """Get current status and status text of a game.
+
+        Args:
+            game_id: ESPN event ID
+            game_date: Date of the game (YYYY-MM-DD). If None, searches recent dates.
+
+        Returns:
+            Tuple of (status_code, status_text) or None if not found.
+        """
+
+        def _map_status(game: GameInfo) -> tuple[int, str]:
+            status_text = game.status_text.lower()
+            if "postponed" in status_text:
+                return (4, game.status_text)
+            if "canceled" in status_text or "cancelled" in status_text:
+                return (5, game.status_text)
+            return (game.status, game.status_text)
+
+        dates_to_check: list[str | None] = []
+        if game_date:
+            dates_to_check.append(game_date)
+        else:
+            today = datetime.now()
+            dates_to_check.extend(
+                [
+                    today.strftime("%Y-%m-%d"),
+                    (today - timedelta(days=1)).strftime("%Y-%m-%d"),
+                ]
+            )
+
+        for date in dates_to_check:
+            games = await self.fetch_games_for_date(date)
+            for g in games:
+                if g.game_id == game_id:
+                    return _map_status(g)
+
+        return None
+
+
 __all__ = [
     "GameInfo",
     "NBAGameFetcher",
+    "NCAAGameFetcher",
     "NFLGameFetcher",
     "TeamInfo",
     "VenueInfo",

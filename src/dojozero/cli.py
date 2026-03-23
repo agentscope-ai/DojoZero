@@ -42,6 +42,7 @@ except ImportError:  # pragma: no cover - ray is optional
 
 DEFAULT_IMPORTS: tuple[str, ...] = (
     "dojozero.nba",
+    "dojozero.ncaa",
     "dojozero.nfl",
 )
 DEFAULT_STORE_DIRECTORY: str = "./dojozero-store"

@@ -436,6 +436,7 @@ class NBAPreGameBettingDataHubDataStream(BaseDataHubDataStream):
             # Map sport type to ESPN sport/league
             sport_map = {
                 "nba": ("basketball", "nba"),
+                "ncaa": ("basketball", "mens-college-basketball"),
                 "nfl": ("football", "nfl"),
             }
             sport, league = sport_map.get(context.sport_type, ("basketball", "nba"))

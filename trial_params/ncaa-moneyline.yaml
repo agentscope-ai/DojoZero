@@ -1,10 +1,10 @@
 scenario:
-  name: nba
+  name: ncaa
   config:
-    espn_game_id: '401810490'  # ESPN game ID - override for specific game
+    espn_game_id: '401522202'  # ESPN game ID - override for specific game
 
     hub:
-      persistence_file: outputs/nba_betting_events.jsonl
+      persistence_file: outputs/ncaa_betting_events.jsonl
 
     data_streams:
     # Pre-game insights: each event class owns search → LLM → typed event lifecycle
@@ -15,7 +15,7 @@ scenario:
       - expert_prediction
       - pregame_stats
       - twitter_top_tweets
-      
+
     # Game lifecycle
     - id: game_lifecycle_stream
       event_types:
@@ -26,7 +26,7 @@ scenario:
     # Live game data
     - id: game_update_stream
       event_types:
-      - nba_game_update
+      - ncaa_game_update
 
     - id: odds_update_stream
       event_types:
@@ -34,7 +34,7 @@ scenario:
 
     - id: play_by_play_stream
       event_types:
-      - nba_play
+      - ncaa_play
 
     operators:
     - id: betting_broker
@@ -72,26 +72,26 @@ scenario:
       persona_config_path: agents/personas/mystic.yaml
       llm_config_path: agents/llms/all.yaml
       operators:
-        - betting_broker
+      - betting_broker
       data_streams:
-        - pre_game_insights_stream
-        - game_update_stream
-        - odds_update_stream
-        - game_lifecycle_stream
-        - play_by_play_stream
+      - pre_game_insights_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_lifecycle_stream
+      - play_by_play_stream
     - id: pundit_agent
       persona: pundit
       class: BettingAgent
       persona_config_path: agents/personas/pundit.yaml
       llm_config_path: agents/llms/all.yaml
       operators:
-        - betting_broker
+      - betting_broker
       data_streams:
-        - pre_game_insights_stream
-        - game_update_stream
-        - odds_update_stream
-        - game_lifecycle_stream
-        - play_by_play_stream
+      - pre_game_insights_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_lifecycle_stream
+      - play_by_play_stream
     - id: shark_agent
       persona: shark
       class: BettingAgent
