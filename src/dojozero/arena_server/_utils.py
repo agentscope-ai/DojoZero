@@ -361,10 +361,31 @@ async def _extract_bets_for_trial(
     return bets[-limit:] if bets else []
 
 
+def _overlay_live_scores_from_spans(
+    metadata: dict[str, Any], spans: list[SpanData]
+) -> None:
+    """Mutate metadata with latest score/clock from in-memory spans (same cycle as bulk fetch).
+
+    ``trial_info`` can lag ``trial_details`` when metadata was derived from a narrower
+    query; ``_spans_by_trial`` is the authoritative merged set for the refresh cycle.
+    """
+    if not spans:
+        return
+    relevant = [s for s in spans if s.operation_name in TRIAL_INFO_OPERATION_NAMES]
+    if not relevant:
+        return
+    span_info = _extract_trial_info_from_spans(relevant)
+    sm = span_info.get("metadata") or {}
+    for key in ("home_score", "away_score", "period", "game_clock"):
+        if key in sm:
+            metadata[key] = sm[key]
+
+
 async def _extract_games_from_trials(
     trace_reader: TraceReader,
     trial_ids: list[str],
     cache: "LandingPageCache | None" = None,
+    spans_by_trial: dict[str, list[SpanData]] | None = None,
 ) -> GamesResponse:
     """Extract games list from trials for landing page.
 
@@ -395,7 +416,9 @@ async def _extract_games_from_trials(
             continue
 
         phase = trial_info["phase"]
-        metadata = trial_info["metadata"]
+        metadata = dict(trial_info.get("metadata") or {})
+        if spans_by_trial is not None:
+            _overlay_live_scores_from_spans(metadata, spans_by_trial.get(trial_id, []))
         # Normalize league to uppercase for frontend compatibility
         league = metadata.get("sport_type", "NBA").upper()
 
@@ -451,6 +474,14 @@ async def _extract_games_from_trials(
             else phase
         )
 
+        # Period/clock: trial_info stores period + game_clock (see _extract_trial_info_from_spans)
+        period_raw = metadata.get("period", metadata.get("quarter", ""))
+        quarter_str = str(period_raw) if period_raw not in (None, "") else ""
+        clock_raw = metadata.get("game_clock")
+        if clock_raw is None:
+            clock_raw = metadata.get("clock")
+        clock_str = "" if clock_raw is None else str(clock_raw)
+
         game_card = GameCardData(
             id=trial_id,
             league=league,
@@ -460,12 +491,8 @@ async def _extract_games_from_trials(
             away_score=metadata.get("away_score", 0),
             status=status,
             date=game_date_str,
-            quarter=metadata.get("quarter", "")
-            if phase == "running" or has_game_hint
-            else "",
-            clock=metadata.get("clock", "")
-            if phase == "running" or has_game_hint
-            else "",
+            quarter=quarter_str if phase == "running" or has_game_hint else "",
+            clock=clock_str if phase == "running" or has_game_hint else "",
             bets=bets,
             winner=metadata.get("winner_agent")
             if phase in ("completed", "stopped")

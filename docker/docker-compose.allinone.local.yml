@@ -1,4 +1,7 @@
 # Local all-in-one compose: serve + arena + jaeger in one container.
+#
+# Jaeger-only: do not set DOJOZERO_REDIS_URL unless you run the SLS→Redis sync
+# service; otherwise Arena may stay on Redis mode with stale hot data.
 name: dojozero-aio-local
 
 services:

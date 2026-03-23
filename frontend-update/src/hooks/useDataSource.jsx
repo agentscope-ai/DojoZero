@@ -9,6 +9,9 @@ import { useState, useEffect, useCallback, createContext, useContext } from "rea
 
 // API URL from environment variable
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const STATS_REFRESH_MS = Number(import.meta.env.VITE_STATS_REFRESH_MS || 10000);
+const LANDING_REFRESH_MS = Number(import.meta.env.VITE_LANDING_REFRESH_MS || 10000);
+const ACTIONS_REFRESH_MS = Number(import.meta.env.VITE_ACTIONS_REFRESH_MS || 10000);
 
 // Data source context
 const DataSourceContext = createContext(null);
@@ -40,7 +43,9 @@ export function DataSourceProvider({ children }) {
   // Fetch data from API
   const fetchFromApi = useCallback(
     async (endpoint) => {
-      const response = await fetch(`${apiUrl}${endpoint}`);
+      const response = await fetch(`${apiUrl}${endpoint}`, {
+        cache: "no-store",
+      });
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
@@ -118,10 +123,9 @@ export function DataSourceProvider({ children }) {
 
   // Periodic refresh for core data
   useEffect(() => {
-    // Refresh stats every 10 seconds (matches server cache TTL)
-    const statsInterval = setInterval(fetchStats, 10000);
-    // Refresh all data every 60 seconds (matches server cache TTL)
-    const fullRefresh = setInterval(fetchLandingData, 60000);
+    // Refresh stats and landing page data at configurable intervals.
+    const statsInterval = setInterval(fetchStats, STATS_REFRESH_MS);
+    const fullRefresh = setInterval(fetchLandingData, LANDING_REFRESH_MS);
 
     return () => {
       clearInterval(statsInterval);
@@ -134,8 +138,7 @@ export function DataSourceProvider({ children }) {
     // Only refresh agent actions if there are live games
     let actionsInterval = null;
     if (liveGames.length > 0) {
-      // Use 30-second interval since actions now include completed games
-      actionsInterval = setInterval(fetchAgentActions, 30000);
+      actionsInterval = setInterval(fetchAgentActions, ACTIONS_REFRESH_MS);
     }
 
     return () => {

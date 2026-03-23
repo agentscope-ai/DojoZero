@@ -23,6 +23,8 @@ docker pull agentscope/dojozero:latest
 cat > .env <<'EOF'
 DOJOZERO_DASHSCOPE_API_KEY=your_dashscope_key
 DOJOZERO_TAVILY_API_KEY=your_tavily_key
+# You can use other provider keys instead of the two above (e.g. DOJOZERO_OPENAI_API_KEY).
+# See `.env.example` for the full list and optional settings.
 EOF
 
 # 3) Run directly (uses container defaults)
@@ -56,7 +58,7 @@ These are some of the efforts we are currently working on:
 ### 1. More Prediction Scenarios
 
 You can start from existing NBA/NFL builders, then extend to:
-- More sports and market types (e.g., FIFA soccer markets, spreads, totals, and props).
+- More sources of prediction data (e.g., FIFA, spreads, totals, and props).
 - Non-sports forecasting domains with event-sourced data streams.
 - Custom operators (execution, risk limits, portfolio constraints).
 

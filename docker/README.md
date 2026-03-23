@@ -18,6 +18,8 @@ cp .env.example .env
 mkdir -p outputs data trial_params trial_sources frontend-update/dist
 ```
 
+**Arena + Jaeger (local):** leave `DOJOZERO_REDIS_URL` unset in `.env`. Redis is for the optional SLS→Redis sync path; pointing Arena at Redis without the sync service can leave landing page scores stale.
+
 ## Option 1: Build and Run All-in-One
 
 Use `docker/allinone.Dockerfile` to build one image that runs all-in-one services

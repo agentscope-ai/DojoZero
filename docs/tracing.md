@@ -59,7 +59,7 @@ dojo0 arena --trace-backend jaeger
 
 Then run the frontend:
 ```bash
-cd frontend && npm run dev
+cd frontend-update && npm install && npm run dev
 # Open http://localhost:5173
 ```
 

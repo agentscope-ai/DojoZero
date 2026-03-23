@@ -23,13 +23,13 @@ llm:
   - model_type: openai
     # model_name: gpt-5.2-2025-12-11
     model_name: gpt-5-mini-2025-08-07
-    api_key_env: DOJOZERO_MODEL_API_KEY
+    api_key_env: DOJOZERO_OPENAI_API_KEY
     model_display_name: OpenAI
     base_url_env: DOJOZERO_OPENAI_BASE_URL
     cdn_url: https://img.alicdn.com/imgextra/i1/O1CN01UUzNlB1Di5k1MrgV8_!!6000000000249-2-tps-200-200.png
   - model_type: openai
     model_name: grok-4-1-fast-reasoning
-    api_key_env: DOJOZERO_MODEL_API_KEY
+    api_key_env: DOJOZERO_OPENAI_API_KEY
     model_display_name: Grok
     base_url_env: DOJOZERO_OPENAI_BASE_URL
     cdn_url: https://img.alicdn.com/imgextra/i4/O1CN016klbRN1YHcmmotXbI_!!6000000003034-2-tps-200-200.png

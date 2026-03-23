@@ -971,7 +971,10 @@ class BackgroundRefresher:
 
         # Refresh global games
         games = await _extract_games_from_trials(
-            self.trace_reader, trial_ids, self.cache
+            self.trace_reader,
+            trial_ids,
+            self.cache,
+            spans_by_trial=self._spans_by_trial,
         )
         self.cache.set_games(games, league=None)
 
@@ -981,7 +984,10 @@ class BackgroundRefresher:
                 self.trace_reader, trial_ids, league, self.cache
             )
             league_games = await _extract_games_from_trials(
-                self.trace_reader, filtered_ids, self.cache
+                self.trace_reader,
+                filtered_ids,
+                self.cache,
+                spans_by_trial=self._spans_by_trial,
             )
             self.cache.set_games(league_games, league=league)
 
@@ -1272,11 +1278,17 @@ class BackgroundRefresher:
                 self.trace_reader, trial_ids, league, self.cache
             )
             games = await _extract_games_from_trials(
-                self.trace_reader, filtered_ids, self.cache
+                self.trace_reader,
+                filtered_ids,
+                self.cache,
+                spans_by_trial=self._spans_by_trial,
             )
         else:
             games = await _extract_games_from_trials(
-                self.trace_reader, trial_ids, self.cache
+                self.trace_reader,
+                trial_ids,
+                self.cache,
+                spans_by_trial=self._spans_by_trial,
             )
 
         self.cache.set_games(games, league=league)

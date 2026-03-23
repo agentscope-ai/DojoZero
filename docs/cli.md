@@ -143,7 +143,7 @@ Arena-specific options:
 For local UI development:
 
 ```bash
-cd frontend
+cd frontend-update
 npm install
 npm run dev
 ```
@@ -153,12 +153,12 @@ Then open `http://localhost:5173`.
 For production-style serving through `dojo0 arena`, build frontend assets first:
 
 ```bash
-cd frontend
+cd frontend-update
 npm install
 npm run build
 
 # then from repo root:
-dojo0 arena --trace-backend jaeger --static-dir frontend/dist
+dojo0 arena --trace-backend jaeger --static-dir frontend-update/dist
 ```
 
 ## 12) Server Mode and Tracing Notes
