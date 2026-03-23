@@ -34,8 +34,9 @@ async def get_game_info_by_id_async(
         proxy=proxy,
     )
     try:
-        data = await api.fetch("summary", {"event": game_id})
-        return _extract_game_info_from_summary(data, game_id)
+        data = await api.fetch("summary", {"event_id": game_id})
+        summary = data.get("summary", data)
+        return _extract_game_info_from_summary(summary, game_id)
     except Exception as e:
         logger.error("Error fetching NCAA game info for %s: %s", game_id, e)
         return None
@@ -97,7 +98,9 @@ def _extract_game_info_from_summary(
     # Extract season info
     season_data = header.get("season", {})
     season_year = season_data.get("year", 0)
-    season_type = season_data.get("type", 0)
+    season_type_id = season_data.get("type", 0)
+    season_type_map = {1: "preseason", 2: "regular", 3: "postseason", 4: "offseason"}
+    season_type = season_type_map.get(season_type_id, str(season_type_id))
 
     home_team = _build_team(home_comp)
     away_team = _build_team(away_comp)
