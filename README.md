@@ -23,7 +23,7 @@ docker pull agentscope/dojozero:latest
 cat > .env <<'EOF'
 DOJOZERO_DASHSCOPE_API_KEY=your_dashscope_key
 DOJOZERO_TAVILY_API_KEY=your_tavily_key
-# You can use other provider keys instead of the two above (e.g. DOJOZERO_OPENAI_API_KEY).
+# You can use other provider keys instead of the dashscope api key above (e.g. DOJOZERO_OPENAI_API_KEY).
 # See `.env.example` for the full list and optional settings.
 EOF
 
