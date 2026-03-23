@@ -1,0 +1,92 @@
+# NFL Trial Source — Pre-prod environment
+#
+# Medium config: 1 game, 2 personas, 2 models.
+# For daily use nfl-daily.yaml, for production use nfl.yaml.
+
+source_id: nfl-moneyline-source
+sport_type: nfl
+
+config:
+  scenario_name: nfl
+  max_concurrent_games: 1
+
+  scenario_config:
+    hub: {}
+
+    data_streams:
+    - id: pre_game_insights_stream
+      event_types:
+      - injury_report
+      - power_ranking
+      - expert_prediction
+      - pregame_stats
+      - twitter_top_tweets
+
+    - id: game_lifecycle_stream
+      event_types:
+      - game_initialize
+      - game_start
+      - game_result
+
+    - id: nfl_game_update_stream
+      event_types:
+      - nfl_game_update
+
+    - id: nfl_odds_update_stream
+      event_types:
+      - odds_update
+
+    - id: nfl_play_stream
+      event_types:
+      - nfl_play
+
+    operators:
+    - id: betting_broker
+      class: BrokerOperator
+      initial_balance: "1000.00"
+      allowed_tools:
+      - get_event
+      - get_balance
+      - get_holdings
+      - place_market_bet_moneyline
+      - get_bet_history
+      - get_statistics
+      data_streams:
+      - game_lifecycle_stream
+      - nfl_odds_update_stream
+      - nfl_game_update_stream
+
+    # Pre-prod: 2 personas × 2 models = 4 agents
+    agents:
+    - id: degen_agent
+      persona: degen
+      class: BettingAgent
+      persona_config_path: agents/personas/degen.yaml
+      llm_config_path: agents/llms/two.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
+      - game_lifecycle_stream
+      - nfl_play_stream
+    - id: shark_agent
+      persona: shark
+      class: BettingAgent
+      persona_config_path: agents/personas/shark.yaml
+      llm_config_path: agents/llms/two.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
+      - game_lifecycle_stream
+      - nfl_play_stream
+
+  pre_start_hours: 0.1
+  check_interval_seconds: 60.0
+  auto_stop_on_completion: true
+  data_dir: outputs
+  sync_interval_seconds: 3600.0

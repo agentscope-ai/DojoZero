@@ -1808,6 +1808,30 @@ def _get_builder_command(args: argparse.Namespace) -> int:
     return 0
 
 
+_ENV_TIER_MAP: dict[str, str] = {
+    "daily": "daily",
+    "testing": "daily",
+    "pre": "pre",
+    "prepub": "pre",
+    "staging": "pre",
+    "prod": "prod",
+    "production": "prod",
+}
+
+
+def _resolve_env_tier() -> str:
+    """Resolve the deployment tier from environment variables.
+
+    Checks DOJOZERO_ENV first, then SIGMA_APP_STAGE, then AONE_ENV_SIGN.
+    Returns one of: "daily", "pre", "prod". Defaults to "daily".
+    """
+    for env_var in ("DOJOZERO_ENV", "SIGMA_APP_STAGE", "AONE_ENV_SIGN"):
+        value = os.environ.get(env_var, "").strip().lower()
+        if value and value in _ENV_TIER_MAP:
+            return _ENV_TIER_MAP[value]
+    return "daily"
+
+
 def _load_trial_source_from_yaml(path: Path) -> InitialTrialSourceDict:
     """Load a trial source configuration from a YAML file.
 
@@ -1871,6 +1895,25 @@ async def _serve_command(args: argparse.Namespace) -> int:
     trial_source_files: list[str] = getattr(args, "trial_sources", []) or []
     auto_resume = not getattr(args, "no_auto_resume", False)
     stale_threshold_hours = getattr(args, "stale_threshold_hours", 24.0)
+
+    # Auto-resolve trial sources from DOJOZERO_ENV / SIGMA_APP_STAGE if not
+    # explicitly provided via --trial-source.
+    if not trial_source_files:
+        env_tier = _resolve_env_tier()
+        trial_sources_dir = Path("trial_sources") / env_tier
+        if trial_sources_dir.is_dir():
+            trial_source_files = [str(trial_sources_dir / "*.yaml")]
+            LOGGER.info(
+                "Auto-resolved trial sources from env tier '%s': %s",
+                env_tier,
+                trial_sources_dir,
+            )
+        else:
+            LOGGER.info(
+                "No trial sources found for env tier '%s' at %s",
+                env_tier,
+                trial_sources_dir,
+            )
 
     # Determine store path from args
     store_path = (

@@ -25,6 +25,7 @@ sport_type: nfl
 # Configuration for trials created from this source
 config:
   scenario_name: nfl
+  max_concurrent_games: 0  # 0 = unlimited (production)
   scenario_config:
     hub: {}
 

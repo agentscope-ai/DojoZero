@@ -113,6 +113,7 @@ class TrialSourceConfigRequest(BaseModel):
     check_interval_seconds: float = 60.0
     auto_stop_on_completion: bool = True
     data_dir: str | None = None
+    max_concurrent_games: int = 0
 
 
 class TrialSourceRequest(BaseModel):
@@ -345,13 +346,6 @@ def create_dashboard_app(
                 source_id = source_data["source_id"]
                 sport_type = source_data["sport_type"]
 
-                # Skip if already registered (from persistence)
-                if schedule_manager.get_source(source_id) is not None:
-                    LOGGER.info(
-                        "Trial source '%s' already registered, skipping", source_id
-                    )
-                    continue
-
                 # Convert config
                 config_data = source_data.get("config", {})
                 config = TrialSourceConfig(
@@ -368,7 +362,20 @@ def create_dashboard_app(
                     sync_interval_seconds=config_data.get(
                         "sync_interval_seconds", 300.0
                     ),
+                    max_concurrent_games=config_data.get("max_concurrent_games", 0),
                 )
+
+                # Update config if already registered (YAML is authoritative)
+                existing = schedule_manager.get_source(source_id)
+                if existing is not None:
+                    existing.config = config
+                    existing.sport_type = sport_type
+                    schedule_manager._persist_sources()
+                    LOGGER.info(
+                        "Updated trial source '%s' config from YAML",
+                        source_id,
+                    )
+                    continue
 
                 try:
                     schedule_manager.register_source(
@@ -1099,6 +1106,7 @@ def create_dashboard_app(
                 check_interval_seconds=request.config.check_interval_seconds,
                 auto_stop_on_completion=request.config.auto_stop_on_completion,
                 data_dir=request.config.data_dir,
+                max_concurrent_games=request.config.max_concurrent_games,
             )
 
             source = state.schedule_manager.register_source(

@@ -1,8 +1,5 @@
-# All models — production configuration.
+# Two models — pre-prod configuration.
 # References individual model files to avoid duplication.
 include:
   - qwen.yaml
-  - deepseek.yaml
   - claude.yaml
-  - openai.yaml
-  - grok.yaml
