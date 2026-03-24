@@ -31,7 +31,7 @@ from dojozero.data.espn import (
 )
 from dojozero.utils import utc_to_us_date
 
-from ._game_discovery import GameInfo, NBAGameFetcher, NFLGameFetcher
+from ._game_discovery import GameInfo, NBAGameFetcher, NCAAGameFetcher, NFLGameFetcher
 from ._trial_manager import TrialManager
 from ._types import GameMetadata, ScheduledGameMetadata
 
@@ -57,6 +57,8 @@ class TrialSourceConfig(BaseModel):
         data_dir: Base directory for persistence files. If set, files are
             created at {data_dir}/{game_date}/{game_id}.jsonl
         sync_interval_seconds: How often to sync with ESPN API for new games
+        max_concurrent_games: Maximum number of games to schedule concurrently
+            for this source. 0 means unlimited (default).
     """
 
     scenario_name: str
@@ -68,6 +70,7 @@ class TrialSourceConfig(BaseModel):
     sync_interval_seconds: float = (
         300.0  # How often to sync with external APIs (5 min default)
     )
+    max_concurrent_games: int = 0  # 0 = unlimited
 
 
 @dataclass
@@ -379,6 +382,7 @@ class ScheduleManager:
 
         # Game fetchers
         self._nba_fetcher = NBAGameFetcher()
+        self._ncaa_fetcher = NCAAGameFetcher()
         self._nfl_fetcher = NFLGameFetcher()
 
     async def start(self) -> None:
@@ -564,6 +568,10 @@ class ScheduleManager:
             if not date:
                 date = datetime.now().strftime("%Y-%m-%d")
             games = await self._nba_fetcher.fetch_games_for_date(date)
+        elif sport_type == "ncaa":
+            if not date:
+                date = datetime.now().strftime("%Y-%m-%d")
+            games = await self._ncaa_fetcher.fetch_games_for_date(date)
         elif sport_type == "nfl":
             if week is not None:
                 games = await self._nfl_fetcher.fetch_games_for_week(week)
@@ -751,7 +759,7 @@ class ScheduleManager:
         if source_id in self._sources:
             raise ValueError(f"Trial source '{source_id}' already exists")
 
-        if sport_type not in ("nba", "nfl"):
+        if sport_type not in ("nba", "nfl", "ncaa"):
             raise ValueError(f"Invalid sport_type: {sport_type}")
 
         source = TrialSource(
@@ -764,7 +772,24 @@ class ScheduleManager:
         self._sources[source_id] = source
         self._persist_sources()
 
-        LOGGER.info("Registered trial source '%s' for %s", source_id, sport_type)
+        # Log config summary for visibility
+        agents = config.scenario_config.get("agents", [])
+        agent_personas = [a.get("persona", a.get("id", "?")) for a in agents]
+        llm_paths = {a.get("llm_config_path", "inline") for a in agents}
+        max_games_str = (
+            str(config.max_concurrent_games)
+            if config.max_concurrent_games > 0
+            else "unlimited"
+        )
+        LOGGER.info(
+            "Registered trial source '%s' for %s: "
+            "max_games=%s, personas=%s, llm_configs=%s",
+            source_id,
+            sport_type,
+            max_games_str,
+            agent_personas,
+            sorted(llm_paths),
+        )
         return source
 
     def unregister_source(self, source_id: str) -> bool:
@@ -850,6 +875,10 @@ class ScheduleManager:
                 # Fetch NBA games from ESPN scoreboard
                 games = await self._nba_fetcher.fetch_games_for_date(None)
 
+            elif source.sport_type == "ncaa":
+                # Fetch NCAA basketball games from ESPN scoreboard
+                games = await self._ncaa_fetcher.fetch_games_for_date(None)
+
             elif source.sport_type == "nfl":
                 # Fetch NFL games from ESPN scoreboard
                 games = await self._nfl_fetcher.fetch_games_for_date(None)
@@ -857,6 +886,35 @@ class ScheduleManager:
         except Exception as e:
             LOGGER.error("Error fetching games for source %s: %s", source.source_id, e)
             return []
+
+        # Check max_concurrent_games limit
+        max_games = config.max_concurrent_games
+        if max_games > 0:
+            active_count = sum(
+                1
+                for sid, gid in self._scheduled_events
+                if sid == source.source_id
+                and self._schedules.get(self._scheduled_events[(sid, gid)])
+                and self._schedules[self._scheduled_events[(sid, gid)]].phase
+                in (
+                    ScheduledTrialPhase.WAITING,
+                    ScheduledTrialPhase.LAUNCHING,
+                    ScheduledTrialPhase.RUNNING,
+                    ScheduledTrialPhase.MONITORING,
+                )
+            )
+            remaining_slots = max_games - active_count
+            if remaining_slots <= 0:
+                LOGGER.info(
+                    "Source '%s': max_concurrent_games=%d reached "
+                    "(%d active), skipping new games",
+                    source.source_id,
+                    max_games,
+                    active_count,
+                )
+                return []
+        else:
+            remaining_slots = len(games)  # unlimited
 
         # Schedule trials for new games
         scheduled_trials: list[ScheduledTrial] = []
@@ -892,6 +950,18 @@ class ScheduleManager:
 
             # Skip if already scheduled for this source
             if (source.source_id, game.game_id) in self._scheduled_events:
+                continue
+
+            # Enforce max_concurrent_games limit
+            if max_games > 0 and remaining_slots <= 0:
+                LOGGER.info(
+                    "Source '%s': skipping game %s (%s) — "
+                    "max_concurrent_games=%d reached",
+                    source.source_id,
+                    game.game_id,
+                    game.short_name,
+                    max_games,
+                )
                 continue
 
             # Build config for this game
@@ -942,6 +1012,7 @@ class ScheduleManager:
 
                 # Track this game as scheduled for this source
                 self._scheduled_events[(source.source_id, game.game_id)] = schedule_id
+                remaining_slots -= 1
 
                 scheduled = self._schedules.get(schedule_id)
                 if scheduled:
@@ -1282,6 +1353,11 @@ class ScheduleManager:
         try:
             if scheduled.sport_type == "nba":
                 return await self._nba_fetcher.get_game_status_info(
+                    scheduled.game_id,
+                    scheduled.game_date,
+                )
+            elif scheduled.sport_type == "ncaa":
+                return await self._ncaa_fetcher.get_game_status_info(
                     scheduled.game_id,
                     scheduled.game_date,
                 )

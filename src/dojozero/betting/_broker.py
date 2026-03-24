@@ -105,6 +105,51 @@ def _odds_info_to_str(odds_info: OddsInfo) -> str:
     return "\n".join(lines)
 
 
+def _build_filtered_odds_str(
+    event: BettingEvent,
+    include_moneyline: bool = True,
+    include_spread: bool = True,
+    include_total: bool = True,
+) -> str | None:
+    """Build an odds string from a BettingEvent, filtered by allowed bet types."""
+    lines: list[str] = []
+
+    # Moneyline
+    if (
+        include_moneyline
+        and event.home_probability is not None
+        and event.away_probability is not None
+    ):
+        lines.append(
+            f"- Home: {1 / event.home_probability:.2f} "
+            f"({event.home_probability * 100:.1f}% implied probability)"
+        )
+        lines.append(
+            f"- Away: {1 / event.away_probability:.2f} "
+            f"({event.away_probability * 100:.1f}% implied probability)"
+        )
+
+    # Spread
+    if include_spread:
+        for spread_value, probs in (event.spread_lines or {}).items():
+            lines.append(
+                f"- Spread: {spread_value:+.1f} "
+                f"(Home: {1 / probs['home_probability']:.2f}, "
+                f"Away: {1 / probs['away_probability']:.2f})"
+            )
+
+    # Total
+    if include_total:
+        for total_value, probs in (event.total_lines or {}).items():
+            lines.append(
+                f"- Total: O/U {total_value:.1f} "
+                f"(Over: {1 / probs['over_probability']:.2f}, "
+                f"Under: {1 / probs['under_probability']:.2f})"
+            )
+
+    return "\n".join(lines) if lines else None
+
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -1836,6 +1881,64 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         recent_bet_ids = reversed(bet_ids[-limit:])
         return [self._bets[bet_id] for bet_id in recent_bet_ids]
 
+    def get_bet_distribution_summary(self) -> str | None:
+        """Return a short summary of current moneyline bet distribution for the active event.
+
+        The summary aggregates active and pending MONEYLINE bets for the current event_id,
+        grouped by selection (home vs away). It reports how many distinct agents are on
+        each side and the total amount wagered per side.
+
+        Returns:
+            Human-readable summary string, or None if there is no current event
+            or no relevant bets to report.
+        """
+        event = self._event
+        if event is None:
+            return None
+
+        event_id = event.event_id
+        # Collect bet IDs for this event from active and pending maps
+        bet_ids: set[str] = set()
+        bet_ids.update(self._event_active_bets.get(event_id, set()))
+        bet_ids.update(self._event_pending_orders.get(event_id, set()))
+        if not bet_ids:
+            return None
+
+        home_agents: set[str] = set()
+        away_agents: set[str] = set()
+        home_total = Decimal("0")
+        away_total = Decimal("0")
+
+        for bet_id in bet_ids:
+            bet = self._bets.get(bet_id)
+            if bet is None:
+                continue
+            if bet.bet_type != BetType.MONEYLINE:
+                continue
+            if bet.selection == "home":
+                home_agents.add(bet.agent_id)
+                home_total += bet.amount
+            elif bet.selection == "away":
+                away_agents.add(bet.agent_id)
+                away_total += bet.amount
+
+        if not home_agents and not away_agents:
+            return None
+
+        # Build concise summary string
+        home_part = (
+            f"{len(home_agents)} agent(s) on {event.home_team} (total {home_total:.2f})"
+            if home_agents or home_total > 0
+            else f"0 agent(s) on {event.home_team}"
+        )
+        away_part = (
+            f"{len(away_agents)} agent(s) on {event.away_team} (total {away_total:.2f})"
+            if away_agents or away_total > 0
+            else f"0 agent(s) on {event.away_team}"
+        )
+
+        return f"{home_part}; {away_part}"
+
     async def get_statistics(self, agent_id: str) -> Statistics:
         """Calculate performance metrics for an agent"""
         all_bet_ids = (
@@ -2017,6 +2120,23 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             if allowed_tools
             else None
         )
+        # Precompute market visibility once when building tools.
+        # None means all tools are allowed, so all markets are visible.
+        can_bet_moneyline = (
+            allowed_tools_set is None
+            or "place_market_bet_moneyline" in allowed_tools_set
+            or "place_limit_bet_moneyline" in allowed_tools_set
+        )
+        can_bet_spread = (
+            allowed_tools_set is None
+            or "place_market_bet_spread" in allowed_tools_set
+            or "place_limit_bet_spread" in allowed_tools_set
+        )
+        can_bet_total = (
+            allowed_tools_set is None
+            or "place_market_bet_total" in allowed_tools_set
+            or "place_limit_bet_total" in allowed_tools_set
+        )
 
         @tool
         async def get_balance() -> str:
@@ -2095,7 +2215,23 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             event = await target.get_available_event()
             if not event:
                 return "null"
-            return event.model_dump_json()
+
+            filtered_event = event.model_copy()
+            filtered_event.current_odds = _build_filtered_odds_str(
+                filtered_event,
+                include_moneyline=can_bet_moneyline,
+                include_spread=can_bet_spread,
+                include_total=can_bet_total,
+            )
+            exclude_fields: set[str] = set()
+            if not can_bet_moneyline:
+                exclude_fields |= {"home_probability", "away_probability"}
+            if not can_bet_spread:
+                exclude_fields.add("spread_lines")
+            if not can_bet_total:
+                exclude_fields.add("total_lines")
+
+            return filtered_event.model_dump_json(exclude=exclude_fields)
 
         @tool
         async def place_market_bet_moneyline(

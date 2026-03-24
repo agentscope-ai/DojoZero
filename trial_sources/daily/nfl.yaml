@@ -1,0 +1,9 @@
+# NFL Trial Source — Daily (testing) environment
+# Minimal: 1 game, 1 persona, 1 model.
+source_id: nfl-moneyline-source
+sport_type: nfl
+config:
+  scenario_name: nfl
+  max_concurrent_games: 1
+  personas: [degen]
+  llm_config_path: agents/llms/claude.yaml

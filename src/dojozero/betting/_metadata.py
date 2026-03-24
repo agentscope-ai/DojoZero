@@ -27,7 +27,7 @@ from dojozero.core._metadata import BaseTrialMetadata
 
 @dataclass(slots=True)
 class BettingTrialMetadata(BaseTrialMetadata):
-    """Typed metadata for betting trials (NBA, NFL).
+    """Typed metadata for betting trials (NBA, NFL, NCAA).
 
     This dataclass defines the contract between trial builders and consumers
     (store factories, context builders). Using dataclass provides:
@@ -56,7 +56,7 @@ class BettingTrialMetadata(BaseTrialMetadata):
 
     # Required fields (in addition to base class fields)
     sample: str
-    sport_type: Literal["nba", "nfl"]
+    sport_type: Literal["nba", "nfl", "ncaa"]
     espn_game_id: str
     event_types: tuple[str, ...]
 
@@ -73,6 +73,7 @@ class BettingTrialMetadata(BaseTrialMetadata):
     # Poll interval overrides (optional)
     nba_poll_intervals: dict[str, float] | None = None
     nfl_poll_intervals: dict[str, float] | None = None
+    ncaa_poll_intervals: dict[str, float] | None = None
     polymarket_poll_intervals: dict[str, float] | None = None
 
 

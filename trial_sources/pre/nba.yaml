@@ -1,0 +1,9 @@
+# NBA Trial Source — Pre-prod environment
+# Full agent matrix (all personas × all models), 1 game.
+source_id: nba-moneyline-source
+sport_type: nba
+config:
+  scenario_name: nba
+  max_concurrent_games: 1
+  personas: [degen, mystic, pundit, shark, sheep, whale]
+  llm_config_path: agents/llms/all.yaml

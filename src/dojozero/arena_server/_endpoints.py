@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from dojozero.arena_server._models import (
@@ -238,8 +238,8 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 live_games = [superbowl_game] + list(live_games)
 
         # only for mock test
-        if league and league.upper() == "NBA" and not live_games:
-            live_games = list(all_games[:10])
+        # if league and league.upper() == "NBA" and not live_games:
+        #     live_games = list(all_games[:10])
 
         response = LandingResponse(
             stats=stats,
@@ -514,32 +514,53 @@ def register_rest_endpoints(app: FastAPI) -> None:
         return JSONResponse(content=state.cache.get_cache_stats())
 
 
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles with SPA (Single Page Application) fallback.
+
+    Security: Inherits Starlette's built-in path traversal protection.
+    When a file is not found, falls back to serving index.html for client-side routing.
+    """
+
+    async def get_response(self, path: str, scope):
+        """Serve static file or fall back to index.html for SPA routing."""
+        try:
+            return await super().get_response(path, scope)
+        except Exception as ex:
+            # Check if it's a 404-like error (HTTPException with 404 status)
+            status_code = getattr(ex, "status_code", None)
+            if status_code == 404:
+                # SPA fallback: serve index.html for client-side routing
+                return await super().get_response("index.html", scope)
+            # Re-raise other exceptions (including 403 for path traversal)
+            raise
+
+
 def register_static_file_serving(app: FastAPI, static_dir: Path) -> None:
-    """Register static file serving for SPA (Single Page Application)."""
+    """Register static file serving for SPA (Single Page Application).
+
+    Uses Starlette's StaticFiles which has built-in path traversal protection.
+    Path traversal attempts (e.g., ../../etc/passwd) return 404 Not Found.
+    """
     if not static_dir.exists():
+        LOGGER.warning("Static directory does not exist: %s", static_dir)
         return
 
-    # Serve static files
-    app.mount(
-        "/assets",
-        StaticFiles(directory=static_dir / "assets"),
-        name="assets",
-    )
-
-    @app.get("/{path:path}")
-    async def serve_spa(path: str):
-        """Serve static files with SPA fallback."""
-        file_path = static_dir / path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
-        # SPA fallback
-        index_path = static_dir / "index.html"
-        if index_path.exists():
-            return FileResponse(index_path)
-        return JSONResponse(
-            content={"error": "Not found"},
-            status_code=404,
+    # Check if assets directory exists for dedicated mount
+    assets_dir = static_dir / "assets"
+    if assets_dir.exists():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=assets_dir),
+            name="assets",
         )
+
+    # Mount SPA static files at root (must be last to catch all routes)
+    # html=True enables serving index.html for directory requests
+    app.mount(
+        "/",
+        SPAStaticFiles(directory=static_dir, html=True),
+        name="spa",
+    )
 
 
 # =============================================================================
@@ -1015,6 +1036,8 @@ def register_websocket_endpoints(app: FastAPI) -> None:
                                 data={"items": filtered_seek},
                             )
                             await websocket.send_text(snapshot_msg.model_dump_json())
+                            # Auto-resume after seek to ensure continuous playback
+                            controller.resume()
                             LOGGER.debug(
                                 "Replay: Seeked to play_index %d for trial '%s'",
                                 play_index,

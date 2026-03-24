@@ -1,33 +1,10 @@
-# NBA Moneyline Trial Source Configuration
-#
-# This configuration defines a trial source for automatic NBA game scheduling.
-# When registered with the Dashboard Server, the server will periodically sync
-# with the ESPN API to discover upcoming games and automatically schedule trials.
-# Games are identified by ESPN event IDs (e.g., '401810490').
-#
-# Usage:
-#   1. Via CLI (recommended):
-#      dojo0 serve --schedule-file ~/.dojozero/schedules.json \
-#                  --trial-source trial_sources/nba-moneyline-trial-source.yaml
-#
-#   2. Via API:
-#      POST /api/trial-sources
-#      {
-#        "source_id": "nba-moneyline-source",
-#        "sport_type": "nba",
-#        "config": <contents of config section below>,
-#        "nba_params": <contents of nba_params section below>
-#      }
+scenario:
+  name: ncaa
+  config:
+    espn_game_id: '401522202'  # ESPN game ID - override for specific game
 
-# Trial source registration request
-source_id: nba-moneyline-source
-sport_type: nba
-
-# Configuration for trials created from this source
-config:
-  scenario_name: nba
-  scenario_config:
-    hub: {}
+    hub:
+      persistence_file: outputs/ncaa_betting_events.jsonl
 
     data_streams:
     # Pre-game insights: each event class owns search → LLM → typed event lifecycle
@@ -38,7 +15,7 @@ config:
       - expert_prediction
       - pregame_stats
       - twitter_top_tweets
-      
+
     # Game lifecycle
     - id: game_lifecycle_stream
       event_types:
@@ -49,7 +26,7 @@ config:
     # Live game data
     - id: game_update_stream
       event_types:
-      - nba_game_update
+      - ncaa_game_update
 
     - id: odds_update_stream
       event_types:
@@ -57,7 +34,7 @@ config:
 
     - id: play_by_play_stream
       event_types:
-      - nba_play
+      - ncaa_play
 
     operators:
     - id: betting_broker
@@ -154,12 +131,3 @@ config:
       - odds_update_stream
       - game_lifecycle_stream
       - play_by_play_stream
-
-  # Schedule options (these are TrialSourceConfig fields, not scenario_config)
-  pre_start_hours: 0.1           # Start trial 0.1 hours before game time
-  check_interval_seconds: 60.0   # Check game status every 60 seconds
-  auto_stop_on_completion: true  # Stop trial when game finishes
-  data_dir: outputs              # Output directory for persistence files
-  sync_interval_seconds: 3600.0  # How often to sync with ESPN API
-
-# Games are discovered automatically from ESPN scoreboard

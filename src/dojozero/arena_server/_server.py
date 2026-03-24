@@ -1435,7 +1435,19 @@ class TrialReplayController:
         self.is_paused = False
 
     def get_snapshot_items(self) -> list[dict[str, Any]]:
-        """Get initial snapshot items to send on connection."""
+        """Get initial snapshot items to send on connection.
+
+        Returns all items from start to game_start (inclusive), so playback
+        begins from the first play after game_start. If game_start is not found,
+        falls back to returning the first snapshot_size items.
+        """
+        # Use game_start index if available
+        if self.meta.game_start_item_index is not None:
+            end_index = self.meta.game_start_item_index + 1
+            self.current_index = end_index
+            return self.items[:end_index]
+
+        # Fallback: return first snapshot_size items
         count = min(self.snapshot_size, len(self.items))
         self.current_index = count
         return self.items[:count]
@@ -1458,11 +1470,16 @@ class TrialReplayController:
     def seek_to_play_index(self, play_index: int) -> list[dict[str, Any]]:
         """Seek to a specific play index and return snapshot of items up to that point.
 
+        The snapshot includes:
+        - Meta events: agent_initialize, game_initialize, game_start
+        - Latest odds_update before the target position
+        - Recent play items up to and including the target
+
         Args:
             play_index: 0-based index among play items (not all items)
 
         Returns:
-            List of items to send as snapshot (last snapshot_size items up to target)
+            List of items to send as snapshot, sorted by item index (chronological)
         """
         if not self.meta.play_item_indices:
             # No plays, return empty
@@ -1477,9 +1494,38 @@ class TrialReplayController:
         # Set current_index to continue from after this item
         self.current_index = target_item_index + 1
 
-        # Return last snapshot_size items up to and including the target
+        # Collect item indices to include in snapshot (use set to avoid duplicates)
+        snapshot_indices: set[int] = set()
+
+        # 1. Add meta events (agent_initialize, game_initialize, game_start)
+        if self.meta.agent_initialize_item_index is not None:
+            snapshot_indices.add(self.meta.agent_initialize_item_index)
+        if self.meta.game_initialize_item_index is not None:
+            snapshot_indices.add(self.meta.game_initialize_item_index)
+        if self.meta.game_start_item_index is not None:
+            snapshot_indices.add(self.meta.game_start_item_index)
+
+        # 2. Find and add the latest odds_update before target_item_index
+        if self.meta.odds_update_indices:
+            # Find the largest odds_update index that is <= target_item_index
+            latest_odds_idx = None
+            for idx in self.meta.odds_update_indices:
+                if idx <= target_item_index:
+                    latest_odds_idx = idx
+                else:
+                    break  # odds_update_indices are in chronological order
+            if latest_odds_idx is not None:
+                snapshot_indices.add(latest_odds_idx)
+
+        # 3. Add recent items up to and including the target
         start = max(0, target_item_index + 1 - self.snapshot_size)
-        return self.items[start : target_item_index + 1]
+        for i in range(start, target_item_index + 1):
+            snapshot_indices.add(i)
+
+        # Sort by item index to maintain chronological order
+        sorted_indices = sorted(snapshot_indices)
+
+        return [self.items[i] for i in sorted_indices]
 
     def get_current_play_index(self) -> int:
         """Get current position in terms of play index (0-based)."""

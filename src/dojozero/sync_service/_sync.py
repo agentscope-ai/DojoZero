@@ -118,17 +118,18 @@ class SyncService:
             # Check last sync time from Redis
             self._last_sync_time = await self.redis_client.get_last_sync_time()
 
-            if self.redis_client.is_sync_time_valid(self._last_sync_time):
+            # Always do a full sync on startup since _spans_by_trial is empty.
+            # Even if _last_sync_time is valid, we need historical spans to
+            # compute leaderboard correctly (broker.final_stats from completed games).
+            if self._last_sync_time is not None:
                 LOGGER.info(
-                    "SyncService: Found valid last sync time: %s, starting incremental sync",
+                    "SyncService: Found last sync time: %s, but doing full sync (empty cache)",
                     self._last_sync_time,
                 )
-                # Do an incremental sync first
-                await self._sync_once(is_initial=False)
             else:
-                LOGGER.info("SyncService: No valid last sync time, starting full sync")
-                # Do a full sync
-                await self._sync_once(is_initial=True)
+                LOGGER.info("SyncService: No last sync time, starting full sync")
+            # Always do a full sync on startup
+            await self._sync_once(is_initial=True)
 
             LOGGER.info("SyncService: Initial sync complete, entering refresh loop")
 

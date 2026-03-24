@@ -9,8 +9,9 @@ import asyncio
 import inspect
 import json
 import logging
+import time
 from collections import deque
-from typing import Any, Callable, Mapping, Sequence, TypedDict
+from typing import Any, Callable, Mapping, Sequence, TypedDict, cast
 
 from agentscope.agent import ReActAgent
 from agentscope.formatter import FormatterBase
@@ -29,6 +30,7 @@ from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEven
 from dojozero.core._tracing import create_span_from_event, emit_span
 from dojozero.betting._config import MEMORY_SUMMARY_PROMPT
 from dojozero.data._models import DataEvent, EventTypes, extract_game_id
+from dojozero.agents import HotTopicsEvent, SocialBoard, format_hot_topics_for_llm
 from dojozero.betting._models import (
     ReasoningStep,
     ToolCallStep,
@@ -331,16 +333,25 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Event formatter for converting DataEvents to LLM-friendly text
         self._event_formatter = event_formatter or _default_format_event
 
+        # Event throttle: minimum seconds between LLM invocations.
+        # Events arriving during cooldown are queued and batch-processed
+        # once the cooldown expires, reducing LLM API call volume.
+        self._min_event_interval: float = 180.0
+        self._last_process_time: float = 0.0
+        self._cooldown_task: asyncio.Task[None] | None = None
+
         # Memory compression settings
         self._event_history: deque[str] = deque(maxlen=1000)
         self._compressed_context: str | None = None
         self._last_summarized_event_count: int = (
             0  # len(_event_history) at last summary
         )
-        self._memory_token_threshold: int = 9000
+        self._memory_token_threshold: int = 102400
         self._head_events: int = 10
         self._tail_events: int = 10
         self._max_event_chars: int = 1000
+
+        self._social_board: SocialBoard | None = None
 
     @property
     def name(self) -> str:
@@ -522,12 +533,21 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             summary_label = "[Historical Event Summary]"
         bet_history = await self._get_bet_history_summary()
 
-        self._compressed_context = (
-            f"{summary_label}\n"
-            f"{events_summary}\n\n"
-            "[Your Betting History]\n"
-            f"{bet_history}"
-        )
+        context_parts = [
+            f"{summary_label}",
+            events_summary,
+            "",
+            "[Your Betting History]",
+            bet_history,
+        ]
+
+        if self._social_board is not None:
+            social_digest = self._social_board.digest(self.actor_id, limit=5)
+            if social_digest:
+                context_parts.append("")
+                context_parts.append(social_digest)
+
+        self._compressed_context = "\n".join(context_parts)
 
         # Record how many events from _event_history are covered by this summary
         self._last_summarized_event_count = len(self._event_history)
@@ -562,11 +582,22 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             raise ValueError(f"Missing 'llm' config for agent {actor_id}")
         model_type = llm_config.get("model_type", "openai")
         model_name = llm_config.get("model_name", "")
+        base_sys_prompt = config.get("sys_prompt", "")
+        identity_lines = [
+            "[Agent Identity]",
+            f"Your agent id is {actor_id}.",
+        ]
+        identity_prompt = "\n".join(identity_lines)
+        sys_prompt = (
+            f"{base_sys_prompt}\n\n{identity_prompt}"
+            if base_sys_prompt
+            else identity_prompt
+        )
         return cls(
             actor_id=actor_id,
             trial_id=context.trial_id,
             name=config.get("name", actor_id),
-            sys_prompt=config.get("sys_prompt", ""),
+            sys_prompt=sys_prompt,
             model=create_model(llm_config),
             formatter=create_formatter(model_type, model_name),
         )
@@ -597,6 +628,85 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         if all_tools:
             self.toolkit = create_toolkit(all_tools)
 
+    async def register_social_board(
+        self,
+        board_or_args: SocialBoard | Sequence[Any],
+        current_round: int = 0,
+    ) -> None:
+        """Register social board and add social tools to toolkit.
+
+        Args:
+            board_or_args: SocialBoard instance, or tuple (board, hot_topics_interval,
+                hot_topics_trigger) when wired by orchestrator with hot-topics feature.
+            current_round: Current trial round (for cooldown tracking)
+        """
+        if isinstance(board_or_args, (list, tuple)) and len(board_or_args) >= 1:
+            board = cast(SocialBoard, board_or_args[0])
+            hot_topics_interval = (
+                int(board_or_args[1]) if len(board_or_args) > 1 else 20
+            )
+            hot_topics_trigger = board_or_args[2] if len(board_or_args) > 2 else None
+        else:
+            board = cast(SocialBoard, board_or_args)
+            hot_topics_interval = 20
+            hot_topics_trigger = None
+
+        self._social_board = board
+
+        from dojozero.agents import create_social_board_tools
+
+        def _bind_agent_id(func):
+            """Wrap function to inject agent_id as first argument.
+
+            The wrapper removes injected parameters from the expected schema so
+            that the toolkit doesn't expose internal fields to the agent.
+            """
+            import functools
+
+            @functools.wraps(func)
+            async def wrapper(**kwargs):
+                if "current_round" in inspect.signature(func).parameters:
+                    kwargs["current_round"] = self._event_count
+                return await func(self.actor_id, **kwargs)
+
+            # Remove injected params from signature for toolkit schema generation
+            original_sig = inspect.signature(func)
+            new_params = [
+                p
+                for name, p in original_sig.parameters.items()
+                if name not in {"agent_id", "current_round"}
+            ]
+            wrapper.__signature__ = original_sig.replace(parameters=new_params)  # type: ignore
+            return wrapper
+
+        social_tools = create_social_board_tools(
+            board,
+            hot_topics_interval=hot_topics_interval,
+            hot_topics_trigger=hot_topics_trigger,
+        )
+        existing_tools = list(self.toolkit.tools.keys())
+        for original_func in social_tools:
+            bound_func = _bind_agent_id(original_func)
+            tool_name = bound_func.__name__
+            if tool_name not in existing_tools:
+                self.toolkit.register_tool_function(bound_func)
+                logger.info(
+                    "agent '%s' registered social tool '%s'",
+                    self.actor_id,
+                    tool_name,
+                )
+
+        # Initialize agent's last post round in board
+        board.agent_last_post_round[self.actor_id] = (
+            current_round - board.cooldown_rounds
+        )
+
+        logger.info(
+            "agent '%s' registered social board (trial_id=%s)",
+            self.actor_id,
+            board.trial_id,
+        )
+
     @property
     def operators(self) -> tuple[str, ...]:
         return tuple(self._operator_registry.keys())
@@ -611,6 +721,13 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
     async def stop(self) -> None:
         """Stop the agent."""
+        if self._cooldown_task is not None and not self._cooldown_task.done():
+            self._cooldown_task.cancel()
+            try:
+                await self._cooldown_task
+            except asyncio.CancelledError:
+                pass
+            self._cooldown_task = None
         logger.info(
             "agent '%s' stopping after %d events", self.actor_id, self._event_count
         )
@@ -691,6 +808,8 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             # Single event: format directly
             event = events[0]
             payload = event.payload
+            if isinstance(payload, HotTopicsEvent):
+                return format_hot_topics_for_llm(payload)
             if _is_formattable_payload(payload):
                 return self._event_formatter(payload)
             else:
@@ -701,7 +820,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
         for event in events:
             payload = event.payload
-            if _is_formattable_payload(payload):
+            if isinstance(payload, HotTopicsEvent):
+                formatted = format_hot_topics_for_llm(payload)
+            elif _is_formattable_payload(payload):
                 formatted = self._event_formatter(payload)
             else:
                 formatted = (
@@ -765,7 +886,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # update event history
         for event in events:
             payload = event.payload
-            if _is_formattable_payload(payload):
+            if isinstance(payload, HotTopicsEvent):
+                formatted = format_hot_topics_for_llm(payload)
+            elif _is_formattable_payload(payload):
                 formatted = self._event_formatter(payload)
             else:
                 formatted = (
@@ -789,7 +912,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             "agent '%s' processing %d event(s) from streams: {%s}",
             self.actor_id,
             len(events),
-            input_content[:500],  # Truncate for logging
+            input_content[0:500],  # Truncate for logging
         )
 
         msg = Msg(name="event_push", content=input_content, role="user")
@@ -831,7 +954,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             trigger = ""
             if events:
                 last_payload = events[-1].payload
-                if _is_formattable_payload(last_payload):
+                if isinstance(last_payload, HotTopicsEvent):
+                    trigger = format_hot_topics_for_llm(last_payload)
+                elif _is_formattable_payload(last_payload):
                     trigger = self._event_formatter(last_payload)
 
             # Emit agent response span with structured message (includes bet fields if present)
@@ -900,12 +1025,66 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 )
                 return False
 
+    async def _drain_event_queue(self) -> None:
+        """Process all queued events until the queue is empty.
+
+        Caller must set ``_is_processing = True`` before invoking.
+        On exit (normal or exception) ``_is_processing`` is reset to False
+        and ``_last_process_time`` is updated so the cooldown window starts.
+        """
+        try:
+            while True:
+                async with self._processing_lock:
+                    if not self._event_queue:
+                        break
+
+                    # Take a snapshot of current queue
+                    queued_items = list(self._event_queue)
+                    self._event_queue.clear()
+
+                # Extract events and find max retry count for the batch
+                queued_events = [item[0] for item in queued_items]
+                max_retry = max(item[1] for item in queued_items)
+
+                logger.info(
+                    "agent '%s' processing %d queued event(s) (max_retry_count=%d)",
+                    self.actor_id,
+                    len(queued_events),
+                    max_retry,
+                )
+                await self._process_events_with_retry(
+                    queued_events, retry_count=max_retry
+                )
+        except Exception:
+            logger.exception(
+                "agent '%s' unexpected error in event processing loop",
+                self.actor_id,
+            )
+            raise
+        finally:
+            async with self._processing_lock:
+                self._is_processing = False
+                self._last_process_time = time.monotonic()
+
+    async def _process_after_cooldown(self, delay: float) -> None:
+        """Wait for the cooldown to expire, then drain queued events."""
+        await asyncio.sleep(delay)
+        async with self._processing_lock:
+            self._cooldown_task = None
+            if self._is_processing or not self._event_queue:
+                return
+            self._is_processing = True
+        await self._drain_event_queue()
+
     async def handle_stream_event(self, event: StreamEvent[Any]) -> None:
         """Process incoming stream event with the ReActAgent.
 
         Event handling behavior:
         - Events are formatted to LLM-friendly text based on their type
-        - If the agent is busy processing, new events are queued
+        - If the agent is busy *or* within the cooldown window
+          (``_min_event_interval`` seconds since last processing), the event
+          is queued.  A background task is scheduled to drain the queue once
+          the cooldown expires, so events are never lost.
         - After processing completes, all queued events are consolidated
           into a single message for the next processing cycle
         - Failed events are retried up to max_event_retry_count times
@@ -933,6 +1112,26 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 )
                 return
 
+            # -- Event throttle: enforce minimum interval between LLM calls --
+            if self._last_process_time > 0:
+                elapsed = time.monotonic() - self._last_process_time
+                if elapsed < self._min_event_interval:
+                    self._event_queue.append((event, 0))
+                    remaining = self._min_event_interval - elapsed
+                    if self._cooldown_task is None or self._cooldown_task.done():
+                        self._cooldown_task = asyncio.create_task(
+                            self._process_after_cooldown(remaining)
+                        )
+                    logger.debug(
+                        "agent '%s' throttled, queued event seq=%s "
+                        "(%.0fs remaining, queue size: %d)",
+                        self.actor_id,
+                        event.sequence,
+                        remaining,
+                        len(self._event_queue),
+                    )
+                    return
+
             # Mark as processing and queue the current event
             self._is_processing = True
 
@@ -955,40 +1154,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             # Add current event to queue with retry_count=0
             self._event_queue.append((event, 0))
 
-        try:
-            # Process all queued events (including the current one)
-            while True:
-                async with self._processing_lock:
-                    if not self._event_queue:
-                        break
-
-                    # Take a snapshot of current queue
-                    queued_items = list(self._event_queue)
-                    self._event_queue.clear()
-
-                # Extract events and find max retry count for the batch
-                queued_events = [item[0] for item in queued_items]
-                max_retry = max(item[1] for item in queued_items)
-
-                logger.info(
-                    "agent '%s' processing %d queued event(s) (max_retry_count=%d)",
-                    self.actor_id,
-                    len(queued_events),
-                    max_retry,
-                )
-                await self._process_events_with_retry(
-                    queued_events, retry_count=max_retry
-                )
-
-        except Exception:
-            logger.exception(
-                "agent '%s' unexpected error in event processing loop",
-                self.actor_id,
-            )
-            raise
-        finally:
-            async with self._processing_lock:
-                self._is_processing = False
+        await self._drain_event_queue()
 
     async def save_state(self) -> Mapping[str, Any]:
         """Return serializable state for checkpointing."""

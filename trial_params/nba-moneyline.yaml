@@ -1,8 +1,13 @@
 scenario:
   name: nba
   config:
+<<<<<<< HEAD
     espn_game_id: 'your_espn_game_id_here'  # ESPN game ID for the NBA game
     
+=======
+    espn_game_id: '401810490'  # ESPN game ID - override for specific game
+
+>>>>>>> origin/master
     hub:
       persistence_file: outputs/nba_betting_events-{espn_game_id}.jsonl
 

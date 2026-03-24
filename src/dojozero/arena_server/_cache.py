@@ -503,11 +503,22 @@ class ReplayMetaInfo:
 
     Computed once when caching replay data. Enables O(1) seek operations
     and provides period segmentation for frontend progress bar.
+
+    Meta event indices are used to include essential initialization events
+    in seek snapshots, ensuring the frontend has complete context.
     """
 
     total_play_count: int  # Number of items matching core_categories
     play_item_indices: list[int]  # play_index -> item_index mapping
     periods: list[PeriodInfo]  # Period segmentation info
+
+    # Meta event indices for seek snapshots
+    agent_initialize_item_index: int | None = None  # Index of agent_initialize event
+    game_initialize_item_index: int | None = None  # Index of game_initialize event
+    game_start_item_index: int | None = None  # Index of game_start event
+    odds_update_indices: list[int] = field(
+        default_factory=list
+    )  # Indices of odds_update events
 
 
 @dataclass

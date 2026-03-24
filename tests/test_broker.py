@@ -2393,13 +2393,406 @@ class TestMultipleSpreadsTotals:
         )  # 1/1.95
 
 
+class TestBetDistributionSummary:
+    """Tests for get_bet_distribution_summary aggregation and formatting."""
+
+    async def test_no_active_event_returns_none(self, broker_with_agent) -> None:
+        broker, _agent = broker_with_agent
+
+        # Ensure no current event
+        broker._event = None  # type: ignore[assignment]
+        summary = broker.get_bet_distribution_summary()
+        assert summary is None
+
+    async def test_no_relevant_bets_returns_none(self, broker_with_agent) -> None:
+        broker, agent = broker_with_agent
+
+        # Initialize event but do not place any bets
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        summary = broker.get_bet_distribution_summary()
+        assert summary is None
+
+    async def test_mixed_pending_and_active_moneyline_bets(
+        self, broker_with_agent
+    ) -> None:
+        broker, agent = broker_with_agent
+
+        # Initialize event and odds
+        game_init_event = StreamEvent(
+            stream_id="nba_game_stream",
+            payload=GameInitializeEvent(
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init_event)
+
+        odds_event = StreamEvent(
+            stream_id="nba_odds_stream",
+            payload=OddsUpdateEvent(
+                game_id="test_event",
+                odds=OddsInfo(
+                    moneyline=MoneylineOdds(
+                        home_probability=0.513,
+                        away_probability=0.476,
+                        home_odds=1.95,
+                        away_odds=2.10,
+                    )
+                ),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+
+        # Agent1: active home bet
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestMoneyline(
+                amount=Decimal("100.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+            ),
+        )
+
+        # Agent2: active away bet
+        agent2 = MockAgent(actor_id="agent2")
+        await broker.register_agents([agent2])  # type: ignore[arg-type]
+        await broker.place_bet(
+            agent2.actor_id,
+            BetRequestMoneyline(
+                amount=Decimal("50.00"),
+                selection="away",
+                event_id="test_event",
+                order_type=OrderType.MARKET,
+            ),
+        )
+
+        # Agent1: pending home bet (limit order that should remain pending)
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestMoneyline(
+                amount=Decimal("25.00"),
+                selection="home",
+                event_id="test_event",
+                order_type=OrderType.LIMIT,
+                limit_probability=Decimal("0.60"),
+            ),
+        )
+
+        # Sanity check: we have both active and pending bets
+        active_home = [
+            b
+            for b in await broker.get_active_bets(agent.actor_id)
+            if b.bet_type == BetType.MONEYLINE and b.selection == "home"
+        ]
+        assert active_home
+        pending_agent1 = await broker.get_pending_orders(agent.actor_id)
+        assert pending_agent1
+
+        summary = broker.get_bet_distribution_summary()
+        assert summary is not None
+        # Expected format (from implementation):
+        # "<home_part>; <away_part>"
+        # where home_part/away_part look like:
+        #   "{n} agent(s) on <TEAM> (total XX.XX)"
+        # One agent on home (agent1), one agent on away (agent2)
+        assert "1 agent(s) on Lakers" in summary
+        assert "1 agent(s) on Warriors" in summary
+        # Totals should aggregate amounts per side (home: 100 + 25, away: 50)
+        assert "total 125.00" in summary
+        assert "total 50.00" in summary
+
+
 # =============================================================================
 # Agent Tools Configuration Tests
 # =============================================================================
-
-
 class TestAllowedTools:
     """Test allowed_tools configuration"""
+
+    @pytest_asyncio.fixture
+    async def broker_moneyline_only(self):
+        """Broker that only allows moneyline betting tools."""
+        config: BrokerOperatorConfig = {
+            "actor_id": "test_broker_ml",
+            "initial_balance": "1000.00",
+            "allowed_tools": [
+                "get_balance",
+                "get_event",
+                "place_market_bet_moneyline",
+                "place_limit_bet_moneyline",
+            ],
+        }
+        broker = BrokerOperator(config, trial_id="test-trial")
+        await broker.start()
+        yield broker
+        await broker.stop()
+
+    @pytest_asyncio.fixture
+    async def broker_spread_only(self):
+        """Broker that only allows spread betting tools."""
+        config: BrokerOperatorConfig = {
+            "actor_id": "test_broker_spread",
+            "initial_balance": "1000.00",
+            "allowed_tools": [
+                "get_balance",
+                "get_event",
+                "place_market_bet_spread",
+                "place_limit_bet_spread",
+            ],
+        }
+        broker = BrokerOperator(config, trial_id="test-trial")
+        await broker.start()
+        yield broker
+        await broker.stop()
+
+    @pytest_asyncio.fixture
+    async def broker_total_only(self):
+        """Broker that only allows total betting tools."""
+        config: BrokerOperatorConfig = {
+            "actor_id": "test_broker_total",
+            "initial_balance": "1000.00",
+            "allowed_tools": [
+                "get_balance",
+                "get_event",
+                "place_market_bet_total",
+                "place_limit_bet_total",
+            ],
+        }
+        broker = BrokerOperator(config, trial_id="test-trial")
+        await broker.start()
+        yield broker
+        await broker.stop()
+
+    @pytest_asyncio.fixture
+    async def event_with_all_markets(self, broker, agent):
+        """Helper: broker with agent and a fully initialized event (moneyline + spread + total)."""
+        await broker.register_agents([agent])  # type: ignore[arg-type]
+
+        game_init = StreamEvent(
+            stream_id="stream",
+            payload=GameInitializeEvent(
+                game_id="test_event",
+                home_team="Lakers",
+                away_team="Warriors",
+                game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+            ),
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(game_init)
+
+        odds_payload = create_odds_event_with_spreads_totals(
+            game_id="test_event",
+            home_odds=1.95,
+            away_odds=2.10,
+            spread_updates=[{"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}],
+            total_updates=[{"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}],
+        )
+        odds_event = StreamEvent(
+            stream_id="stream",
+            payload=odds_payload,
+            emitted_at=datetime.now(),
+        )
+        await broker.handle_stream_event(odds_event)
+        return broker, agent
+
+    async def _setup_full_event(self, broker, agent):
+        """Initialize a fully populated event (moneyline + spread + total) on the given broker."""
+        await broker.register_agents([agent])  # type: ignore[arg-type]
+
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="stream",
+                payload=GameInitializeEvent(
+                    game_id="test_event",
+                    home_team="Lakers",
+                    away_team="Warriors",
+                    game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="stream",
+                payload=create_odds_event_with_spreads_totals(
+                    game_id="test_event",
+                    home_odds=1.95,
+                    away_odds=2.10,
+                    spread_updates=[
+                        {"spread": -3.5, "home_odds": 1.90, "away_odds": 1.90}
+                    ],
+                    total_updates=[
+                        {"total": 220.5, "over_odds": 1.88, "under_odds": 1.88}
+                    ],
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+    def _parse_tool_json_response(self, tool_response):
+        """Extract JSON payload from a ToolResponse."""
+        import json
+
+        assert tool_response.content, "ToolResponse.content should not be empty"
+
+        text_parts = [
+            item["text"] for item in tool_response.content if item.get("type") == "text"
+        ]
+        assert text_parts, f"No text content found in tool response: {tool_response}"
+
+        return json.loads("".join(text_parts))
+
+    # ------------------------------------------------------------------
+    # get_event filtering tests
+    # ------------------------------------------------------------------
+
+    async def test_get_event_moneyline_only_hides_spread_and_total(
+        self, broker_moneyline_only, agent
+    ):
+        """get_event should omit spread_lines and total_lines when only moneyline tools are allowed."""
+        await self._setup_full_event(broker_moneyline_only, agent)
+
+        tools = broker_moneyline_only.agent_tools(agent.actor_id)
+        get_event_tool = next(t for t in tools if t.__name__ == "get_event")
+
+        result = self._parse_tool_json_response(await get_event_tool())
+
+        # Moneyline fields must be present
+        assert result["home_probability"] is not None
+        assert result["away_probability"] is not None
+
+        # Spread and total fields must be absent
+        assert "spread_lines" not in result
+        assert "total_lines" not in result
+
+    async def test_get_event_moneyline_only_current_odds_has_no_spread_or_total(
+        self, broker_moneyline_only, agent
+    ):
+        """current_odds should only contain moneyline lines when only moneyline tools are allowed."""
+        await self._setup_full_event(broker_moneyline_only, agent)
+
+        tools = broker_moneyline_only.agent_tools(agent.actor_id)
+        get_event_tool = next(t for t in tools if t.__name__ == "get_event")
+
+        result = self._parse_tool_json_response(await get_event_tool())
+
+        current_odds = result.get("current_odds", "")
+        assert current_odds is not None
+        assert "Home:" in current_odds
+        assert "Away:" in current_odds
+        assert "Spread:" not in current_odds
+        assert "Total:" not in current_odds
+
+    async def test_get_event_spread_only_hides_moneyline_and_total(
+        self, broker_spread_only, agent
+    ):
+        """get_event should omit home_probability, away_probability and total_lines when only spread tools are allowed."""
+        await self._setup_full_event(broker_spread_only, agent)
+
+        tools = broker_spread_only.agent_tools(agent.actor_id)
+        get_event_tool = next(t for t in tools if t.__name__ == "get_event")
+
+        result = self._parse_tool_json_response(await get_event_tool())
+
+        # Spread fields must be present
+        assert "spread_lines" in result
+        assert len(result["spread_lines"]) > 0
+
+        # Moneyline and total fields must be absent
+        assert "home_probability" not in result
+        assert "away_probability" not in result
+        assert "total_lines" not in result
+
+    async def test_get_event_spread_only_current_odds_has_no_moneyline_or_total(
+        self, broker_spread_only, agent
+    ):
+        """current_odds should only contain spread lines when only spread tools are allowed."""
+        await self._setup_full_event(broker_spread_only, agent)
+
+        tools = broker_spread_only.agent_tools(agent.actor_id)
+        get_event_tool = next(t for t in tools if t.__name__ == "get_event")
+
+        result = self._parse_tool_json_response(await get_event_tool())
+
+        current_odds = result.get("current_odds", "")
+        assert current_odds is not None
+        assert "- Spread:" in current_odds
+        assert "- Home:" not in current_odds
+        assert "- Away:" not in current_odds
+        assert "- Total:" not in current_odds
+
+    async def test_get_event_total_only_hides_moneyline_and_spread(
+        self, broker_total_only, agent
+    ):
+        """get_event should omit home_probability, away_probability and spread_lines when only total tools are allowed."""
+        await self._setup_full_event(broker_total_only, agent)
+
+        tools = broker_total_only.agent_tools(agent.actor_id)
+        get_event_tool = next(t for t in tools if t.__name__ == "get_event")
+
+        result = self._parse_tool_json_response(await get_event_tool())
+
+        # Total fields must be present
+        assert "total_lines" in result
+        assert len(result["total_lines"]) > 0
+
+        # Moneyline and spread fields must be absent
+        assert "home_probability" not in result
+        assert "away_probability" not in result
+        assert "spread_lines" not in result
+
+    async def test_get_event_total_only_current_odds_has_no_moneyline_or_spread(
+        self, broker_total_only, agent
+    ):
+        """current_odds should only contain total lines when only total tools are allowed."""
+        await self._setup_full_event(broker_total_only, agent)
+
+        tools = broker_total_only.agent_tools(agent.actor_id)
+        get_event_tool = next(t for t in tools if t.__name__ == "get_event")
+
+        result = self._parse_tool_json_response(await get_event_tool())
+
+        current_odds = result.get("current_odds", "")
+        assert current_odds is not None
+        assert "Total:" in current_odds
+        assert "Home:" not in current_odds
+        assert "Away:" not in current_odds
+        assert "Spread:" not in current_odds
+
+    async def test_get_event_all_tools_shows_all_markets(self, event_with_all_markets):
+        """get_event should expose all markets when no tool restriction is set."""
+        broker, agent = event_with_all_markets
+
+        tools = broker.agent_tools(agent.actor_id)
+        get_event_tool = next(t for t in tools if t.__name__ == "get_event")
+
+        result = self._parse_tool_json_response(await get_event_tool())
+
+        assert result["home_probability"] is not None
+        assert result["away_probability"] is not None
+        assert "spread_lines" in result and len(result["spread_lines"]) > 0
+        assert "total_lines" in result and len(result["total_lines"]) > 0
+
+        current_odds = result.get("current_odds", "")
+        assert "Home:" in current_odds
+        assert "Away:" in current_odds
+        assert "Spread:" in current_odds
+        assert "Total:" in current_odds
 
     @pytest_asyncio.fixture
     async def broker_with_limited_tools(self):
