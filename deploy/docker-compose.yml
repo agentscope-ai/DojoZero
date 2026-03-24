@@ -7,7 +7,8 @@
 #   # China (use mirrors)
 #   CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build
 #
-# Runs two separate containers for NBA and NFL trial sources
+# Uses DOJOZERO_ENV to auto-resolve trial sources from tier directories.
+# Default tier is "prod". Override with DOJOZERO_ENV=daily or DOJOZERO_ENV=pre.
 
 services:
   nba:
@@ -24,6 +25,7 @@ services:
       - ../.env
     environment:
       - PYTHONUNBUFFERED=1
+      - DOJOZERO_ENV=${DOJOZERO_ENV:-daily}
     volumes:
       - ../outputs:/app/outputs
       - ../data:/app/data
@@ -35,7 +37,7 @@ services:
       --port 8000
       --trace-backend sls
       --oss-backup
-      --trial-source trial_sources/nba.yaml
+      --trial-source trial_sources/${DOJOZERO_ENV:-daily}/nba.yaml
     logging:
       driver: json-file
       options:
@@ -62,6 +64,7 @@ services:
       - ../.env
     environment:
       - PYTHONUNBUFFERED=1
+      - DOJOZERO_ENV=${DOJOZERO_ENV:-daily}
     volumes:
       - ../outputs:/app/outputs
       - ../data:/app/data
@@ -73,7 +76,7 @@ services:
       --port 8000
       --trace-backend sls
       --oss-backup
-      --trial-source trial_sources/nfl.yaml
+      --trial-source trial_sources/${DOJOZERO_ENV:-daily}/nfl.yaml
     logging:
       driver: json-file
       options:
