@@ -5,57 +5,85 @@
 ```bash
 # 1. Configure environment
 cp deploy/.env.template .env
-nano .env  # Fill in API keys and credentials
+nano .env  # Fill in API keys, credentials, and DOJOZERO_ENV
 
 # 2. Build and run
-# International (default):
-docker-compose -f deploy/docker-compose.yml up -d --build
+deploy/up.sh --build
 
 # China (use mirrors for faster builds):
-CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build
+CHINA_MIRRORS=true deploy/up.sh --build
 
 # 3. Verify
 docker logs dojozero-nba --tail 50
 docker logs dojozero-nfl --tail 50
+docker logs dojozero-ncaa --tail 50
 curl http://localhost:8001/health  # NBA
 curl http://localhost:8002/health  # NFL
+curl http://localhost:8003/health  # NCAA
 ```
 
-Two containers run separately for NBA (port 8001) and NFL (port 8002). Each automatically discovers games from ESPN and schedules trials. No cron needed.
+Three containers run separately for NBA (port 8001), NFL (port 8002), and NCAA (port 8003). Each automatically discovers games from ESPN and schedules trials. No cron needed.
+
+---
+
+## Environment Tiers
+
+Trial sources are organized into tiers under `trial_sources/{daily,pre,prod}/`:
+
+| Tier | `DOJOZERO_ENV` | Personas | Models | Max Games |
+|------|-----------------|----------|--------|-----------|
+| **daily** | `daily` | degen only | claude | 1 |
+| **pre** | `pre` | all 6 | all models | 1 |
+| **prod** | `prod` | all 6 | all models | unlimited |
+
+Set `DOJOZERO_ENV` in `.env` to select the tier:
+
+```bash
+# In .env
+DOJOZERO_ENV=prod
+```
+
+Override per-invocation:
+
+```bash
+DOJOZERO_ENV=daily deploy/up.sh
+```
+
+**Important:** Use `deploy/up.sh` instead of `docker-compose` directly. The script sources `.env` from the project root so that `DOJOZERO_ENV` is available for both compose-time variable substitution (trial source paths) and container runtime.
 
 ---
 
 ## Architecture
 
 ```
-┌───────────────────────────────┐    ┌───────────────────────────────┐
-│  dojozero-nba (port 8001)     │    │  dojozero-nfl (port 8002)     │
-│                               │    │                               │
-│  dojo0 serve                  │    │  dojo0 serve                  │
-│    --trial-source nba.yaml    │    │    --trial-source nfl.yaml    │
-│                               │    │                               │
-│  ┌─────────────────────────┐  │    │  ┌─────────────────────────┐  │
-│  │  ScheduleManager        │  │    │  │  ScheduleManager        │  │
-│  │  - ESPN sync (hourly)   │  │    │  │  - ESPN sync (hourly)   │  │
-│  │  - Game discovery       │  │    │  │  - Game discovery       │  │
-│  │  - Trial lifecycle      │  │    │  │  - Trial lifecycle      │  │
-│  └─────────────────────────┘  │    │  └─────────────────────────┘  │
-│             │                 │    │             │                 │
-│             ▼                 │    │             ▼                 │
-│  ┌────────┬────────┬───────┐  │    │  ┌────────┬────────┬───────┐  │
-│  │  SLS   │  OSS   │ JSONL │  │    │  │  SLS   │  OSS   │ JSONL │  │
-│  └────────┴────────┴───────┘  │    │  └────────┴────────┴───────┘  │
-└───────────────────────────────┘    └───────────────────────────────┘
-                │                                │
-                └────────────┬───────────────────┘
-                             ▼
-                     Shared volumes:
-                     - ./outputs/
-                     - ./data/
-                     - .env
+┌──────────────────────────┐ ┌──────────────────────────┐ ┌──────────────────────────┐
+│ dojozero-nba (port 8001) │ │ dojozero-nfl (port 8002) │ │ dojozero-ncaa (port 8003)│
+│                          │ │                          │ │                          │
+│ dojo0 serve              │ │ dojo0 serve              │ │ dojo0 serve              │
+│   --trial-source         │ │   --trial-source         │ │   --trial-source         │
+│   {tier}/nba.yaml        │ │   {tier}/nfl.yaml        │ │   {tier}/ncaa.yaml       │
+│                          │ │                          │ │                          │
+│ ┌──────────────────────┐ │ │ ┌──────────────────────┐ │ │ ┌──────────────────────┐ │
+│ │ ScheduleManager      │ │ │ │ ScheduleManager      │ │ │ │ ScheduleManager      │ │
+│ │ - ESPN sync (hourly) │ │ │ │ - ESPN sync (hourly) │ │ │ │ - ESPN sync (hourly) │ │
+│ │ - Game discovery     │ │ │ │ - Game discovery     │ │ │ │ - Game discovery     │ │
+│ │ - Trial lifecycle    │ │ │ │ - Trial lifecycle    │ │ │ │ - Trial lifecycle    │ │
+│ └──────────────────────┘ │ │ └──────────────────────┘ │ │ └──────────────────────┘ │
+│           │              │ │           │              │ │           │              │
+│           ▼              │ │           ▼              │ │           ▼              │
+│ ┌───────┬──────┬───────┐ │ │ ┌───────┬──────┬───────┐ │ │ ┌───────┬──────┬───────┐ │
+│ │  SLS  │ OSS  │ JSONL │ │ │ │  SLS  │ OSS  │ JSONL │ │ │ │  SLS  │ OSS  │ JSONL │ │
+│ └───────┴──────┴───────┘ │ │ └───────┴──────┴───────┘ │ │ └───────┴──────┴───────┘ │
+└──────────────────────────┘ └──────────────────────────┘ └──────────────────────────┘
+               │                         │                         │
+               └─────────────────────────┼─────────────────────────┘
+                                         ▼
+                                 Shared volumes:
+                                 - ./outputs/
+                                 - ./data/
+                                 - ./trial_sources/ (read-only)
+                                 - .env
 ```
-
-Two separate containers run NBA and NFL independently.
 
 ---
 
@@ -86,14 +114,13 @@ exit
 
 # Configure environment
 cd DojoZero
-nano .env  # Fill in credentials
+nano .env  # Fill in credentials, set DOJOZERO_ENV=prod
 
 # Build and run
-# International:
-docker-compose -f deploy/docker-compose.yml up -d --build
+deploy/up.sh --build
 
 # China:
-CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build
+CHINA_MIRRORS=true deploy/up.sh --build
 ```
 
 The setup script:
@@ -110,14 +137,17 @@ docker ps
 # View logs
 docker logs dojozero-nba --tail 100
 docker logs dojozero-nfl --tail 100
+docker logs dojozero-ncaa --tail 100
 
 # Health checks
 curl http://localhost:8001/health  # NBA
 curl http://localhost:8002/health  # NFL
+curl http://localhost:8003/health  # NCAA
 
 # Check scheduled trials
-curl http://localhost:8001/api/schedules  # NBA
-curl http://localhost:8002/api/schedules  # NFL
+curl http://localhost:8001/api/scheduled-trials  # NBA
+curl http://localhost:8002/api/scheduled-trials  # NFL
+curl http://localhost:8003/api/scheduled-trials  # NCAA
 ```
 
 ---
@@ -130,6 +160,7 @@ Copy `deploy/.env.template` to `.env` and fill in:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
+| `DOJOZERO_ENV` | No | Tier: `daily`, `pre`, or `prod` (default: `daily`) |
 | `DOJOZERO_DASHSCOPE_API_KEY` | Yes | LLM API key for agent reasoning |
 | `DOJOZERO_TAVILY_API_KEY` | Yes | Web search API key |
 | `ALIBABA_CLOUD_ACCESS_KEY_ID` | Yes | Alibaba Cloud credentials |
@@ -144,15 +175,19 @@ Copy `deploy/.env.template` to `.env` and fill in:
 
 ### Trial Source Configuration
 
-Edit `trial_sources/nba.yaml` or `trial_sources/nfl.yaml`:
+Trial sources use a compact YAML format in `trial_sources/{tier}/{sport}.yaml`:
 
 ```yaml
-# Schedule options
-pre_start_hours: 0.1           # Start 6 minutes before game
-sync_interval_seconds: 3600.0  # Sync with ESPN every hour
-check_interval_seconds: 60.0   # Check game status every minute
-auto_stop_on_completion: true  # Stop when game ends
+source_id: nba-moneyline-source
+sport_type: nba
+config:
+  scenario_name: nba
+  max_concurrent_games: 0    # 0 = unlimited
+  personas: [degen, mystic, pundit, shark, sheep, whale]
+  llm_config_path: agents/llms/all.yaml
 ```
+
+Base configs (data streams, operators, schedules) are shared via `trial_sources/base/{sport}.yaml`.
 
 ### Common SLS/OSS Endpoints
 
@@ -172,10 +207,10 @@ auto_stop_on_completion: true  # Stop when game ends
 # Live logs (Docker handles rotation: 5 files x 100MB per container)
 docker logs dojozero-nba -f
 docker logs dojozero-nfl -f
+docker logs dojozero-ncaa -f
 
 # Recent logs
 docker logs dojozero-nba --tail 100
-docker logs dojozero-nfl --tail 100
 
 # Logs since timestamp
 docker logs dojozero-nba --since 2025-01-20T10:00:00
@@ -185,16 +220,16 @@ docker logs dojozero-nba --since 2025-01-20T10:00:00
 
 ```bash
 # Restart (after .env changes)
-docker compose -f deploy/docker-compose.yml restart
+deploy/up.sh
 
 # Update code and rebuild
 cd DojoZero
 git pull
-docker compose -f deploy/docker-compose.yml up -d --build
+deploy/up.sh --build
 
 # Full rebuild (clear cache)
 docker compose -f deploy/docker-compose.yml build --no-cache
-docker compose -f deploy/docker-compose.yml up -d
+deploy/up.sh
 ```
 
 ### Stop
@@ -211,7 +246,7 @@ docker compose -f deploy/docker-compose.yml down -v
 
 ```bash
 # CPU/memory usage
-docker stats dojozero-nba dojozero-nfl
+docker stats dojozero-nba dojozero-nfl dojozero-ncaa
 
 # Disk usage
 docker system df
@@ -251,7 +286,7 @@ tar -czf backup-$(date +%Y%m%d).tar.gz outputs/
 ls -lht outputs/ | head -20
 
 # View specific trial events
-cat outputs/2025-01-20/401810490.jsonl | head -10
+cat outputs/2025-01-20/sched-nba-401810490-abc12345.jsonl | head -10
 ```
 
 ---
@@ -264,11 +299,13 @@ cat outputs/2025-01-20/401810490.jsonl | head -10
 # Check logs for errors
 docker logs dojozero-nba
 docker logs dojozero-nfl
+docker logs dojozero-ncaa
 
 # Common issues:
 # - Missing .env file or variables
 # - Invalid API keys
-# - Port 8001/8002 already in use
+# - Port 8001/8002/8003 already in use
+# - Missing alicloud extras (need pip install 'dojozero[alicloud]')
 ```
 
 ### No trials scheduled
@@ -277,13 +314,26 @@ docker logs dojozero-nfl
 # Check if trial sources loaded
 curl http://localhost:8001/api/trial-sources  # NBA
 curl http://localhost:8002/api/trial-sources  # NFL
+curl http://localhost:8003/api/trial-sources  # NCAA
 
 # Check ESPN sync status
 docker logs dojozero-nba | grep -i "sync\|espn\|schedule"
-docker logs dojozero-nfl | grep -i "sync\|espn\|schedule"
 
 # Verify trial source configs exist
-ls -la trial_sources/
+ls -la trial_sources/prod/
+```
+
+### Wrong tier loaded
+
+```bash
+# Check what tier the container is using
+docker inspect dojozero-nba --format '{{json .Config.Cmd}}'
+
+# Check container env
+docker exec dojozero-nba env | grep DOJOZERO_ENV
+
+# Fix: always use deploy/up.sh which sources .env properly
+deploy/up.sh
 ```
 
 ### SLS/OSS connection issues
@@ -302,12 +352,13 @@ python tools/validate_alicloud_access.py --verbose
 # Check if servers are responding
 curl -v http://localhost:8001/health  # NBA
 curl -v http://localhost:8002/health  # NFL
+curl -v http://localhost:8003/health  # NCAA
 
 # Check containers are running
 docker ps -a | grep dojozero
 
 # Restart containers
-docker-compose -f deploy/docker-compose.yml restart
+deploy/up.sh
 ```
 
 ---
@@ -321,6 +372,7 @@ docker-compose -f deploy/docker-compose.yml restart
 | `./trial_sources` | `/app/trial_sources` | Trial source configs (read-only) |
 | `dojozero-nba-schedules` | `/app/.dojozero` | NBA schedule state |
 | `dojozero-nfl-schedules` | `/app/.dojozero` | NFL schedule state |
+| `dojozero-ncaa-schedules` | `/app/.dojozero` | NCAA schedule state |
 
 ---
 
@@ -341,5 +393,5 @@ nano .env
 dojo0 run trial_params/nba-moneyline.yaml
 
 # Run server locally
-dojo0 serve --trial-source trial_sources/nba.yaml
+DOJOZERO_ENV=daily dojo0 serve --trial-source trial_sources/daily/nba.yaml
 ```

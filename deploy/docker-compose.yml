@@ -1,14 +1,13 @@
 # DojoZero Docker Compose Configuration
 #
 # Usage:
-#   # International (default)
-#   docker-compose -f deploy/docker-compose.yml up -d --build
+#   deploy/up.sh                    # uses DOJOZERO_ENV from .env (default: daily)
+#   deploy/up.sh --build            # rebuild images
+#   DOJOZERO_ENV=pre deploy/up.sh   # override tier
+#   CHINA_MIRRORS=true deploy/up.sh --build  # use China mirrors
 #
-#   # China (use mirrors)
-#   CHINA_MIRRORS=true docker-compose -f deploy/docker-compose.yml up -d --build
-#
-# Uses DOJOZERO_ENV to auto-resolve trial sources from tier directories.
-# Default tier is "prod". Override with DOJOZERO_ENV=daily or DOJOZERO_ENV=pre.
+# Uses DOJOZERO_ENV to resolve trial sources from tier directories (daily/pre/prod).
+# Set DOJOZERO_ENV in .env or pass via shell. Default: daily.
 
 services:
   nba:
