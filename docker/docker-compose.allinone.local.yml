@@ -1,0 +1,42 @@
+# Local all-in-one compose: serve + arena + jaeger in one container.
+#
+# Jaeger-only: do not set DOJOZERO_REDIS_URL unless you run the SLS→Redis sync
+# service; otherwise Arena may stay on Redis mode with stale hot data.
+name: dojozero-aio-local
+
+services:
+  dojozero:
+    image: dojozero:latest
+    build:
+      context: ..
+      dockerfile: docker/allinone.Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DOJOZERO_TRIAL_SOURCE=${DOJOZERO_TRIAL_SOURCE:-trial_sources/*.yaml}
+      - DOJOZERO_SERVE_HOST=0.0.0.0
+      - DOJOZERO_SERVE_PORT=8000
+      - DOJOZERO_ARENA_HOST=0.0.0.0
+      - DOJOZERO_ARENA_PORT=3001
+      - DOJOZERO_TRACE_INGEST_ENDPOINT=${DOJOZERO_TRACE_INGEST_ENDPOINT:-http://127.0.0.1:4318}
+      - DOJOZERO_ARENA_TRACE_BACKEND=${DOJOZERO_ARENA_TRACE_BACKEND:-jaeger}
+      - DOJOZERO_ARENA_TRACE_QUERY_ENDPOINT=${DOJOZERO_ARENA_TRACE_QUERY_ENDPOINT:-http://127.0.0.1:16686}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${DOJOZERO_SERVE_PORT:-8000}:8000"
+      - "${DOJOZERO_ARENA_PORT:-3001}:3001"
+      - "16686:16686"
+    volumes:
+      - ../outputs:/app/outputs
+      - ../data:/app/data
+      - ../trial_params:/app/trial_params:ro
+      - ../trial_sources:/app/trial_sources:ro
+      - ../frontend/dist:/app/arena-static:ro
+      - dojozero-aio-local-schedules:/app/.dojozero
+    restart: unless-stopped
+
+volumes:
+  dojozero-aio-local-schedules:
+    name: dojozero-aio-local-schedules

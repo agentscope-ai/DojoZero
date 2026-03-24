@@ -1,0 +1,9 @@
+# NBA Trial Source — Daily (testing) environment
+# Minimal: 1 game, 1 persona, 1 model.
+source_id: nba-moneyline-source
+sport_type: nba
+config:
+  scenario_name: nba
+  max_concurrent_games: 1
+  personas: [degen]
+  llm_config_path: agents/llms/claude.yaml

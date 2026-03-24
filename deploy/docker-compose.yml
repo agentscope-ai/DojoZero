@@ -1,0 +1,136 @@
+# DojoZero Docker Compose Configuration
+#
+# Usage:
+#   deploy/up.sh                    # uses DOJOZERO_ENV from .env (default: daily)
+#   deploy/up.sh --build            # rebuild images
+#   DOJOZERO_ENV=pre deploy/up.sh   # override tier
+#   CHINA_MIRRORS=true deploy/up.sh --build  # use China mirrors
+#
+# Uses DOJOZERO_ENV to resolve trial sources from tier directories (daily/pre/prod).
+# Set DOJOZERO_ENV in .env or pass via shell. Default: daily.
+
+services:
+  nba:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        CHINA_MIRRORS: ${CHINA_MIRRORS:-false}
+    container_name: dojozero-nba
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    env_file:
+      - ../.env
+    environment:
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      - ../outputs:/app/outputs
+      - ../data:/app/data
+      - ../trial_sources:/app/trial_sources:ro
+      - dojozero-nba-schedules:/app/.dojozero
+    command: >
+      dojo0 serve
+      --host 0.0.0.0
+      --port 8000
+      --trace-backend sls
+      --oss-backup
+      --trial-source trial_sources/${DOJOZERO_ENV:-daily}/nba.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  nfl:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        CHINA_MIRRORS: ${CHINA_MIRRORS:-false}
+    container_name: dojozero-nfl
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    env_file:
+      - ../.env
+    environment:
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      - ../outputs:/app/outputs
+      - ../data:/app/data
+      - ../trial_sources:/app/trial_sources:ro
+      - dojozero-nfl-schedules:/app/.dojozero
+    command: >
+      dojo0 serve
+      --host 0.0.0.0
+      --port 8000
+      --trace-backend sls
+      --oss-backup
+      --trial-source trial_sources/${DOJOZERO_ENV:-daily}/nfl.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  ncaa:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        CHINA_MIRRORS: ${CHINA_MIRRORS:-false}
+    container_name: dojozero-ncaa
+    restart: unless-stopped
+    ports:
+      - "8003:8000"
+    env_file:
+      - ../.env
+    environment:
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      - ../outputs:/app/outputs
+      - ../data:/app/data
+      - ../trial_sources:/app/trial_sources:ro
+      - dojozero-ncaa-schedules:/app/.dojozero
+    command: >
+      dojo0 serve
+      --host 0.0.0.0
+      --port 8000
+      --trace-backend sls
+      --oss-backup
+      --trial-source trial_sources/${DOJOZERO_ENV:-daily}/ncaa.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  dojozero-nba-schedules:
+    name: dojozero-nba-schedules
+  dojozero-nfl-schedules:
+    name: dojozero-nfl-schedules
+  dojozero-ncaa-schedules:
+    name: dojozero-ncaa-schedules
