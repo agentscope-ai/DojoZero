@@ -7,24 +7,30 @@ See [README.md](./README.md) for installation and CLI usage. **Default install**
 ## Project Structure
 
 ```
-src/dojozero/
-├── core/              # Actor framework, runtime, trial orchestration
-├── agents/            # AI agent implementations (PredictionAgent, AgentGroup)
-├── data/              # Data infrastructure (stores, events, processors, hub)
-│   ├── nba/           # NBA game data (play-by-play, boxscores)
-│   ├── nfl/           # NFL game data
-│   ├── espn/          # ESPN data integration
-│   ├── polymarket/    # Prediction market odds
-│   └── websearch/     # Web search with LLM processing
-├── prediction/           # Shared prediction utilities
-├── nba/               # NBA prediction scenario
-├── nfl/               # NFL prediction scenario
-├── samples/           # Reference implementations (bounded_random)
-├── dashboard_server/  # Trial orchestration server
-├── arena_server/      # Web UI server
-├── ray_runtime/       # Distributed execution via Ray
-├── utils/             # Shared utilities
-└── cli.py             # CLI entry point
+packages/
+├── dojozero/                  # Main framework package
+│   ├── pyproject.toml
+│   └── src/dojozero/
+│       ├── core/              # Actor framework, runtime, trial orchestration
+│       ├── agents/            # AI agent implementations (PredictionAgent, AgentGroup)
+│       ├── data/              # Data infrastructure (stores, events, processors, hub)
+│       │   ├── nba/           # NBA game data (play-by-play, boxscores)
+│       │   ├── nfl/           # NFL game data
+│       │   ├── espn/          # ESPN data integration
+│       │   ├── polymarket/    # Prediction market odds
+│       │   └── websearch/     # Web search with LLM processing
+│       ├── prediction/        # Shared prediction utilities
+│       ├── nba/               # NBA prediction scenario
+│       ├── nfl/               # NFL prediction scenario
+│       ├── samples/           # Reference implementations (bounded_random)
+│       ├── dashboard_server/  # Trial orchestration server
+│       ├── arena_server/      # Web UI server
+│       ├── ray_runtime/       # Distributed execution via Ray
+│       ├── utils/             # Shared utilities
+│       └── cli.py             # CLI entry point
+└── dojozero-client/           # Python SDK for external agents
+    ├── pyproject.toml
+    └── src/dojozero_client/
 ```
 
 ## Development Commands
@@ -40,7 +46,7 @@ uv run pytest
 uv run pyright
 
 # Linting
-uv run ruff check src/
+uv run ruff check packages/
 ```
 
 ## Architecture
