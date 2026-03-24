@@ -7,15 +7,15 @@ DojoZero splits Python dependencies into a **default (open-source) core** and **
 **Install**
 
 ```bash
-uv pip install .
-# or: pip install .
+uv pip install packages/dojozero
+# or: pip install packages/dojozero
 ```
 
 **What you get**
 
 - CLI (`dojo0`), trial runs, dashboard server, arena server (with supported backends)
 - OpenTelemetry + OTLP HTTP → **Jaeger** (`--trace-backend jaeger`)
-- Core model/data integrations listed in `pyproject.toml` `dependencies` (DashScope, Tavily, etc.)
+- Core model/data integrations listed in `packages/dojozero/pyproject.toml` `dependencies` (DashScope, Tavily, etc.)
 
 **What is not included**
 
@@ -36,13 +36,13 @@ So anything that needs OSS, Alibaba credentials, SLS, or the Redis client will f
 
 ```bash
 # Alibaba: OSS, SLS tracing / log access, credential chain used by those features
-uv pip install '.[alicloud]'
+uv pip install 'packages/dojozero[alicloud]'
 
 # Redis: sync-service and other Redis-backed code paths
-uv pip install '.[redis]'
+uv pip install 'packages/dojozero[redis]'
 
 # Both at once
-uv pip install '.[alicloud,redis]'
+uv pip install 'packages/dojozero[alicloud,redis]'
 ```
 
 **`[alicloud]` enables**
