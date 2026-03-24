@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
+import { arenaWsBase } from "../arenaEnv.js";
+
 /**
  * Hook for connecting to the trial WebSocket stream endpoint.
  * Provides real-time updates for trial events.
@@ -21,10 +23,8 @@ export function useTrialWebSocket(trialId) {
   const maxReconnectAttempts = 5;
 
   const getWebSocketUrl = useCallback(() => {
-    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
-    // Convert http(s) to ws(s)
-    const wsUrl = apiUrl.replace(/^http/, "ws");
-    return `${wsUrl}/ws/trials/${trialId}/stream`;
+    const base = arenaWsBase();
+    return `${base}/ws/trials/${trialId}/stream`;
   }, [trialId]);
 
   const connect = useCallback(() => {

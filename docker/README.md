@@ -11,14 +11,13 @@ All commands below assume you are at repository root (parent of `docker/`).
 # 1) Prepare env file
 cp .env.example .env
 # Fill at least:
-# - DOJOZERO_DASHSCOPE_API_KEY
+# - DOJOZERO_DASHSCOPE_API_KEY (or other model api)
 # - DOJOZERO_TAVILY_API_KEY
 
 # 2) Prepare host folders
-mkdir -p outputs data trial_params trial_sources frontend/dist
+mkdir -p outputs data trial_params trial_sources
 ```
 
-**Arena + Jaeger (local):** leave `DOJOZERO_REDIS_URL` unset in `.env`. Redis is for the optional SLS→Redis sync path; pointing Arena at Redis without the sync service can leave landing page scores stale.
 
 ## Option 1: Build and Run All-in-One
 
@@ -36,7 +35,7 @@ docker build -f docker/allinone.Dockerfile -t dojozero:latest .
 ```bash
 docker run -d --name dojozero \
   --env-file .env \
-  -e DOJOZERO_TRIAL_SOURCE='trial_sources/*.yaml' \
+  -e DOJOZERO_TRIAL_SOURCE='trial_sources/daily/nba.yaml trial_sources/daily/nfl.yaml' \
   -p 8000:8000 \
   -p 3001:3001 \
   -p 16686:16686 \
@@ -44,7 +43,6 @@ docker run -d --name dojozero \
   -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/trial_params:/app/trial_params:ro" \
   -v "$(pwd)/trial_sources:/app/trial_sources:ro" \
-  -v "$(pwd)/frontend/dist:/app/arena-static:ro" \
   dojozero:latest
 ```
 
@@ -73,15 +71,15 @@ docker compose -f docker/docker-compose.allinone.local.yml down
 
 ## Build Frontend for Arena (Optional)
 
+The all-in-one image already runs `npm run build` during `docker build`. Rebuild the frontend locally only when you want to iterate without rebuilding the image, then mount `frontend/dist` over `/app/arena-static` as described above.
+
 From repo root:
 
 ```bash
 cd frontend
-npm ci
+npm install   # use npm ci instead if package-lock.json is present
 VITE_API_URL=http://localhost:3001 npm run build
 ```
-
-Static files in `frontend/dist` are mounted to `/app/arena-static`.
 
 ## Useful Commands
 

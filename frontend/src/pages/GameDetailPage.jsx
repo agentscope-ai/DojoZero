@@ -512,6 +512,94 @@ function FeedItem({ event, gameInfo }) {
     );
   }
 
+  // Social media (X / Twitter watchlist summaries)
+  if (
+    category === "twitter_top_tweets" ||
+    category.includes("twitter_top_tweets") ||
+    (category.includes("twitter") && data.source === "twitter")
+  ) {
+    const tweets = Array.isArray(data.tweets) ? data.tweets : [];
+
+    return (
+      <motion.div style={styles.feedItem} initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+        <div style={styles.feedInfo}>
+          <span style={styles.infoIcon}>𝕏</span>
+          <div style={styles.infoContent}>
+            <span style={styles.infoText}>Social Media</span>
+            {data.query && (
+              <div style={{ ...styles.infoDetail, fontSize: 11, color: "var(--text-muted)" }}>
+                {data.query}
+              </div>
+            )}
+            {data.summary && (
+              <div
+                style={{
+                  ...styles.infoDetail,
+                  marginTop: 8,
+                  whiteSpace: "pre-wrap",
+                  lineHeight: 1.45,
+                  fontSize: 12,
+                }}
+              >
+                {data.summary}
+              </div>
+            )}
+            {!data.summary && tweets.length === 0 && (
+              <div style={styles.infoDetail}>No social posts in this update.</div>
+            )}
+            {tweets.length > 0 && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>
+                  Recent posts ({tweets.length})
+                </div>
+                {tweets.slice(0, 5).map((tw, idx) => (
+                  <div
+                    key={tw.tweet_id || tw.id || idx}
+                    style={{
+                      ...styles.infoDetail,
+                      marginTop: idx > 0 ? 8 : 0,
+                      paddingBottom: 8,
+                      borderBottom:
+                        idx < Math.min(tweets.length, 5) - 1 ? "1px solid var(--border-subtle)" : "none",
+                    }}
+                  >
+                    {tw.username && (
+                      <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>
+                        @{tw.username}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 12, lineHeight: 1.4 }}>{tw.text || tw.full_text || ""}</div>
+                    {tw.url && (
+                      <a
+                        href={tw.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: "inline-block",
+                          marginTop: 4,
+                          fontSize: 11,
+                          color: "var(--accent-primary)",
+                        }}
+                      >
+                        View post
+                      </a>
+                    )}
+                  </div>
+                ))}
+                {tweets.length > 5 && (
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
+                    +{tweets.length - 5} more in raw data
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <span style={styles.infoTime}>{event.time}</span>
+        </div>
+      </motion.div>
+    );
+  }
+
   // Play-by-play events
   if (category.includes("play") && data.description) {
     return (
