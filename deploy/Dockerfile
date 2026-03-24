@@ -40,9 +40,9 @@ COPY trial_params/ trial_params/
 
 # Install dependencies and the package (with China mirror if needed)
 RUN if [ "$CHINA_MIRRORS" = "true" ]; then \
-        UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ uv pip install --system .; \
+        UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ uv pip install --system '.[alicloud]'; \
     else \
-        uv pip install --system .; \
+        uv pip install --system '.[alicloud]'; \
     fi
 
 # Create output directories
