@@ -1357,7 +1357,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     async def _log_accounts_and_bets_status(
         self, change_type: BrokerStateChangeType
     ) -> None:
-        """Emit a log to SLS about each agent's current balance and bet status.
+        """Emit a span to the trace backend with each agent's current balance and bet status.
 
         This is called whenever self._accounts or self._bets have changed.
         Uses a global lock to ensure atomic snapshot of broker state.

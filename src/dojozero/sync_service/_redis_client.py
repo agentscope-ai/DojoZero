@@ -132,7 +132,9 @@ class RedisClient:
             LOGGER.info("Connected to Redis: %s", safe_url)
             return True
         except ImportError:
-            LOGGER.error("redis package not installed. Run: uv add redis")
+            LOGGER.error(
+                "redis package not installed. Install with: pip install 'dojozero[redis]'"
+            )
             return False
         except Exception as e:
             LOGGER.error("Failed to connect to Redis: %s", e)

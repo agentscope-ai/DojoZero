@@ -4,21 +4,20 @@
 Orchestrates betting trials for NBA games:
 - Checks NBA API for daily games
 - Sets up separate trial/config for each game
-- Starts trial 2 hours before game time
+- Starts trial shortly before game time (default 0.1 hours)
 - Runs agents that analyze data and place bets
 - Runs until game concludes
 - Persists all events to event files (for backtesting)
 
 When using --server flag, trials are submitted to a Dashboard Server which handles:
-- SLS trace export (via --otlp-endpoint on server)
-- OSS backup (via --oss-backup on server)
+- Trace export to Jaeger (via Dashboard Server when using --server)
 
 Usage:
-    # Local mode (no SLS/OSS integration)
+    # Local mode (no trace export to server)
     python nba_trial_runner.py run --data-dir outputs
 
-    # Server mode (with SLS/OSS via Dashboard Server)
-    # First start: dojo0 serve --otlp-endpoint https://... --trace-backend sls
+    # Server mode (traces exported via Dashboard Server)
+    # First start: dojo0 serve --trace-backend jaeger
     python nba_trial_runner.py run --data-dir outputs --server http://localhost:8000
 """
 
@@ -59,7 +58,7 @@ class GameTrialManager:
         self,
         game: dict[str, Any],
         base_config: Path,
-        pre_start_hours: float = 2.0,
+        pre_start_hours: float = 0.1,
         check_interval_seconds: float = 60.0,
         data_dir: Path | None = None,
         game_date: str | None = None,
@@ -71,14 +70,14 @@ class GameTrialManager:
         Args:
             game: Game dictionary from NBA API
             base_config: Path to base config template
-            pre_start_hours: Hours before game to start trial (default: 2.0)
+            pre_start_hours: Hours before game to start trial (default: 0.1)
             check_interval_seconds: Interval to check game status (default: 60.0)
             data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
                       If None, use defaults: configs/ and outputs/
             game_date: Date string (YYYY-MM-DD) for date-organized structure
             log_level: Logging level for subprocess (default: INFO)
             server: Dashboard Server URL (e.g., http://localhost:8000). If provided,
-                    trials are submitted to the server which handles SLS/OSS.
+                    trials are submitted to the server which exports traces to Jaeger.
         """
         self.game = game
         self.game_id = str(game.get("gameId", ""))
@@ -258,7 +257,7 @@ class GameTrialManager:
             self._logger.log(level, message, *args)
 
     def calculate_start_time(self) -> datetime | None:
-        """Calculate when to start the trial (2 hours before game).
+        """Calculate when to start the trial (pre_start_hours before game).
 
         Returns:
             Start time in UTC, or None if game time unavailable
@@ -334,7 +333,7 @@ class GameTrialManager:
         ]
 
         # If server is specified, submit to Dashboard Server
-        # Server handles SLS trace export and OSS backup
+        # Server handles trace export to Jaeger
         if self.server:
             cmd.extend(["--server", self.server])
 
@@ -764,7 +763,7 @@ async def run_trial_for_game(
         data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
                   If None, use defaults: configs/ and outputs/
         log_level: Logging level for subprocess
-        server: Dashboard Server URL for SLS/OSS integration
+        server: Dashboard Server URL for trace export
 
     Returns:
         List with single GameTrialManager instance, or empty list if game not found
@@ -836,7 +835,7 @@ async def run_trials_for_date(
         data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
                   If None, use defaults: configs/ and outputs/
         log_level: Logging level for subprocess
-        server: Dashboard Server URL for SLS/OSS integration
+        server: Dashboard Server URL for trace export
 
     Returns:
         List of GameTrialManager instances
@@ -926,7 +925,7 @@ async def run_trials(
                 await manager.monitor_trial()
 
                 # Log final status
-                # Note: SLS trace export and OSS backup are handled by Dashboard Server
+                # Note: Trace export is handled by Dashboard Server
                 manager.log_status()
 
             except Exception as e:
@@ -1092,8 +1091,8 @@ def main() -> int:
     run_parser.add_argument(
         "--pre-start-hours",
         type=float,
-        default=2.0,
-        help="Hours before game to start trial (default: 2.0)",
+        default=0.1,
+        help="Hours before game to start trial (default: 0.1)",
     )
     run_parser.add_argument(
         "--check-interval",
@@ -1114,7 +1113,7 @@ def main() -> int:
         default=None,
         help="Dashboard Server URL (e.g., http://localhost:8000). "
         "When specified, trials are submitted to the server which handles "
-        "SLS trace export and OSS backup.",
+        "Trace export to Jaeger.",
     )
     run_parser.add_argument(
         "--max-concurrent-starts",

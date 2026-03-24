@@ -1,10 +1,32 @@
-scenario:
-  name: ncaa
-  config:
-    espn_game_id: '401522202'  # ESPN game ID - override for specific game
+# NFL Moneyline Trial Source Configuration
+#
+# This configuration defines a trial source for automatic NFL game scheduling.
+# When registered with the Dashboard Server, the server will periodically sync
+# with the ESPN API to discover upcoming NFL games and automatically schedule trials.
+#
+# Usage:
+#   1. Via CLI (recommended):
+#      dojo0 serve --schedule-file ~/.dojozero/schedules.json \
+#                  --trial-source trial_sources/nfl-moneyline-trial-source.yaml
+#
+#   2. Via API:
+#      POST /api/trial-sources
+#      {
+#        "source_id": "nfl-moneyline-source",
+#        "sport_type": "nfl",
+#        "config": <contents of config section below>,
+#        "nfl_params": <contents of nfl_params section below>
+#      }
 
-    hub:
-      persistence_file: outputs/ncaa_betting_events.jsonl
+# Trial source registration request
+source_id: nfl-moneyline-source
+sport_type: nfl
+
+# Configuration for trials created from this source
+config:
+  scenario_name: nfl
+  scenario_config:
+    hub: {}
 
     data_streams:
     # Pre-game insights: each event class owns search → LLM → typed event lifecycle
@@ -24,17 +46,17 @@ scenario:
       - game_result
 
     # Live game data
-    - id: game_update_stream
+    - id: nfl_game_update_stream
       event_types:
-      - ncaa_game_update
+      - nfl_game_update
 
-    - id: odds_update_stream
+    - id: nfl_odds_update_stream
       event_types:
       - odds_update
 
-    - id: play_by_play_stream
+    - id: nfl_play_stream
       event_types:
-      - ncaa_play
+      - nfl_play
 
     operators:
     - id: betting_broker
@@ -49,8 +71,8 @@ scenario:
       - get_statistics
       data_streams:
       - game_lifecycle_stream
-      - odds_update_stream
-      - game_update_stream
+      - nfl_odds_update_stream
+      - nfl_game_update_stream
 
     agents:
     - id: degen_agent
@@ -62,10 +84,10 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - game_update_stream
-      - odds_update_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
       - game_lifecycle_stream
-      - play_by_play_stream
+      - nfl_play_stream
     - id: mystic_agent
       persona: mystic
       class: BettingAgent
@@ -75,10 +97,10 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - game_update_stream
-      - odds_update_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
       - game_lifecycle_stream
-      - play_by_play_stream
+      - nfl_play_stream
     - id: pundit_agent
       persona: pundit
       class: BettingAgent
@@ -88,10 +110,10 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - game_update_stream
-      - odds_update_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
       - game_lifecycle_stream
-      - play_by_play_stream
+      - nfl_play_stream
     - id: shark_agent
       persona: shark
       class: BettingAgent
@@ -101,10 +123,10 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - game_update_stream
-      - odds_update_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
       - game_lifecycle_stream
-      - play_by_play_stream
+      - nfl_play_stream
     - id: sheep_agent
       persona: sheep
       class: BettingAgent
@@ -114,10 +136,10 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - game_update_stream
-      - odds_update_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
       - game_lifecycle_stream
-      - play_by_play_stream
+      - nfl_play_stream
     - id: whale_agent
       persona: whale
       class: BettingAgent
@@ -127,7 +149,16 @@ scenario:
       - betting_broker
       data_streams:
       - pre_game_insights_stream
-      - game_update_stream
-      - odds_update_stream
+      - nfl_game_update_stream
+      - nfl_odds_update_stream
       - game_lifecycle_stream
-      - play_by_play_stream
+      - nfl_play_stream
+
+  # Schedule options (these are TrialSourceConfig fields, not scenario_config)
+  pre_start_hours: 0.1           # Start trial 0.1 hours before kickoff
+  check_interval_seconds: 60.0   # Check game status every 60 seconds
+  auto_stop_on_completion: true  # Stop trial when game finishes
+  data_dir: outputs              # Output directory for persistence files
+  sync_interval_seconds: 3600.0  # How often to sync with ESPN API
+
+# Games are discovered automatically from ESPN scoreboard

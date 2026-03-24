@@ -66,7 +66,7 @@ class DataHub:
     - Persist events to file (timestamped, typed)
     - Manage agent subscriptions
     - Dispatch events to subscribed agents
-    - Emit events to trace backend (OTel/SLS)
+    - Emit events to trace backend (OTel/Jaeger)
     - Support backtest mode
     """
 
@@ -257,8 +257,8 @@ class DataHub:
             self._dedup_keys.add(dedup_key)
 
     # Class-level counters for progress logging
-    _sls_emit_count: int = 0
-    _sls_error_count: int = 0
+    _trace_emit_count: int = 0
+    _trace_error_count: int = 0
 
     def _emit_event_span(
         self,
@@ -352,24 +352,24 @@ class DataHub:
             emit_span(span)
 
             # Progress logging
-            DataHub._sls_emit_count += 1
-            if DataHub._sls_emit_count % 50 == 0:
+            DataHub._trace_emit_count += 1
+            if DataHub._trace_emit_count % 50 == 0:
                 logger.info(
-                    "DataHub SLS emit progress: %d events emitted (%d errors) "
+                    "DataHub trace emit progress: %d events emitted (%d errors) "
                     "[latest: event_type=%s, trial=%s, actor=%s]",
-                    DataHub._sls_emit_count,
-                    DataHub._sls_error_count,
+                    DataHub._trace_emit_count,
+                    DataHub._trace_error_count,
                     event_type,
                     self.trial_id,
                     actor_id,
                 )
 
         except Exception as e:
-            DataHub._sls_error_count += 1
+            DataHub._trace_error_count += 1
             # Don't let trace emission failures affect event processing
             logger.warning(
                 "Failed to emit event span (#%d): %s: %s (event_type=%s, actor=%s)",
-                DataHub._sls_error_count,
+                DataHub._trace_error_count,
                 type(e).__name__,
                 e,
                 event.event_type,
@@ -722,7 +722,7 @@ class DataHub:
         """Enable trace emission during backtest with rebased timestamps.
 
         When enabled, data events replayed from the JSONL file are emitted to
-        the trace backend (SLS/Jaeger) with timestamps rebased so the first
+        the trace backend (Jaeger or SLS) with timestamps rebased so the first
         event starts at "now".  This makes replay trials visible in the Arena
         UI alongside agent-generated events that carry wall-clock timestamps.
 

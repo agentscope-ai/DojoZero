@@ -1729,6 +1729,7 @@ class TrialOrchestrator:
         span_id = uuid4().hex[:16]
 
         tags: dict[str, Any] = {
+            "dojozero.trial.id": trial_id,
             "dojozero.trial.phase": phase,
         }
         if metadata:

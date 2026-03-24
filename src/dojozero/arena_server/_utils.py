@@ -48,6 +48,42 @@ TRIAL_INFO_OPERATION_NAMES = [
     "event.nfl_game_update",
 ]
 
+# Tag used by DojoZero to correlate all spans for a trial (see TrialOrchestrator, create_span_from_event).
+_TRIAL_ID_TAG = "dojozero.trial.id"
+
+
+def _trial_counts_as_live_for_arena(trial_info: dict[str, Any]) -> bool:
+    """True if landing/stats should treat this trial as live (see _extract_games_from_trials)."""
+    phase = trial_info.get("phase")
+    if phase == "running":
+        return True
+    if phase != "unknown":
+        return False
+    metadata = trial_info.get("metadata") or {}
+    home = metadata.get("home_team_tricode", "TBD")
+    away = metadata.get("away_team_tricode", "TBD")
+    return (
+        bool(metadata.get("espn_game_id"))
+        or (bool(home) and home != "TBD")
+        or (bool(away) and away != "TBD")
+    )
+
+
+def trial_id_for_span_grouping(span: SpanData) -> str:
+    """Return the stable trial key used to bucket spans for Arena aggregation.
+
+    OTLP export assigns each trace a random Jaeger ``traceID``; semantic trial ids live
+    on ``dojozero.trial.id``. ``list_trials`` returns the latter, so grouping only by
+    ``span.trace_id`` would drop every span during prune (trace id never matches trial id).
+    """
+    if span.tags:
+        raw = span.tags.get(_TRIAL_ID_TAG)
+        if raw is not None:
+            tid = str(raw).strip()
+            if tid:
+                return tid
+    return span.trace_id
+
 
 async def _extract_trial_info_from_traces(
     trace_reader: TraceReader,
@@ -100,8 +136,8 @@ def _extract_trial_info_from_spans(spans: list[SpanData]) -> dict[str, Any]:
                     latest_start_time = typed.start_time
                 metadata.update(
                     {
-                        "home_team_tricode": typed.home_team_tricode,
-                        "away_team_tricode": typed.away_team_tricode,
+                        "home_team_tricode": typed.home_tricode,
+                        "away_team_tricode": typed.away_tricode,
                         "home_team_name": typed.home_team_name,
                         "away_team_name": typed.away_team_name,
                         "game_date": typed.game_date,
@@ -325,10 +361,31 @@ async def _extract_bets_for_trial(
     return bets[-limit:] if bets else []
 
 
+def _overlay_live_scores_from_spans(
+    metadata: dict[str, Any], spans: list[SpanData]
+) -> None:
+    """Mutate metadata with latest score/clock from in-memory spans (same cycle as bulk fetch).
+
+    ``trial_info`` can lag ``trial_details`` when metadata was derived from a narrower
+    query; ``_spans_by_trial`` is the authoritative merged set for the refresh cycle.
+    """
+    if not spans:
+        return
+    relevant = [s for s in spans if s.operation_name in TRIAL_INFO_OPERATION_NAMES]
+    if not relevant:
+        return
+    span_info = _extract_trial_info_from_spans(relevant)
+    sm = span_info.get("metadata") or {}
+    for key in ("home_score", "away_score", "period", "game_clock"):
+        if key in sm:
+            metadata[key] = sm[key]
+
+
 async def _extract_games_from_trials(
     trace_reader: TraceReader,
     trial_ids: list[str],
     cache: "LandingPageCache | None" = None,
+    spans_by_trial: dict[str, list[SpanData]] | None = None,
 ) -> GamesResponse:
     """Extract games list from trials for landing page.
 
@@ -359,12 +416,18 @@ async def _extract_games_from_trials(
             continue
 
         phase = trial_info["phase"]
-        metadata = trial_info["metadata"]
+        metadata = dict(trial_info.get("metadata") or {})
+        if spans_by_trial is not None:
+            _overlay_live_scores_from_spans(metadata, spans_by_trial.get(trial_id, []))
         # Normalize league to uppercase for frontend compatibility
         league = metadata.get("sport_type", "NBA").upper()
 
         home_tricode = metadata.get("home_team_tricode", "TBD")
         away_tricode = metadata.get("away_team_tricode", "TBD")
+
+        has_game_hint = (
+            _trial_counts_as_live_for_arena(trial_info) and phase == "unknown"
+        )
 
         # Prefer rich team data from GameInitializeEvent (full TeamIdentity)
         game_init = trial_info.get("game_init")
@@ -385,7 +448,7 @@ async def _extract_games_from_trials(
 
         # Fetch bets for live games only (performance optimization)
         bets = []
-        if phase == "running":
+        if phase == "running" or has_game_hint:
             try:
                 bets = await _extract_bets_for_trial(
                     trace_reader, trial_id, cache, limit=10
@@ -405,11 +468,19 @@ async def _extract_games_from_trials(
         # Map phase to frontend status
         status = (
             "live"
-            if phase == "running"
+            if phase == "running" or has_game_hint
             else "completed"
             if phase in ("completed", "stopped")
             else phase
         )
+
+        # Period/clock: trial_info stores period + game_clock (see _extract_trial_info_from_spans)
+        period_raw = metadata.get("period", metadata.get("quarter", ""))
+        quarter_str = str(period_raw) if period_raw not in (None, "") else ""
+        clock_raw = metadata.get("game_clock")
+        if clock_raw is None:
+            clock_raw = metadata.get("clock")
+        clock_str = "" if clock_raw is None else str(clock_raw)
 
         game_card = GameCardData(
             id=trial_id,
@@ -420,8 +491,8 @@ async def _extract_games_from_trials(
             away_score=metadata.get("away_score", 0),
             status=status,
             date=game_date_str,
-            quarter=metadata.get("quarter", "") if phase == "running" else "",
-            clock=metadata.get("clock", "") if phase == "running" else "",
+            quarter=quarter_str if phase == "running" or has_game_hint else "",
+            clock=clock_str if phase == "running" or has_game_hint else "",
             bets=bets,
             winner=metadata.get("winner_agent")
             if phase in ("completed", "stopped")
@@ -431,7 +502,7 @@ async def _extract_games_from_trials(
             else 0,
         )
 
-        if phase == "running":
+        if phase == "running" or has_game_hint:
             live_games.append(game_card)
         elif phase in ("completed", "stopped"):
             completed_games.append(game_card)
@@ -605,7 +676,7 @@ async def _compute_stats(
         # Count completed games (both "completed" and "stopped" phases)
         if phase in ("completed", "stopped"):
             games_played += 1
-        elif phase == "running":
+        elif _trial_counts_as_live_for_arena(trial_info):
             live_now += 1
 
     # Calculate total wagered from broker.final_stats spans

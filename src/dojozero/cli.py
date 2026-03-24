@@ -416,7 +416,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--service-name",
         dest="service_name",
         default="dojozero",
-        help="Service name for trace queries (default: dojozero). Use to isolate multiple arena servers.",
+        help="Service name for trace queries (default: dojozero).",
     )
     arena_parser.add_argument(
         "--trace-query-endpoint",
@@ -431,13 +431,6 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Path to built static assets to serve (optional).",
-    )
-    arena_parser.add_argument(
-        "--redis-url",
-        dest="redis_url",
-        default=None,
-        help="Redis URL for fast startup (e.g., redis://host:6379/0). "
-        "Can also be set via DOJOZERO_REDIS_URL env var.",
     )
 
     # Sync Service command
@@ -840,7 +833,12 @@ def _setup_otel_exporter(
     )
 
     if trace_backend == "sls":
-        import os
+        from dojozero._optional_alicloud import ensure_alibabacloud_credentials
+
+        try:
+            ensure_alibabacloud_credentials()
+        except ImportError as e:
+            raise DojoZeroCLIError(str(e)) from e
 
         # Construct SLS OTLP endpoint from environment variables
         sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
@@ -886,7 +884,7 @@ def _setup_otel_exporter(
             )
 
         return otel_exporter
-    elif trace_backend == "jaeger":
+    if trace_backend == "jaeger":
         otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
         otel_exporter = OTelSpanExporter(
             otlp_endpoint, service_name=service_name, headers=None
@@ -899,8 +897,7 @@ def _setup_otel_exporter(
             service_name,
         )
         return otel_exporter
-    else:
-        raise DojoZeroCLIError(f"Unsupported trace backend: {trace_backend}")
+    raise DojoZeroCLIError(f"Unsupported trace backend: {trace_backend}")
 
 
 def _shutdown_otel_exporter(otel_exporter: Any) -> None:
@@ -1392,7 +1389,8 @@ def _resolve_event_files(
             oss_client = OSSClient.from_env(bucket_name=bucket_name)
         except ImportError:
             raise DojoZeroCLIError(
-                "OSS support requires oss2 package. Install with: pip install oss2"
+                "OSS support requires optional dependencies. "
+                "Install with: pip install 'dojozero[alicloud]'"
             )
         except ValueError as e:
             raise DojoZeroCLIError(f"OSS configuration error: {e}")
@@ -1957,7 +1955,6 @@ async def _serve_command(args: argparse.Namespace) -> int:
     port = args.port
     trace_backend = getattr(args, "trace_backend", None)
     trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
-    oss_backup = getattr(args, "oss_backup", False)
     service_name = getattr(args, "service_name", "dojozero")
     trial_source_files: list[str] = getattr(args, "trial_sources", []) or []
     auto_resume = not getattr(args, "no_auto_resume", False)
@@ -2022,12 +2019,10 @@ async def _serve_command(args: argparse.Namespace) -> int:
     if initial_trial_sources:
         LOGGER.info("Initial trial sources: %d", len(initial_trial_sources))
 
-    if trace_backend == "sls":
-        LOGGER.info("Trace backend: SLS (using env vars for configuration)")
-        if oss_backup:
-            LOGGER.info("OSS backup enabled for trial data")
-    elif trace_backend == "jaeger":
+    if trace_backend == "jaeger":
         LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_ingest_endpoint)
+    elif trace_backend == "sls":
+        LOGGER.info("Trace backend: SLS (OTLP + optional flat logstore via env)")
     else:
         LOGGER.info("No trace backend configured - traces will not be exported")
 
@@ -2070,7 +2065,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         port=port,
         trace_backend=trace_backend,
         trace_ingest_endpoint=trace_ingest_endpoint,
-        oss_backup=oss_backup,
+        oss_backup=getattr(args, "oss_backup", False),
         service_name=service_name,
         initial_trial_sources=initial_trial_sources if initial_trial_sources else None,
         auto_resume=auto_resume,
@@ -2515,18 +2510,12 @@ async def _arena_command(args: argparse.Namespace) -> int:
     trace_query_endpoint = args.trace_query_endpoint
     static_dir = getattr(args, "static_dir", None)
     service_name = args.service_name
-    redis_url = getattr(args, "redis_url", None)
 
     LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
-    if trace_backend == "sls":
-        LOGGER.info("Trace backend: SLS (using env vars for configuration)")
-    else:
-        LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_query_endpoint)
+    LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_query_endpoint)
     LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
     if static_dir:
         LOGGER.info("Static files: %s", static_dir)
-    if redis_url or os.getenv("DOJOZERO_REDIS_URL"):
-        LOGGER.info("Redis: enabled (fast startup)")
 
     await run_arena_server(
         config=config,
@@ -2536,17 +2525,26 @@ async def _arena_command(args: argparse.Namespace) -> int:
         trace_query_endpoint=trace_query_endpoint,
         static_dir=static_dir,
         service_name=service_name,
-        redis_url=redis_url,
     )
     return 0
 
 
 async def _sync_service_command(args: argparse.Namespace) -> int:
     """Handle sync-service command - start SLS to Redis sync service."""
-    from dojozero.sync_service import SyncService
-    from dojozero.sync_service._redis_client import RedisClient
+    from dojozero._optional_alicloud import (
+        ensure_alibabacloud_credentials,
+        ensure_redis,
+    )
     from dojozero.arena_server._cache import CacheConfig
     from dojozero.core._tracing import create_trace_reader
+    from dojozero.sync_service import SyncService
+    from dojozero.sync_service._redis_client import RedisClient
+
+    try:
+        ensure_alibabacloud_credentials()
+        ensure_redis()
+    except ImportError as e:
+        raise DojoZeroCLIError(str(e)) from e
 
     # Get Redis URL (required)
     redis_url = args.redis_url or os.getenv("DOJOZERO_REDIS_URL")

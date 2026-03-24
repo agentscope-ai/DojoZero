@@ -80,7 +80,9 @@ class BacktestConfig(BaseModel):
     trial_id: str  # Reference a previous trial to replay its events
     speed: float = 1.0
     max_sleep: float = 20.0
-    emit_traces: bool = False  # Emit data events to SLS with rebased timestamps
+    emit_traces: bool = (
+        False  # Emit data events to trace backend with rebased timestamps
+    )
 
 
 # Backward compatibility alias (deprecated)
@@ -287,10 +289,6 @@ def create_dashboard_app(
         authenticator: AgentAuthenticator for validating agent API keys. If None and
             agent_keys.yaml exists, uses LocalAgentAuthenticator. Otherwise NoOpAuthenticator.
 
-    For SLS backend, configuration comes from environment variables:
-        DOJOZERO_SLS_PROJECT: SLS project name
-        DOJOZERO_SLS_ENDPOINT: SLS endpoint (e.g., cn-hangzhou.log.aliyuncs.com)
-        DOJOZERO_SLS_LOGSTORE: Logstore name (e.g., "dojozero-traces")
     """
 
     # Create gateway router early so it can be passed to TrialManager
@@ -398,7 +396,13 @@ def create_dashboard_app(
         # Initialize OTel exporter based on backend
         otel_exporter = None
         if trace_backend == "sls":
-            # SLS backend: construct endpoint from env vars
+            from dojozero._optional_alicloud import ensure_alibabacloud_credentials
+
+            try:
+                ensure_alibabacloud_credentials()
+            except ImportError as e:
+                raise RuntimeError(str(e)) from e
+
             otlp_endpoint = _get_sls_otlp_endpoint()
             headers = get_sls_exporter_headers()
             if headers:
@@ -410,12 +414,13 @@ def create_dashboard_app(
                     "2) ~/.alibabacloud/credentials file, or 3) ECS RAM role."
                 )
 
-            otel_exporter = OTelSpanExporter(otlp_endpoint, headers=headers)
+            otel_exporter = OTelSpanExporter(
+                otlp_endpoint, service_name=service_name, headers=headers
+            )
             otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info("OTel exporter configured: %s (backend: sls)", otlp_endpoint)
 
-            # Also initialize SLS Log exporter for flat field indexing
             sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
             sls_endpoint = os.environ.get("DOJOZERO_SLS_ENDPOINT", "")
             sls_logstore = os.environ.get("DOJOZERO_SLS_LOGSTORE", "")
@@ -435,7 +440,6 @@ def create_dashboard_app(
                 )
 
         elif trace_backend == "jaeger":
-            # Jaeger or SLS backend: use provided endpoint or default
             otlp_endpoint = trace_ingest_endpoint or "http://localhost:4318"
             otel_exporter = OTelSpanExporter(
                 otlp_endpoint, service_name=service_name, headers=None
@@ -443,7 +447,7 @@ def create_dashboard_app(
             otel_exporter.start()
             set_otel_exporter(otel_exporter)
             LOGGER.info(
-                "OTel exporter configured: %s (backend: jaeger or sls, service_name: %s)",
+                "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
                 otlp_endpoint,
                 service_name,
             )
@@ -496,14 +500,14 @@ def create_dashboard_app(
         except Exception as e:
             LOGGER.error("Error during trial cleanup: %s", e)
 
-        # Shutdown exporters
+        # Shutdown OTel exporter
         if otel_exporter is not None:
             otel_exporter.shutdown()
             set_otel_exporter(None)
 
-        sls_log_exp = get_sls_log_exporter()
-        if sls_log_exp is not None:
-            sls_log_exp.shutdown()
+        sls_log_exporter = get_sls_log_exporter()
+        if sls_log_exporter is not None:
+            sls_log_exporter.shutdown()
             set_sls_log_exporter(None)
 
         LOGGER.info("Dashboard Server shutdown complete")

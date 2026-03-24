@@ -1215,7 +1215,6 @@ class TrialManager:
             except TrialNotFoundError:
                 queued.phase = QueuedTrialPhase.COMPLETED
 
-            # OSS backup if enabled
             if self._oss_backup and queued.phase == QueuedTrialPhase.COMPLETED:
                 self._upload_to_oss(trial_id, queued.spec)
 
@@ -1301,7 +1300,10 @@ def upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
         return True
 
     except ImportError:
-        LOGGER.warning("OSS backup requested but oss2 package not installed")
+        LOGGER.warning(
+            "OSS backup skipped: optional OSS dependencies missing "
+            "(pip install 'dojozero[alicloud]')"
+        )
         return False
     except ValueError as e:
         LOGGER.warning("OSS backup failed - configuration error: %s", e)

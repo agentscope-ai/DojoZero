@@ -25,6 +25,40 @@ import httpx
 LOGGER = logging.getLogger("dojozero.trace_store")
 
 
+def _jaeger_tag_value(tag: dict[str, Any]) -> Any:
+    """Extract tag value from Jaeger Query `/api/traces` JSON.
+
+    Shape differs by Jaeger version / storage: classic ``value``, or ``vStr`` /
+    ``vInt64`` (model/json), or OTLP-style structs nested under ``value``.
+    """
+    if not isinstance(tag, dict):
+        return None
+    for k in ("vStr", "vBool", "vInt64", "vFloat64"):
+        if k in tag and tag[k] is not None:
+            return tag[k]
+    v = tag.get("value")
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        if "stringValue" in v:
+            return v["stringValue"]
+        if "boolValue" in v:
+            return v["boolValue"]
+        if "intValue" in v:
+            return v["intValue"]
+        if "doubleValue" in v:
+            return v["doubleValue"]
+    return v
+
+
+def _jaeger_span_operation_name(span: dict[str, Any]) -> str:
+    """Span operation / name from Jaeger internal JSON (field names vary by version)."""
+    if not isinstance(span, dict):
+        return ""
+    raw = span.get("operationName") or span.get("name") or ""
+    return raw if isinstance(raw, str) else str(raw)
+
+
 @dataclass(slots=True)
 class SpanData:
     """Normalized span data structure (OTel-compatible).
@@ -60,11 +94,13 @@ class SpanData:
         tags = {}
         for tag in data.get("tags", []):
             if isinstance(tag, dict):
-                tags[tag.get("key", "")] = tag.get("value")
+                k = tag.get("key", "")
+                if k:
+                    tags[k] = _jaeger_tag_value(tag)
         return cls(
             trace_id=data.get("traceID", ""),
             span_id=data.get("spanID", ""),
-            operation_name=data.get("operationName", ""),
+            operation_name=_jaeger_span_operation_name(data),
             start_time=data.get("startTime", 0),
             duration=data.get("duration", 0),
             parent_span_id=data.get("parentSpanID"),
@@ -191,23 +227,64 @@ class JaegerTraceReader:
             "limit": limit,
         }
 
-        response = await self._client.get(
-            f"{self._base_url}/api/traces",
-            params=params,
-        )
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response = await self._client.get(
+                f"{self._base_url}/api/traces",
+                params=params,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except httpx.HTTPError as e:
+            LOGGER.warning(
+                "Jaeger list_trials HTTP error (%s operation=trial.started): %s",
+                self._base_url,
+                e,
+            )
+            return []
+        except json.JSONDecodeError as e:
+            LOGGER.warning("Jaeger list_trials invalid JSON: %s", e)
+            return []
+
+        if not isinstance(data, dict):
+            LOGGER.warning(
+                "Jaeger list_trials unexpected JSON root type: %s", type(data).__name__
+            )
+            return []
 
         # Extract trial IDs from trial.started spans
         trial_ids: set[str] = set()
-        for trace in data.get("data", []):
-            for span in trace.get("spans", []):
-                # Only process trial.started spans (should be all of them due to filter)
-                if span.get("operationName") == "trial.started":
-                    for tag in span.get("tags", []):
-                        if tag.get("key") == "dojozero.trial.id":
-                            trial_ids.add(str(tag.get("value", "")))
-                            break
+        try:
+            for trace in data.get("data") or []:
+                if not isinstance(trace, dict):
+                    continue
+                for span in trace.get("spans") or []:
+                    if not isinstance(span, dict):
+                        continue
+                    if _jaeger_span_operation_name(span) == "trial.started":
+                        for tag in span.get("tags") or []:
+                            if not isinstance(tag, dict):
+                                continue
+                            if tag.get("key") == "dojozero.trial.id":
+                                raw = _jaeger_tag_value(tag)
+                                if raw is not None and str(raw).strip():
+                                    trial_ids.add(str(raw).strip())
+                                break
+        except (TypeError, AttributeError, KeyError) as e:
+            LOGGER.warning("Jaeger list_trials parse error: %s", e)
+            return []
+
+        # Jaeger v2 internal API may ignore `operation=`; fall back to a bounded scan.
+        if not trial_ids:
+            extra = await self._query_jaeger_spans(start_us, end_us, None)
+            for sp in extra:
+                if len(trial_ids) >= limit:
+                    break
+                if sp.operation_name != "trial.started":
+                    continue
+                tid_raw = sp.tags.get("dojozero.trial.id")
+                if tid_raw is not None and str(tid_raw).strip():
+                    trial_ids.add(str(tid_raw).strip())
+
         return list(trial_ids)
 
     async def get_spans(
@@ -287,13 +364,15 @@ class JaegerTraceReader:
 
                 tags: dict[str, Any] = {}
                 for tag in span.get("tags", []):
-                    tags[tag.get("key", "")] = tag.get("value")
+                    k = tag.get("key", "")
+                    if k:
+                        tags[k] = _jaeger_tag_value(tag)
 
                 spans.append(
                     SpanData(
                         trace_id=span.get("traceID", ""),
                         span_id=span.get("spanID", ""),
-                        operation_name=span.get("operationName", ""),
+                        operation_name=_jaeger_span_operation_name(span),
                         start_time=span_start_time,
                         duration=span.get("duration", 0),
                         parent_span_id=span.get("references", [{}])[0].get("spanID")
@@ -430,15 +509,16 @@ class JaegerTraceReader:
             spans: list[SpanData] = []
             for trace in data.get("data", []):
                 for span in trace.get("spans", []):
-                    tags = {
-                        tag.get("key", ""): tag.get("value")
-                        for tag in span.get("tags", [])
-                    }
+                    tags: dict[str, Any] = {}
+                    for tag in span.get("tags", []):
+                        k = tag.get("key", "")
+                        if k:
+                            tags[k] = _jaeger_tag_value(tag)
                     spans.append(
                         SpanData(
                             trace_id=span.get("traceID", ""),
                             span_id=span.get("spanID", ""),
-                            operation_name=span.get("operationName", ""),
+                            operation_name=_jaeger_span_operation_name(span),
                             start_time=span.get("startTime", 0),
                             duration=span.get("duration", 0),
                             parent_span_id=span.get("references", [{}])[0].get("spanID")
@@ -1263,9 +1343,11 @@ def create_span_from_event(
     }
     if extra_tags:
         tags.update(extra_tags)
+    # Jaeger/OTLP assigns its own trace id; Arena and tag queries use this tag.
+    tags["dojozero.trial.id"] = trial_id
 
     return SpanData(
-        trace_id=trial_id,  # Use trial_id as trace_id for correlation
+        trace_id=trial_id,  # Logical correlation (may differ from Jaeger traceID)
         span_id=uuid4().hex[:16],
         operation_name=operation_name,
         start_time=start_us,
@@ -1342,6 +1424,7 @@ def convert_actor_registration_to_span(
     tags: dict[str, Any] = {
         "actor.id": actor_id,
         "actor.type": actor_type,
+        "dojozero.trial.id": trial_id,
     }
 
     # Add resource.* tags from metadata
@@ -1404,6 +1487,7 @@ def convert_checkpoint_event_to_span(
     tags: dict[str, Any] = {
         "actor.id": event_actor_id,
         "sequence": event.get("sequence", sequence),
+        "dojozero.trial.id": trial_id,
     }
     # Add remaining event data as tags
     for key, value in event.items():
@@ -1533,6 +1617,7 @@ def convert_agent_message_to_span(
     tags: dict[str, Any] = {
         "actor.id": actor_id,
         "sequence": sequence,
+        "dojozero.trial.id": trial_id,
         "event.stream_id": stream_id,
         "event.role": role,
         "event.name": name,
@@ -1675,7 +1760,7 @@ class OTelSpanExporter:
     """OpenTelemetry span exporter using SDK BatchSpanProcessor.
 
     This class wraps the OpenTelemetry SDK to export DojoZero spans to an OTLP
-    endpoint (e.g., Jaeger, Alibaba Cloud SLS). Uses BatchSpanProcessor for
+    endpoint (e.g., Jaeger). Uses BatchSpanProcessor for
     efficient batched HTTP exports.
 
     Usage:
@@ -1711,7 +1796,7 @@ class OTelSpanExporter:
         Args:
             otlp_endpoint: OTLP HTTP endpoint URL (e.g., http://localhost:4318)
             service_name: Service name for trace attribution
-            headers: Optional headers for authentication (e.g., SLS auth headers)
+            headers: Optional headers for authentication
             batch_size: Max spans per batch export (BatchSpanProcessor config)
             export_timeout_ms: Timeout for each export request
             schedule_delay_ms: Delay between batch exports
@@ -1753,7 +1838,7 @@ class OTelSpanExporter:
             self._provider = TracerProvider(resource=resource)
 
             # Create OTLP exporter - use /v1/traces endpoint
-            # For SLS: https://{project}.{region}.log.aliyuncs.com/opentelemetry/v1/traces
+            # For Jaeger: http://localhost:4318/v1/traces
             # For Jaeger: http://localhost:4318/v1/traces
             if "log.aliyuncs.com" in self._endpoint:
                 traces_endpoint = f"{self._endpoint}/opentelemetry/v1/traces"
@@ -2248,9 +2333,9 @@ def emit_span(span_data: SpanData) -> None:
 
 __all__ = [
     "JaegerTraceReader",
+    "SLSTraceReader",
     "OTelSpanExporter",
     "SLSLogExporter",
-    "SLSTraceReader",
     "SpanData",
     "TraceReader",
     "convert_actor_registration_to_span",
@@ -2258,13 +2343,11 @@ __all__ = [
     "convert_checkpoint_event_to_span",
     "create_span_from_event",
     "create_trace_reader",
-    "create_trace_reader",
     "emit_span",
-    "get_sls_log_exporter",
-    "set_sls_log_exporter",
     "get_otel_exporter",
     "get_sls_exporter_headers",
-    "get_sls_exporter_headers",
+    "get_sls_log_exporter",
     "load_spans_from_checkpoint",
     "set_otel_exporter",
+    "set_sls_log_exporter",
 ]

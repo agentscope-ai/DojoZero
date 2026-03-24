@@ -1,10 +1,25 @@
 """Unit tests for OSS utilities."""
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from dojozero.utils.oss import OSSClient, upload_directory, upload_file
+
+
+def _patch_require_oss2():
+    """Patch lazy oss2 loader (oss2 is no longer a module-level import)."""
+    mock_mod = MagicMock()
+    return patch("dojozero.utils.oss._require_oss2", return_value=mock_mod)
+
+
+@contextmanager
+def _patch_oss2_as(mock_oss2: MagicMock | None = None):
+    """Yield a MagicMock oss2 module patched into _require_oss2."""
+    m = mock_oss2 if mock_oss2 is not None else MagicMock()
+    with patch("dojozero.utils.oss._require_oss2", return_value=m):
+        yield m
 
 
 @pytest.fixture
@@ -50,7 +65,7 @@ class TestOSSClientInit:
 
     def test_init_sets_attributes(self):
         """Test that __init__ sets all attributes correctly."""
-        with patch("dojozero.utils.oss.oss2"):
+        with _patch_require_oss2():
             client = OSSClient(
                 bucket_name="test-bucket",
                 endpoint="oss-cn-hangzhou.aliyuncs.com",
@@ -65,7 +80,7 @@ class TestOSSClientInit:
 
     def test_init_empty_prefix(self):
         """Test that empty prefix stays empty."""
-        with patch("dojozero.utils.oss.oss2"):
+        with _patch_require_oss2():
             client = OSSClient(
                 bucket_name="bucket",
                 endpoint="endpoint",
@@ -78,7 +93,7 @@ class TestOSSClientInit:
 
     def test_init_prefix_without_trailing_slash(self):
         """Test that prefix without trailing slash gets one added."""
-        with patch("dojozero.utils.oss.oss2"):
+        with _patch_require_oss2():
             client = OSSClient(
                 bucket_name="bucket",
                 endpoint="endpoint",
@@ -178,7 +193,7 @@ class TestOSSClientFromEnv:
         monkeypatch.setenv("DOJOZERO_OSS_ENDPOINT", "endpoint")
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
 
-        with patch("dojozero.utils.oss.oss2"):
+        with _patch_require_oss2():
             client = OSSClient.from_env()
 
         # Verify client was created with correct bucket/endpoint
@@ -191,7 +206,7 @@ class TestOSSClientMakeKey:
 
     def _create_client(self, prefix: str = "") -> OSSClient:
         """Create a client for testing _make_key."""
-        with patch("dojozero.utils.oss.oss2"):
+        with _patch_require_oss2():
             return OSSClient(
                 access_key_id="key",
                 access_key_secret="secret",
@@ -230,7 +245,7 @@ class TestOSSClientUploadFile:
 
     def test_upload_file_missing_raises(self, tmp_path):
         """Test that uploading missing file raises FileNotFoundError."""
-        with patch("dojozero.utils.oss.oss2"):
+        with _patch_require_oss2():
             client = OSSClient(
                 access_key_id="key",
                 access_key_secret="secret",
@@ -250,7 +265,7 @@ class TestOSSClientUploadFile:
         test_file = tmp_path / "test.txt"
         test_file.write_text("test content")
 
-        with patch("dojozero.utils.oss.oss2") as mock_oss2:
+        with _patch_oss2_as() as mock_oss2:
             mock_bucket = MagicMock()
             mock_oss2.Bucket.return_value = mock_bucket
 
@@ -274,7 +289,7 @@ class TestOSSClientUploadFile:
         test_file = tmp_path / "test.txt"
         test_file.write_text("test content")
 
-        with patch("dojozero.utils.oss.oss2") as mock_oss2:
+        with _patch_oss2_as() as mock_oss2:
             mock_bucket = MagicMock()
             mock_oss2.Bucket.return_value = mock_bucket
 
@@ -302,7 +317,7 @@ class TestOSSClientUploadDirectory:
         test_file = tmp_path / "file.txt"
         test_file.write_text("content")
 
-        with patch("dojozero.utils.oss.oss2"):
+        with _patch_require_oss2():
             client = OSSClient(
                 access_key_id="key",
                 access_key_secret="secret",
@@ -320,7 +335,7 @@ class TestOSSClientUploadDirectory:
         (tmp_path / "file1.txt").write_text("content1")
         (tmp_path / "file2.txt").write_text("content2")
 
-        with patch("dojozero.utils.oss.oss2") as mock_oss2:
+        with _patch_oss2_as() as mock_oss2:
             mock_bucket = MagicMock()
             mock_oss2.Bucket.return_value = mock_bucket
 
@@ -344,7 +359,7 @@ class TestOSSClientUploadDirectory:
         (tmp_path / "file2.log").write_text("content2")
         (tmp_path / "file3.txt").write_text("content3")
 
-        with patch("dojozero.utils.oss.oss2") as mock_oss2:
+        with _patch_oss2_as() as mock_oss2:
             mock_bucket = MagicMock()
             mock_oss2.Bucket.return_value = mock_bucket
 
@@ -368,7 +383,7 @@ class TestOSSClientUploadDirectory:
         subdir.mkdir()
         (subdir / "nested.txt").write_text("content")
 
-        with patch("dojozero.utils.oss.oss2") as mock_oss2:
+        with _patch_oss2_as() as mock_oss2:
             mock_bucket = MagicMock()
             mock_oss2.Bucket.return_value = mock_bucket
 
@@ -392,7 +407,7 @@ class TestOSSClientFileExists:
 
     def test_file_exists_calls_object_exists(self):
         """Test that file_exists calls oss2 object_exists."""
-        with patch("dojozero.utils.oss.oss2") as mock_oss2:
+        with _patch_oss2_as() as mock_oss2:
             mock_bucket = MagicMock()
             mock_bucket.object_exists.return_value = True
             mock_oss2.Bucket.return_value = mock_bucket
@@ -412,7 +427,7 @@ class TestOSSClientFileExists:
 
     def test_file_exists_applies_prefix(self):
         """Test that file_exists applies prefix."""
-        with patch("dojozero.utils.oss.oss2") as mock_oss2:
+        with _patch_oss2_as() as mock_oss2:
             mock_bucket = MagicMock()
             mock_bucket.object_exists.return_value = False
             mock_oss2.Bucket.return_value = mock_bucket
@@ -445,7 +460,7 @@ class TestConvenienceFunctions:
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
         monkeypatch.setenv("DOJOZERO_OSS_PREFIX", "")
 
-        with patch("dojozero.utils.oss.oss2") as mock_oss2:
+        with _patch_oss2_as() as mock_oss2:
             mock_bucket = MagicMock()
             mock_oss2.Bucket.return_value = mock_bucket
 
@@ -464,7 +479,7 @@ class TestConvenienceFunctions:
         monkeypatch.setenv("DOJOZERO_OSS_BUCKET", "bucket")
         monkeypatch.setenv("DOJOZERO_OSS_PREFIX", "")
 
-        with patch("dojozero.utils.oss.oss2") as mock_oss2:
+        with _patch_oss2_as() as mock_oss2:
             mock_bucket = MagicMock()
             mock_oss2.Bucket.return_value = mock_bucket
 

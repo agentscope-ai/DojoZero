@@ -153,7 +153,9 @@ async def _build_trial_spec(
             "data_dir is set in the trial source config so the scheduler can "
             "populate this field."
         )
-    persistence_file = params.hub.persistence_file
+    persistence_file = params.hub.persistence_file.replace(
+        "{espn_game_id}", params.espn_game_id
+    )
 
     # Fallback: extract game_date from persistence_file path if still not available
     # Path format: data/nba-betting/YYYY-MM-DD/espn_game_id.jsonl

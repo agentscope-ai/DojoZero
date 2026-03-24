@@ -1,13 +1,17 @@
 scenario:
   name: nba
   config:
+<<<<<<< HEAD
+    espn_game_id: 'your_espn_game_id_here'  # ESPN game ID for the NBA game
+    
+=======
     espn_game_id: '401810490'  # ESPN game ID - override for specific game
 
+>>>>>>> origin/master
     hub:
-      persistence_file: outputs/nba_betting_events.jsonl
+      persistence_file: outputs/nba_betting_events-{espn_game_id}.jsonl
 
     data_streams:
-    # Pre-game insights: each event class owns search → LLM → typed event lifecycle
     - id: pre_game_insights_stream
       event_types:
       - injury_report
@@ -57,7 +61,7 @@ scenario:
       persona: degen
       class: BettingAgent
       persona_config_path: agents/personas/degen.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
       - betting_broker
       data_streams:
@@ -70,7 +74,7 @@ scenario:
       persona: mystic
       class: BettingAgent
       persona_config_path: agents/personas/mystic.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
         - betting_broker
       data_streams:
@@ -83,7 +87,7 @@ scenario:
       persona: pundit
       class: BettingAgent
       persona_config_path: agents/personas/pundit.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
         - betting_broker
       data_streams:
@@ -96,7 +100,7 @@ scenario:
       persona: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
       - betting_broker
       data_streams:
@@ -109,7 +113,7 @@ scenario:
       persona: sheep
       class: BettingAgent
       persona_config_path: agents/personas/sheep.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
       - betting_broker
       data_streams:
@@ -122,7 +126,7 @@ scenario:
       persona: whale
       class: BettingAgent
       persona_config_path: agents/personas/whale.yaml
-      llm_config_path: agents/llms/all.yaml
+      llm_config_path: agents/llms/default.yaml
       operators:
       - betting_broker
       data_streams:

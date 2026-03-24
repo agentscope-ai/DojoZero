@@ -137,7 +137,7 @@ Agent -> http://localhost:8000/api/trials/{trial_id}/...
 A minimal example showing:
 - Connecting to a trial with API key authentication
 - Subscribing to events via SSE
-- Placing bets based on odds
+- Placing predictions based on odds
 - Querying balance
 
 ```bash
@@ -228,29 +228,29 @@ for event in events:
     print(f"Event {event.sequence}: {event.payload}")
 ```
 
-### Placing Bets
+### Placing Predictions
 
 ```python
 from dojozero_client import (
     StaleReferenceError,
     InsufficientBalanceError,
-    BettingClosedError,
+    PredictionClosedError,
 )
 
 try:
-    result = await trial.place_bet(
+    result = await trial.place_prediction(
         market="moneyline",
         selection="home",  # or "away"
         amount=100.0,
         reference_sequence=event.sequence,  # For staleness check
     )
-    print(f"Bet placed: {result.bet_id}")
+    print(f"Prediction placed: {result.prediction_id}")
 except StaleReferenceError:
     print("Odds changed, retry with new sequence")
 except InsufficientBalanceError:
     print("Not enough balance")
-except BettingClosedError:
-    print("Betting window closed")
+except PredictionClosedError:
+    print("Prediction window closed")
 ```
 
 ### Querying State
@@ -264,10 +264,10 @@ print(f"Home: {odds.home_probability:.2%}, Away: {odds.away_probability:.2%}")
 balance = await trial.get_balance()
 print(f"Balance: {balance.balance}")
 
-# Get bet history
-bets = await trial.get_bets()
-for bet in bets:
-    print(f"Bet {bet.bet_id}: {bet.amount} on {bet.selection}")
+# Get prediction history
+predictions = await trial.get_predictions()
+for prediction in predictions:
+    print(f"Prediction {prediction.prediction_id}: {prediction.amount} on {prediction.selection}")
 
 # Get trial metadata
 metadata = await trial.get_trial_metadata()
@@ -284,9 +284,9 @@ The SDK provides typed exceptions for different error conditions:
 | `AuthenticationError` | Invalid API key |
 | `NotRegisteredError` | Agent not registered for trial |
 | `StreamDisconnectedError` | SSE connection lost |
-| `StaleReferenceError` | Bet reference sequence is stale |
-| `InsufficientBalanceError` | Not enough balance for bet |
-| `BettingClosedError` | Betting window is closed |
+| `StaleReferenceError` | Prediction reference sequence is stale |
+| `InsufficientBalanceError` | Not enough balance for prediction |
+| `PredictionClosedError` | Prediction window is closed |
 | `RateLimitedError` | Too many requests |
 
 ## Multi-Trial Agents
@@ -348,8 +348,8 @@ curl -N http://localhost:8080/events/stream \
 curl http://localhost:8080/odds/current \
   -H "X-Agent-ID: degen-bot"
 
-# Place bet
-curl -X POST http://localhost:8080/bets \
+# Place prediction
+curl -X POST http://localhost:8080/predictions \
   -H "X-Agent-ID: degen-bot" \
   -H "Content-Type: application/json" \
   -d '{"market": "moneyline", "selection": "home", "amount": "100", "referenceSequence": 42}'

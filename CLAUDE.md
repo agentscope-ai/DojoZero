@@ -1,24 +1,24 @@
 # DojoZero
 
-AI agent system for real-time data reasoning and automated betting/trading. Agents run continuously on live data streams to analyze outcomes and take actions.
+AI agent system for real-time data reasoning and automated prediction/trading. Agents run continuously on live data streams to analyze outcomes and take actions.
 
-See [README.md](./README.md) for installation and CLI usage.
+See [README.md](./README.md) for installation and CLI usage. **Default install** excludes Alibaba Cloud wheels (`oss2`, credentials SDK, SLS SDK); use `dojozero[alicloud]` and/or `dojozero[redis]` when needed — details in [docs/installation.md](./docs/installation.md).
 
 ## Project Structure
 
 ```
 src/dojozero/
 ├── core/              # Actor framework, runtime, trial orchestration
-├── agents/            # AI agent implementations (BettingAgent, AgentGroup)
+├── agents/            # AI agent implementations (PredictionAgent, AgentGroup)
 ├── data/              # Data infrastructure (stores, events, processors, hub)
 │   ├── nba/           # NBA game data (play-by-play, boxscores)
 │   ├── nfl/           # NFL game data
 │   ├── espn/          # ESPN data integration
 │   ├── polymarket/    # Prediction market odds
 │   └── websearch/     # Web search with LLM processing
-├── betting/           # Shared betting utilities
-├── nba/               # NBA betting scenario
-├── nfl/               # NFL betting scenario
+├── prediction/           # Shared prediction utilities
+├── nba/               # NBA prediction scenario
+├── nfl/               # NFL prediction scenario
 ├── samples/           # Reference implementations (bounded_random)
 ├── dashboard_server/  # Trial orchestration server
 ├── arena_server/      # Web UI server
@@ -30,6 +30,9 @@ src/dojozero/
 ## Development Commands
 
 ```bash
+# Install project + dev deps (includes alicloud/redis packages used in tests)
+uv sync --group dev
+
 # Run tests
 uv run pytest
 

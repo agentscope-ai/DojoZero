@@ -34,7 +34,7 @@ PERSONAS_DIR = AGENTS_DIR / "personas"
 LLMS_DIR = AGENTS_DIR / "llms"
 
 # Default LLM config for tests
-DEFAULT_LLM_CONFIG_PATH = LLMS_DIR / "qwen.yaml"
+DEFAULT_LLM_CONFIG_PATH = LLMS_DIR / "default.yaml"
 
 
 def get_all_persona_files() -> list[Path]:

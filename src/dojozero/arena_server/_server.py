@@ -89,6 +89,7 @@ from dojozero.arena_server._utils import (
     _compute_leaderboard_from_spans,
     _load_replay_data,
     TRIAL_INFO_OPERATION_NAMES,
+    trial_id_for_span_grouping,
 )
 from dojozero.core._models import (
     AgentAction,
@@ -633,7 +634,7 @@ class BackgroundRefresher:
         # 3. Group new spans by trial_id and merge into cache
         new_span_count = 0
         for span in all_spans:
-            trial_id = span.trace_id
+            trial_id = trial_id_for_span_grouping(span)
             if trial_id not in self._spans_by_trial:
                 self._spans_by_trial[trial_id] = []
             self._spans_by_trial[trial_id].append(span)
@@ -831,10 +832,22 @@ class BackgroundRefresher:
                         e,
                     )
             else:
-                # No spans found - set unknown phase
-                self.cache.set_trial_info(
-                    trial_id, {"phase": "unknown", "metadata": {}}
-                )
+                # Bulk fetch may omit lifecycle spans (separate traces / operation names).
+                try:
+                    trial_info = await _extract_trial_info_from_traces(
+                        self.trace_reader, trial_id
+                    )
+                    self.cache.set_trial_info(trial_id, trial_info)
+                    processed += 1
+                except Exception as e:
+                    LOGGER.warning(
+                        "BackgroundRefresher: trial_info fallback Jaeger fetch failed[%s]: %s",
+                        trial_id,
+                        e,
+                    )
+                    self.cache.set_trial_info(
+                        trial_id, {"phase": "unknown", "metadata": {}}
+                    )
 
         LOGGER.info(
             "BackgroundRefresher: Processed trial_info for %d trials",
@@ -958,7 +971,10 @@ class BackgroundRefresher:
 
         # Refresh global games
         games = await _extract_games_from_trials(
-            self.trace_reader, trial_ids, self.cache
+            self.trace_reader,
+            trial_ids,
+            self.cache,
+            spans_by_trial=self._spans_by_trial,
         )
         self.cache.set_games(games, league=None)
 
@@ -968,7 +984,10 @@ class BackgroundRefresher:
                 self.trace_reader, trial_ids, league, self.cache
             )
             league_games = await _extract_games_from_trials(
-                self.trace_reader, filtered_ids, self.cache
+                self.trace_reader,
+                filtered_ids,
+                self.cache,
+                spans_by_trial=self._spans_by_trial,
             )
             self.cache.set_games(league_games, league=league)
 
@@ -1259,11 +1278,17 @@ class BackgroundRefresher:
                 self.trace_reader, trial_ids, league, self.cache
             )
             games = await _extract_games_from_trials(
-                self.trace_reader, filtered_ids, self.cache
+                self.trace_reader,
+                filtered_ids,
+                self.cache,
+                spans_by_trial=self._spans_by_trial,
             )
         else:
             games = await _extract_games_from_trials(
-                self.trace_reader, trial_ids, self.cache
+                self.trace_reader,
+                trial_ids,
+                self.cache,
+                spans_by_trial=self._spans_by_trial,
             )
 
         self.cache.set_games(games, league=league)
