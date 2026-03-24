@@ -225,8 +225,8 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 live_games = [superbowl_game] + list(live_games)
 
         # only for mock test
-        if league and league.upper() == "NBA" and not live_games:
-            live_games = list(all_games[:10])
+        # if league and league.upper() == "NBA" and not live_games:
+        #     live_games = list(all_games[:10])
 
         response = LandingResponse(
             stats=stats,
