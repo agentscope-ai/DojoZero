@@ -9,6 +9,7 @@ Handles automatic scheduling of trials based on registered trial sources:
 """
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -592,7 +593,7 @@ class ScheduleManager:
                 continue
 
             # Build config for this game
-            config = dict(scenario_config or {})
+            config = copy.deepcopy(scenario_config or {})
 
             # Add game-specific config (both NBA and NFL use espn_game_id)
             config["espn_game_id"] = game.game_id
@@ -964,8 +965,8 @@ class ScheduleManager:
                 )
                 continue
 
-            # Build config for this game
-            game_config = dict(config.scenario_config)
+            # Build config for this game (deep copy to avoid shared nested dicts)
+            game_config = copy.deepcopy(config.scenario_config)
 
             # Add game-specific config (both NBA and NFL use espn_game_id)
             game_config["espn_game_id"] = game.game_id

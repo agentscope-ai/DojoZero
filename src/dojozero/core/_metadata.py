@@ -11,8 +11,8 @@ Usage:
         my_field: str
 """
 
-from dataclasses import dataclass
-from typing import TypeVar
+from dataclasses import dataclass, fields
+from typing import Any, TypeVar
 
 
 @dataclass(slots=True)
@@ -30,6 +30,35 @@ class BaseTrialMetadata:
     hub_id: str
     persistence_file: str
     store_types: tuple[str, ...]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dict-like access for backward compatibility with code that
+        treats metadata as a plain dict."""
+        if key in {f.name for f in fields(self)}:
+            return getattr(self, key)
+        return default
+
+    def __contains__(self, key: object) -> bool:
+        """Support ``key in metadata`` checks."""
+        return isinstance(key, str) and key in {f.name for f in fields(self)}
+
+    def __getitem__(self, key: str) -> Any:
+        """Support ``metadata["key"]`` access."""
+        if key in {f.name for f in fields(self)}:
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def __iter__(self):
+        """Support ``for key in metadata`` iteration over field names."""
+        return iter(f.name for f in fields(self))
+
+    def items(self):
+        """Support ``dict(metadata.items())`` and dict-like iteration."""
+        return ((f.name, getattr(self, f.name)) for f in fields(self))
+
+    def keys(self):
+        """Return field names."""
+        return (f.name for f in fields(self))
 
 
 # TypeVar for generic TrialSpec and StoreFactory
