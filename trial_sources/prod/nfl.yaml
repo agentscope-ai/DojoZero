@@ -4,6 +4,6 @@ source_id: nfl-moneyline-source
 sport_type: nfl
 config:
   scenario_name: nfl
-  max_concurrent_games: 0
+  max_daily_games: 0
   personas: [degen, mystic, pundit, shark, sheep, whale]
   llm_config_path: agents/llms/all.yaml

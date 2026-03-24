@@ -115,7 +115,7 @@ class TrialSourceConfigRequest(BaseModel):
     check_interval_seconds: float = 60.0
     auto_stop_on_completion: bool = True
     data_dir: str | None = None
-    max_concurrent_games: int = 0
+    max_daily_games: int = 0
 
 
 class TrialSourceRequest(BaseModel):
@@ -360,7 +360,7 @@ def create_dashboard_app(
                     sync_interval_seconds=config_data.get(
                         "sync_interval_seconds", 300.0
                     ),
-                    max_concurrent_games=config_data.get("max_concurrent_games", 0),
+                    max_daily_games=config_data.get("max_daily_games", 0),
                 )
 
                 # Update config if already registered (YAML is authoritative)
@@ -1110,7 +1110,7 @@ def create_dashboard_app(
                 check_interval_seconds=request.config.check_interval_seconds,
                 auto_stop_on_completion=request.config.auto_stop_on_completion,
                 data_dir=request.config.data_dir,
-                max_concurrent_games=request.config.max_concurrent_games,
+                max_daily_games=request.config.max_daily_games,
             )
 
             source = state.schedule_manager.register_source(

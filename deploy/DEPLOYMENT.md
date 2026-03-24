@@ -182,7 +182,7 @@ source_id: nba-moneyline-source
 sport_type: nba
 config:
   scenario_name: nba
-  max_concurrent_games: 0    # 0 = unlimited
+  max_daily_games: 0    # 0 = unlimited
   personas: [degen, mystic, pundit, shark, sheep, whale]
   llm_config_path: agents/llms/all.yaml
 ```

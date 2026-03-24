@@ -58,7 +58,7 @@ class TrialSourceConfig(BaseModel):
         data_dir: Base directory for persistence files. If set, files are
             created at {data_dir}/{game_date}/{game_id}.jsonl
         sync_interval_seconds: How often to sync with ESPN API for new games
-        max_concurrent_games: Maximum number of games to schedule concurrently
+        max_daily_games: Maximum number of games to schedule per day
             for this source. 0 means unlimited (default).
     """
 
@@ -71,7 +71,7 @@ class TrialSourceConfig(BaseModel):
     sync_interval_seconds: float = (
         300.0  # How often to sync with external APIs (5 min default)
     )
-    max_concurrent_games: int = 0  # 0 = unlimited
+    max_daily_games: int = 0  # 0 = unlimited
 
 
 @dataclass
@@ -778,9 +778,7 @@ class ScheduleManager:
         agent_personas = [a.get("persona", a.get("id", "?")) for a in agents]
         llm_paths = {a.get("llm_config_path", "inline") for a in agents}
         max_games_str = (
-            str(config.max_concurrent_games)
-            if config.max_concurrent_games > 0
-            else "unlimited"
+            str(config.max_daily_games) if config.max_daily_games > 0 else "unlimited"
         )
         LOGGER.info(
             "Registered trial source '%s' for %s: "
@@ -888,30 +886,26 @@ class ScheduleManager:
             LOGGER.error("Error fetching games for source %s: %s", source.source_id, e)
             return []
 
-        # Check max_concurrent_games limit
-        max_games = config.max_concurrent_games
+        # Check max_daily_games limit (count all games scheduled today for this source)
+        max_games = config.max_daily_games
         if max_games > 0:
-            active_count = sum(
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            daily_count = sum(
                 1
                 for sid, gid in self._scheduled_events
                 if sid == source.source_id
                 and self._schedules.get(self._scheduled_events[(sid, gid)])
-                and self._schedules[self._scheduled_events[(sid, gid)]].phase
-                in (
-                    ScheduledTrialPhase.WAITING,
-                    ScheduledTrialPhase.LAUNCHING,
-                    ScheduledTrialPhase.RUNNING,
-                    ScheduledTrialPhase.MONITORING,
-                )
+                and self._schedules[self._scheduled_events[(sid, gid)]].game_date
+                == today
             )
-            remaining_slots = max_games - active_count
+            remaining_slots = max_games - daily_count
             if remaining_slots <= 0:
                 LOGGER.info(
-                    "Source '%s': max_concurrent_games=%d reached "
-                    "(%d active), skipping new games",
+                    "Source '%s': max_daily_games=%d reached "
+                    "(%d today), skipping new games",
                     source.source_id,
                     max_games,
-                    active_count,
+                    daily_count,
                 )
                 return []
         else:
@@ -953,11 +947,10 @@ class ScheduleManager:
             if (source.source_id, game.game_id) in self._scheduled_events:
                 continue
 
-            # Enforce max_concurrent_games limit
+            # Enforce max_daily_games limit
             if max_games > 0 and remaining_slots <= 0:
                 LOGGER.info(
-                    "Source '%s': skipping game %s (%s) — "
-                    "max_concurrent_games=%d reached",
+                    "Source '%s': skipping game %s (%s) — max_daily_games=%d reached",
                     source.source_id,
                     game.game_id,
                     game.short_name,
