@@ -96,7 +96,7 @@ Extend `data_streams` / agents in the template the same way you would for any tr
 
 ## Event types (reference)
 
-Trial params list **stream subscription names** (e.g. `nfl_play`, `nba_play`, `odds_update`). The exact persisted `event_type` strings in JSONL follow the registered data events in `src/dojozero/data/` (NFL/NBA modules and shared lifecycle models). Use `trial_params/nba-moneyline.yaml` and `trial_params/nfl-moneyline.yaml` as the source of truth for which streams a moneyline trial wires up.
+Trial params list **stream subscription names** (e.g. `nfl_play`, `nba_play`, `odds_update`). The exact persisted `event_type` strings in JSONL follow the registered data events in `packages/dojozero/src/dojozero/data/` (NFL/NBA modules and shared lifecycle models). Use `trial_params/nba-moneyline.yaml` and `trial_params/nfl-moneyline.yaml` as the source of truth for which streams a moneyline trial wires up.
 
 ## CLI options
 

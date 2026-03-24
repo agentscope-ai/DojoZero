@@ -6,7 +6,7 @@ This guide combines local CLI usage, server-based orchestration, trial schedulin
 
 ```bash
 # Install from source
-uv pip install .
+uv pip install packages/dojozero
 
 # Create local environment file from template
 cp .env.example .env
@@ -27,8 +27,8 @@ If you plan to run DojoZero outside Docker or do local development, choose one i
 
 | Track | Command | Use when |
 |--------|---------|----------|
-| **Default (Recommended)** | `uv pip install .` | Trials, dashboard, Jaeger tracing |
-| **+ Alibaba Cloud/ Redis** | `uv pip install '.[alicloud,redis]'` | OSS backup / `oss://` paths, **`--trace-backend sls`**, sync-service Redis |
+| **Default (Recommended)** | `uv pip install packages/dojozero` | Trials, dashboard, Jaeger tracing |
+| **+ Alibaba Cloud/ Redis** | `uv pip install 'packages/dojozero[alicloud,redis]'` | OSS backup / `oss://` paths, **`--trace-backend sls`**, sync-service Redis |
 
 Details, package lists, and development setup: [`docs/installation.md`](./installation.md).
 

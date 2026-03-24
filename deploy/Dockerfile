@@ -31,18 +31,18 @@ RUN if [ "$CHINA_MIRRORS" = "true" ]; then \
     fi
 
 # Copy all source files needed for build
-COPY pyproject.toml .
-COPY README.md .
-COPY src/ src/
+COPY pyproject.toml uv.lock ./
+COPY packages/dojozero/ packages/dojozero/
+COPY packages/dojozero-client/ packages/dojozero-client/
 COPY agents/ agents/
 COPY trial_sources/ trial_sources/
 COPY trial_params/ trial_params/
 
 # Install dependencies and the package (with China mirror if needed)
 RUN if [ "$CHINA_MIRRORS" = "true" ]; then \
-        UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ uv pip install --system '.[alicloud]'; \
+        UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ uv pip install --system 'packages/dojozero[alicloud]'; \
     else \
-        uv pip install --system '.[alicloud]'; \
+        uv pip install --system 'packages/dojozero[alicloud]'; \
     fi
 
 # Create output directories
