@@ -25,7 +25,7 @@ services:
       - ../.env
     environment:
       - PYTHONUNBUFFERED=1
-      - DOJOZERO_ENV=${DOJOZERO_ENV:-daily}
+
     volumes:
       - ../outputs:/app/outputs
       - ../data:/app/data
@@ -64,7 +64,7 @@ services:
       - ../.env
     environment:
       - PYTHONUNBUFFERED=1
-      - DOJOZERO_ENV=${DOJOZERO_ENV:-daily}
+
     volumes:
       - ../outputs:/app/outputs
       - ../data:/app/data
@@ -103,7 +103,7 @@ services:
       - ../.env
     environment:
       - PYTHONUNBUFFERED=1
-      - DOJOZERO_ENV=${DOJOZERO_ENV:-daily}
+
     volumes:
       - ../outputs:/app/outputs
       - ../data:/app/data
