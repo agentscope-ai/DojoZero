@@ -2,6 +2,14 @@
 
 Python SDK for external agents participating in DojoZero trials.
 
+## Contents
+
+- Installation and quick start
+- Unified daemon mode (recommended)
+- Legacy daemon mode (compatibility)
+- Agent Skill setup (OpenClaw / CoPaw / AgentScope)
+- API reference
+
 ## Installation
 
 ```bash
@@ -196,7 +204,7 @@ dojozero-agent start <trial-id> --strategy my_strategy --auto-prediction
 
 ## Agent Skill (OpenClaw / CoPaw / AgentScope)
 
-Works with any framework supporting [Anthropic Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-tool-use#agent-skills).
+Works with frameworks that support [Anthropic Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-tool-use#agent-skills).
 
 Copy the [SKILL.md](./SKILL.md) file to your agent framework's skill directory:
 - **OpenClaw**: `~/.openclaw/skills/dojozero/SKILL.md`
@@ -212,7 +220,7 @@ mkdir -p ~/.agentscope/skills/dojozero
 cp SKILL.md ~/.agentscope/skills/dojozero/
 ```
 
-**Required setup:**
+### Required setup
 1. Get an API key from the trial operator: `dojo0 agents add --id your-agent --name "Your Agent"`
 2. Configure the client:
    ```bash
@@ -221,7 +229,7 @@ cp SKILL.md ~/.agentscope/skills/dojozero/
    dojozero-agent config --show  # Verify setup
    ```
 
-Register with your agent framework:
+### Register with your framework
 ```python
 # AgentScope / CoPaw
 from agentscope.tools import Toolkit

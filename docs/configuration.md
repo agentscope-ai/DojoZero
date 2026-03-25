@@ -1,6 +1,6 @@
-# Configuration Guide
+# Full Configuration Guide
 
-This guide covers the current DojoZero configuration which includes:
+This guide covers DojoZero configuration in three areas:
 
 1. **Environment variables** (`DOJOZERO_*` in `.env`)
 2. **Trial configurations** (`trial_params/*.yaml`, `trial_sources/*.yaml`)
@@ -40,9 +40,9 @@ Then fill only the variables your scenario needs. Never commit real credentials.
 ### Python dependencies vs. features
 
 - **Default install** (`uv pip install packages/dojozero`): core trials + **Jaeger** tracing. No OSS/SLS/Redis client libraries.
-- **Alibaba / Redis extras** (`uv pip install 'packages/dojozero[alicloud,redis]'`): needed for OSS, `--trace-backend sls`, and Redis-backed sync-service paths.
+- **Alibaba / Redis extras** (`uv pip install 'packages/dojozero[alicloud,redis]'`): required for OSS, `--trace-backend sls`, and Redis-backed sync-service paths.
 
-See [`installation.md`](./installation.md) for the full split.
+See [`getting-started.md`](./getting-started.md) for installation details.
 
 Typical minimum for NBA/NFL trial usage:
 
@@ -55,6 +55,7 @@ DOJOZERO_TAVILY_API_KEY=...
 ## 2. Trial Configuration (`trial_params/*.yaml`, `trial_sources/*.yaml`)
 
 ### Trial Parameter YAML (`trial_params/*.yaml`)
+
 A trial params file defines one concrete, manually selected trial (single run).
 
 ```yaml
@@ -84,7 +85,8 @@ scenario:
 | `scenario.config.agents` | Agent instances, persona, model config, subscriptions |
 
 ### Trial Source YAML (`trial_sources/*.yaml`)
-Trial sources enable automatic game discovery and trial scheduling. When the server starts with --trial-source, it periodically syncs with sports APIs to find upcoming games and schedules trials to start before each game.
+
+Trial sources enable automatic game discovery and scheduling. When the server starts with `--trial-source`, it periodically syncs with sports APIs, discovers upcoming games, and schedules trials ahead of start time.
 
 ```yaml
 # trial_sources/nba.yaml
@@ -112,8 +114,8 @@ config:
 
 ## 3. Agent Configuration (`agents/personas`, `agents/llms`)
 
-1. **Persona config** (`agents/personas/*.yaml`) - strategy style, tone, risk profile, and decision preferences.
-2. **LLM config** (`agents/llms/*.yaml`) - model provider, model name, and API key environment mapping.
+- **Persona config** (`agents/personas/*.yaml`): strategy style, tone, risk profile, and decision preferences.
+- **LLM config** (`agents/llms/*.yaml`): model provider, model name, and API key environment mapping.
 
 ### Persona configuration
 
