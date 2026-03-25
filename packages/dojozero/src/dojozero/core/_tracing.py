@@ -336,7 +336,7 @@ class JaegerTraceReader:
             "tags": tags_json,
             "start": start_us,
             "end": end_us,
-            "limit": 1000,
+            "limit": 1000000,
         }
 
         # Add operation filter if specified

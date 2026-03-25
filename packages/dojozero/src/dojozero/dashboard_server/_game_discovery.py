@@ -12,6 +12,11 @@ from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data.espn._api import ESPNExternalAPI
 from dojozero.data.nfl._api import NFLExternalAPI
 
+from dojozero.utils import (
+    us_game_day_today,
+    us_game_day_today_and_yesterday,
+)
+
 from ._types import BroadcastDataDict, OddsDataDict, TeamDataDict, VenueDataDict
 
 LOGGER = logging.getLogger("dojozero.game_discovery")
@@ -215,19 +220,17 @@ class NBAGameFetcher:
         """Fetch NBA games for a specific date.
 
         Args:
-            date: Date in YYYY-MM-DD format. If None, uses today's date.
-                  Note: Unlike NFL which has weekly schedules, NBA has daily games,
-                  so we default to today rather than using ESPN's default
-                  (which returns yesterday's completed games).
+            date: Date in YYYY-MM-DD format. If None, uses US today; if all
+                  games are finished/postponed/cancelled, falls back to US tomorrow.
 
         Returns:
             List of GameInfo objects.
         """
         api = ESPNExternalAPI(sport="basketball", league="nba")
         try:
-            # Default to today if no date provided
+            auto_date = date is None
             if date is None:
-                date = datetime.now().strftime("%Y-%m-%d")
+                date = us_game_day_today()
 
             # Parse date to ESPN format (YYYYMMDD)
             try:
@@ -236,8 +239,30 @@ class NBAGameFetcher:
             except ValueError:
                 LOGGER.error("Invalid date format: %s", date)
                 return []
+
             data = await api.fetch("scoreboard", {"dates": date_str})
-            return _parse_espn_scoreboard(data, "nba")
+            games = _parse_espn_scoreboard(data, "nba")
+            if not auto_date:
+                return games
+
+            has_actionable = any(
+                g.status != 3
+                and "postponed" not in g.status_text.lower()
+                and "canceled" not in g.status_text.lower()
+                and "cancelled" not in g.status_text.lower()
+                for g in games
+            )
+            if has_actionable:
+                return games
+
+            tomorrow = (
+                datetime.strptime(us_game_day_today(), "%Y-%m-%d").date()
+                + timedelta(days=1)
+            ).isoformat()
+            tomorrow_str = datetime.strptime(tomorrow, "%Y-%m-%d").strftime("%Y%m%d")
+            tomorrow_data = await api.fetch("scoreboard", {"dates": tomorrow_str})
+            tomorrow_games = _parse_espn_scoreboard(tomorrow_data, "nba")
+            return tomorrow_games if tomorrow_games else games
         except Exception as e:
             LOGGER.error("Error fetching NBA games for %s: %s", date, e)
             return []
@@ -318,14 +343,8 @@ class NBAGameFetcher:
         if game_date:
             dates_to_check.append(game_date)
         else:
-            # If no date, check today and yesterday
-            today = datetime.now()
-            dates_to_check.extend(
-                [
-                    today.strftime("%Y-%m-%d"),
-                    (today - timedelta(days=1)).strftime("%Y-%m-%d"),
-                ]
-            )
+            us_today, us_yesterday = us_game_day_today_and_yesterday()
+            dates_to_check.extend([us_today, us_yesterday])
 
         for date in dates_to_check:
             games = await self.fetch_games_for_date(date)
@@ -465,15 +484,17 @@ class NCAAGameFetcher:
         """Fetch NCAA basketball games for a specific date.
 
         Args:
-            date: Date in YYYY-MM-DD format. If None, uses today's date.
+            date: Date in YYYY-MM-DD format. If None, uses US today; if all
+                  games are finished/postponed/cancelled, falls back to US tomorrow.
 
         Returns:
             List of GameInfo objects.
         """
         api = ESPNExternalAPI(sport="basketball", league="mens-college-basketball")
         try:
+            auto_date = date is None
             if date is None:
-                date = datetime.now().strftime("%Y-%m-%d")
+                date = us_game_day_today()
 
             try:
                 parsed_date = datetime.strptime(date, "%Y-%m-%d")
@@ -481,8 +502,30 @@ class NCAAGameFetcher:
             except ValueError:
                 LOGGER.error("Invalid date format: %s", date)
                 return []
+
             data = await api.fetch("scoreboard", {"dates": date_str})
-            return _parse_espn_scoreboard(data, "ncaa")
+            games = _parse_espn_scoreboard(data, "ncaa")
+            if not auto_date:
+                return games
+
+            has_actionable = any(
+                g.status != 3
+                and "postponed" not in g.status_text.lower()
+                and "canceled" not in g.status_text.lower()
+                and "cancelled" not in g.status_text.lower()
+                for g in games
+            )
+            if has_actionable:
+                return games
+
+            tomorrow = (
+                datetime.strptime(us_game_day_today(), "%Y-%m-%d").date()
+                + timedelta(days=1)
+            ).isoformat()
+            tomorrow_str = datetime.strptime(tomorrow, "%Y-%m-%d").strftime("%Y%m%d")
+            tomorrow_data = await api.fetch("scoreboard", {"dates": tomorrow_str})
+            tomorrow_games = _parse_espn_scoreboard(tomorrow_data, "ncaa")
+            return tomorrow_games if tomorrow_games else games
         except Exception as e:
             LOGGER.error("Error fetching NCAA games for %s: %s", date, e)
             return []
@@ -560,13 +603,8 @@ class NCAAGameFetcher:
         if game_date:
             dates_to_check.append(game_date)
         else:
-            today = datetime.now()
-            dates_to_check.extend(
-                [
-                    today.strftime("%Y-%m-%d"),
-                    (today - timedelta(days=1)).strftime("%Y-%m-%d"),
-                ]
-            )
+            us_today, us_yesterday = us_game_day_today_and_yesterday()
+            dates_to_check.extend([us_today, us_yesterday])
 
         for date in dates_to_check:
             games = await self.fetch_games_for_date(date)
