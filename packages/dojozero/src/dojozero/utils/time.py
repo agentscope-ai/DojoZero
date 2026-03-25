@@ -1,6 +1,6 @@
 """Time and timezone utilities."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 # US Eastern timezone for date conversion (default for US sports)
@@ -62,6 +62,19 @@ def utc_to_us_date(dt: datetime) -> str:
         Date string in YYYY-MM-DD format, in US Eastern time
     """
     return utc_to_local_date(dt, "")
+
+
+def us_game_day_today() -> str:
+    """Calendar date string for current US Eastern game day."""
+    return utc_to_us_date(datetime.now(timezone.utc))
+
+
+def us_game_day_today_and_yesterday() -> tuple[str, str]:
+    """Current and previous US Eastern game day date strings."""
+    today = us_game_day_today()
+    d = datetime.strptime(today, "%Y-%m-%d").date()
+    yesterday = (d - timedelta(days=1)).isoformat()
+    return today, yesterday
 
 
 def utc_iso_to_local_date(utc_str: str, tz_str: str = "") -> str:
