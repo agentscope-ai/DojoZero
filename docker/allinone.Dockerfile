@@ -1,3 +1,22 @@
+# -----------------------------------------------------------------------------
+# Frontend (Vite) — output copied to /app/arena-static for Arena --static-dir
+# -----------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS frontend-build
+WORKDIR /frontend
+
+COPY frontend/package.json ./
+RUN npm install --no-audit --no-fund
+
+COPY frontend/ ./
+# Optional: docker build --build-arg VITE_API_URL=https://your-host:3001
+ARG VITE_API_URL=
+ENV VITE_API_URL=${VITE_API_URL}
+ENV VITE_USE_MOCK_DATA=false
+RUN npm run build
+
+# -----------------------------------------------------------------------------
+# Runtime
+# -----------------------------------------------------------------------------
 FROM python:3.11-slim
 
 ARG JAEGER_VERSION=2.16.0
@@ -47,6 +66,8 @@ RUN uv pip install --system --no-cache packages/dojozero \
     && chmod +x /app/docker/allinone/entrypoint.sh
 
 RUN mkdir -p outputs data
+
+COPY --from=frontend-build /frontend/dist /app/arena-static
 
 ENV PYTHONUNBUFFERED=1
 

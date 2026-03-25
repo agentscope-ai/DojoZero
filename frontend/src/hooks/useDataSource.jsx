@@ -7,8 +7,9 @@
 
 import { useState, useEffect, useCallback, createContext, useContext } from "react";
 
-// API URL from environment variable
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+import { arenaHttpBase } from "../arenaEnv.js";
+
+const API_URL = arenaHttpBase();
 const STATS_REFRESH_MS = Number(import.meta.env.VITE_STATS_REFRESH_MS || 10000);
 const LANDING_REFRESH_MS = Number(import.meta.env.VITE_LANDING_REFRESH_MS || 10000);
 const ACTIONS_REFRESH_MS = Number(import.meta.env.VITE_ACTIONS_REFRESH_MS || 10000);
