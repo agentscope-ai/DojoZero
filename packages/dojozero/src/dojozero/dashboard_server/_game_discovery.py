@@ -5,16 +5,31 @@ NBA API and ESPN API (for NFL).
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data.espn._api import ESPNExternalAPI
 from dojozero.data.nfl._api import NFLExternalAPI
 
+from dojozero.utils import utc_to_us_date
+
 from ._types import BroadcastDataDict, OddsDataDict, TeamDataDict, VenueDataDict
 
 LOGGER = logging.getLogger("dojozero.game_discovery")
+
+
+def _espn_us_game_day_today() -> str:
+    """Calendar date for ESPN scoreboard `dates=` (US Eastern game day)."""
+    return utc_to_us_date(datetime.now(timezone.utc))
+
+
+def _espn_us_game_day_today_and_yesterday() -> tuple[str, str]:
+    """Today and previous US game day, for scoreboard lookups without a known date."""
+    today = _espn_us_game_day_today()
+    d = datetime.strptime(today, "%Y-%m-%d").date()
+    yesterday = (d - timedelta(days=1)).isoformat()
+    return today, yesterday
 
 
 def _parse_team_data(competitor: dict[str, Any]) -> TeamDataDict:
@@ -215,19 +230,18 @@ class NBAGameFetcher:
         """Fetch NBA games for a specific date.
 
         Args:
-            date: Date in YYYY-MM-DD format. If None, uses today's date.
-                  Note: Unlike NFL which has weekly schedules, NBA has daily games,
-                  so we default to today rather than using ESPN's default
-                  (which returns yesterday's completed games).
+            date: Date in YYYY-MM-DD format. If None, uses today's US Eastern
+                  game day (matches ESPN scoreboard `dates=`, avoids UTC midnight
+                  skew in Docker).
 
         Returns:
             List of GameInfo objects.
         """
         api = ESPNExternalAPI(sport="basketball", league="nba")
         try:
-            # Default to today if no date provided
+            # Default to US game calendar so UTC-hosted servers still see "tonight's" slate
             if date is None:
-                date = datetime.now().strftime("%Y-%m-%d")
+                date = _espn_us_game_day_today()
 
             # Parse date to ESPN format (YYYYMMDD)
             try:
@@ -318,14 +332,8 @@ class NBAGameFetcher:
         if game_date:
             dates_to_check.append(game_date)
         else:
-            # If no date, check today and yesterday
-            today = datetime.now()
-            dates_to_check.extend(
-                [
-                    today.strftime("%Y-%m-%d"),
-                    (today - timedelta(days=1)).strftime("%Y-%m-%d"),
-                ]
-            )
+            us_today, us_yesterday = _espn_us_game_day_today_and_yesterday()
+            dates_to_check.extend([us_today, us_yesterday])
 
         for date in dates_to_check:
             games = await self.fetch_games_for_date(date)
@@ -465,7 +473,8 @@ class NCAAGameFetcher:
         """Fetch NCAA basketball games for a specific date.
 
         Args:
-            date: Date in YYYY-MM-DD format. If None, uses today's date.
+            date: Date in YYYY-MM-DD format. If None, uses today's US Eastern
+                  game day (matches ESPN scoreboard `dates=`).
 
         Returns:
             List of GameInfo objects.
@@ -473,7 +482,7 @@ class NCAAGameFetcher:
         api = ESPNExternalAPI(sport="basketball", league="mens-college-basketball")
         try:
             if date is None:
-                date = datetime.now().strftime("%Y-%m-%d")
+                date = _espn_us_game_day_today()
 
             try:
                 parsed_date = datetime.strptime(date, "%Y-%m-%d")
@@ -560,13 +569,8 @@ class NCAAGameFetcher:
         if game_date:
             dates_to_check.append(game_date)
         else:
-            today = datetime.now()
-            dates_to_check.extend(
-                [
-                    today.strftime("%Y-%m-%d"),
-                    (today - timedelta(days=1)).strftime("%Y-%m-%d"),
-                ]
-            )
+            us_today, us_yesterday = _espn_us_game_day_today_and_yesterday()
+            dates_to_check.extend([us_today, us_yesterday])
 
         for date in dates_to_check:
             games = await self.fetch_games_for_date(date)

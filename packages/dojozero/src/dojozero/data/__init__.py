@@ -119,6 +119,7 @@ AnyDataEvent = Annotated[
         InjuryReportEvent,
         PowerRankingEvent,
         ExpertPredictionEvent,
+        TwitterTopTweetsEvent,
     ],
     Field(discriminator="event_type"),
 ]
