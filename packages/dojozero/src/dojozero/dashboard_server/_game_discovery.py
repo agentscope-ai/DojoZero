@@ -5,7 +5,7 @@ NBA API and ESPN API (for NFL).
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
@@ -15,7 +15,6 @@ from dojozero.data.nfl._api import NFLExternalAPI
 from dojozero.utils import (
     us_game_day_today,
     us_game_day_today_and_yesterday,
-    utc_to_us_date,
 )
 
 from ._types import BroadcastDataDict, OddsDataDict, TeamDataDict, VenueDataDict
