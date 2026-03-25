@@ -788,6 +788,7 @@ class SLSTraceReader:
         # We paginate using offset parameter to get all data
         page_size = 100  # SLS max per request in search mode
         max_total = 1000000  # Safety limit to prevent infinite loops
+        max_incomplete_retries = 3
         all_rows: list[dict[str, Any]] = []
         offset = 0
 
@@ -806,22 +807,31 @@ class SLSTraceReader:
                 LOGGER.debug(
                     "SLS get_spans request: offset=%d, query=%s", offset, query
                 )
-                response = await self._client.get(
-                    url,
-                    params=params,
-                    headers=headers,
-                )
-                if response.status_code != 200:
-                    LOGGER.error(
-                        "SLS get_spans error response: status=%d, body=%s",
-                        response.status_code,
-                        response.text[:500] if response.text else "(empty)",
-                    )
-                response.raise_for_status()
-                data = response.json()
 
-                # SLS may return list directly or dict with "data" key
-                rows = data if isinstance(data, list) else data.get("data", [])
+                # SLS may return Incomplete results; retry same offset until
+                # x-log-progress is "Complete" (see SLS paged-query docs).
+                rows: list[dict[str, Any]] = []
+                for _attempt in range(max_incomplete_retries):
+                    response = await self._client.get(
+                        url,
+                        params=params,
+                        headers=headers,
+                    )
+                    if response.status_code != 200:
+                        LOGGER.error(
+                            "SLS get_spans error response: status=%d, body=%s",
+                            response.status_code,
+                            response.text[:500] if response.text else "(empty)",
+                        )
+                    response.raise_for_status()
+                    data = response.json()
+
+                    # SLS may return list directly or dict with "data" key
+                    rows = data if isinstance(data, list) else data.get("data", [])
+                    progress = response.headers.get("x-log-progress", "Complete")
+                    if progress == "Complete":
+                        break
+                    await asyncio.sleep(0.2)
 
                 if not rows:
                     break  # No more data
@@ -973,6 +983,7 @@ class SLSTraceReader:
         url = f"{self._get_base_url()}{resource}"
         page_size = 100
         max_total = 100000
+        max_incomplete_retries = 3
         all_rows: list[dict[str, Any]] = []
         offset = 0
 
@@ -987,16 +998,29 @@ class SLSTraceReader:
                     "offset": str(offset),
                 }
                 headers = self._sign_request("GET", resource, params)
-                response = await self._client.get(url, params=params, headers=headers)
-                if response.status_code != 200:
-                    LOGGER.warning(
-                        "SLS day fetch error: status=%d, day=%s",
-                        response.status_code,
-                        day_start.date(),
+
+                # SLS may return Incomplete results; retry same offset until
+                # x-log-progress is "Complete" (see SLS paged-query docs).
+                rows: list[dict[str, Any]] = []
+                for _attempt in range(max_incomplete_retries):
+                    response = await self._client.get(
+                        url, params=params, headers=headers
                     )
-                response.raise_for_status()
-                data = response.json()
-                rows = data if isinstance(data, list) else data.get("data", [])
+                    if response.status_code != 200:
+                        LOGGER.warning(
+                            "SLS day fetch error: status=%d, day=%s",
+                            response.status_code,
+                            day_start.date(),
+                        )
+                    response.raise_for_status()
+                    data = response.json()
+                    rows = data if isinstance(data, list) else data.get("data", [])
+                    progress = response.headers.get("x-log-progress", "Complete")
+                    if progress == "Complete":
+                        break
+                    # Incomplete — wait briefly then retry with same params
+                    await asyncio.sleep(0.2)
+
                 if not rows:
                     break
                 all_rows.extend(rows)
