@@ -6,6 +6,8 @@ OSS helpers load only when accessed (requires ``dojozero[alicloud]``).
 from typing import TYPE_CHECKING
 
 from dojozero.utils.time import (
+    us_game_day_today,
+    us_game_day_today_and_yesterday,
     utc_iso_to_local,
     utc_iso_to_local_date,
     utc_to_local_date,
@@ -16,6 +18,8 @@ __all__ = [
     "OSSClient",
     "upload_file",
     "upload_directory",
+    "us_game_day_today",
+    "us_game_day_today_and_yesterday",
     "utc_iso_to_local",
     "utc_iso_to_local_date",
     "utc_to_local_date",
