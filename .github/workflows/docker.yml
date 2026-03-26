@@ -1,30 +1,45 @@
-name: Docker Build and Push Latest
+name: Build and Publish Docker Image
 
 on:
-  push:
-    branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
-
+    inputs:
+      ref:
+        description: 'The git ref (branch or tag) to build the Docker image from.'
+        required: true
+      version:
+        description: 'Version tag for the Docker image (e.g., 0.1.0)'
+        required: true
 env:
+  GHCR_REGISTRY: ghcr.io
   ACR_REGISTRY: agentscope-registry.ap-southeast-1.cr.aliyuncs.com
   IMAGE: agentscope/dojozero
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: docker.io
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Aliyun ACR
         uses: docker/login-action@v3
@@ -33,9 +48,34 @@ jobs:
           username: ${{ secrets.ALIYUN_ACR_USERNAME }}
           password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
 
-      - name: Build and push multi-arch (latest only)
-        run: |
-          TAGS="-t ${ACR_REGISTRY}/${IMAGE}:latest -t docker.io/${IMAGE}:latest"
-          docker buildx build --platform linux/amd64,linux/arm64 \
-            -f docker/allinone.Dockerfile \
-            ${TAGS} --push .
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE }}
+            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
+            type=raw,value=${{ github.event.inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: docker/allinone.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Generate artifact attestation (GHCR)
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
