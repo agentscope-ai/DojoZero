@@ -2,6 +2,9 @@
 
 Use Arena to inspect trace timelines and trial activity in a browser UI.
 
+**Requirements:** Arena does **not** require the dashboard server (`dojo0 serve`). It **does** require a **trace query backend** reachable from the Arena process—Jaeger Query when using `--trace-backend jaeger`, or SLS when using `--trace-backend sls`—because the UI loads trial and span data from that API.
+
+
 ## 1. Running Arena
 
 Build the React app once; Arena serves `frontend/dist` on the same port as the API.
@@ -57,36 +60,3 @@ Open **http://localhost:5173**. Vite proxies `/api` and `/ws` to `http://localho
 | `--trace-query-endpoint` | Jaeger Query API base URL (default: `http://localhost:16686`). Only used with `--trace-backend=jaeger`. |
 | `--service-name` | Service name for trace queries (default: `dojozero`). |
 | `--static-dir` | Path to frontend build output (`frontend/dist`). Optional; omit in Vite dev mode. |
-
-### `dojo0 serve` (related tracing option)
-
-| Option | Description |
-|---|---|
-| `--trace-backend` | Optional. Pass `jaeger` or `sls` to export traces; if omitted, tracing is disabled. `sls` requires `dojozero[alicloud]` and env vars. |
-| `--trace-ingest-endpoint` | OTLP HTTP ingest URL for Jaeger (default: `http://localhost:4318`). Only used with `--trace-backend=jaeger`. |
-| `--service-name` | Trace `service.name` (default: `dojozero`). |
-
-## 3. Programmatic Usage
-
-```python
-from dojozero.core._tracing import (
-    OTelSpanExporter,
-    create_trace_reader,
-    set_otel_exporter,
-)
-
-# Initialize exporter for Jaeger (OTLP HTTP, e.g. Jaeger collector on 4318)
-exporter = OTelSpanExporter(
-    otlp_endpoint="http://localhost:4318",
-    service_name="my-service",
-)
-exporter.start()
-set_otel_exporter(exporter)
-
-# Create trace reader for querying
-reader = create_trace_reader(
-    backend="jaeger",
-    trace_query_endpoint="http://localhost:16686",
-    service_name="my-service",
-)
-```

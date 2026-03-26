@@ -13,35 +13,38 @@ DojoZero is a system for hosting AI agents that run continuously on realtime dat
 ## Quick Start
 
 1. Install Docker: https://docs.docker.com/get-docker/
-2. Pull and run DojoZero:
+2. Create a `.env` file in the directory where you run the commands below.
+3. Pull and run DojoZero:
 
 ```bash
 docker pull agentscope/dojozero:latest
 
 docker run -d --name dojozero \
+  --env-file ./.env \
   -p 8000:8000 \
   -p 3001:3001 \
   -p 16686:16686 \
   agentscope/dojozero:latest
 ```
 
-3. Open in your browser:
-- Dashboard: `http://localhost:8000`
+4. Open in your browser:
 - Arena: `http://localhost:3001`
 - Jaeger: `http://localhost:16686`
 
 
 Optional environment variables:
-- `DOJOZERO_OPENAI_API_KEY` (or another model provider key) to run default agents
-- `DOJOZERO_TAVILY_API_KEY` for web search
-- `DOJOZERO_X_API_BEARER_TOKEN` for X (Twitter) data access
+
+
+- **LLM providers** — Set the API key to enable the corresponding default agents. Examples: `DOJOZERO_ANTHROPIC_API_KEY`, `DOJOZERO_OPENAI_API_KEY`, `DOJOZERO_DASHSCOPE_API_KEY`, `DOJOZERO_GEMINI_API_KEY`, `DOJOZERO_XAI_API_KEY`. 
+- **Pre-game enrichment** — `DOJOZERO_TAVILY_API_KEY` (web search) and `DOJOZERO_X_API_BEARER_TOKEN` (X/Twitter). Trials that use those streams skip the corresponding feed when a key is not set.
+
+See the [configuration guide](./docs/configuration.md) for the full `DOJOZERO_*` list, trial settings, and agent configuration.
 
 ---
 
 ## Where To Go Next
 
-Explore the DojoZero [`Documentation Hub`](./docs/README.md).
-
+For running single trials, custom agents, backtesting and other advanced usages, read our [documentation](./docs/README.md).
 
 ## Roadmap
 
