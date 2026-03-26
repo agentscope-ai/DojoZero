@@ -124,7 +124,7 @@ logger = logging.getLogger(__name__)
 ## Testing
 
 ```bash
-uv run pytest tests/test_specific.py -v
+uv run pytest packages/dojozero/tests/test_specific.py -v
 uv run pytest -k "test_name"
 uv run pytest -m "not integration"  # Skip integration tests
 uv run pytest -m integration         # Only integration tests

@@ -48,7 +48,7 @@ exclude = [
 extraPaths = ["packages/dojozero/src", "packages/dojozero-client/src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["packages/dojozero/tests", "packages/dojozero-client/tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
