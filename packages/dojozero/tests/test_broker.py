@@ -2,6 +2,8 @@
 Unit tests for Sports Betting Broker Operator using pytest
 """
 
+import json
+
 import pytest
 import pytest_asyncio  # pyright: ignore
 from decimal import Decimal, ROUND_HALF_UP
@@ -30,6 +32,7 @@ from dojozero.data._models import (
     OddsUpdateEvent,
 )
 from dojozero.data._models import MoneylineOdds, SpreadOdds, TotalOdds, OddsInfo
+from dojozero.data.nba import NBAGameUpdateEvent, NBATeamGameStats
 
 # Constants
 SHARES_PRECISION = Decimal("0.01")  # Precision for shares: 2 decimal places
@@ -1398,6 +1401,196 @@ class TestStateManagement:
         assert event is not None
         quote = event.model_dump(mode="json")
         assert quote["event_id"] == "test_event"
+
+
+# =============================================================================
+# Pull-based game state (recent_game_updates cache)
+# =============================================================================
+
+
+class TestPullBasedGameUpdates:
+    """Broker caches BaseGameUpdateEvent for get_event() and save_state/load_state."""
+
+    @staticmethod
+    def _parse_tool_json(tool_response: Any) -> dict[str, Any]:
+        assert tool_response.content, "ToolResponse.content should not be empty"
+        text_parts = [
+            item["text"] for item in tool_response.content if item.get("type") == "text"
+        ]
+        assert text_parts, f"No text content in tool response: {tool_response}"
+        return json.loads("".join(text_parts))
+
+    async def test_get_event_includes_recent_game_updates_order_and_size(
+        self, broker_with_agent
+    ):
+        """Game updates flow through the broker; get_event exposes them with deque size/order."""
+        broker, agent = broker_with_agent
+        game_id = "lakers_vs_warriors"
+
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="nba_game_stream",
+                payload=GameInitializeEvent(
+                    game_id=game_id,
+                    home_team="Lakers",
+                    away_team="Warriors",
+                    game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="nba_odds_stream",
+                payload=OddsUpdateEvent(
+                    game_id=game_id,
+                    odds=OddsInfo(
+                        moneyline=MoneylineOdds(
+                            home_probability=0.513,
+                            away_probability=0.476,
+                            home_odds=1.95,
+                            away_odds=2.10,
+                        )
+                    ),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+        def _nba_snapshot(
+            home_score: int, away_score: int, period: int
+        ) -> NBAGameUpdateEvent:
+            return NBAGameUpdateEvent(
+                game_id=game_id,
+                period=period,
+                game_clock="6:00",
+                home_score=home_score,
+                away_score=away_score,
+                home_team_stats=NBATeamGameStats(
+                    team_city="Los Angeles",
+                    team_name="Lakers",
+                    score=home_score,
+                ),
+                away_team_stats=NBATeamGameStats(
+                    team_city="Golden State",
+                    team_name="Warriors",
+                    score=away_score,
+                ),
+            )
+
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="nba_game_stream",
+                payload=_nba_snapshot(10, 8, period=1),
+                emitted_at=datetime.now(),
+            )
+        )
+        tools = broker.agent_tools(agent.actor_id)
+        get_event_tool = next(t for t in tools if t.__name__ == "get_event")
+
+        first = self._parse_tool_json(await get_event_tool())
+        assert "recent_game_updates" in first
+        assert len(first["recent_game_updates"]) == 1
+        assert first["recent_game_updates"][0]["home_score"] == 10
+        assert first["recent_game_updates"][0]["away_score"] == 8
+
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="nba_game_stream",
+                payload=_nba_snapshot(55, 52, period=2),
+                emitted_at=datetime.now(),
+            )
+        )
+        second = self._parse_tool_json(await get_event_tool())
+        # Broker keeps a bounded deque (maxlen=1): only the latest snapshot remains.
+        assert len(second["recent_game_updates"]) == 1
+        assert second["recent_game_updates"][0]["home_score"] == 55
+        assert second["recent_game_updates"][0]["away_score"] == 52
+        assert second["recent_game_updates"][0]["period"] == 2
+
+        cached = await broker.get_recent_game_updates()
+        assert len(cached) == 1
+        assert cached[0].home_score == 55
+        assert cached[0].away_score == 52
+
+    async def test_recent_game_updates_survives_save_and_load_state(
+        self, broker_with_agent
+    ):
+        """recent_game_updates is part of save_state and is restored by load_state."""
+        broker, agent = broker_with_agent
+        game_id = "test_event_game_updates"
+
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="nba_game_stream",
+                payload=GameInitializeEvent(
+                    game_id=game_id,
+                    home_team="Lakers",
+                    away_team="Warriors",
+                    game_time=datetime.fromisoformat("2025-12-15T19:00:00"),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="nba_odds_stream",
+                payload=OddsUpdateEvent(
+                    game_id=game_id,
+                    odds=OddsInfo(
+                        moneyline=MoneylineOdds(
+                            home_probability=0.513,
+                            away_probability=0.476,
+                            home_odds=1.95,
+                            away_odds=2.10,
+                        )
+                    ),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="nba_game_stream",
+                payload=NBAGameUpdateEvent(
+                    game_id=game_id,
+                    period=3,
+                    game_clock="2:00",
+                    home_score=88,
+                    away_score=90,
+                    home_team_stats=NBATeamGameStats(
+                        team_city="Los Angeles",
+                        team_name="Lakers",
+                        score=88,
+                    ),
+                    away_team_stats=NBATeamGameStats(
+                        team_city="Golden State",
+                        team_name="Warriors",
+                        score=90,
+                    ),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+        state = await broker.save_state()
+        new_broker = BrokerOperator(
+            {"actor_id": "restored_broker"}, trial_id="test-trial"
+        )
+        await new_broker.load_state(state)
+
+        restored = await new_broker.get_recent_game_updates()
+        assert len(restored) == 1
+        assert restored[0].home_score == 88
+        assert restored[0].away_score == 90
+        assert restored[0].period == 3
+
+        tools = new_broker.agent_tools(agent.actor_id)
+        get_event_tool = next(t for t in tools if t.__name__ == "get_event")
+        payload = self._parse_tool_json(await get_event_tool())
+        assert payload["recent_game_updates"][0]["home_score"] == 88
+        assert payload["recent_game_updates"][0]["away_score"] == 90
 
 
 # =============================================================================

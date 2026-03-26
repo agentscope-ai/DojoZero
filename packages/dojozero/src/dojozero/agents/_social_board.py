@@ -339,14 +339,14 @@ class SocialBoard:
 def create_social_board_tools(
     board: SocialBoard,
     *,
-    hot_topics_interval: int = 20,
+    hot_topics_interval: int = 100,
     hot_topics_trigger: Callable[[], Awaitable[None]] | None = None,
 ) -> list:
     """Create agent tool functions for social board operations.
 
     Args:
         board: SocialBoard instance to create tools for
-        hot_topics_interval: Every N messages, fire hot_topics_trigger (default 20).
+        hot_topics_interval: Every N messages, fire hot_topics_trigger (default 100).
         hot_topics_trigger: Optional async callback to generate and push hot topics
             to all agents when message count reaches a multiple of hot_topics_interval.
 

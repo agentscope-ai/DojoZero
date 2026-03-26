@@ -29,7 +29,12 @@ from dojozero.agents import (
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
 from dojozero.betting._config import MEMORY_SUMMARY_PROMPT
-from dojozero.data._models import DataEvent, EventTypes, extract_game_id
+from dojozero.data._models import (
+    BaseGameUpdateEvent,
+    DataEvent,
+    EventTypes,
+    extract_game_id,
+)
 from dojozero.agents import HotTopicsEvent, SocialBoard, format_hot_topics_for_llm
 from dojozero.betting._models import (
     ReasoningStep,
@@ -643,12 +648,12 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         if isinstance(board_or_args, (list, tuple)) and len(board_or_args) >= 1:
             board = cast(SocialBoard, board_or_args[0])
             hot_topics_interval = (
-                int(board_or_args[1]) if len(board_or_args) > 1 else 20
+                int(board_or_args[1]) if len(board_or_args) > 1 else 100
             )
             hot_topics_trigger = board_or_args[2] if len(board_or_args) > 2 else None
         else:
             board = cast(SocialBoard, board_or_args)
-            hot_topics_interval = 20
+            hot_topics_interval = 100
             hot_topics_trigger = None
 
         self._social_board = board
@@ -838,8 +843,10 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
     ) -> list[StreamEvent[Any]]:
         """Filter out events that should not wake the agent.
 
-        ODDS_UPDATE events are excluded because odds are now pull-based: the agent
-        reads current odds by calling get_event() rather than being pushed them.
+        ODDS_UPDATE and GAME_UPDATE events are excluded because they are pull-based:
+        the agent reads the latest odds and game state by calling get_event() rather
+        than being triggered by each push. The broker still processes all these events
+        internally to keep its state current.
 
         Args:
             events: List of events to filter
@@ -858,6 +865,13 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                     logger.debug(
                         "agent '%s' ignoring odds_update event (pull-based via get_event)",
                         self.actor_id,
+                    )
+                    continue
+                if isinstance(payload, BaseGameUpdateEvent):
+                    logger.debug(
+                        "agent '%s' ignoring %s event (pull-based via get_event)",
+                        self.actor_id,
+                        event_type,
                     )
                     continue
 

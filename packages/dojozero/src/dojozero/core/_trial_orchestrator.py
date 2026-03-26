@@ -932,7 +932,7 @@ class TrialOrchestrator:
                 )
                 continue
 
-            hot_topics_interval = 20
+            hot_topics_interval = 100
             hot_topics_trigger = self._build_hot_topics_trigger(
                 social_board,
                 target_agents,
