@@ -341,7 +341,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Event throttle: minimum seconds between LLM invocations.
         # Events arriving during cooldown are queued and batch-processed
         # once the cooldown expires, reducing LLM API call volume.
-        self._min_event_interval: float = 1.0
+        self._min_event_interval: float = 180.0
         self._last_process_time: float = 0.0
         self._cooldown_task: asyncio.Task[None] | None = None
 
