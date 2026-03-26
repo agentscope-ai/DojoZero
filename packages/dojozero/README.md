@@ -22,15 +22,6 @@ pip install dojozero[ray]        # Distributed execution via Ray
 cp .env.example .env
 ```
 
-Minimum required keys in `.env`:
-
-```bash
-DOJOZERO_DASHSCOPE_API_KEY=your_key
-DOJOZERO_TAVILY_API_KEY=your_key
-```
-
-See the [getting started guide](https://github.com/agentscope-ai/DojoZero/blob/main/docs/getting-started.md) for environment variables, trial config, and CLI workflows.
-
 ## Quick Start
 
 ### Run a single trial locally
