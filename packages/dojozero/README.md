@@ -93,8 +93,7 @@ dojo0 arena --trace-backend jaeger
 
 ## Documentation
 
-- [Documentation Hub](https://github.com/agentscope-ai/DojoZero/blob/main/docs/README.md)
-- [Getting Started](https://github.com/agentscope-ai/DojoZero/blob/main/docs/getting-started.md)
+- [Documentation](https://github.com/agentscope-ai/DojoZero/docs/README.md)
 
 ## License
 
