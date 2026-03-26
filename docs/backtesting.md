@@ -1,8 +1,8 @@
-# Backtesting Guide
+# Backtesting
 
 Backtesting replays historical event files through your agent stack so you can evaluate behavior quickly and reproducibly.
 
-## Basic Usage
+## 1. Basic Usage
 
 ```bash
 dojo0 backtest \
@@ -12,18 +12,18 @@ dojo0 backtest \
   --max-sleep 20.0
 ```
 
-## Multiple Files (Glob)
+## 2. Replay Multiple Files (Glob)
 
 ```bash
 dojo0 backtest \
-  --events "outputs/2025-01-*/*.jsonl" \
+  --events "outputs/2026-03-*/*.jsonl" \
   --params trial_params/nba-moneyline.yaml \
   --speed 5.0
 ```
 
 Files are processed in sorted order.
 
-## Submit Backtest to Dashboard Server
+## 3. Submit Backtest to Dashboard Server
 
 ```bash
 dojo0 backtest \
@@ -32,7 +32,9 @@ dojo0 backtest \
   --server http://localhost:8000
 ```
 
-## CLI Options
+Use `--server` when you want orchestration and visibility through the dashboard service.
+
+## 4. CLI Options
 
 | Option | Description |
 |---|---|

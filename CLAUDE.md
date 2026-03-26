@@ -2,7 +2,7 @@
 
 AI agent system for real-time data reasoning and automated prediction/trading. Agents run continuously on live data streams to analyze outcomes and take actions.
 
-See [README.md](./README.md) for installation and CLI usage. **Default install** excludes Alibaba Cloud wheels (`oss2`, credentials SDK, SLS SDK); use `dojozero[alicloud]` and/or `dojozero[redis]` when needed — details in [docs/installation.md](./docs/installation.md).
+See [README.md](./README.md) for installation and CLI usage. **Default install** excludes Alibaba Cloud wheels (`oss2`, credentials SDK, SLS SDK); use `dojozero[alicloud]` and/or `dojozero[redis]` when needed.
 
 ## Project Structure
 

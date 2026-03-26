@@ -30,7 +30,7 @@ from dojozero.data.espn import (
     STATUS_FINAL,
     STATUS_POSTPONED,
 )
-from dojozero.utils import utc_to_us_date
+from dojozero.utils import utc_to_us_date, us_game_day_today
 
 from ._game_discovery import GameInfo, NBAGameFetcher, NCAAGameFetcher, NFLGameFetcher
 from ._trial_manager import TrialManager
@@ -566,12 +566,9 @@ class ScheduleManager:
         # Fetch games
         games: list[GameInfo] = []
         if sport_type == "nba":
-            if not date:
-                date = datetime.now().strftime("%Y-%m-%d")
+            # None → fetcher uses us_game_day_today() (US Eastern game day)
             games = await self._nba_fetcher.fetch_games_for_date(date)
         elif sport_type == "ncaa":
-            if not date:
-                date = datetime.now().strftime("%Y-%m-%d")
             games = await self._ncaa_fetcher.fetch_games_for_date(date)
         elif sport_type == "nfl":
             if week is not None:
@@ -889,7 +886,8 @@ class ScheduleManager:
         # Check max_daily_games limit (count all games scheduled today for this source)
         max_games = config.max_daily_games
         if max_games > 0:
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            # Align with game_date / ESPN slate: US Eastern calendar day, not UTC
+            today = us_game_day_today()
             daily_count = sum(
                 1
                 for sid, gid in self._scheduled_events

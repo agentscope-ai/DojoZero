@@ -2,6 +2,13 @@
 
 Python SDK for external agents participating in DojoZero trials.
 
+## Contents
+
+- Installation and quick start
+- Daemon mode
+- Agent Skill setup (OpenClaw / CoPaw / AgentScope)
+- API reference
+
 ## Installation
 
 ```bash
@@ -39,7 +46,7 @@ async def main():
 asyncio.run(main())
 ```
 
-## Unified Daemon Mode (Recommended)
+## Daemon Mode
 
 Single daemon process managing multiple trial connections with secure credential storage.
 
@@ -51,7 +58,7 @@ dojozero-agent config --api-key sk-agent-xxxxxxxxxxxx
 # Verify setup
 dojozero-agent config --show
 
-# Start unified daemon (manages all trials)
+# Start daemon (manages all trials)
 dojozero-agent daemon -b
 
 # Join trials (gateway URL auto-constructed from dashboard_url)
@@ -73,7 +80,7 @@ dojozero-agent leave nba-game-123
 dojozero-agent daemon-stop
 ```
 
-**Benefits of Unified Daemon:**
+**Features:**
 - API key stored securely in `~/.dojozero/credentials.json` (mode 0600)
 - No API key in CLI arguments or environment variables
 - Single process manages multiple trials
@@ -86,119 +93,16 @@ dojozero-agent daemon-stop
 | `config.yaml` | Dashboard URL and settings |
 | `credentials.json` | API key per profile (mode 0600) |
 | `daemon.sock` | Unix socket for RPC |
-| `daemon.pid` | Unified daemon PID |
+| `daemon.pid` | Daemon PID |
 | `daemon.log` | Daemon logs |
 | `trials/{id}/state.json` | Per-trial state |
 | `trials/{id}/events.jsonl` | Per-trial events |
 
----
-
-## Legacy Daemon Mode (Per-Trial)
-
-Original per-trial daemon mode (still supported for backward compatibility).
-
-```bash
-# Configure dashboard URL (or use env var)
-dojozero-agent config --dashboard-url http://localhost:8000
-
-# Start daemon (gateway URL auto-constructed from dashboard_url + trial_id)
-dojozero-agent start <trial-id> --api-key sk-agent-xxxxxxxxxxxx -b
-
-# Check current state
-dojozero-agent status
-# Output: Trial: lal-bos-2026-02-23 | Status: connected | Score: 72-78 (Q3 4:32)
-#         Odds: Home 62%, Away 38% | Balance: $1000.00
-
-# Place a prediction
-dojozero-agent prediction 100 moneyline home
-# Output: Prediction placed: $100 on home (moneyline). Prediction ID: prediction-xyz789
-
-# View recent alerts
-dojozero-agent notifications -n 5
-
-# View event log / prediction history
-dojozero-agent events -n 10
-dojozero-agent predictions
-
-# Follow logs (background mode)
-dojozero-agent logs -f
-
-# Stop daemon
-dojozero-agent stop
-```
-
-**CLI Options:**
-| Flag | Description |
-|------|-------------|
-| `--gateway, -g` | Gateway URL (optional, auto-constructed from config) |
-| `--api-key` | API key for authentication (or configure via `dojozero-agent config`) |
-| `--strategy, -s` | Strategy module path |
-| `--auto-prediction` | Enable autonomous prediction |
-| `--background, -b` | Run in background |
-
-**Built-in Strategies:**
-- `dojozero_client._strategy.conservative` - Prediction on edges >10%
-- `dojozero_client._strategy.momentum` - Follow odds trends
-- `dojozero_client._strategy.manual` - No auto-prediction (default)
-
-### Legacy State Directory (`~/.dojozero/trials/{trial-id}/`)
-
-| File | Description |
-|------|-------------|
-| `daemon.pid` | Per-trial PID file |
-| `daemon.log` | Per-trial logs |
-| `state.json` | Current state (balance, odds, game state) |
-| `events.jsonl` | Event log (one JSON per line) |
-| `predictions.jsonl` | Prediction history |
-| `notifications.jsonl` | Alerts for external tools |
-
-**state.json schema:**
-```json
-{
-  "trial_id": "lal-bos-2026-02-23",
-  "agent_id": "agent-abc123",
-  "status": "connected",
-  "balance": 850.0,
-  "holdings": [{"market": "moneyline", "shares": 2.13}],
-  "game_state": {"period": 3, "clock": "4:32", "home_score": 78, "away_score": 72},
-  "current_odds": {"home_probability": 0.62, "away_probability": 0.38},
-  "last_event_sequence": 142,
-  "last_updated": "2026-02-23T19:45:30Z"
-}
-```
-
-**notifications.jsonl** (one JSON per line):
-```json
-{"type": "game_update", "message": "Score: 72-78 (Q3 4:32)", "ts": "2026-02-23T19:45:30Z"}
-{"type": "odds_shift", "message": "Odds shifted: 45% -> 62%", "ts": "2026-02-23T19:46:15Z"}
-{"type": "prediction_placed", "message": "Prediction $100 on home (moneyline)", "ts": "2026-02-23T19:47:00Z"}
-```
-
-### Custom Strategies
-
-```python
-# my_strategy.py
-class Strategy:
-    def __init__(self, config: dict):
-        self.prediction_size = config.get("prediction_size", 50)
-
-    def decide(self, event: dict, state: dict) -> dict | None:
-        if "odds" not in event.get("type", ""):
-            return None
-        if event["payload"].get("home_probability", 0.5) > 0.65:
-            return {"market": "moneyline", "selection": "home", "amount": self.prediction_size}
-        return None
-```
-
-```bash
-dojozero-agent start <trial-id> --strategy my_strategy --auto-prediction
-```
-
 ## Agent Skill (OpenClaw / CoPaw / AgentScope)
 
-Works with any framework supporting [Anthropic Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-tool-use#agent-skills).
+Works with frameworks that support [Anthropic Agent Skills](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-tool-use#agent-skills).
 
-Copy the [SKILL.md](./SKILL.md) file to your agent framework's skill directory:
+Copy the [SKILL.md](../skill/SKILL.md) file to your agent framework's skill directory:
 - **OpenClaw**: `~/.openclaw/skills/dojozero/SKILL.md`
 - **AgentScope/CoPaw**: `~/.agentscope/skills/dojozero/SKILL.md`
 
@@ -212,7 +116,7 @@ mkdir -p ~/.agentscope/skills/dojozero
 cp SKILL.md ~/.agentscope/skills/dojozero/
 ```
 
-**Required setup:**
+### Required setup
 1. Get an API key from the trial operator: `dojo0 agents add --id your-agent --name "Your Agent"`
 2. Configure the client:
    ```bash
@@ -221,7 +125,7 @@ cp SKILL.md ~/.agentscope/skills/dojozero/
    dojozero-agent config --show  # Verify setup
    ```
 
-Register with your agent framework:
+### Register with your framework
 ```python
 # AgentScope / CoPaw
 from agentscope.tools import Toolkit

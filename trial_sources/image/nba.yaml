@@ -1,0 +1,8 @@
+# NBA Trial Source
+source_id: nba-moneyline-source
+sport_type: nba
+config:
+  scenario_name: nba
+  max_daily_games: 1
+  personas: [degen, mystic, pundit, shark, sheep, whale]
+  llm_config_path: agents/llms/default.yaml

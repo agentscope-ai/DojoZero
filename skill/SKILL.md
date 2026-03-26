@@ -1,16 +1,24 @@
 ---
 name: dojozero
-description: "Participate in DojoZero sports prediction trials. Use when user wants to join prediction trials, check game status, place predictions, or monitor odds."
+description: "Participate in DojoZero prediction trials. Use when user wants to join prediction trials, check game status, place predictions, or monitor odds."
 metadata:
   copaw:
     emoji: "🎲"
-    requires:
-      bins: ["dojozero-agent"]
 ---
 
 # DojoZero Prediction Skill
 
 Connect to live sports prediction trials, monitor odds, and place predictions.
+
+## Prerequisites
+
+Install the client:
+
+```bash
+pip install dojozero-client
+```
+
+Ensure `dojozero-agent` is on your PATH after installation.
 
 ## First-Run Setup (Interactive)
 
@@ -86,7 +94,7 @@ Credentials (~/.dojozero/credentials.json):
 
 Or with a GitHub token:
 ```
-  API key (default): ghp_xxxxxx...xxxx (GitHub PAT)
+  API key (default): github_pat_xx...xxxx (GitHub PAT)
 ```
 
 ## Multiple Agent Profiles
@@ -140,7 +148,7 @@ Profile is determined in this order:
 
 **Environment-based setup (recommended for dedicated agents):**
 ```bash
-# Set profile for this CoPaw instance
+# Set profile for this agent instance
 export DOJOZERO_PROFILE=alice
 
 # Now all commands automatically use "alice" profile
@@ -251,7 +259,7 @@ Trial ID is optional if only one trial is running.
 
 | Need | Command | Use When |
 |------|---------|----------|
-| Quick snapshot | `status` | Check current score, odds, balance before prediction |
+| Quick snapshot | `status` | Check current score, odds, balance before predicting |
 | Game activity | `events -n 20` | See recent plays, scores, odds changes - **use this during active games** |
 | Alerts only | `notifications -n 5` | See important updates (odds shifts, prediction confirmations) |
 
@@ -311,7 +319,7 @@ API keys are stored securely with mode 0600:
 {
   "default": "default",
   "profiles": {
-    "default": {"api_key": "ghp_xxxxxxxxxxxx"},
+    "default": {"api_key": "github_pat_xxxxxxxxxxxx"},
     "alice": {"api_key": "sk-agent-alice"},
     "bob": {"api_key": "sk-agent-bob"}
   }
@@ -325,7 +333,7 @@ API keys can be either GitHub PATs (`ghp_`/`github_pat_` prefix) or DojoZero key
 ```json
 {
   "trial_id": "lal-bos-2026-02-23",
-  "agent_id": "copaw-agent",
+  "agent_id": "agent-abc123",
   "status": "connected",
   "balance": 850.0,
   "game_state": {"period": 3, "clock": "4:32", "home_score": 78, "away_score": 72},
@@ -346,7 +354,7 @@ API keys can be either GitHub PATs (`ghp_`/`github_pat_` prefix) or DojoZero key
 
 - Always run `dojozero-agent config --show` first to check configuration
 - Both `dashboard_url` and `api_key` must be configured before joining trials
-- Check `status` before prediction to see current odds and balance
+- Check `status` before predicting to see current odds and balance
 - Use `notifications` to see what happened while you were away
 - Prediction amounts cannot exceed your balance
 - The daemon auto-reconnects if the connection drops
@@ -359,7 +367,7 @@ For more control, use the Python SDK directly:
 
 ```python
 import asyncio
-from dojozero_client import DojoClient
+from dojozero_client import DojoClient, StaleReferenceError, PredictionClosedError
 
 async def main():
     client = DojoClient()
@@ -375,13 +383,16 @@ async def main():
         async for event in trial.events():
             odds = await trial.get_current_odds()
             if odds.prediction_open and odds.home_probability > 0.6:
-                result = await trial.place_prediction(
-                    market="moneyline",
-                    selection="home",
-                    amount=100,
-                    reference_sequence=event.sequence,
-                )
-                print(f"Prediction placed: {result.prediction_id}")
+                try:
+                    result = await trial.place_prediction(
+                        market="moneyline",
+                        selection="home",
+                        amount=100,
+                        reference_sequence=event.sequence,
+                    )
+                    print(f"Prediction placed: {result.prediction_id}")
+                except (StaleReferenceError, PredictionClosedError) as e:
+                    print(f"Prediction rejected: {e}")
 
 asyncio.run(main())
 ```

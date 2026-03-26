@@ -1,6 +1,6 @@
-# Configuration Guide
+# Full Configuration Guide
 
-This guide covers the current DojoZero configuration which includes:
+This guide covers DojoZero configuration in three areas:
 
 1. **Environment variables** (`DOJOZERO_*` in `.env`)
 2. **Trial configurations** (`trial_params/*.yaml`, `trial_sources/*.yaml`)
@@ -9,23 +9,25 @@ This guide covers the current DojoZero configuration which includes:
 
 ## 1. Environment Variables
 
-### Core model and data keys
+### Search and social signals
 
 | Variable | Required | Purpose | Where to get it |
 |---|---|---|---|
-| `DOJOZERO_DASHSCOPE_API_KEY` | Required when using DashScope-backed models (Qwen/Deepseek) | LLM calls | DashScope account |
-| `DOJOZERO_TAVILY_API_KEY` | Optional (required if pre-game web search stream is enabled) | Web search API | Tavily account |
-| `DOJOZERO_X_API_BEARER_TOKEN` | Optional (required only if social media stream is enabled) | X/Twitter social signal ingestion | X developer account |
+| `DOJOZERO_TAVILY_API_KEY` | Optional (required if a trial enables the Tavily web-search stream) | Web search (Tavily) | [Tavily](https://tavily.com/) |
+| `DOJOZERO_X_API_BEARER_TOKEN` | Optional (required if a trial enables the X/Twitter stream) | Social posts / signals | [X Developer Portal](https://developer.x.com/) |
 
+### LLM provider keys
 
-### Additional model/provider keys
+Set the keys that match your `agents/llms/*.yaml` provider choice. See `.env.example` for the full list (including optional Alibaba OSS/SLS variables).
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `DOJOZERO_ANTHROPIC_API_KEY` | If using Claude model config | Anthropic API access |
-| `DOJOZERO_OPENAI_BASE_URL` | If using OPENAI model config | Custom OpenAI-compatible endpoint |
-| `DOJOZERO_GEMINI_API_KEY` | If using Gemini model config | Gemini API access |
-| `DOJOZERO_XAI_API_KEY` | If using Grok model config | Grok API access |
+| Variable | Required | Purpose | Where to get it |
+|---|---|---|---|
+| `DOJOZERO_DASHSCOPE_API_KEY` | When using DashScope-backed models (e.g. Qwen) in agent LLM config | LLM inference on DashScope | [DashScope](https://dashscope.aliyun.com/) |
+| `DOJOZERO_ANTHROPIC_API_KEY` | When using Claude in agent LLM config | Anthropic Messages API | [Anthropic](https://www.anthropic.com/) |
+| `DOJOZERO_OPENAI_API_KEY` | When using OpenAI or a compatible API that expects an API key | Bearer token for the provider | OpenAI or your compatible host |
+| `DOJOZERO_OPENAI_BASE_URL` | When using a non-default OpenAI-compatible base URL | Overrides the default API base | Your provider’s docs |
+| `DOJOZERO_GEMINI_API_KEY` | When using Gemini in agent LLM config | Google Gemini API | [Google AI / Gemini](https://ai.google.dev/) |
+| `DOJOZERO_XAI_API_KEY` | When using Grok in agent LLM config | xAI API | [xAI](https://x.ai/) |
 
 ## `.env.example` and local setup
 
@@ -40,9 +42,9 @@ Then fill only the variables your scenario needs. Never commit real credentials.
 ### Python dependencies vs. features
 
 - **Default install** (`uv pip install packages/dojozero`): core trials + **Jaeger** tracing. No OSS/SLS/Redis client libraries.
-- **Alibaba / Redis extras** (`uv pip install 'packages/dojozero[alicloud,redis]'`): needed for OSS, `--trace-backend sls`, and Redis-backed sync-service paths.
+- **Alibaba / Redis extras** (`uv pip install 'packages/dojozero[alicloud,redis]'`): required for OSS, `--trace-backend sls`, and Redis-backed sync-service paths.
 
-See [`installation.md`](./installation.md) for the full split.
+See [`getting-started.md`](./getting-started.md) for installation details.
 
 Typical minimum for NBA/NFL trial usage:
 
@@ -55,6 +57,7 @@ DOJOZERO_TAVILY_API_KEY=...
 ## 2. Trial Configuration (`trial_params/*.yaml`, `trial_sources/*.yaml`)
 
 ### Trial Parameter YAML (`trial_params/*.yaml`)
+
 A trial params file defines one concrete, manually selected trial (single run).
 
 ```yaml
@@ -84,7 +87,8 @@ scenario:
 | `scenario.config.agents` | Agent instances, persona, model config, subscriptions |
 
 ### Trial Source YAML (`trial_sources/*.yaml`)
-Trial sources enable automatic game discovery and trial scheduling. When the server starts with --trial-source, it periodically syncs with sports APIs to find upcoming games and schedules trials to start before each game.
+
+Trial sources enable automatic game discovery and scheduling. When the server starts with `--trial-source`, it periodically syncs with sports APIs, discovers upcoming games, and schedules trials ahead of start time.
 
 ```yaml
 # trial_sources/nba.yaml
@@ -112,8 +116,8 @@ config:
 
 ## 3. Agent Configuration (`agents/personas`, `agents/llms`)
 
-1. **Persona config** (`agents/personas/*.yaml`) - strategy style, tone, risk profile, and decision preferences.
-2. **LLM config** (`agents/llms/*.yaml`) - model provider, model name, and API key environment mapping.
+- **Persona config** (`agents/personas/*.yaml`): strategy style, tone, risk profile, and decision preferences.
+- **LLM config** (`agents/llms/*.yaml`): model provider, model name, and API key environment mapping.
 
 ### Persona configuration
 

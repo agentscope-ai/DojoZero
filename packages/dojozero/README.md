@@ -22,15 +22,6 @@ pip install dojozero[ray]        # Distributed execution via Ray
 cp .env.example .env
 ```
 
-Minimum required keys in `.env`:
-
-```bash
-DOJOZERO_DASHSCOPE_API_KEY=your_key
-DOJOZERO_TAVILY_API_KEY=your_key
-```
-
-See [configuration docs](https://github.com/agentscope-ai/DojoZero/blob/main/docs/configuration.md) for all environment variables and trial config.
-
 ## Quick Start
 
 ### Run a single trial locally
@@ -61,7 +52,7 @@ dojo0 run \
 ### Automatic scheduling with trial sources
 
 ```bash
-dojo0 serve --trace-backend jaeger --trial-source "trial_sources/*.yaml"
+dojo0 serve --trace-backend jaeger --trial-source "trial_sources/daily/*.yaml"
 ```
 
 ### Backtest from captured events
@@ -93,13 +84,7 @@ dojo0 arena --trace-backend jaeger
 
 ## Documentation
 
-- [CLI Usage](https://github.com/agentscope-ai/DojoZero/blob/main/docs/cli.md)
-- [Installation](https://github.com/agentscope-ai/DojoZero/blob/main/docs/installation.md)
-- [Configuration](https://github.com/agentscope-ai/DojoZero/blob/main/docs/configuration.md)
-- [Architecture](https://github.com/agentscope-ai/DojoZero/blob/main/docs/architecture.md)
-- [Tracing](https://github.com/agentscope-ai/DojoZero/blob/main/docs/tracing.md)
-- [Trial Runners](https://github.com/agentscope-ai/DojoZero/blob/main/docs/trial-runners.md)
-- [Backtesting](https://github.com/agentscope-ai/DojoZero/blob/main/docs/backtesting.md)
+- [Documentation](https://github.com/agentscope-ai/DojoZero/docs/README.md)
 
 ## License
 

@@ -12,43 +12,40 @@ DojoZero is a system for hosting AI agents that run continuously on realtime dat
 
 ## Quick Start
 
-Install Docker first: https://docs.docker.com/get-docker/
+1. Install Docker: https://docs.docker.com/get-docker/
+2. Create a `.env` file in the directory where you run the commands below.
+3. Pull and run DojoZero:
 
-Then pull and run the all-in-one image:
 ```bash
-# 1) Pull the all-in-one image
 docker pull agentscope/dojozero:latest
 
-# 2) Create `.env` (minimum required keys)
-cat > .env <<'EOF'
-DOJOZERO_DASHSCOPE_API_KEY=your_dashscope_key
-DOJOZERO_TAVILY_API_KEY=your_tavily_key
-# You can use other provider keys instead of the dashscope api key above (e.g. DOJOZERO_OPENAI_API_KEY).
-# See `.env.example` for the full list and optional settings.
-EOF
-
-# 3) Run directly (uses container defaults)
 docker run -d --name dojozero \
-  --env-file .env \
+  --env-file ./.env \
   -p 8000:8000 \
   -p 3001:3001 \
   -p 16686:16686 \
   agentscope/dojozero:latest
 ```
 
-Open in your browser:
-- Dashboard: `http://localhost:8000`
+4. Open in your browser:
 - Arena: `http://localhost:3001`
 - Jaeger: `http://localhost:16686`
 
 
+Optional environment variables:
+
+
+- **LLM providers** — Set the API key to enable the corresponding default agents. Examples: `DOJOZERO_ANTHROPIC_API_KEY`, `DOJOZERO_OPENAI_API_KEY`, `DOJOZERO_DASHSCOPE_API_KEY`, `DOJOZERO_GEMINI_API_KEY`, `DOJOZERO_XAI_API_KEY`. 
+- **Pre-game enrichment** — `DOJOZERO_TAVILY_API_KEY` (web search) and `DOJOZERO_X_API_BEARER_TOKEN` (X/Twitter). Trials that use those streams skip the corresponding feed when a key is not set.
+
+See the [configuration guide](./docs/configuration.md) for the full `DOJOZERO_*` list, trial settings, and agent configuration.
+
 ---
 
 ## Where To Go Next
-- **For advanced users: install DojoZero locally and run more commands via the CLI**: [`docs/cli.md`](./docs/cli.md)
-- **Customize trials and agents**: [`docs/configuration.md`](./docs/configuration.md)
-- **Run game-centric trials with the NBA/NFL tool runners**: [`docs/trial-runners.md`](./docs/trial-runners.md)
-- **Replay historical events**: [`docs/backtesting.md`](./docs/backtesting.md)
+
+For running single trials, custom agents, backtesting and other advanced usages, read our [documentation](./docs/README.md).
+
 
 
 ## Roadmap

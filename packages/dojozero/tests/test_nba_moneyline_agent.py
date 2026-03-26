@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import ray
 
-from dojozero.agents import load_agent_config
+from dojozero.agents import load_llm_file_config, load_persona_config
 from dojozero.betting import BrokerOperator
 from dojozero.core import RuntimeContext, AgentSpec, OperatorSpec, StreamEvent
 from dojozero.data._models import GameInitializeEvent, GameResultEvent
@@ -167,13 +167,13 @@ def broker_spec() -> OperatorSpec:
 
 def _create_ray_agent_config() -> BettingAgentConfig:
     """Create agent config with test-specific env vars for Ray."""
-    config = load_agent_config(BASIC_PERSONA_PATH, DEFAULT_LLM_CONFIG_PATH)
-    # llm is a list of configs - use the first one for tests
-    llm_config = config["llm"][0]
+    persona = load_persona_config(BASIC_PERSONA_PATH)
+    llm_file = load_llm_file_config(DEFAULT_LLM_CONFIG_PATH)
+    llm_config = llm_file["llm"][0]
     return BettingAgentConfig(
-        actor_id=config["name"],
-        name=config.get("name", ""),
-        sys_prompt=config.get("sys_prompt", ""),
+        actor_id=AGENT_ID,
+        name=AGENT_ID,
+        sys_prompt=persona.get("sys_prompt", ""),
         llm={
             "model_type": llm_config.get("model_type", "openai"),
             "model_name": llm_config.get("model_name", "qwen3-max"),
