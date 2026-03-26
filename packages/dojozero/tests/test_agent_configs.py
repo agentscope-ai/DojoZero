@@ -117,7 +117,9 @@ class TestPersonaConfigLoading:
 class TestLLMCredentialFilter:
     """Credential-based filtering for load_agent_config."""
 
-    def test_llm_config_has_credentials_requires_key(self, monkeypatch: pytest.MonkeyPatch):
+    def test_llm_config_has_credentials_requires_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         cfg: LLMConfig = {
             "model_type": "openai",
             "model_name": "gpt-4",
