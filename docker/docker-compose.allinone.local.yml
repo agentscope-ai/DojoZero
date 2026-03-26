@@ -10,11 +10,14 @@ services:
     build:
       context: ..
       dockerfile: docker/allinone.Dockerfile
+    # API keys: load from repo-root `.env` if present (gitignored). Do not pass keys on the shell
+    # (`export`/`-e`); see ../docker/README.md for overrides and CI.
     env_file:
-      - ../.env
+      - path: ../.env
+        required: false
     environment:
       - PYTHONUNBUFFERED=1
-      - DOJOZERO_TRIAL_SOURCE=${DOJOZERO_TRIAL_SOURCE:-trial_sources/daily/nba.yaml trial_sources/daily/nfl.yaml}
+      - DOJOZERO_TRIAL_SOURCE=${DOJOZERO_TRIAL_SOURCE:-trial_sources/image/nba.yaml trial_sources/image/nfl.yaml}
       - DOJOZERO_SERVE_HOST=0.0.0.0
       - DOJOZERO_SERVE_PORT=8000
       - DOJOZERO_ARENA_HOST=0.0.0.0
