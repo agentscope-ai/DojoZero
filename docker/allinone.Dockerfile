@@ -44,13 +44,14 @@ RUN case "${TARGETARCH}" in \
     && ln -sf /usr/local/bin/jaeger /usr/local/bin/jaeger-all-in-one \
     && rm -rf "/tmp/jaeger-${JAEGER_VERSION}-linux-${JAEGER_ARCH}"
 
-# Layer cache: third-party deps only (invalidates when pyproject.toml or uv.lock changes)
-COPY pyproject.toml uv.lock ./
+# Layer cache: third-party deps only (invalidates when pyproject.toml changes)
+COPY pyproject.toml ./
 COPY packages/dojozero/pyproject.toml packages/dojozero/pyproject.toml
 COPY packages/dojozero/README.md packages/dojozero/README.md
 COPY packages/dojozero-client/pyproject.toml packages/dojozero-client/pyproject.toml
 COPY packages/dojozero-client/README.md packages/dojozero-client/README.md
-RUN uv export --frozen --no-dev --no-emit-project --no-hashes --no-annotate \
+RUN uv lock \
+    && uv export --frozen --no-dev --no-emit-project --no-hashes --no-annotate \
         -o /tmp/requirements.txt \
     && uv pip install --system --no-cache -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
