@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import cast
 
 import pytest
 from dotenv import load_dotenv
@@ -160,6 +161,7 @@ def create_nba_test_agent(
     """Create NBA BettingAgent with test-specific env vars."""
     from dojozero.nba._agent import BettingAgent
     from dojozero.agents import (
+        LLMConfig,
         create_formatter,
         create_model,
         load_llm_file_config,
@@ -170,11 +172,13 @@ def create_nba_test_agent(
     llm_file = load_llm_file_config(llm_config_path)
     if not llm_file["llm"]:
         raise RuntimeError(f"No LLM entries in {llm_config_path}")
-    llm_config = dict(llm_file["llm"][0])
-    llm_config["api_key_env"] = TEST_API_KEY_ENV
-    llm_config["base_url_env"] = TEST_BASE_URL_ENV
-    model_type = llm_config.get("model_type", "openai")
-    model_name = llm_config.get("model_name", "")
+    llm_config: LLMConfig = {
+        **llm_file["llm"][0],
+        "api_key_env": TEST_API_KEY_ENV,
+        "base_url_env": TEST_BASE_URL_ENV,
+    }
+    model_type = cast(str, llm_config.get("model_type", "openai"))
+    model_name = cast(str, llm_config.get("model_name", ""))
     agent_name = persona_config_path.stem
     return BettingAgent(
         actor_id=agent_name,
@@ -194,6 +198,7 @@ def create_nfl_test_agent(
     """Create NFL BettingAgent with test-specific env vars."""
     from dojozero.nfl._agent import BettingAgent
     from dojozero.agents import (
+        LLMConfig,
         create_formatter,
         create_model,
         load_llm_file_config,
@@ -204,11 +209,13 @@ def create_nfl_test_agent(
     llm_file = load_llm_file_config(llm_config_path)
     if not llm_file["llm"]:
         raise RuntimeError(f"No LLM entries in {llm_config_path}")
-    llm_config = dict(llm_file["llm"][0])
-    llm_config["api_key_env"] = TEST_API_KEY_ENV
-    llm_config["base_url_env"] = TEST_BASE_URL_ENV
-    model_type = llm_config.get("model_type", "openai")
-    model_name = llm_config.get("model_name", "")
+    llm_config: LLMConfig = {
+        **llm_file["llm"][0],
+        "api_key_env": TEST_API_KEY_ENV,
+        "base_url_env": TEST_BASE_URL_ENV,
+    }
+    model_type = cast(str, llm_config.get("model_type", "openai"))
+    model_name = cast(str, llm_config.get("model_name", ""))
     agent_name = persona_config_path.stem
     return BettingAgent(
         actor_id=agent_name,

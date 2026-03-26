@@ -147,7 +147,7 @@ class TestLLMCredentialFilter:
         monkeypatch.delenv("DOJOZERO_ANTHROPIC_API_KEY", raising=False)
         out = filter_llm_configs_by_credentials(cfgs)
         assert len(out) == 1
-        assert out[0]["model_name"] == "a"
+        assert out[0].get("model_name") == "a"
 
 
 class TestLLMConfigLoading:
