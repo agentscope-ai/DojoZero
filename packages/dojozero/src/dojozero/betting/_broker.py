@@ -2266,7 +2266,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             if not can_bet_total:
                 exclude_fields.add("total_lines")
 
-            event_dict = json.loads(filtered_event.model_dump_json(exclude=exclude_fields))
+            event_dict = json.loads(
+                filtered_event.model_dump_json(exclude=exclude_fields)
+            )
             recent_updates = await target.get_recent_game_updates()
             if recent_updates:
                 event_dict["recent_game_updates"] = [

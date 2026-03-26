@@ -29,7 +29,12 @@ from dojozero.agents import (
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
 from dojozero.betting._config import MEMORY_SUMMARY_PROMPT
-from dojozero.data._models import BaseGameUpdateEvent, DataEvent, EventTypes, extract_game_id
+from dojozero.data._models import (
+    BaseGameUpdateEvent,
+    DataEvent,
+    EventTypes,
+    extract_game_id,
+)
 from dojozero.agents import HotTopicsEvent, SocialBoard, format_hot_topics_for_llm
 from dojozero.betting._models import (
     ReasoningStep,
@@ -336,7 +341,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         # Event throttle: minimum seconds between LLM invocations.
         # Events arriving during cooldown are queued and batch-processed
         # once the cooldown expires, reducing LLM API call volume.
-        self._min_event_interval: float = 180.0
+        self._min_event_interval: float = 1.0
         self._last_process_time: float = 0.0
         self._cooldown_task: asyncio.Task[None] | None = None
 
