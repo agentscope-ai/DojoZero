@@ -212,7 +212,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._pending_odds: Dict[str, OddsInfo] = {}
 
         # Recent game update events cache (pull-based: agent reads via get_event)
-        # Keeps the last 3 updates so the agent gets meaningful game state context
+        # Keeps recent updates so the agent gets meaningful game state context
         self._recent_game_updates: deque[BaseGameUpdateEvent] = deque(maxlen=1)
 
         # Bet management
@@ -2266,13 +2266,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             if not can_bet_total:
                 exclude_fields.add("total_lines")
 
-            event_dict = json.loads(
-                filtered_event.model_dump_json(exclude=exclude_fields)
-            )
+            event_dict = filtered_event.model_dump(mode="json", exclude=exclude_fields)
             recent_updates = await target.get_recent_game_updates()
             if recent_updates:
                 event_dict["recent_game_updates"] = [
-                    json.loads(u.model_dump_json()) for u in recent_updates
+                    u.model_dump(mode="json") for u in recent_updates
                 ]
             return json.dumps(event_dict)
 

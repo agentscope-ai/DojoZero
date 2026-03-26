@@ -1,10 +1,17 @@
 """Pytest configuration and shared fixtures."""
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
+
+# Prefer the workspace package over any other `dojozero` on sys.path (e.g. another checkout).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_DOJOZERO_SRC = _REPO_ROOT / "packages" / "dojozero" / "src"
+if _DOJOZERO_SRC.is_dir():
+    sys.path.insert(0, str(_DOJOZERO_SRC))
 
 load_dotenv()
 
