@@ -13,7 +13,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict
@@ -210,6 +210,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Pending odds that arrived before GameInitializeEvent
         # Maps event_id -> OddsInfo (structured odds from OddsUpdateEvent)
         self._pending_odds: Dict[str, OddsInfo] = {}
+
+        # Recent game update events cache (pull-based: agent reads via get_event)
+        # Keeps the last 3 updates so the agent gets meaningful game state context
+        self._recent_game_updates: deque[BaseGameUpdateEvent] = deque(maxlen=1)
 
         # Bet management
         self._bets: Dict[str, Bet] = {}
@@ -662,6 +666,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self, data_event: BaseGameUpdateEvent, event_id: str
     ) -> None:
         """Handle game update event (NBAGameUpdateEvent, NFLGameUpdateEvent, etc.)."""
+        # Cache for pull-based access: agent reads via get_event() instead of being triggered
+        self._recent_game_updates.append(data_event)
+
         # Extract team names from sport-specific typed stats models
         home_team_str: str | None = None
         away_team_str: str | None = None
@@ -2002,6 +2009,15 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             return self._event
         return None
 
+    async def get_recent_game_updates(self) -> list[BaseGameUpdateEvent]:
+        """Return the most recent game update events (up to 3), oldest first.
+
+        Game update events are no longer pushed to the agent as triggers; instead
+        the agent pulls the latest state by calling get_event(), which includes
+        the output of this method as ``recent_game_updates``.
+        """
+        return list(self._recent_game_updates)
+
     async def get_account(self, agent_id: str) -> Account:
         """Get account information for an agent"""
         if agent_id not in self._accounts:
@@ -2052,6 +2068,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 "event_pending_orders": {
                     k: list(v) for k, v in self._event_pending_orders.items()
                 },
+                "recent_game_updates": [
+                    u.model_dump(mode="json") for u in self._recent_game_updates
+                ],
             }
         finally:
             # Release all locks in reverse order
@@ -2092,6 +2111,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         self._event_pending_orders = defaultdict(
             set, {k: set(v) for k, v in state["event_pending_orders"].items()}
         )
+
+        # Restore recent game updates cache (introduced after initial release; optional key)
+        if "recent_game_updates" in state:
+            from dojozero.data import deserialize_data_event
+
+            restored: list[BaseGameUpdateEvent] = []
+            for u in state["recent_game_updates"]:
+                event = deserialize_data_event(u)
+                if isinstance(event, BaseGameUpdateEvent):
+                    restored.append(event)
+            self._recent_game_updates = deque(restored, maxlen=1)
 
     # =========================================================================
     # Agent Tools
@@ -2208,6 +2238,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                   Check this field to see the current market prices before placing a bet.
                 - betting_closed_at: When betting closed (ISO format string) or null if still open
 
+                Game state (may be absent if no game updates received yet):
+                - recent_game_updates: List of up to 3 most recent game state snapshots
+                  (oldest first). Each entry contains period, game_clock, home_score,
+                  away_score, and sport-specific team/player stats.
+
             Note: Probabilities represent the price per share. If you bet $100 at probability 0.56, you get 100/0.56 ≈ 178.57 shares.
             If your bet wins, each share pays $1.00. If it loses, you get $0.00.
 
@@ -2231,7 +2266,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             if not can_bet_total:
                 exclude_fields.add("total_lines")
 
-            return filtered_event.model_dump_json(exclude=exclude_fields)
+            event_dict = json.loads(filtered_event.model_dump_json(exclude=exclude_fields))
+            recent_updates = await target.get_recent_game_updates()
+            if recent_updates:
+                event_dict["recent_game_updates"] = [
+                    json.loads(u.model_dump_json()) for u in recent_updates
+                ]
+            return json.dumps(event_dict)
 
         @tool
         async def place_market_bet_moneyline(
