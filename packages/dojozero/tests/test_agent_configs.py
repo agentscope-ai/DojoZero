@@ -18,6 +18,8 @@ from dojozero.agents import (
     create_model,
     create_formatter,
     expand_agent_config,
+    filter_llm_configs_by_credentials,
+    llm_config_has_credentials,
     LLMConfig,
     AgentConfig,
 )
@@ -112,6 +114,40 @@ class TestPersonaConfigLoading:
         )
 
 
+class TestLLMCredentialFilter:
+    """Credential-based filtering for load_agent_config."""
+
+    def test_llm_config_has_credentials_requires_key(self, monkeypatch: pytest.MonkeyPatch):
+        cfg: LLMConfig = {
+            "model_type": "openai",
+            "model_name": "gpt-4",
+            "api_key_env": "DOJOZERO_OPENAI_API_KEY",
+        }
+        monkeypatch.delenv("DOJOZERO_OPENAI_API_KEY", raising=False)
+        assert llm_config_has_credentials(cfg) is False
+        monkeypatch.setenv("DOJOZERO_OPENAI_API_KEY", "sk-test")
+        assert llm_config_has_credentials(cfg) is True
+
+    def test_filter_llm_configs_by_credentials(self, monkeypatch: pytest.MonkeyPatch):
+        cfgs: list[LLMConfig] = [
+            {
+                "model_type": "openai",
+                "model_name": "a",
+                "api_key_env": "DOJOZERO_OPENAI_API_KEY",
+            },
+            {
+                "model_type": "anthropic",
+                "model_name": "b",
+                "api_key_env": "DOJOZERO_ANTHROPIC_API_KEY",
+            },
+        ]
+        monkeypatch.setenv("DOJOZERO_OPENAI_API_KEY", "x")
+        monkeypatch.delenv("DOJOZERO_ANTHROPIC_API_KEY", raising=False)
+        out = filter_llm_configs_by_credentials(cfgs)
+        assert len(out) == 1
+        assert out[0]["model_name"] == "a"
+
+
 class TestLLMConfigLoading:
     """Test that all LLM configs can be loaded and parsed correctly."""
 
@@ -174,7 +210,10 @@ class TestAgentConfigLoading:
         assert "sys_prompt" in config, "Config missing 'sys_prompt' field"
         assert "llm" in config, "Config missing 'llm' field"
         assert isinstance(config["llm"], list), "Config 'llm' should be a list"
-        assert len(config["llm"]) > 0, "Config should have at least one LLM config"
+        # Credential filtering may yield zero entries when no DOJOZERO_* keys are set
+        for item in config["llm"]:
+            assert "model_name" in item
+            assert "model_type" in item
 
     @pytest.mark.parametrize(
         "persona_path",

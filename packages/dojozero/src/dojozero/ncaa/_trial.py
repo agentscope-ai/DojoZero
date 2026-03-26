@@ -342,6 +342,11 @@ async def _build_trial_spec(
         allowed_class_names={"BettingAgent"},
         config_cache=config_cache,
     )
+    if not agent_specs:
+        logger.warning(
+            "No agents enabled for this trial: no LLM API keys matched your "
+            "agents/llms config. Continuing with data streams and broker only."
+        )
 
     # Create SocialBoard if multiple agents
     social_board: OperatorSpec[Any] | None = None

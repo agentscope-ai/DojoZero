@@ -1,5 +1,6 @@
 """Agent configuration and model creation."""
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, Literal, TypedDict
@@ -21,6 +22,8 @@ from agentscope.model import (
     AnthropicChatModel,
     GeminiChatModel,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 ModelType = Literal["openai", "dashscope", "anthropic", "gemini", "grok"]
 
@@ -178,6 +181,39 @@ def load_llm_file_config(config_path: str | Path) -> LLMFileConfig:
     return LLMFileConfig(llm=llm_configs)
 
 
+def llm_config_has_credentials(llm_config: LLMConfig) -> bool:
+    """True if required API key (and optional base URL) env vars are set and non-empty."""
+    api_key_env = llm_config.get("api_key_env", "")
+    if not api_key_env:
+        return False
+    key = os.environ.get(api_key_env)
+    if not key or not str(key).strip():
+        return False
+    base_url_env = llm_config.get("base_url_env")
+    if base_url_env:
+        base_url = os.environ.get(base_url_env)
+        if not base_url or not str(base_url).strip():
+            return False
+    return True
+
+
+def filter_llm_configs_by_credentials(llm_configs: list[LLMConfig]) -> list[LLMConfig]:
+    """Keep only LLM entries whose credential env vars are present."""
+    usable: list[LLMConfig] = []
+    for c in llm_configs:
+        if llm_config_has_credentials(c):
+            usable.append(c)
+        else:
+            env = c.get("api_key_env") or ""
+            mn = c.get("model_name", "?")
+            LOGGER.info(
+                "Skipping LLM %r: missing or empty environment variable %s",
+                mn,
+                repr(env) if env else "api_key_env",
+            )
+    return usable
+
+
 def load_agent_config(
     persona_config_path: str | Path,
     llm_config_path: str | Path,
@@ -199,8 +235,10 @@ def load_agent_config(
     persona_config = load_persona_config(persona_config_path)
     llm_file_config = load_llm_file_config(llm_config_path)
 
+    # Only enable models whose API keys (and optional base URL) are configured
+    llm_configs = filter_llm_configs_by_credentials(llm_file_config["llm"])
+
     # Validate unique model names when multiple models are specified
-    llm_configs = llm_file_config["llm"]
     if len(llm_configs) > 1:
         model_names = [c.get("model_name", "") for c in llm_configs]
         if len(model_names) != len(set(model_names)):

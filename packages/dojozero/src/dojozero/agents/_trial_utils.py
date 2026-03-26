@@ -10,8 +10,9 @@ from typing import Any, TypeVar
 from dojozero.agents._config import (
     AgentConfig,
     LLMConfig,
-    load_agent_config,
     expand_agent_config,
+    llm_config_has_credentials,
+    load_agent_config,
 )
 from dojozero.core import AgentSpec
 
@@ -189,6 +190,14 @@ def build_agent_specs(
                 )
 
             expanded_configs = expand_agent_config(yaml_config)
+            if not expanded_configs:
+                logger.warning(
+                    "Agent '%s': no usable LLMs in %s (all API keys missing or empty); "
+                    "skipping this persona.",
+                    agent_id,
+                    llm_config_path,
+                )
+                continue
 
             for single_config in expanded_configs:
                 # Create unique actor_id using model name
@@ -249,6 +258,13 @@ def build_agent_specs(
                     ]
                 if agent_dict.get("cdn_url"):
                     inline_llm_config["cdn_url"] = agent_dict["cdn_url"]
+                if not llm_config_has_credentials(inline_llm_config):
+                    logger.warning(
+                        "Skipping agent '%s': missing credentials for %s",
+                        agent_id,
+                        inline_llm_config.get("api_key_env", ""),
+                    )
+                    continue
                 inline_agent_config["llm"] = inline_llm_config
                 inline_agent_config["model_display_name"] = agent_dict.get(
                     "model_display_name", ""

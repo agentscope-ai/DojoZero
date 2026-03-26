@@ -159,20 +159,28 @@ def create_nba_test_agent(
 ):
     """Create NBA BettingAgent with test-specific env vars."""
     from dojozero.nba._agent import BettingAgent
-    from dojozero.agents import load_agent_config, create_model, create_formatter
+    from dojozero.agents import (
+        create_formatter,
+        create_model,
+        load_llm_file_config,
+        load_persona_config,
+    )
 
-    config = load_agent_config(persona_config_path, llm_config_path)
-    # llm is a list of configs - use the first one for tests
-    llm_config = config["llm"][0].copy()
+    persona = load_persona_config(persona_config_path)
+    llm_file = load_llm_file_config(llm_config_path)
+    if not llm_file["llm"]:
+        raise RuntimeError(f"No LLM entries in {llm_config_path}")
+    llm_config = dict(llm_file["llm"][0])
     llm_config["api_key_env"] = TEST_API_KEY_ENV
     llm_config["base_url_env"] = TEST_BASE_URL_ENV
     model_type = llm_config.get("model_type", "openai")
     model_name = llm_config.get("model_name", "")
+    agent_name = persona_config_path.stem
     return BettingAgent(
-        actor_id=config["name"],
+        actor_id=agent_name,
         trial_id=trial_id,
-        name=config["name"],
-        sys_prompt=config["sys_prompt"],
+        name=agent_name,
+        sys_prompt=persona["sys_prompt"],
         model=create_model(llm_config),
         formatter=create_formatter(model_type, model_name),
     )
@@ -185,20 +193,28 @@ def create_nfl_test_agent(
 ):
     """Create NFL BettingAgent with test-specific env vars."""
     from dojozero.nfl._agent import BettingAgent
-    from dojozero.agents import load_agent_config, create_model, create_formatter
+    from dojozero.agents import (
+        create_formatter,
+        create_model,
+        load_llm_file_config,
+        load_persona_config,
+    )
 
-    config = load_agent_config(persona_config_path, llm_config_path)
-    # llm is a list of configs - use the first one for tests
-    llm_config = config["llm"][0].copy()
+    persona = load_persona_config(persona_config_path)
+    llm_file = load_llm_file_config(llm_config_path)
+    if not llm_file["llm"]:
+        raise RuntimeError(f"No LLM entries in {llm_config_path}")
+    llm_config = dict(llm_file["llm"][0])
     llm_config["api_key_env"] = TEST_API_KEY_ENV
     llm_config["base_url_env"] = TEST_BASE_URL_ENV
     model_type = llm_config.get("model_type", "openai")
     model_name = llm_config.get("model_name", "")
+    agent_name = persona_config_path.stem
     return BettingAgent(
-        actor_id=config["name"],
+        actor_id=agent_name,
         trial_id=trial_id,
-        name=config["name"],
-        sys_prompt=config["sys_prompt"],
+        name=agent_name,
+        sys_prompt=persona["sys_prompt"],
         model=create_model(llm_config),
         formatter=create_formatter(model_type, model_name),
     )

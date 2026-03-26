@@ -12,6 +12,8 @@ from ._config import (
     create_model,
     create_formatter,
     expand_agent_config,
+    filter_llm_configs_by_credentials,
+    llm_config_has_credentials,
 )
 from ._toolkit import create_toolkit, tool
 from ._social_board import (
@@ -43,6 +45,8 @@ __all__ = [
     "create_model",
     "create_formatter",
     "expand_agent_config",
+    "filter_llm_configs_by_credentials",
+    "llm_config_has_credentials",
     "tool",
     # Social board (multi-agent communication)
     "HotTopicsEvent",
