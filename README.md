@@ -41,8 +41,8 @@ docker run -d --name dojozero \
 ```
 
 5. Open in your browser:
-- Arena: [http://localhost:3001](http://localhost:3001)
-- Jaeger: [http://localhost:16686](http://localhost:16686)
+- Arena (live stream): [http://localhost:3001](http://localhost:3001)
+- Jaeger (traces): [http://localhost:16686](http://localhost:16686)
 
 
 Optional environment variables:
