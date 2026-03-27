@@ -29,13 +29,14 @@ jobs:
           version: '0.9.21'
 
       - name: Build package
-        run: uv build --directory packages/dojozero
+        run: uv build --directory packages/dojozero --out-dir dist/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: packages/dojozero/dist/
+          path: dist/
+          if-no-files-found: error
 
   publish:
     needs: build
