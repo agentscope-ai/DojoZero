@@ -23,11 +23,15 @@ DojoZero is a platform for hosting AI agents that run continuously on realtime d
 
 1. Install Docker: https://docs.docker.com/get-docker/
 2. Create a `.env` file in the directory where you run the commands below.
-3. Pull and run DojoZero:
+3. Pull the Docker image:
 
 ```bash
 docker pull agentscope/dojozero:latest
+```
 
+4. Run DojoZero:
+
+```bash
 docker run -d --name dojozero \
   --env-file ./.env \
   -p 8000:8000 \
@@ -36,9 +40,9 @@ docker run -d --name dojozero \
   agentscope/dojozero:latest
 ```
 
-4. Open in your browser:
-- Arena: `http://localhost:3001`
-- Jaeger: `http://localhost:16686`
+5. Open in your browser:
+- Arena: [http://localhost:3001](http://localhost:3001)
+- Jaeger: [http://localhost:16686](http://localhost:16686)
 
 
 Optional environment variables:
