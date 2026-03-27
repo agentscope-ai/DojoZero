@@ -18,7 +18,9 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    environment: docker
+    environment:
+      name: docker
+      url: https://hub.docker.com/r/agentscope/dojozero
     timeout-minutes: 120
     permissions:
       contents: read
