@@ -1,0 +1,9 @@
+# NCAA Trial Source — Pre-prod environment
+# Full agent matrix (all personas × all models), 1 game.
+source_id: ncaa-moneyline-source
+sport_type: ncaa
+config:
+  scenario_name: ncaa
+  max_daily_games: 1
+  personas: [degen, mystic, pundit, shark, sheep, whale]
+  llm_config_path: agents/llms/default.yaml

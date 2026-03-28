@@ -31,7 +31,8 @@ docker run -d --name dojozero \
   --add-host=host.docker.internal:host-gateway \
   --env-file ./.env \
   -e PYTHONUNBUFFERED=1 \
-  -e DOJOZERO_TRIAL_SOURCE='trial_sources/image/nba.yaml trial_sources/image/nfl.yaml' \
+  -e DOJOZERO_TRIAL_SOURCE='trial_sources/image/nba.yaml trial_sources/image/nfl.yaml trial_sources/image/ncaa.yaml' \
+  -e DOJOZERO_MAX_DAILY_GAMES=1 \
   -e DOJOZERO_SERVE_HOST=0.0.0.0 \
   -e DOJOZERO_SERVE_PORT=8000 \
   -e DOJOZERO_ARENA_HOST=0.0.0.0 \

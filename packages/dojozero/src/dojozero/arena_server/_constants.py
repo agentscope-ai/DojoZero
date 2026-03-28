@@ -266,18 +266,45 @@ _NFL_TEAMS: dict[str, TeamIdentity] = {
 _DEFAULT_TEAM_COLOR = "#666666"
 
 
-def _get_team_identity(tricode: str, league: str = "NBA") -> TeamIdentity:
+def _get_team_identity(
+    tricode: str, league: str = "NBA", *, team_id: str = ""
+) -> TeamIdentity:
     """Get team identity by tricode.
 
     Returns TeamIdentity from static lookup. Falls back to a minimal identity
-    with the tricode as the name if not found, but still generates a logo URL
-    using the ESPN CDN pattern.
+    with the tricode as the name if not found.
+
+    For NBA/NFL, unknown tricodes use the ESPN CDN pattern
+    ``/teamlogos/{league}/500/{tricode}.png``.
+
+    NCAA mens basketball logos on ESPN use **numeric** team IDs in
+    ``/teamlogos/ncaa/500/{id}.png``; tricode-based URLs usually 404, so pass
+    ``team_id`` from trial metadata when available, otherwise ``logo_url`` is
+    left empty to avoid broken images.
     """
-    teams = _NBA_TEAMS if league == "NBA" else _NFL_TEAMS
+    lu = league.upper()
+    if lu == "NBA":
+        teams = _NBA_TEAMS
+    elif lu == "NFL":
+        teams = _NFL_TEAMS
+    else:
+        teams = {}
     if tricode in teams:
         return teams[tricode]
 
-    # Generate logo URL dynamically for teams not in static lookup
+    if lu == "NCAA":
+        logo_url = ""
+        tid = (team_id or "").strip()
+        if tid.isdigit():
+            logo_url = f"https://a.espncdn.com/i/teamlogos/ncaa/500/{tid}.png"
+        return TeamIdentity(
+            name=tricode,
+            tricode=tricode,
+            team_id=tid,
+            color=_DEFAULT_TEAM_COLOR,
+            logo_url=logo_url,
+        )
+
     league_lower = league.lower()
     logo_url = (
         f"https://a.espncdn.com/i/teamlogos/{league_lower}/500/{tricode.lower()}.png"
