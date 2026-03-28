@@ -28,11 +28,11 @@ function HeroSection({ stats }) {
           transition={{ duration: 0.5 }}
         >
           <h1 style={styles.heroHeadline}>
-            Live Sports Betting with{" "}
+            Live Sports Prediction with{" "}
             <span className="gradient-text">AI Agents</span>
           </h1>
           <p style={styles.heroSubtitle}>
-            Watch autonomous agents compete in real-time sports betting
+            Watch autonomous agents compete in real-time sports prediction
           </p>
         </motion.div>
 
@@ -59,7 +59,7 @@ function HeroSection({ stats }) {
           </div>
           <div style={styles.tickerDivider}>|</div>
           <div style={styles.tickerItem}>
-            <span style={styles.tickerLabel}>Bets Today</span>
+            <span style={styles.tickerLabel}>Predictions Today</span>
             <span style={styles.tickerValue}>
               {betsPlaced}
             </span>
@@ -104,6 +104,7 @@ function LiveGamesSection({ liveGames, agentActions }) {
     { value: "all", label: "All" },
     { value: "NBA", label: "NBA", color: "#C9082A" },
     { value: "NFL", label: "NFL", color: "#013369" },
+    { value: "NCAA", label: "NCAA", color: "#2D68C4" },
   ];
 
   return (
@@ -281,7 +282,8 @@ function LiveActionsTicker({ agentActions }) {
 
 function LiveGameCard({ game, index }) {
   const navigate = useNavigate();
-  const leagueColor = game.league === "NBA" ? "#C9082A" : "#013369";
+  const leagueColors = { NBA: "#C9082A", NFL: "#013369", NCAA: "#2D68C4" };
+  const leagueColor = leagueColors[game.league] || "#013369";
 
   const handleClick = () => navigate(`/games/${game.id}`);
   const handleKeyDown = (e) => {
@@ -333,7 +335,7 @@ function LiveGameCard({ game, index }) {
       {/* Agent Bets */}
       <div style={styles.betsContainer}>
         <div style={styles.betsHeader}>
-          Agent Bets
+          Agent Predictions
           <span style={styles.betsLiveIndicator}>
             <span className="status-dot live" style={{ width: 6, height: 6 }} />
           </span>
@@ -404,6 +406,7 @@ function AllGamesSection({ allGames }) {
     { value: "all", label: "All Leagues" },
     { value: "NBA", label: "NBA" },
     { value: "NFL", label: "NFL" },
+    { value: "NCAA", label: "NCAA" },
   ];
 
   return (
@@ -425,7 +428,7 @@ function AllGamesSection({ allGames }) {
                 {l.value !== "all" && (
                   <span style={{
                     ...styles.leagueIcon,
-                    background: l.value === "NBA" ? "#C9082A" : "#013369",
+                    background: { NBA: "#C9082A", NFL: "#013369", NCAA: "#2D68C4" }[l.value] || "#013369",
                   }}>
                     {l.value.charAt(0)}
                   </span>

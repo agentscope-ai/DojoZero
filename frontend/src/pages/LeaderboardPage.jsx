@@ -93,7 +93,7 @@ function FilterBar({ filters, setFilters }) {
       <div style={styles.filterGroup}>
         <span style={styles.filterLabel}>League</span>
         <div style={styles.filterButtons}>
-          {["All", "NBA", "NFL", "MLB"].map((league) => (
+          {["All", "NBA", "NFL", "NCAA"].map((league) => (
             <button
               key={league}
               onClick={() => setFilters({ ...filters, league })}
@@ -109,7 +109,7 @@ function FilterBar({ filters, setFilters }) {
       </div>
 
       <div style={styles.filterGroup}>
-        <span style={styles.filterLabel}>Bet Type</span>
+        <span style={styles.filterLabel}>Prediction Type</span>
         <div style={styles.filterButtons}>
           {["All", "Moneyline", "Spread", "Totals"].map((betType) => (
             <button
@@ -159,7 +159,7 @@ function RankingTable({ selectedAgent, setSelectedAgent, leaderboardData }) {
             <th>Agent</th>
             <th style={{ textAlign: "right" }}>Winnings</th>
             <th style={{ textAlign: "right" }}>Win Rate</th>
-            <th style={{ textAlign: "right" }}>Bets</th>
+            <th style={{ textAlign: "right" }}>Predictions</th>
             <th style={{ textAlign: "right" }}>ROI</th>
           </tr>
         </thead>
@@ -297,7 +297,7 @@ function AgentDetailPanel({ agent }) {
 
       {/* Recent Bets */}
       <div style={styles.recentBets}>
-        <div style={styles.recentBetsHeader}>Recent Bets</div>
+        <div style={styles.recentBetsHeader}>Recent Predictions</div>
         <div style={styles.betTags}>
           <span style={{ ...styles.betTag, ...styles.betTagWin }}>LAL +150 ✓</span>
           <span style={{ ...styles.betTag, ...styles.betTagLoss }}>BOS -110 ✗</span>
@@ -367,7 +367,7 @@ export default function LeaderboardPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
           >
-            See which agents are dominating the betting arena
+            See which agents are dominating the prediction arena
           </motion.p>
         </section>
 

@@ -162,7 +162,7 @@ export default function GameDetailPage() {
             </div>
           </section>
 
-          {/* Right: Agents & Bets */}
+          {/* Right: Agents & Predictions */}
           <aside style={styles.sidebar}>
             <div style={styles.sidebarCard}>
               <div style={styles.sidebarHeader}>
@@ -262,7 +262,7 @@ function FeedItem({ event, gameInfo }) {
             </div>
           </div>
           <div style={styles.betContent}>
-            <span style={styles.betAction}>placed a bet</span>
+            <span style={styles.betAction}>made a prediction</span>
             <span style={styles.betAmount}>${data.amount}</span>
             <span style={styles.betTeam}>on {data.selection}</span>
           </div>
@@ -714,7 +714,7 @@ function AgentCard({ agent }) {
             </div>
           </div>
         ) : (
-          /* Show bets for live/ongoing games */
+          /* Show predictions for live/ongoing games */
           <div style={styles.agentBets}>
             {agent.teamBets && Object.entries(agent.teamBets).map(([team, amount]) => (
               <div key={team} style={styles.agentBetRow}>
@@ -723,7 +723,7 @@ function AgentCard({ agent }) {
               </div>
             ))}
             {(!agent.teamBets || Object.keys(agent.teamBets).length === 0) && (
-              <div style={styles.agentNoBets}>No bets yet</div>
+              <div style={styles.agentNoBets}>No predictions yet</div>
             )}
           </div>
         )}
@@ -999,7 +999,7 @@ function parseEvents(items) {
       // Create description based on category
       let description = "";
       if (category.includes("bet") && data.amount && data.team) {
-        description = `${data.agent_name || data.persona || "Agent"} bet $${data.amount} on ${data.team}`;
+        description = `${data.agent_name || data.persona || "Agent"} predicted $${data.amount} on ${data.team}`;
       } else if (category === "game_update" && data.home_score !== undefined) {
         description = `Score: ${data.home_score} - ${data.away_score}`;
       }
