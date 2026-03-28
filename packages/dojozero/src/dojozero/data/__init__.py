@@ -75,6 +75,10 @@ from dojozero.data.nfl import (
     NFLGameUpdateEvent,
     NFLPlayEvent,
 )
+from dojozero.data.ncaa import (
+    NCAAGameUpdateEvent,
+    NCAAPlayEvent,
+)
 from dojozero.data.polymarket import (
     PolymarketAPI,
     PolymarketStore,
@@ -115,6 +119,8 @@ AnyDataEvent = Annotated[
         NFLPlayEvent,
         NFLDriveEvent,
         NFLGameUpdateEvent,
+        NCAAGameUpdateEvent,
+        NCAAPlayEvent,
         PreGameStatsEvent,
         InjuryReportEvent,
         PowerRankingEvent,

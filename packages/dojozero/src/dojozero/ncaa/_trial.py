@@ -380,6 +380,8 @@ async def _build_trial_spec(
         home_team_name=home_team_name,
         away_team_name=away_team_name,
         game_date=game_date,
+        home_team_id=home_team_id,
+        away_team_id=away_team_id,
         market_url=params.market_url,
     )
 

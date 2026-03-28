@@ -67,6 +67,10 @@ class BettingTrialMetadata(BaseTrialMetadata):
     away_team_name: str
     game_date: str
 
+    # ESPN team IDs (for Arena logos, APIs; optional, default from game lookup)
+    home_team_id: str = ""
+    away_team_id: str = ""
+
     # Polymarket (optional)
     market_url: str | None = None
 

@@ -46,6 +46,7 @@ TRIAL_INFO_OPERATION_NAMES = [
     "event.game_result",
     "event.nba_game_update",
     "event.nfl_game_update",
+    "event.ncaa_game_update",
 ]
 
 # Tag used by DojoZero to correlate all spans for a trial (see TrialOrchestrator, create_span_from_event).
@@ -258,15 +259,25 @@ def _resolve_team_identity(
     fallback_tricode: str,
     fallback_name: str,
     league: str,
+    *,
+    team_id: str = "",
 ) -> TeamIdentity:
     """Resolve a team to a TeamIdentity, applying fallbacks as needed."""
     if isinstance(team, TeamIdentity) and team:
-        # Ensure tricode is populated
+        resolved = team
         if not team.tricode and fallback_tricode:
-            return team.model_copy(update={"tricode": fallback_tricode})
-        return team
+            resolved = resolved.model_copy(update={"tricode": fallback_tricode})
+        if league.upper() == "NCAA" and not resolved.logo_url:
+            tid = (resolved.team_id or team_id or "").strip()
+            if tid.isdigit():
+                resolved = resolved.model_copy(
+                    update={
+                        "logo_url": f"https://a.espncdn.com/i/teamlogos/ncaa/500/{tid}.png"
+                    }
+                )
+        return resolved
     # Fallback to static lookup, then override name if provided
-    identity = _get_team_identity(fallback_tricode, league)
+    identity = _get_team_identity(fallback_tricode, league, team_id=team_id)
     if fallback_name and fallback_name != identity.name:
         return identity.model_copy(update={"name": fallback_name})
     return identity
@@ -433,17 +444,33 @@ async def _extract_games_from_trials(
         game_init = trial_info.get("game_init")
         if isinstance(game_init, GameInitializeEvent):
             home_team = _resolve_team_identity(
-                game_init.home_team, home_tricode, "", league
+                game_init.home_team,
+                home_tricode,
+                "",
+                league,
+                team_id=str(metadata.get("home_team_id", "") or ""),
             )
             away_team = _resolve_team_identity(
-                game_init.away_team, away_tricode, "", league
+                game_init.away_team,
+                away_tricode,
+                "",
+                league,
+                team_id=str(metadata.get("away_team_id", "") or ""),
             )
         else:
             home_team = _resolve_team_identity(
-                "", home_tricode, metadata.get("home_team_name", ""), league
+                "",
+                home_tricode,
+                metadata.get("home_team_name", ""),
+                league,
+                team_id=str(metadata.get("home_team_id", "") or ""),
             )
             away_team = _resolve_team_identity(
-                "", away_tricode, metadata.get("away_team_name", ""), league
+                "",
+                away_tricode,
+                metadata.get("away_team_name", ""),
+                league,
+                team_id=str(metadata.get("away_team_id", "") or ""),
             )
 
         # Fetch bets for live games only (performance optimization)

@@ -339,7 +339,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Path or glob pattern for trial source YAML files (repeatable). "
         "Enables automatic scheduling for the specified sports/scenarios. "
-        "Requires filesystem store to be configured.",
+        "Requires filesystem store to be configured. "
+        "Optional env DOJOZERO_MAX_DAILY_GAMES overrides config.max_daily_games "
+        "for every loaded source (integer; 0 = unlimited).",
     )
     serve_parser.add_argument(
         "--no-auto-resume",
@@ -1881,6 +1883,29 @@ def _expand_compact_trial_source(
         config.setdefault(key, value)
 
 
+def _parse_max_daily_games_env_override() -> int | None:
+    """Parse ``DOJOZERO_MAX_DAILY_GAMES`` for ``serve`` trial source loading.
+
+    Returns:
+        ``None`` if unset or empty (YAML values are used as-is).
+
+    Note:
+        ``0`` means unlimited, consistent with scheduler / trial source YAML.
+    """
+    raw = os.environ.get("DOJOZERO_MAX_DAILY_GAMES", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw, 10)
+    except ValueError as e:
+        raise DojoZeroCLIError(
+            f"DOJOZERO_MAX_DAILY_GAMES must be an integer, got {raw!r}"
+        ) from e
+    if value < 0:
+        raise DojoZeroCLIError(f"DOJOZERO_MAX_DAILY_GAMES must be >= 0, got {value}")
+    return value
+
+
 def _load_trial_source_from_yaml(path: Path) -> InitialTrialSourceDict:
     """Load a trial source configuration from a YAML file.
 
@@ -2008,6 +2033,21 @@ async def _serve_command(args: argparse.Namespace) -> int:
                 "Loaded trial source from %s: %s",
                 source_path,
                 source_data.get("source_id"),
+            )
+
+    env_max_daily = _parse_max_daily_games_env_override()
+    if env_max_daily is not None:
+        if initial_trial_sources:
+            for source_data in initial_trial_sources:
+                source_data["config"]["max_daily_games"] = env_max_daily
+            LOGGER.info(
+                "DOJOZERO_MAX_DAILY_GAMES=%s overrides max_daily_games for %d trial source(s)",
+                env_max_daily,
+                len(initial_trial_sources),
+            )
+        else:
+            LOGGER.warning(
+                "DOJOZERO_MAX_DAILY_GAMES is set but no trial sources were loaded; ignoring override"
             )
 
     LOGGER.info("Starting Dashboard Server at http://%s:%d", host, port)

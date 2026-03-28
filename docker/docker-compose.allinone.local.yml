@@ -17,7 +17,9 @@ services:
         required: false
     environment:
       - PYTHONUNBUFFERED=1
-      - DOJOZERO_TRIAL_SOURCE=${DOJOZERO_TRIAL_SOURCE:-trial_sources/image/nba.yaml trial_sources/image/nfl.yaml}
+      - DOJOZERO_TRIAL_SOURCE=${DOJOZERO_TRIAL_SOURCE:-trial_sources/image/nba.yaml trial_sources/image/nfl.yaml trial_sources/image/ncaa.yaml}
+      # Optional: override max_daily_games for all loaded sources (empty = use YAML; 0 = unlimited)
+      - DOJOZERO_MAX_DAILY_GAMES=${DOJOZERO_MAX_DAILY_GAMES:-}
       - DOJOZERO_SERVE_HOST=0.0.0.0
       - DOJOZERO_SERVE_PORT=8000
       - DOJOZERO_ARENA_HOST=0.0.0.0
