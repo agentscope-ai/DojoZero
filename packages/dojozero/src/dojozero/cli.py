@@ -1889,9 +1889,6 @@ def _parse_max_daily_games_env_override() -> int | None:
     Returns:
         ``None`` if unset or empty (YAML values are used as-is).
 
-    Raises:
-        DojoZeroCLIError: If set but not a non-negative integer.
-
     Note:
         ``0`` means unlimited, consistent with scheduler / trial source YAML.
     """
