@@ -1,6 +1,6 @@
 # Tracing
 
-DojoZero uses OpenTelemetry for tracing.
+DojoZero uses OpenTelemetry to give you visibility into what happens during a trial — every event processed, every agent message, and every decision made. Without tracing, you only see terminal output; with it, you get a structured, searchable record of the entire trial.
 
 **Install note:** **Jaeger** works with the **default** package install. **Alibaba Cloud Log Service (SLS)** as a trace backend requires optional dependencies: `pip install 'dojozero[alicloud]'`.
 

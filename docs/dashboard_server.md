@@ -1,6 +1,13 @@
 # Dashboard Server
 
-Use the dashboard server to run, schedule, and monitor trials from a central service.
+The dashboard server is a central service for managing trials. While [`dojo0 run`](./single_trial.md) executes a single trial in your terminal, the dashboard lets you:
+
+- **Run multiple trials concurrently** from a single server process
+- **Auto-discover and schedule trials** for upcoming games via trial sources and sports API integration
+- **Monitor trial status** through a unified API
+- **Submit backtests** to the same server for centralized tracking (see [Backtesting](./backtesting.md))
+
+If you're running a single trial to experiment, `dojo0 run` is all you need. Use the dashboard when you want to operate DojoZero as an always-on service.
 
 ## 1. Run via Dashboard Server
 
@@ -56,3 +63,9 @@ Scheduling knobs (when present in your template) typically include:
 - `--store-directory`: trial state and checkpoint root.
 - `--runtime-provider {local,ray}`: execution backend.
 - `--ray-config`: Ray initialization YAML file.
+
+## What's Next
+
+- **Observe trials**: Add `--trace-backend jaeger` to `dojo0 serve` to export OpenTelemetry traces for all trials managed by the server. See [Tracing](./tracing.md) for backend setup and [Arena](./arena.md) for a browser-based trace timeline.
+- **Iterate offline**: Replay event logs from completed trials through different agent configurations with [Backtesting](./backtesting.md).
+- **Deploy to production**: See [Deployment](./deployment.md) for Docker and cloud VM setup.

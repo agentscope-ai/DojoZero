@@ -47,15 +47,38 @@ Optional extras: `uv pip install 'packages/dojozero[alicloud,redis,ray]'`.
 
 ---
 
-## 🚀 Navigation Index
+## 🚀 Recommended Reading Order
 
-| Category | Description | Reference |
-| :--- | :--- | :--- |
-| **Single Trial Execution** | Run and configure your first single trial. | [`single_trial.md`](./single_trial.md) |
-| **Dashboard Server** | Launching the server to manage trials, monitor jobs, and handle auto-scheduling. | [`dashboard_server.md`](./dashboard_server.md) |
-| **Backtesting** | Replaying trials, and strategy evaluation. | [`backtesting.md`](./backtesting.md) |
-| **Observer Traces** | Tracing spans, and debugging agent decision-making. | [`tracing.md`](./tracing.md) |
-| **Arena & UI** | Frontend and active session monitoring. | [`arena.md`](./arena.md) |
-| **Deployment** | Deploying your DojoZero. | [`deployment.md`](./deployment.md) |
-| **External Agents** | Integration guides for OpenClaw and CoPaw clients to play in DojoZero. | [`client.md`](./client.md) |
-| **Appendix** | Environment variables, trial settings, and agent configuration details. | [`configuration.md`](./configuration.md) |
+If you're new to DojoZero, we recommend reading the docs in this order:
+
+### 1. Run your first trial
+
+Start here. Run a single trial locally to see DojoZero in action.
+
+- **[Single Trial Execution](./single_trial.md)** — Run a trial, understand the output, and see what DojoZero produces.
+
+### 2. Observe and debug
+
+Once you've run a trial, you'll want to see what happened inside it — what the agents saw, how they reasoned, and what decisions they made.
+
+- **[Tracing](./tracing.md)** — Set up OpenTelemetry tracing to capture agent decisions, events, and trial lifecycle spans.
+- **[Arena & UI](./arena.md)** — Browser-based timeline for inspecting traces and trial activity.
+
+### 3. Scale up with the dashboard
+
+When you're ready to run multiple trials, schedule them automatically, or monitor them from a central place, use the dashboard server.
+
+- **[Dashboard Server](./dashboard_server.md)** — Central service for running, scheduling, and monitoring trials.
+
+### 4. Iterate with backtesting
+
+Every trial produces a JSONL event log. Replay those events through different agent configurations to evaluate changes without waiting for live games.
+
+- **[Backtesting](./backtesting.md)** — Replay historical events for offline evaluation.
+
+### 5. Go further
+
+- **[External Agents](./client.md)** — Python SDK for building agents that connect to DojoZero trials from outside the framework.
+- **[Deployment](./deployment.md)** — Docker and cloud VM deployment for production.
+- **[Trial Runners](./trial_runner.md)** — Standalone scripts for discovering and launching game trials.
+- **[Configuration Reference](./configuration.md)** — Environment variables, trial settings, and agent configuration details.

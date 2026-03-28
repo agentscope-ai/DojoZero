@@ -44,7 +44,7 @@ Then fill only the variables your scenario needs. Never commit real credentials.
 - **Default install** (`uv pip install packages/dojozero`): core trials + **Jaeger** tracing. No OSS/SLS/Redis client libraries.
 - **Alibaba / Redis extras** (`uv pip install 'packages/dojozero[alicloud,redis]'`): required for OSS, `--trace-backend sls`, and Redis-backed sync-service paths.
 
-See [`getting-started.md`](./getting-started.md) for installation details.
+See the [Documentation Hub](./README.md) for installation details.
 
 Typical minimum for NBA/NFL trial usage:
 
