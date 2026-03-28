@@ -1902,9 +1902,7 @@ def _parse_max_daily_games_env_override() -> int | None:
             f"DOJOZERO_MAX_DAILY_GAMES must be an integer, got {raw!r}"
         ) from e
     if value < 0:
-        raise DojoZeroCLIError(
-            f"DOJOZERO_MAX_DAILY_GAMES must be >= 0, got {value}"
-        )
+        raise DojoZeroCLIError(f"DOJOZERO_MAX_DAILY_GAMES must be >= 0, got {value}")
     return value
 
 
