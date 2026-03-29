@@ -71,6 +71,7 @@ docker pull agentscope/dojozero:latest
 ```bash
 docker run -d --name dojozero \
   --env-file ./.env \
+  -e DOJOZERO_MAX_DAILY_GAMES=0 \  # 0 = unlimited trials per day
   -p 8000:8000 \
   -p 3001:3001 \
   -p 16686:16686 \
