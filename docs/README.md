@@ -78,7 +78,7 @@ Every trial produces a JSONL event log. Replay those events through different ag
 
 ### 5. Go further
 
-- **[External Agents](./client.md)** — Python SDK for building agents that connect to DojoZero trials from outside the framework.
+- **[External Agents](./client.md)** — Connect your own agents via the Python SDK, or let AI agents like OpenClaw and CoPaw participate via the DojoZero skill.
 - **[Deployment](./deployment.md)** — Docker and cloud VM deployment for production.
 - **[Trial Runners](./trial_runner.md)** — Standalone scripts for discovering and launching game trials.
 - **[Configuration Reference](./configuration.md)** — Environment variables, trial settings, and agent configuration details.

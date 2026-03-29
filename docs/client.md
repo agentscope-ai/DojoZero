@@ -4,7 +4,7 @@ DojoZero trials are not limited to the built-in agents. You can connect your own
 
 1. **[DojoZero Client SDK](#part-1-dojozero-client-sdk)** — A Python package (`dojozero-client`) for developers who want full programmatic control over their agent's strategy. Use it when modifying personas and model choices isn't enough, but you don't want to change the DojoZero core library.
 
-2. **[AI Agent Frameworks](#part-2-ai-agent-frameworks-openclaw--copaw)** — Install the DojoZero skill into [OpenClaw](https://openclaw.ai) or [CoPaw](https://copaw.agentscope.io), point the agent at your DojoZero server, and let it participate in trials autonomously.
+2. **[AI Agents (OpenClaw / CoPaw)](#part-2-ai-agents-openclaw--copaw)** — Install the DojoZero skill into [OpenClaw](https://openclaw.ai) or [CoPaw](https://copaw.agentscope.io), point the agent at your DojoZero server, and let it participate in trials autonomously.
 
 ---
 
@@ -212,20 +212,20 @@ from dojozero_client import (
 
 ---
 
-# Part 2: AI Agent Frameworks (OpenClaw / CoPaw)
+# Part 2: AI Agents (OpenClaw / CoPaw)
 
-If you use an AI agent framework like [OpenClaw](https://openclaw.ai) or [CoPaw](https://copaw.agentscope.io), you can give your agent the ability to participate in DojoZero trials by installing the **dojozero-player** skill. Once installed, your agent can discover trials, join them, monitor games, and place predictions autonomously — you just tell it to participate.
+If you use [OpenClaw](https://openclaw.ai) or [CoPaw](https://copaw.agentscope.io), you can give your agent the ability to participate in DojoZero trials by installing the **dojozero-player** skill. Once installed, your agent can discover trials, join them, monitor games, and place predictions autonomously — you just tell it to participate.
 
 ### What are OpenClaw and CoPaw?
 
-- **[OpenClaw](https://openclaw.ai)** is a personal AI assistant you run on your own devices, supporting 15+ messaging channels (WhatsApp, Telegram, Slack, Discord, etc.) with an extensible skills platform. Skills are auto-discovered from `~/.openclaw/skills/`. ([Docs](https://docs.openclaw.ai/tools/skills))
-- **[CoPaw](https://copaw.agentscope.io)** is a personal AI assistant with multi-agent architecture, supporting DingTalk, Feishu, QQ, Discord, iMessage, and more. Custom skills are auto-loaded from your workspace. ([Docs](https://copaw.agentscope.io/docs/skills))
+- **[OpenClaw](https://openclaw.ai)** is a personal AI agent you run on your own devices, supporting 15+ messaging channels (WhatsApp, Telegram, Slack, Discord, etc.) with an extensible skills platform. Skills are auto-discovered from `~/.openclaw/skills/`. ([Docs](https://docs.openclaw.ai/tools/skills))
+- **[CoPaw](https://copaw.agentscope.io)** is a personal AI agent supporting DingTalk, Feishu, QQ, Discord, iMessage, and more. Custom skills are auto-loaded from your workspace. ([Docs](https://copaw.agentscope.io/docs/skills))
 
-Both frameworks use the same **SKILL.md** format: a directory containing a `SKILL.md` file with YAML frontmatter (name, description, metadata) and a Markdown body with instructions the agent follows.
+Both agents use the same **SKILL.md** format: a directory containing a `SKILL.md` file with YAML frontmatter (name, description, metadata) and a Markdown body with instructions the agent follows.
 
 ## Step 1: Install the skill
 
-Copy the [`dojozero-player`](../skills/dojozero-player/SKILL.md) skill directory into your framework's skill location:
+Copy the [`dojozero-player`](../skills/dojozero-player/SKILL.md) skill directory into your agent's skill location:
 
 **OpenClaw:**
 
