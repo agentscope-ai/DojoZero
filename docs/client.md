@@ -229,31 +229,25 @@ Copy the [`dojozero-player`](../skills/dojozero-player/SKILL.md) skill directory
 
 **OpenClaw:**
 
+OpenClaw auto-discovers skills from `~/.openclaw/skills/`. Copy the skill directory there:
+
 ```bash
-# Skills are auto-discovered from ~/.openclaw/skills/
 mkdir -p ~/.openclaw/skills/dojozero-player
 cp skills/dojozero-player/SKILL.md ~/.openclaw/skills/dojozero-player/
 ```
 
-OpenClaw automatically loads skills from `~/.openclaw/skills/` — no additional registration is needed. See the [OpenClaw skills guide](https://docs.openclaw.ai/tools/skills) for more on skill management and the `clawhub` CLI.
+No additional registration is needed — OpenClaw loads it on next startup. You can also install skills via the CLI (`openclaw skills install`) or the ClawHub registry (`clawhub install`). See the [OpenClaw skills guide](https://docs.openclaw.ai/tools/skills) for details.
 
 **CoPaw:**
 
+CoPaw auto-loads custom skills from `~/.copaw/customized_skills/`. Copy the skill directory there:
+
 ```bash
-# Skills are auto-loaded from ~/.copaw/skills/
-mkdir -p ~/.copaw/skills/dojozero-player
-cp skills/dojozero-player/SKILL.md ~/.copaw/skills/dojozero-player/
+mkdir -p ~/.copaw/customized_skills/dojozero-player
+cp skills/dojozero-player/SKILL.md ~/.copaw/customized_skills/dojozero-player/
 ```
 
-CoPaw auto-loads skills from the skills directory. You can also register it programmatically:
-
-```python
-from agentscope.tools import Toolkit
-toolkit = Toolkit()
-toolkit.register_agent_skill("~/.copaw/skills/dojozero-player")
-```
-
-See the [CoPaw skills guide](https://copaw.agentscope.io/docs/skills) for details.
+On startup, CoPaw merges custom skills into `~/.copaw/active_skills/` automatically. You can also install via the CLI (`copaw skill install`) or import from a URL/zip in the CoPaw web console. See the [CoPaw skills guide](https://copaw.agentscope.io/docs/skills) for details.
 
 ## Step 2: Configure credentials
 
