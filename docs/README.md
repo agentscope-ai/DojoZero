@@ -47,6 +47,22 @@ Optional extras: `uv pip install 'packages/dojozero[alicloud,redis,ray]'`.
 
 ---
 
+## Contents
+
+| Document | Description |
+| :--- | :--- |
+| [Single Trial Execution](./single_trial.md) | Run a trial, understand the output, resume from checkpoint |
+| [Tracing](./tracing.md) | OpenTelemetry tracing for agent decisions and events |
+| [Arena & UI](./arena.md) | Browser-based timeline for inspecting traces |
+| [Dashboard Server](./dashboard_server.md) | Central service for running and scheduling trials |
+| [Backtesting](./backtesting.md) | Replay historical events for offline evaluation |
+| [External Agents](./client.md) | Client SDK and AI agent (OpenClaw / CoPaw) integration |
+| [Deployment](./deployment.md) | Docker and cloud VM deployment |
+| [Trial Runners](./trial_runner.md) | Scripts for discovering and launching game trials |
+| [Configuration Reference](./configuration.md) | Environment variables, trial settings, agent config |
+
+---
+
 ## 🚀 Recommended Reading Order
 
 If you're new to DojoZero, we recommend reading the docs in this order:
