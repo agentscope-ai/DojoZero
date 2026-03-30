@@ -215,12 +215,14 @@ class SyncService:
                 len(all_spans),
             )
 
-        # 3. Group spans by trial_id
+        # 3. Group spans by trial_id, tracking which trials got new spans
+        trials_with_new_spans: set[str] = set()
         for span in all_spans:
             trial_id = span.trace_id
             if trial_id not in self._spans_by_trial:
                 self._spans_by_trial[trial_id] = []
             self._spans_by_trial[trial_id].append(span)
+            trials_with_new_spans.add(trial_id)
 
         # Prune stale trials
         trial_ids_set = set(trial_ids)
@@ -231,9 +233,10 @@ class SyncService:
             del self._spans_by_trial[tid]
 
         LOGGER.info(
-            "SyncService: [4/8] Grouped spans into %d trials (pruned %d stale)",
+            "SyncService: [4/8] Grouped spans into %d trials (pruned %d stale, %d with new spans)",
             len(self._spans_by_trial),
             len(stale_trial_ids),
+            len(trials_with_new_spans),
         )
 
         # 4. Extract agent info
@@ -245,7 +248,7 @@ class SyncService:
         )
 
         # 5. Process trial_info
-        await self._process_trial_info(trial_ids)
+        await self._process_trial_info(trial_ids, trials_with_new_spans)
         LOGGER.info("SyncService: [6/8] Trial info processed")
 
         # 6. Refresh stats, games, leaderboard, agent_actions
@@ -259,18 +262,35 @@ class SyncService:
         # Update last sync time
         self._last_sync_time = now
 
-    async def _process_trial_info(self, trial_ids: list[str]) -> None:
-        """Process trial info from cached spans."""
+    async def _process_trial_info(
+        self,
+        trial_ids: list[str],
+        trials_with_new_spans: set[str] | None = None,
+    ) -> None:
+        """Process trial info from cached spans.
+
+        Args:
+            trial_ids: All trial IDs to process.
+            trials_with_new_spans: Set of trial IDs that received new spans
+                in this sync cycle. Completed/stopped trials are re-processed
+                if they have new spans (to pick up late-arriving score updates).
+        """
         if self._temp_cache is None:
             return
 
+        if trials_with_new_spans is None:
+            trials_with_new_spans = set()
+
         for trial_id in trial_ids:
-            # Skip if already processed and not running
+            # Skip completed/stopped trials ONLY if they have no new spans.
+            # If new spans arrived (e.g. final score update after game_result),
+            # we must re-process to capture the latest score.
             cached_info = self._temp_cache.get_trial_info(trial_id)
             if cached_info is not None:
                 phase = cached_info.get("phase", "")
                 if phase in ("completed", "stopped"):
-                    continue  # Skip completed trials
+                    if trial_id not in trials_with_new_spans:
+                        continue  # Skip — no new data
 
             spans = self._spans_by_trial.get(trial_id, [])
             relevant_spans = [
