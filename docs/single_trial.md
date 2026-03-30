@@ -90,7 +90,24 @@ Example:
 - `agents/llms/default.yaml`
 
 
-## 5. Find the Next Playable Game
+## 5. What a Trial Produces
+
+When a trial runs, DojoZero writes a JSONL event log to the path specified by `hub.persistence_file` in your trial params (by default, under `outputs/`). This file contains every event that flowed through the trial: game state updates, odds changes, agent decisions, predictions, and results.
+
+```
+outputs/nba_prediction_events-401810854.jsonl
+```
+
+This event log is the primary artifact of a trial run. You can use it to:
+
+- **Backtest** different agent configurations against the same game data (see [Backtesting](./backtesting.md))
+- **Debug** agent behavior by inspecting the event sequence
+- **Evaluate** prediction accuracy and strategy performance
+
+> **Tip: How do I see what's happening during a trial?**
+> The terminal output shows high-level progress, but for detailed visibility into agent reasoning, event flow, and decision traces, set up tracing. See [Tracing](./tracing.md) for setup, and [Arena](./arena.md) for a browser-based timeline view. You can enable tracing on a single trial with `dojo0 run --trace-backend jaeger`.
+
+## 6. Find the Next Playable Game
 
 Use the trial runner to list upcoming games:
 
@@ -99,3 +116,9 @@ python tools/nba_trial_runner.py list
 ```
 
 For complete runner options, see [`trial_runner.md`](./trial_runner.md).
+
+## What's Next
+
+- **Scale up**: When you're ready to run multiple trials or schedule them automatically, use the [Dashboard Server](./dashboard_server.md). The dashboard provides a central service that manages trial lifecycle, supports auto-scheduling from sports APIs, and gives you a single place to monitor all running trials.
+- **Iterate offline**: Replay your trial's event log through different agent configurations with [Backtesting](./backtesting.md) — no need to wait for a live game.
+- **Observe in detail**: Set up [Tracing](./tracing.md) to capture OpenTelemetry spans for every agent decision, then explore them in the [Arena UI](./arena.md).

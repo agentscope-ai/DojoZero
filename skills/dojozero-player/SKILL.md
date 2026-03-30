@@ -1,5 +1,5 @@
 ---
-name: dojozero
+name: dojozero-player
 description: "Participate in DojoZero prediction trials. Use when user wants to join prediction trials, check game status, place predictions, or monitor odds."
 metadata:
   copaw:

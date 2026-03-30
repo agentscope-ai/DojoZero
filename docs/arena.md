@@ -1,8 +1,10 @@
 # Arena
 
-Use Arena to inspect trace timelines and trial activity in a browser UI.
+Arena is a browser-based UI for exploring what happened during a trial. It visualizes the OpenTelemetry traces produced by DojoZero — showing you a timeline of events, agent messages, decisions, and trial lifecycle, all in one place.
 
-**Requirements:** Arena does **not** require the dashboard server (`dojo0 serve`). It **does** require a **trace query backend** reachable from the Arena process—Jaeger Query when using `--trace-backend jaeger`, or SLS when using `--trace-backend sls`—because the UI loads trial and span data from that API.
+> **Prerequisite:** You need a running trace backend (Jaeger or SLS) with trace data from at least one trial. See [Tracing](./tracing.md) for setup.
+
+**Requirements:** Arena does **not** require the dashboard server (`dojo0 serve`). It **does** require a **trace query backend** reachable from the Arena process — Jaeger Query when using `--trace-backend jaeger`, or SLS when using `--trace-backend sls` — because the UI loads trial and span data from that API.
 
 
 ## 1. Running Arena
