@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from dojozero_client._client import DojoClient, EventEnvelope
+from dojozero_client._client import AgentResult, DojoClient, EventEnvelope
 from dojozero_client._config import (
     CONFIG_DIR,
     PID_FILE,
@@ -275,6 +275,19 @@ class Daemon:
                 # Main event loop
                 await self._event_loop(trial)
 
+                # Check if trial ended naturally
+                if trial.trial_ended is not None:
+                    ended = trial.trial_ended
+                    logger.info(
+                        "Trial ended (reason=%s, agents=%d)",
+                        ended.reason,
+                        len(ended.final_results),
+                    )
+                    self._state.status = ended.reason
+                    if ended.final_results:
+                        self._write_results(ended.reason, ended.final_results)
+                    self._save_state()
+
         except asyncio.CancelledError:
             logger.info("Daemon cancelled")
         except Exception as e:
@@ -295,7 +308,10 @@ class Daemon:
 
     async def _event_loop(self, trial: "TrialConnection") -> None:
         """Main event processing loop."""
-        async for event in trial.events(event_types=self.config.filters):
+        async for event in trial.events(
+            event_types=self.config.filters,
+            raise_on_trial_end=False,
+        ):
             if not self.running:
                 break
 
@@ -519,6 +535,29 @@ class Daemon:
         notif_file = self.state_dir / "notifications.jsonl"
         with open(notif_file, "a") as f:
             f.write(json.dumps(notif) + "\n")
+
+    def _write_results(self, reason: str, results: list[AgentResult]) -> None:
+        """Write final trial results to results.json."""
+        results_file = self.state_dir / "results.json"
+        data = {
+            "trial_id": self._state.trial_id,
+            "status": reason,
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "results": [
+                {
+                    "agent_id": r.agent_id,
+                    "final_balance": r.final_balance,
+                    "net_profit": r.net_profit,
+                    "total_bets": r.total_bets,
+                    "win_rate": r.win_rate,
+                    "roi": r.roi,
+                }
+                for r in results
+            ],
+        }
+        with open(results_file, "w") as f:
+            json.dump(data, f, indent=2)
+        logger.info("Results written to %s", results_file)
 
     def _write_pid(self) -> None:
         """Write PID file for process management."""
@@ -902,10 +941,27 @@ class TrialHandler:
             return
 
         try:
-            async for event in self._trial.events(event_types=self.filters):
+            async for event in self._trial.events(
+                event_types=self.filters,
+                raise_on_trial_end=False,
+            ):
                 if not self._running:
                     break
                 await self._handle_event(event)
+
+            # Check if trial ended naturally
+            if self._trial.trial_ended is not None:
+                ended = self._trial.trial_ended
+                logger.info(
+                    "Trial %s ended (reason=%s, agents=%d)",
+                    self.trial_id,
+                    ended.reason,
+                    len(ended.final_results),
+                )
+                self._state.status = ended.reason
+                if ended.final_results:
+                    self._write_results(ended.reason, ended.final_results)
+                self._save_state()
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -998,6 +1054,29 @@ class TrialHandler:
         bets_file = self.state_dir / "bets.jsonl"
         with open(bets_file, "a") as f:
             f.write(json.dumps(bet) + "\n")
+
+    def _write_results(self, reason: str, results: list[AgentResult]) -> None:
+        """Write final trial results to results.json."""
+        results_file = self.state_dir / "results.json"
+        data = {
+            "trial_id": self.trial_id,
+            "status": reason,
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "results": [
+                {
+                    "agent_id": r.agent_id,
+                    "final_balance": r.final_balance,
+                    "net_profit": r.net_profit,
+                    "total_bets": r.total_bets,
+                    "win_rate": r.win_rate,
+                    "roi": r.roi,
+                }
+                for r in results
+            ],
+        }
+        with open(results_file, "w") as f:
+            json.dump(data, f, indent=2)
+        logger.info("Trial %s: Results written to %s", self.trial_id, results_file)
 
 
 class UnifiedDaemon:

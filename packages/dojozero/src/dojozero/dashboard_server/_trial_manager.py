@@ -1080,8 +1080,18 @@ class TrialManager:
             except Exception:
                 pass  # Error checking status, continue with cancellation handling
 
-            queued.phase = QueuedTrialPhase.CANCELLED
-            self._logger.info("Resumed trial '%s' was cancelled", trial_id)
+            # Only set CANCELLED if phase wasn't already set to a terminal state
+            # (e.g., complete_trial() sets COMPLETED before cancelling the task)
+            if queued.phase not in (
+                QueuedTrialPhase.COMPLETED,
+                QueuedTrialPhase.FAILED,
+            ):
+                queued.phase = QueuedTrialPhase.CANCELLED
+            self._logger.info(
+                "Resumed trial '%s' monitoring cancelled (phase=%s)",
+                trial_id,
+                queued.phase.value,
+            )
             raise
         except Exception as e:
             queued.phase = QueuedTrialPhase.FAILED
@@ -1240,8 +1250,18 @@ class TrialManager:
             except Exception:
                 pass  # Error checking status, continue with cancellation handling
 
-            queued.phase = QueuedTrialPhase.CANCELLED
-            self._logger.info("Trial '%s' was cancelled", trial_id)
+            # Only set CANCELLED if phase wasn't already set to a terminal state
+            # (e.g., complete_trial() sets COMPLETED before cancelling the task)
+            if queued.phase not in (
+                QueuedTrialPhase.COMPLETED,
+                QueuedTrialPhase.FAILED,
+            ):
+                queued.phase = QueuedTrialPhase.CANCELLED
+            self._logger.info(
+                "Trial '%s' monitoring cancelled (phase=%s)",
+                trial_id,
+                queued.phase.value,
+            )
             raise
         except Exception as e:
             queued.phase = QueuedTrialPhase.FAILED
