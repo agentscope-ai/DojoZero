@@ -933,7 +933,12 @@ class TrialHandler:
         logger.info("Trial %s: Disconnected", self.trial_id)
 
     async def place_bet(
-        self, amount: float, market: str, selection: str
+        self,
+        amount: float,
+        market: str,
+        selection: str,
+        spread_value: float | None = None,
+        total_value: float | None = None,
     ) -> dict[str, Any]:
         """Place a bet on this trial.
 
@@ -941,6 +946,8 @@ class TrialHandler:
             amount: Bet amount
             market: Market type (moneyline, spread, total)
             selection: Selection (home, away, over, under)
+            spread_value: Spread value for spread bets (e.g., -3.5)
+            total_value: Total value for total bets (e.g., 215.5)
 
         Returns:
             Bet result dict with bet_id, status, etc.
@@ -953,6 +960,8 @@ class TrialHandler:
             selection=selection,
             amount=amount,
             reference_sequence=self._state.last_event_sequence,
+            spread_value=spread_value,
+            total_value=total_value,
         )
 
         # Log bet
@@ -1348,11 +1357,23 @@ class UnifiedDaemon:
         return {"status": "left"}
 
     async def _handle_bet(
-        self, trial_id: str, amount: float, market: str, selection: str
+        self,
+        trial_id: str,
+        amount: float,
+        market: str,
+        selection: str,
+        spread_value: float | None = None,
+        total_value: float | None = None,
     ) -> dict[str, Any]:
         """Place a bet."""
         handler = self._get_handler(trial_id)
-        return await handler.place_bet(amount, market, selection)
+        return await handler.place_bet(
+            amount,
+            market,
+            selection,
+            spread_value=spread_value,
+            total_value=total_value,
+        )
 
     async def _handle_status(self, trial_id: str | None = None) -> dict[str, Any]:
         """Get trial status."""

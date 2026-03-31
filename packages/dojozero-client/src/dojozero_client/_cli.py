@@ -325,8 +325,8 @@ def cmd_logs(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_bet(args: argparse.Namespace) -> int:
-    """Place a bet via daemon RPC or REST API."""
+def cmd_prediction(args: argparse.Namespace) -> int:
+    """Place a prediction via daemon RPC or REST API."""
     trial_id = getattr(args, "trial_id", None)
     state_dir = _get_state_dir(args)
     state = get_daemon_status(trial_id=trial_id, state_dir=state_dir)
@@ -336,6 +336,16 @@ def cmd_bet(args: argparse.Namespace) -> int:
         return 1
 
     actual_trial_id: str = state.get("trial_id", trial_id or "")
+
+    spread_value: float | None = getattr(args, "spread_value", None)
+    total_value: float | None = getattr(args, "total_value", None)
+
+    if args.market == "spread" and spread_value is None:
+        print("Error: --spread-value required for spread predictions", file=sys.stderr)
+        return 1
+    if args.market == "total" and total_value is None:
+        print("Error: --total-value required for total predictions", file=sys.stderr)
+        return 1
 
     # Try unified daemon RPC first (keeps local state in sync)
     if is_unified_daemon_running():
@@ -347,9 +357,13 @@ def cmd_bet(args: argparse.Namespace) -> int:
                 amount=args.amount,
                 market=args.market,
                 selection=args.selection,
+                spread_value=spread_value,
+                total_value=total_value,
             )
-            print(f"Bet placed: ${args.amount} on {args.selection} ({args.market})")
-            print(f"Bet ID: {result.get('bet_id')}")
+            print(
+                f"Prediction placed: ${args.amount} on {args.selection} ({args.market})"
+            )
+            print(f"Prediction ID: {result.get('bet_id')}")
             return 0
         except RPCError as e:
             print(f"Error: {e.message}", file=sys.stderr)
@@ -362,14 +376,20 @@ def cmd_bet(args: argparse.Namespace) -> int:
     agent_id = state.get("agent_id", "")
 
     try:
+        body: dict[str, Any] = {
+            "market": args.market,
+            "selection": args.selection,
+            "amount": str(args.amount),
+        }
+        if spread_value is not None:
+            body["spreadValue"] = spread_value
+        if total_value is not None:
+            body["totalValue"] = total_value
+
         resp = httpx.post(
             f"{gateway_url}/bets",
             headers={"X-Agent-ID": agent_id},
-            json={
-                "market": args.market,
-                "selection": args.selection,
-                "amount": str(args.amount),
-            },
+            json=body,
             timeout=10.0,
         )
 
@@ -383,8 +403,8 @@ def cmd_bet(args: argparse.Namespace) -> int:
 
         data = resp.json()
         bet_id = data.get("betId")
-        print(f"Bet placed: ${args.amount} on {args.selection} ({args.market})")
-        print(f"Bet ID: {bet_id}")
+        print(f"Prediction placed: ${args.amount} on {args.selection} ({args.market})")
+        print(f"Prediction ID: {bet_id}")
 
         # Update local state for legacy mode
         _update_local_state_after_bet(state_dir, gateway_url, agent_id, data)
@@ -499,13 +519,13 @@ def cmd_events(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_bets(args: argparse.Namespace) -> int:
-    """Show bet history."""
+def cmd_predictions(args: argparse.Namespace) -> int:
+    """Show prediction history."""
     state_dir = _get_state_dir(args)
     bets_file = state_dir / "bets.jsonl"
 
     if not bets_file.exists():
-        print("No bets")
+        print("No predictions")
         return 0
 
     lines = bets_file.read_text().strip().split("\n")
@@ -833,8 +853,8 @@ def cmd_leave(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_rpc_bet(args: argparse.Namespace) -> int:
-    """Place a bet via unified daemon RPC."""
+def cmd_rpc_prediction(args: argparse.Namespace) -> int:
+    """Place a prediction via unified daemon RPC."""
     if not is_unified_daemon_running():
         print("Unified daemon not running", file=sys.stderr)
         return 1
@@ -848,8 +868,8 @@ def cmd_rpc_bet(args: argparse.Namespace) -> int:
             market=args.market,
             selection=args.selection,
         )
-        print(f"Bet placed: ${args.amount} on {args.selection} ({args.market})")
-        print(f"Bet ID: {result.get('bet_id')}")
+        print(f"Prediction placed: ${args.amount} on {args.selection} ({args.market})")
+        print(f"Prediction ID: {result.get('bet_id')}")
         return 0
     except RPCError as e:
         print(f"Error: {e.message}", file=sys.stderr)
@@ -1001,19 +1021,31 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p_logs.set_defaults(func=cmd_logs)
 
-    # bet
-    p_bet = subparsers.add_parser("bet", help="Place a bet")
-    p_bet.add_argument(
+    # prediction
+    p_pred = subparsers.add_parser("prediction", help="Place a prediction")
+    p_pred.add_argument(
         "trial_id", nargs="?", help="Trial ID (optional if only one running)"
     )
-    p_bet.add_argument("amount", type=float, help="Bet amount")
-    p_bet.add_argument(
+    p_pred.add_argument("amount", type=float, help="Prediction amount")
+    p_pred.add_argument(
         "market",
         choices=["moneyline", "spread", "total"],
         help="Market type",
     )
-    p_bet.add_argument("selection", help="Selection (e.g., home, away, over, under)")
-    p_bet.set_defaults(func=cmd_bet)
+    p_pred.add_argument("selection", help="Selection (e.g., home, away, over, under)")
+    p_pred.add_argument(
+        "--spread-value",
+        type=float,
+        default=None,
+        help="Spread value for spread predictions (e.g., -3.5)",
+    )
+    p_pred.add_argument(
+        "--total-value",
+        type=float,
+        default=None,
+        help="Total value for total predictions (e.g., 215.5)",
+    )
+    p_pred.set_defaults(func=cmd_prediction)
 
     # notifications
     p_notif = subparsers.add_parser("notifications", help="Show notifications")
@@ -1031,13 +1063,13 @@ def create_parser() -> argparse.ArgumentParser:
     p_events.add_argument("-n", "--count", type=int, default=20, help="Number to show")
     p_events.set_defaults(func=cmd_events)
 
-    # bets
-    p_bets = subparsers.add_parser("bets", help="Show bet history")
-    p_bets.add_argument(
+    # predictions
+    p_preds = subparsers.add_parser("predictions", help="Show prediction history")
+    p_preds.add_argument(
         "trial_id", nargs="?", help="Trial ID (optional if only one running)"
     )
-    p_bets.add_argument("-n", "--count", type=int, default=20, help="Number to show")
-    p_bets.set_defaults(func=cmd_bets)
+    p_preds.add_argument("-n", "--count", type=int, default=20, help="Number to show")
+    p_preds.set_defaults(func=cmd_predictions)
 
     # list - show all running trials
     p_list = subparsers.add_parser("list", help="List running trials")

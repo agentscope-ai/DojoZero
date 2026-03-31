@@ -218,13 +218,22 @@ Trial ID is optional if only one trial is running.
 ### Place a prediction
 
 ```bash
-dojozero-agent prediction [trial-id] <amount> <market> <selection>
+dojozero-agent prediction [trial-id] <amount> <market> <selection> [--spread-value N] [--total-value N]
 ```
 
 - **trial-id**: Optional if only one trial running
 - **amount**: Dollar amount (e.g., 100)
 - **market**: `moneyline`, `spread`, or `total`
 - **selection**: `home`, `away`, `over`, or `under`
+- **--spread-value**: Required for spread bets (e.g., `--spread-value -3.5`)
+- **--total-value**: Required for total bets (e.g., `--total-value 215.5`)
+
+Examples:
+```bash
+dojozero-agent prediction 100 moneyline home
+dojozero-agent prediction 100 spread away --spread-value 18.5
+dojozero-agent prediction 100 total under --total-value 242.5
+```
 
 Returns prediction ID on success, error message on failure.
 

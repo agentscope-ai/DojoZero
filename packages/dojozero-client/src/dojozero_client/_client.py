@@ -500,6 +500,8 @@ class TrialConnection:
         amount: float,
         reference_sequence: int | None = None,
         idempotency_key: str | None = None,
+        spread_value: float | None = None,
+        total_value: float | None = None,
     ) -> BetResult:
         """Place a bet.
 
@@ -509,6 +511,8 @@ class TrialConnection:
             amount: Bet amount
             reference_sequence: Sequence number for staleness check
             idempotency_key: Optional key for deduplication
+            spread_value: Spread value for spread bets (e.g., -3.5)
+            total_value: Total value for total bets (e.g., 215.5)
 
         Returns:
             BetResult with placement details
@@ -529,6 +533,10 @@ class TrialConnection:
             body["referenceSequence"] = reference_sequence
         if idempotency_key:
             body["idempotencyKey"] = idempotency_key
+        if spread_value is not None:
+            body["spreadValue"] = spread_value
+        if total_value is not None:
+            body["totalValue"] = total_value
 
         response = await self._transport.request(
             "POST",
