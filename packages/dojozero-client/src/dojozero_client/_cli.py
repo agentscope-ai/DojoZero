@@ -643,6 +643,107 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_results(args: argparse.Namespace) -> int:
+    """Show trial results."""
+    trial_id = getattr(args, "trial_id", None)
+    output_format = getattr(args, "format", "table")
+
+    # Try daemon RPC first (works for connected or ended trials)
+    if is_daemon_running():
+        client = RPCClient(SOCKET_PATH)
+        try:
+            data = client.call_sync("results", trial_id=trial_id)
+        except RPCError as e:
+            if e.code != "NO_RESULTS":
+                print(f"Error: {e.message}", file=sys.stderr)
+                return 1
+            data = None
+        except ConnectionError:
+            data = None
+
+        if data:
+            if output_format == "json":
+                print(json.dumps(data, indent=2))
+                return 0
+
+            status = data.get("status", "unknown")
+            ended_at = data.get("ended_at", "")
+            print(f"Trial: {data.get('trial_id', trial_id or 'unknown')}")
+            print(f"Status: {status}")
+            if ended_at:
+                print(f"Ended: {ended_at}")
+            print()
+
+            results = data.get("results", [])
+            if not results:
+                print("No agent results available")
+                return 0
+
+            print(
+                f"  {'#':<4} {'Agent':<24} {'Balance':>10} {'P/L':>10} "
+                f"{'Bets':>6} {'Win%':>6} {'ROI':>7}"
+            )
+            print(
+                f"  {'─' * 4} {'─' * 24} {'─' * 10} {'─' * 10} "
+                f"{'─' * 6} {'─' * 6} {'─' * 7}"
+            )
+
+            for i, r in enumerate(results, 1):
+                agent = r.get("agent_id", "?")
+                if len(agent) > 23:
+                    agent = agent[:20] + "..."
+                balance = float(r.get("final_balance", 0))
+                pnl = float(r.get("net_profit", 0))
+                bets = r.get("total_bets", 0)
+                wr = r.get("win_rate", 0)
+                roi = r.get("roi", 0)
+                print(
+                    f"  {i:<4} {agent:<24} ${balance:>9.2f} "
+                    f"{'+' if pnl >= 0 else ''}{pnl:>9.2f} "
+                    f"{bets:>6} {wr:>5.0%} {roi:>6.0%}"
+                )
+            return 0
+
+    # Fall back to results.json on disk
+    if not trial_id:
+        print(
+            "Trial ID required. Use 'results <trial-id>' or join a trial first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    results_file = _trial_state_dir(trial_id) / "results.json"
+    if not results_file.exists():
+        print(f"No results found for trial {trial_id}", file=sys.stderr)
+        return 1
+
+    data = json.loads(results_file.read_text())
+    if output_format == "json":
+        print(json.dumps(data, indent=2))
+    else:
+        print(f"Trial: {data.get('trial_id', trial_id)}")
+        print(f"Status: {data.get('status', 'unknown')}")
+        ended_at = data.get("ended_at", "")
+        if ended_at:
+            print(f"Ended: {ended_at}")
+        print()
+        for i, r in enumerate(data.get("results", []), 1):
+            agent = r.get("agent_id", "?")
+            if len(agent) > 23:
+                agent = agent[:20] + "..."
+            balance = float(r.get("final_balance", 0))
+            pnl = float(r.get("net_profit", 0))
+            bets = r.get("total_bets", 0)
+            wr = r.get("win_rate", 0)
+            roi = r.get("roi", 0)
+            print(
+                f"  {i:<4} {agent:<24} ${balance:>9.2f} "
+                f"{'+' if pnl >= 0 else ''}{pnl:>9.2f} "
+                f"{bets:>6} {wr:>5.0%} {roi:>6.0%}"
+            )
+    return 0
+
+
 def cmd_discover(args: argparse.Namespace) -> int:
     """Discover available trials from dashboard."""
     from dojozero_client._client import DojoClient
@@ -1029,6 +1130,19 @@ def create_parser() -> argparse.ArgumentParser:
         help="Output format (default: table)",
     )
     p_lb.set_defaults(func=cmd_leaderboard)
+
+    # results
+    p_results = subparsers.add_parser("results", help="Show trial results")
+    p_results.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
+    p_results.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table)",
+    )
+    p_results.set_defaults(func=cmd_results)
 
     # discover
     p_discover = subparsers.add_parser("discover", help="Discover available trials")

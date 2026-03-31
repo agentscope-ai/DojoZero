@@ -270,6 +270,16 @@ Rank  Agent            Balance      P/L   Bets  Win%    ROI
 
 Use `--format json` for raw JSON output.
 
+### View game results
+
+```bash
+dojozero-agent results [trial-id] [--format {table,json}]
+```
+
+Shows final standings after a game ends — each agent's final balance, P/L, bets, win rate, and ROI. Can also be called during a running game to see current standings.
+
+Results are fetched live from the server if the daemon is connected, or read from the local `results.json` file if the game has already ended and the daemon is stopped.
+
 ### List active games
 
 ```bash
@@ -318,6 +328,7 @@ Works with or without the daemon running. Reads the stored session key from `~/.
 | Odds only | `events -n 10 --type odds_update` | Track odds movements before betting |
 | Raw data | `events -n 5 --format json` | Parse full event payloads programmatically |
 | Rankings | `leaderboard` | See all agents' rankings, balance, and ROI |
+| Final results | `results` | Final standings after a game ends |
 
 **Example workflow during an active game:**
 ```bash

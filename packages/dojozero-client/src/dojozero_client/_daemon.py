@@ -419,6 +419,43 @@ class TrialHandler:
             ],
         }
 
+    async def get_results(self) -> dict[str, Any]:
+        """Get trial results from server, or fall back to disk."""
+        # Try live results from server
+        if self._trial:
+            try:
+                results = await self._trial.get_results()
+                return {
+                    "trial_id": results.trial_id,
+                    "status": results.status,
+                    "ended_at": results.ended_at.isoformat()
+                    if results.ended_at
+                    else None,
+                    "results": [
+                        {
+                            "agent_id": r.agent_id,
+                            "final_balance": r.final_balance,
+                            "net_profit": r.net_profit,
+                            "total_bets": r.total_bets,
+                            "win_rate": r.win_rate,
+                            "roi": r.roi,
+                        }
+                        for r in results.results
+                    ],
+                }
+            except Exception as e:
+                logger.warning("Failed to fetch results from server: %s", e)
+
+        # Fall back to results.json on disk
+        results_file = self.state_dir / "results.json"
+        if results_file.exists():
+            return json.loads(results_file.read_text())
+
+        raise RPCError(
+            "NO_RESULTS",
+            f"No results available for trial {self.trial_id}",
+        )
+
     async def get_status(self) -> dict[str, Any]:
         """Get current trial status with fresh balance from server."""
         # Refresh balance from server if connected
@@ -673,6 +710,7 @@ class UnifiedDaemon:
         self._rpc.register("list", self._handle_list)
         self._rpc.register("events", self._handle_events)
         self._rpc.register("balance", self._handle_balance)
+        self._rpc.register("results", self._handle_results)
         self._rpc.register("ping", self._handle_ping)
 
     async def start(self) -> None:
@@ -827,6 +865,11 @@ class UnifiedDaemon:
         """Get balance."""
         handler = self._get_handler(trial_id)
         return await handler.get_balance()
+
+    async def _handle_results(self, trial_id: str | None = None) -> dict[str, Any]:
+        """Get trial results."""
+        handler = self._get_handler(trial_id)
+        return await handler.get_results()
 
     async def _handle_ping(self) -> dict[str, Any]:
         """Health check."""
