@@ -37,12 +37,12 @@ from dojozero_client._config import (
     load_config,
 )
 from dojozero_client._daemon import (
-    Daemon,
-    DaemonConfig,
     DaemonState,
+    Strategy,
+    TrialHandler,
+    UnifiedDaemon,
     get_daemon_status,
     is_daemon_running,
-    list_running_trials,
     stop_daemon,
 )
 from dojozero_client._exceptions import (
@@ -82,12 +82,12 @@ __all__ = [
     "ClientConfig",
     "load_config",
     # Daemon (agent mode)
-    "Daemon",
-    "DaemonConfig",
+    "UnifiedDaemon",
+    "TrialHandler",
+    "Strategy",
     "DaemonState",
     "get_daemon_status",
     "is_daemon_running",
-    "list_running_trials",
     "stop_daemon",
     # Transport (advanced use)
     "GatewayTransport",

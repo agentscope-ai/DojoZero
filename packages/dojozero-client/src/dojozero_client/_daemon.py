@@ -1,10 +1,10 @@
 """Daemon mode for persistent trial connections.
 
 Provides a long-running process that:
-- Maintains SSE connection to a trial
+- Maintains SSE connections to one or more trials
 - Persists state to ~/.dojozero/
 - Supports strategy plugins for automated betting
-- Writes notifications for external tools (e.g., OpenClaw)
+- Exposes Unix socket RPC for CLI commands
 """
 
 from __future__ import annotations
@@ -94,41 +94,6 @@ def _trial_state_dir(trial_id: str) -> Path:
     return CONFIG_DIR / "trials" / trial_id
 
 
-def _default_filters() -> list[str]:
-    return ["event.*", "odds.*"]
-
-
-def _default_strategy_config() -> dict[str, Any]:
-    return {}
-
-
-def _unset_state_dir() -> Path:
-    """Sentinel factory - state_dir will be set in __post_init__."""
-    return Path()  # Placeholder, will be replaced
-
-
-@dataclass
-class DaemonConfig:
-    """Configuration for the daemon.
-
-    State is stored in ~/.dojozero/trials/{trial_id}/ to support
-    multiple concurrent trials.
-    """
-
-    trial_id: str
-    api_key: str = ""
-    state_dir: Path = field(default_factory=_unset_state_dir)
-    strategy: str | None = None
-    strategy_config: dict[str, Any] = field(default_factory=_default_strategy_config)
-    auto_bet: bool = False
-    filters: list[str] = field(default_factory=_default_filters)
-
-    def __post_init__(self) -> None:
-        # Auto-compute state_dir from trial_id if not explicitly set
-        if self.state_dir == Path():
-            self.state_dir = _trial_state_dir(self.trial_id)
-
-
 def _default_holdings() -> list[dict[str, Any]]:
     return []
 
@@ -188,428 +153,6 @@ class DaemonState:
         )
 
 
-class Daemon:
-    """Daemon process for persistent trial connections.
-
-    Maintains a long-running SSE connection to a trial, persists state,
-    and optionally executes betting strategies.
-
-    Usage:
-        config = DaemonConfig(trial_id="lal-bos-2026-02-23")
-        daemon = Daemon(config)
-        await daemon.start()
-    """
-
-    def __init__(self, config: DaemonConfig):
-        """Initialize daemon.
-
-        Args:
-            config: Daemon configuration
-        """
-        self.config = config
-        self.client = DojoClient()
-        self.state_dir = config.state_dir
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.running = False
-        self.strategy: Strategy | None = None
-        self._state = DaemonState()
-        self._stop_event: asyncio.Event | None = None
-        self._seen_uids: set[str] = set()
-        self._needs_balance_refresh = False
-
-    async def start(self) -> None:
-        """Start the daemon main loop."""
-        self._write_pid()
-        self._setup_signals()
-        self._stop_event = asyncio.Event()
-
-        if self.config.strategy:
-            self.strategy = self._load_strategy(
-                self.config.strategy, self.config.strategy_config
-            )
-
-        self.running = True
-        gateway_url = load_config().get_gateway_url(self.config.trial_id)
-        logger.info(
-            "Starting daemon for trial %s at %s",
-            self.config.trial_id,
-            gateway_url,
-        )
-
-        # Check for existing state to resume from
-        resume_sequence = 0
-        stored_session_key = ""
-        existing_state = self._read_state()
-        if existing_state:
-            resume_sequence = existing_state.get("last_event_sequence", 0)
-            stored_session_key = existing_state.get("session_key", "")
-            if resume_sequence > 0:
-                logger.info(
-                    "Resuming from sequence %d (from previous session)", resume_sequence
-                )
-
-        # Seed seen UIDs from existing events.jsonl to prevent duplicates on reconnect
-        self._seen_uids = self._load_seen_uids()
-
-        try:
-            async with (
-                self.client.connect_trial(
-                    gateway_url=gateway_url,
-                    api_key=self.config.api_key,
-                    initial_balance=1000.0,  # Default balance for new agents
-                    session_key=stored_session_key,  # Use stored session key for reconnection
-                ) as trial
-            ):
-                # Set resume sequence for event replay
-                if resume_sequence > 0:
-                    trial.set_resume_sequence(resume_sequence)
-
-                # Initialize state
-                balance = await trial.get_balance()
-                self._state = DaemonState(
-                    trial_id=self.config.trial_id,
-                    agent_id=trial.agent_id,
-                    session_key=trial.session_key,  # Store session key for reconnection
-                    status="connected",
-                    balance=balance.balance,
-                    holdings=[
-                        {
-                            "event_id": h.event_id,
-                            "selection": h.selection,
-                            "bet_type": h.bet_type,
-                            "shares": h.shares,
-                        }
-                        for h in balance.holdings
-                    ],
-                    last_event_sequence=resume_sequence,  # Preserve sequence
-                )
-                self._save_state()
-                logger.info("Connected as agent %s", trial.agent_id)
-
-                # Main event loop
-                await self._event_loop(trial)
-
-                # Check if trial ended naturally
-                if trial.trial_ended is not None:
-                    ended = trial.trial_ended
-                    logger.info(
-                        "Trial ended (reason=%s, agents=%d)",
-                        ended.reason,
-                        len(ended.final_results),
-                    )
-                    self._state.status = ended.reason
-                    if ended.final_results:
-                        _write_results(
-                            self.state_dir / "results.json",
-                            self._state.trial_id,
-                            ended.reason,
-                            ended.final_results,
-                        )
-                    self._save_state()
-
-        except asyncio.CancelledError:
-            logger.info("Daemon cancelled")
-        except Exception as e:
-            logger.exception("Daemon error: %s", e)
-            self._state.status = "error"
-            self._save_state()
-            raise
-        finally:
-            self._state.status = "disconnected"
-            self._save_state()
-            self._cleanup_pid()
-
-    async def stop(self) -> None:
-        """Signal the daemon to stop."""
-        self.running = False
-        if self._stop_event:
-            self._stop_event.set()
-
-    async def _event_loop(self, trial: "TrialConnection") -> None:
-        """Main event processing loop."""
-        async for event in trial.events(
-            event_types=self.config.filters,
-            raise_on_trial_end=False,
-        ):
-            if not self.running:
-                break
-
-            await self._handle_event(trial, event)
-
-    async def _handle_event(
-        self, trial: "TrialConnection", event: EventEnvelope
-    ) -> None:
-        """Process an incoming event."""
-        # Skip events already seen (replayed on reconnect)
-        uid = event.payload.get("uid", "")
-        if uid and uid in self._seen_uids:
-            return
-        if uid:
-            self._seen_uids.add(uid)
-
-        # Convert to dict for logging and strategy
-        event_dict = {
-            "type": event.event_type or event.payload.get("eventType", ""),
-            "payload": event.payload,
-            "sequence": event.sequence,
-            "timestamp": event.timestamp.isoformat(),
-        }
-
-        # Log event
-        self._append_event(event_dict)
-
-        # Update state from event
-        self._update_state_from_event(event_dict)
-
-        # Deferred balance refresh after a failed post-bet refresh
-        if self._needs_balance_refresh:
-            try:
-                balance = await trial.get_balance()
-                self._state.balance = balance.balance
-                self._state.holdings = [
-                    {
-                        "bet_type": h.bet_type,
-                        "selection": h.selection,
-                        "shares": h.shares,
-                    }
-                    for h in balance.holdings
-                ]
-                self._needs_balance_refresh = False
-                self._save_state()
-                logger.info("Deferred balance refresh succeeded")
-            except Exception:
-                pass  # Will retry on next event
-
-        # Maybe make betting decision
-        if self.config.auto_bet and self.strategy:
-            try:
-                decision = self.strategy.decide(event_dict, self._state.to_dict())
-                if decision:
-                    result = await trial.place_bet(
-                        market=decision["market"],
-                        selection=decision["selection"],
-                        amount=decision["amount"],
-                        reference_sequence=event.sequence,
-                    )
-                    self._append_bet(
-                        {
-                            "bet_id": result.bet_id,
-                            "market": result.market,
-                            "selection": result.selection,
-                            "amount": result.amount,
-                            "probability": result.probability,
-                            "status": result.status,
-                            "placed_at": result.placed_at.isoformat(),
-                        }
-                    )
-                    logger.info(
-                        "Placed bet: %s on %s for $%s",
-                        decision["market"],
-                        decision["selection"],
-                        decision["amount"],
-                    )
-                    # Refresh balance after bet
-                    try:
-                        balance = await trial.get_balance()
-                        self._state.balance = balance.balance
-                        self._state.holdings = [
-                            {
-                                "bet_type": h.bet_type,
-                                "selection": h.selection,
-                                "shares": h.shares,
-                            }
-                            for h in balance.holdings
-                        ]
-                        self._needs_balance_refresh = False
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to refresh balance after auto-bet, applying optimistic update: %s",
-                            e,
-                        )
-                        self._state.balance = max(
-                            0.0, self._state.balance - decision["amount"]
-                        )
-                        existing = next(
-                            (
-                                h
-                                for h in self._state.holdings
-                                if h.get("bet_type") == decision["market"]
-                                and h.get("selection") == decision["selection"]
-                            ),
-                            None,
-                        )
-                        if existing:
-                            existing["shares"] = (
-                                existing.get("shares", 0) + decision["amount"]
-                            )
-                        else:
-                            self._state.holdings.append(
-                                {
-                                    "bet_type": decision["market"],
-                                    "selection": decision["selection"],
-                                    "shares": decision["amount"],
-                                }
-                            )
-                        self._needs_balance_refresh = True
-                    self._save_state()
-            except Exception as e:
-                logger.warning("Strategy decision error: %s", e)
-
-    def _update_state_from_event(self, event: dict[str, Any]) -> None:
-        """Update daemon state from an event."""
-        payload = event.get("payload", {})
-        # Use the inner event_type (e.g., "event.nba_game_update") not the
-        # outer SSE type (always "event").
-        event_type = payload.get("event_type", "") or event.get("type", "")
-        sequence = event.get("sequence", 0)
-
-        if sequence > self._state.last_event_sequence:
-            self._state.last_event_sequence = sequence
-
-        # Update game state from game events
-        if "game" in event_type.lower() or "play" in event_type.lower():
-            # Extract game state fields (handle both camelCase and snake_case)
-            self._state.game_state.update(
-                {
-                    k: v
-                    for k, v in payload.items()
-                    if k
-                    in (
-                        "period",
-                        "clock",
-                        "game_clock",
-                        "quarter",
-                        "time",
-                        "home_score",
-                        "away_score",
-                        "homeScore",
-                        "awayScore",
-                    )
-                }
-            )
-            # Normalize key names to snake_case
-            if "homeScore" in self._state.game_state:
-                self._state.game_state["home_score"] = self._state.game_state.pop(
-                    "homeScore"
-                )
-            if "awayScore" in self._state.game_state:
-                self._state.game_state["away_score"] = self._state.game_state.pop(
-                    "awayScore"
-                )
-            if "game_clock" in self._state.game_state:
-                self._state.game_state["clock"] = self._state.game_state.pop(
-                    "game_clock"
-                )
-
-        # Update odds from odds events
-        if "odds" in event_type.lower():
-            # Odds may be nested under payload.odds.moneyline or flat on payload
-            odds_data = payload.get("odds", {})
-            moneyline = odds_data.get("moneyline", {})
-            # Try nested path first, fall back to flat payload
-            self._state.current_odds = {
-                "home_probability": moneyline.get(
-                    "home_probability",
-                    payload.get("homeProbability", payload.get("home_probability", 0)),
-                ),
-                "away_probability": moneyline.get(
-                    "away_probability",
-                    payload.get("awayProbability", payload.get("away_probability", 0)),
-                ),
-            }
-
-        # Update balance from balance events
-        if "balance" in event_type.lower():
-            self._state.balance = payload.get("balance", self._state.balance)
-
-        self._save_state()
-
-    def _load_strategy(
-        self, module_path: str, config: dict[str, Any]
-    ) -> Strategy | None:
-        """Load a strategy plugin from a module path.
-
-        Args:
-            module_path: Dot-separated module path (e.g., "strategies.conservative")
-            config: Configuration dict to pass to strategy
-
-        Returns:
-            Strategy instance or None if loading fails
-        """
-        import importlib
-
-        try:
-            module = importlib.import_module(module_path)
-            strategy_cls = getattr(module, "Strategy")
-            return strategy_cls(config)
-        except Exception as e:
-            logger.error("Failed to load strategy %s: %s", module_path, e)
-            return None
-
-    def _save_state(self) -> None:
-        """Save current state to disk."""
-        self._state.last_updated = datetime.now(timezone.utc).isoformat()
-        state_file = self.state_dir / "state.json"
-        state_file.write_text(json.dumps(self._state.to_dict(), indent=2))
-
-    def _read_state(self) -> dict[str, Any]:
-        """Read state from disk."""
-        state_file = self.state_dir / "state.json"
-        if state_file.exists():
-            return json.loads(state_file.read_text())
-        return {}
-
-    def _load_seen_uids(self) -> set[str]:
-        """Load UIDs from existing events.jsonl for dedup on reconnect."""
-        uids: set[str] = set()
-        events_file = self.state_dir / "events.jsonl"
-        if events_file.exists():
-            for line in events_file.read_text().strip().split("\n"):
-                if line:
-                    try:
-                        uid = json.loads(line).get("payload", {}).get("uid", "")
-                        if uid:
-                            uids.add(uid)
-                    except json.JSONDecodeError:
-                        continue
-        return uids
-
-    def _append_event(self, event: dict[str, Any]) -> None:
-        """Append event to event log."""
-        events_file = self.state_dir / "events.jsonl"
-        with open(events_file, "a") as f:
-            f.write(json.dumps(event) + "\n")
-
-    def _append_bet(self, bet: dict[str, Any]) -> None:
-        """Append bet to bet history."""
-        bets_file = self.state_dir / "bets.jsonl"
-        with open(bets_file, "a") as f:
-            f.write(json.dumps(bet) + "\n")
-
-    def _write_pid(self) -> None:
-        """Write PID file for process management."""
-        pid_file = self.state_dir / "daemon.pid"
-        pid_file.write_text(str(os.getpid()))
-
-    def _cleanup_pid(self) -> None:
-        """Remove PID file."""
-        pid_file = self.state_dir / "daemon.pid"
-        if pid_file.exists():
-            pid_file.unlink()
-
-    def _setup_signals(self) -> None:
-        """Setup signal handlers for graceful shutdown."""
-
-        def handle_signal(signum: int, _frame: Any) -> None:
-            logger.info("Received signal %s, stopping...", signum)
-            self.running = False
-            if self._stop_event:
-                self._stop_event.set()
-
-        signal.signal(signal.SIGTERM, handle_signal)
-        signal.signal(signal.SIGINT, handle_signal)
-
-
 def get_daemon_status(
     trial_id: str | None = None, state_dir: Path | None = None
 ) -> dict[str, Any] | None:
@@ -638,92 +181,6 @@ def get_daemon_status(
         return None
 
 
-def is_daemon_running(
-    trial_id: str | None = None, state_dir: Path | None = None
-) -> bool:
-    """Check if a daemon is currently running.
-
-    Args:
-        trial_id: Trial ID to check
-        state_dir: Override state directory (defaults to ~/.dojozero/trials/{trial_id}/)
-
-    Returns:
-        True if daemon is running
-    """
-    if state_dir is None:
-        if trial_id:
-            state_dir = _trial_state_dir(trial_id)
-        else:
-            state_dir = CONFIG_DIR
-
-    pid_file = state_dir / "daemon.pid"
-    if not pid_file.exists():
-        return False
-
-    try:
-        pid = int(pid_file.read_text().strip())
-        # Check if process exists
-        os.kill(pid, 0)
-        return True
-    except (ValueError, OSError):
-        # Process doesn't exist or invalid PID
-        return False
-
-
-def stop_daemon(trial_id: str | None = None, state_dir: Path | None = None) -> bool:
-    """Stop the running daemon.
-
-    Args:
-        trial_id: Trial ID to stop
-        state_dir: Override state directory (defaults to ~/.dojozero/trials/{trial_id}/)
-
-    Returns:
-        True if daemon was stopped
-    """
-    if state_dir is None:
-        if trial_id:
-            state_dir = _trial_state_dir(trial_id)
-        else:
-            state_dir = CONFIG_DIR
-
-    pid_file = state_dir / "daemon.pid"
-    if not pid_file.exists():
-        return False
-
-    try:
-        pid = int(pid_file.read_text().strip())
-        os.kill(pid, signal.SIGTERM)
-        pid_file.unlink()
-        return True
-    except (ValueError, OSError):
-        return False
-
-
-def list_running_trials() -> list[str]:
-    """List all trials with running daemons.
-
-    Returns:
-        List of trial IDs with active daemons
-    """
-    trials_dir = CONFIG_DIR / "trials"
-    if not trials_dir.exists():
-        return []
-
-    running = []
-    for trial_dir in trials_dir.iterdir():
-        if trial_dir.is_dir():
-            trial_id = trial_dir.name
-            if is_daemon_running(trial_id=trial_id):
-                running.append(trial_id)
-
-    return running
-
-
-# =============================================================================
-# Unified Daemon (New Architecture)
-# =============================================================================
-
-
 class TrialHandler:
     """Handler for a single trial connection within UnifiedDaemon.
 
@@ -737,6 +194,9 @@ class TrialHandler:
         api_key: str,
         client: DojoClient,
         filters: list[str] | None = None,
+        strategy: str | None = None,
+        strategy_config: dict[str, Any] | None = None,
+        auto_bet: bool = False,
     ):
         """Initialize trial handler.
 
@@ -745,11 +205,17 @@ class TrialHandler:
             api_key: API key for authentication
             client: Shared DojoClient instance
             filters: Event type filters
+            strategy: Strategy module path (e.g., "dojozero_client._strategy.conservative")
+            strategy_config: Configuration dict to pass to strategy
+            auto_bet: Enable autonomous betting with strategy
         """
         self.trial_id = trial_id
         self.api_key = api_key
         self.client = client
         self.filters = filters or ["event.*", "odds.*"]
+        self._strategy_path = strategy
+        self._strategy_config = strategy_config or {}
+        self.auto_bet = auto_bet
 
         self.state_dir = TRIALS_DIR / trial_id
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -761,6 +227,7 @@ class TrialHandler:
         self._running = False
         self._seen_uids: set[str] = set()
         self._needs_balance_refresh = False
+        self.strategy: Strategy | None = None
 
     @property
     def agent_id(self) -> str:
@@ -776,6 +243,12 @@ class TrialHandler:
         """Connect to the trial and start event streaming."""
         if self._running:
             return
+
+        # Load strategy plugin if configured
+        if self._strategy_path:
+            self.strategy = self._load_strategy(
+                self._strategy_path, self._strategy_config
+            )
 
         # Seed seen UIDs from existing events.jsonl to prevent duplicates on reconnect
         self._seen_uids = self._load_seen_uids()
@@ -1117,6 +590,43 @@ class TrialHandler:
             except Exception:
                 pass  # Will retry on next event
 
+        # Maybe make betting decision (auto-bet with strategy)
+        if self.auto_bet and self.strategy and self._trial:
+            try:
+                decision = self.strategy.decide(event_dict, self._state.to_dict())
+                if decision:
+                    result = await self._trial.place_bet(
+                        market=decision["market"],
+                        selection=decision["selection"],
+                        amount=decision["amount"],
+                        reference_sequence=event.sequence,
+                    )
+                    self._append_bet(
+                        {
+                            "bet_id": result.bet_id,
+                            "market": result.market,
+                            "selection": result.selection,
+                            "amount": result.amount,
+                            "probability": result.probability,
+                            "status": result.status,
+                            "placed_at": result.placed_at.isoformat(),
+                        }
+                    )
+                    logger.info(
+                        "Trial %s: Auto-bet %s on %s for $%s",
+                        self.trial_id,
+                        decision["market"],
+                        decision["selection"],
+                        decision["amount"],
+                    )
+                    await self._refresh_balance_after_bet(
+                        result.amount, result.market, result.selection
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Trial %s: Strategy decision error: %s", self.trial_id, e
+                )
+
     def _update_state_from_event(self, event: dict[str, Any]) -> None:
         """Update state from an event."""
         payload = event.get("payload", {})
@@ -1127,6 +637,40 @@ class TrialHandler:
 
         if sequence > self._state.last_event_sequence:
             self._state.last_event_sequence = sequence
+
+        # Update game state from game/play events
+        if "game" in event_type.lower() or "play" in event_type.lower():
+            self._state.game_state.update(
+                {
+                    k: v
+                    for k, v in payload.items()
+                    if k
+                    in (
+                        "period",
+                        "clock",
+                        "game_clock",
+                        "quarter",
+                        "time",
+                        "home_score",
+                        "away_score",
+                        "homeScore",
+                        "awayScore",
+                    )
+                }
+            )
+            # Normalize key names to snake_case
+            if "homeScore" in self._state.game_state:
+                self._state.game_state["home_score"] = self._state.game_state.pop(
+                    "homeScore"
+                )
+            if "awayScore" in self._state.game_state:
+                self._state.game_state["away_score"] = self._state.game_state.pop(
+                    "awayScore"
+                )
+            if "game_clock" in self._state.game_state:
+                self._state.game_state["clock"] = self._state.game_state.pop(
+                    "game_clock"
+                )
 
         # Update odds from odds events
         if "odds" in event_type.lower():
@@ -1141,7 +685,38 @@ class TrialHandler:
                 ),
             }
 
+        # Update balance from balance events
+        if "balance" in event_type.lower():
+            self._state.balance = payload.get("balance", self._state.balance)
+
         self._save_state()
+
+    def _load_strategy(
+        self, module_path: str, config: dict[str, Any]
+    ) -> Strategy | None:
+        """Load a strategy plugin from a module path.
+
+        Args:
+            module_path: Dot-separated module path (e.g., "strategies.conservative")
+            config: Configuration dict to pass to strategy
+
+        Returns:
+            Strategy instance or None if loading fails
+        """
+        import importlib
+
+        try:
+            module = importlib.import_module(module_path)
+            strategy_cls = getattr(module, "Strategy")
+            return strategy_cls(config)
+        except Exception as e:
+            logger.error(
+                "Trial %s: Failed to load strategy %s: %s",
+                self.trial_id,
+                module_path,
+                e,
+            )
+            return None
 
     def _save_state(self) -> None:
         """Save current state to disk."""
@@ -1269,7 +844,12 @@ class UnifiedDaemon:
     # -------------------------------------------------------------------------
 
     async def _handle_join(
-        self, trial_id: str, filters: list[str] | None = None
+        self,
+        trial_id: str,
+        filters: list[str] | None = None,
+        strategy: str | None = None,
+        strategy_config: dict[str, Any] | None = None,
+        auto_bet: bool = False,
     ) -> dict[str, Any]:
         """Join a trial."""
         if trial_id in self._trials:
@@ -1287,6 +867,9 @@ class UnifiedDaemon:
             api_key=self._api_key,
             client=self._client,
             filters=filters,
+            strategy=strategy,
+            strategy_config=strategy_config,
+            auto_bet=auto_bet,
         )
 
         try:
@@ -1451,18 +1034,16 @@ def stop_unified_daemon() -> bool:
 
 
 __all__ = [
-    # Legacy per-trial daemon (backward compatible)
-    "Daemon",
-    "DaemonConfig",
     "DaemonState",
     "Strategy",
     "get_daemon_status",
-    "is_daemon_running",
-    "stop_daemon",
-    "list_running_trials",
-    # Unified daemon (new)
     "UnifiedDaemon",
     "TrialHandler",
-    "is_unified_daemon_running",
-    "stop_unified_daemon",
+    "is_daemon_running",
+    "stop_daemon",
 ]
+
+
+# Convenience aliases (renamed from is_unified_daemon_running / stop_unified_daemon)
+is_daemon_running = is_unified_daemon_running
+stop_daemon = stop_unified_daemon

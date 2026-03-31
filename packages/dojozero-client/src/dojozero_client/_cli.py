@@ -42,15 +42,10 @@ from dojozero_client._credentials import (
     set_default_profile,
 )
 from dojozero_client._daemon import (
-    Daemon,
-    DaemonConfig,
     UnifiedDaemon,
     get_daemon_status,
     is_daemon_running,
-    is_unified_daemon_running,
-    list_running_trials,
     stop_daemon,
-    stop_unified_daemon,
     _trial_state_dir,
 )
 from dojozero_client._rpc import RPCClient, RPCError
@@ -64,17 +59,12 @@ def _get_state_dir(args: argparse.Namespace) -> Path:
     Priority:
     1. Explicit --state-dir override
     2. Computed from trial_id: ~/.dojozero/trials/{trial_id}/
-    3. Auto-detect if only one trial is running
-    4. Legacy fallback: ~/.dojozero/
+    3. Fallback: ~/.dojozero/
     """
     if args.state_dir:
         return Path(args.state_dir)
     if hasattr(args, "trial_id") and args.trial_id:
         return _trial_state_dir(args.trial_id)
-    # Auto-detect if only one trial running
-    running = list_running_trials()
-    if len(running) == 1:
-        return _trial_state_dir(running[0])
     return CONFIG_DIR
 
 
@@ -83,133 +73,202 @@ def _get_profile(args: argparse.Namespace) -> str | None:
     return getattr(args, "profile", None) or os.environ.get("DOJOZERO_PROFILE")
 
 
-def cmd_start(args: argparse.Namespace) -> int:
-    """Start the daemon for a trial."""
-    profile = _get_profile(args)
-    state_dir = _get_state_dir(args)
+def _ensure_daemon_running(profile: str | None) -> bool:
+    """Ensure the unified daemon is running, starting it if needed.
 
-    if is_daemon_running(trial_id=args.trial_id, state_dir=state_dir):
-        print(
-            f"Daemon already running for {args.trial_id}. Use 'stop' first.",
-            file=sys.stderr,
-        )
-        return 1
+    Returns:
+        True if daemon is running (was already running or just started).
+    """
+    if is_daemon_running():
+        return True
 
-    api_key = (
-        args.api_key
-        or os.environ.get("DOJOZERO_AGENT_API_KEY", "")
-        or load_api_key(profile=profile)
-        or ""
-    )
-    if not api_key:
+    if not has_api_key(profile):
         profile_hint = f" --profile {profile}" if profile else ""
         print(
-            f"Error: API key required. Use 'dojozero-agent config{profile_hint} --api-key <key>', "
-            "set DOJOZERO_AGENT_API_KEY, or pass --api-key.",
+            f"Error: No API key configured. Run 'dojozero-agent config{profile_hint} --api-key <key>' first.",
             file=sys.stderr,
         )
-        return 1
+        return False
 
-    daemon_config = DaemonConfig(
-        trial_id=args.trial_id,
-        api_key=api_key,
-        state_dir=state_dir,
-        strategy=args.strategy,
-        auto_bet=args.auto_bet,
-        filters=args.filters.split(",") if args.filters else ["event.*", "odds.*"],
-    )
+    profile_dir = get_profile_dir(profile)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    log_file = profile_dir / "daemon.log"
+
+    env = os.environ.copy()
+    env.setdefault("NO_PROXY", "localhost,127.0.0.1")
+
+    cmd = [sys.executable, "-m", "dojozero_client._cli"]
+    if profile:
+        cmd.extend(["--profile", profile])
+    cmd.append("daemon")
+
+    with open(log_file, "a") as f:
+        subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            stdout=f,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            env=env,
+        )
+
+    # Wait briefly for daemon to start
+    import time
+
+    for _ in range(10):
+        time.sleep(0.3)
+        if is_daemon_running():
+            return True
+    print("Error: Daemon failed to start. Check logs.", file=sys.stderr)
+    return False
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    """Start (join) a trial. Auto-starts daemon if needed."""
+    profile = _get_profile(args)
+
+    filters = args.filters.split(",") if args.filters else ["event.*", "odds.*"]
+    strategy: str | None = getattr(args, "strategy", None)
+    auto_bet: bool = getattr(args, "auto_bet", False)
 
     if args.background:
-        # Start as background process
-        # Note: --state-dir is a global arg (before subcommand)
-        cmd = [
-            sys.executable,
-            "-m",
-            "dojozero_client._cli",
-            "--state-dir",
-            str(state_dir),
-            "start",
-            args.trial_id,
-        ]
-        # Note: API key is NOT passed via CLI for security (visible in ps).
-        # Child process reads from credentials file or DOJOZERO_AGENT_API_KEY env var.
-        if daemon_config.strategy:
-            cmd.extend(["--strategy", daemon_config.strategy])
-        if daemon_config.auto_bet:
-            cmd.append("--auto-bet")
-        # Don't pass --background to avoid infinite recursion
+        # Ensure daemon is running, then join via RPC
+        if not _ensure_daemon_running(profile):
+            return 1
 
-        state_dir.mkdir(parents=True, exist_ok=True)
-        log_file = state_dir / "daemon.log"
-
-        # Inherit environment and ensure proxy bypass for localhost
-        env = os.environ.copy()
-        env.setdefault("NO_PROXY", "localhost,127.0.0.1")
-
-        with open(log_file, "a") as f:
-            subprocess.Popen(
-                cmd,
-                start_new_session=True,
-                stdout=f,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                env=env,
+        client = RPCClient(SOCKET_PATH)
+        try:
+            result = client.call_sync(
+                "join",
+                trial_id=args.trial_id,
+                filters=filters,
+                strategy=strategy,
+                auto_bet=auto_bet,
             )
-        print(f"Started daemon for {args.trial_id} (background)")
-        print(f"Logs: {log_file}")
-        return 0
+            status = result.get("status", "joined")
+            agent_id = result.get("agent_id", "")
+            if status == "already_joined":
+                print(f"Already joined trial {args.trial_id} as {agent_id}")
+            else:
+                print(f"Joined trial {args.trial_id} as {agent_id}")
+            return 0
+        except RPCError as e:
+            print(f"Error: {e.message}", file=sys.stderr)
+            return 1
+        except ConnectionError as e:
+            print(f"Cannot connect to daemon: {e}", file=sys.stderr)
+            return 1
 
-    # Run in foreground
+    # Foreground mode: run daemon in-process with a single trial
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    daemon = Daemon(daemon_config)
+    async def _run_foreground() -> None:
+        daemon = UnifiedDaemon()
+        # Start daemon, then auto-join the trial
+        daemon._stop_event = asyncio.Event()
+        daemon._api_key = load_api_key(profile=profile)
+        if not daemon._api_key:
+            raise RuntimeError("No API key configured")
+        daemon._write_pid()
+        daemon._setup_signals()
+        daemon._running = True
+        await daemon._rpc.start()
+        try:
+            await daemon._handle_join(
+                trial_id=args.trial_id,
+                filters=filters,
+                strategy=strategy,
+                auto_bet=auto_bet,
+            )
+            logger.info("Joined trial %s in foreground mode", args.trial_id)
+            await daemon._stop_event.wait()
+        finally:
+            await daemon.stop()
+
     try:
-        asyncio.run(daemon.start())
+        asyncio.run(_run_foreground())
     except KeyboardInterrupt:
         print("\nStopping daemon...")
     return 0
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
-    """Stop the running daemon."""
+    """Stop a trial or the entire daemon."""
     trial_id = getattr(args, "trial_id", None)
-    state_dir = _get_state_dir(args)
 
-    if not is_daemon_running(trial_id=trial_id, state_dir=state_dir):
-        print(f"No daemon running{f' for {trial_id}' if trial_id else ''}")
+    if not is_daemon_running():
+        print("Daemon not running")
         return 1
 
-    if stop_daemon(trial_id=trial_id, state_dir=state_dir):
-        print(f"Daemon stopped{f' for {trial_id}' if trial_id else ''}")
-        return 0
+    if trial_id:
+        # Disconnect from a specific trial (keep daemon running)
+        client = RPCClient(SOCKET_PATH)
+        try:
+            client.call_sync("leave", trial_id=trial_id)
+            print(f"Disconnected from trial {trial_id}")
+            return 0
+        except RPCError as e:
+            print(f"Error: {e.message}", file=sys.stderr)
+            return 1
     else:
-        print("Failed to stop daemon", file=sys.stderr)
-        return 1
+        # Stop the entire daemon
+        if stop_daemon():
+            print("Daemon stopped")
+            return 0
+        else:
+            print("Failed to stop daemon", file=sys.stderr)
+            return 1
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Show current daemon status."""
+    """Show current trial status."""
     trial_id = getattr(args, "trial_id", None)
+    daemon_running = is_daemon_running()
+
+    # Try RPC first for live data
+    if daemon_running:
+        client = RPCClient(SOCKET_PATH)
+        try:
+            state = client.call_sync("status", trial_id=trial_id)
+            _print_status(state, daemon_running=True)
+            # Show bet history from disk
+            tid = state.get("trial_id", trial_id or "")
+            if tid:
+                _print_bet_history(_trial_state_dir(tid))
+            return 0
+        except RPCError as e:
+            if e.code == "NO_TRIALS":
+                print("No trials connected. Use 'start <trial-id>' first.")
+                return 1
+            print(f"Error: {e.message}", file=sys.stderr)
+            return 1
+
+    # Fallback to disk state
     state_dir = _get_state_dir(args)
     state = get_daemon_status(trial_id=trial_id, state_dir=state_dir)
-
     if not state:
         print(
             f"No active trial{f' for {trial_id}' if trial_id else ''}. Use 'start <trial-id>' first."
         )
         return 1
 
-    running = is_daemon_running(trial_id=trial_id, state_dir=state_dir)
+    _print_status(state, daemon_running=False)
+    _print_bet_history(state_dir)
+    return 0
+
+
+def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
+    """Print formatted status output."""
     game_state = state.get("game_state", {})
     odds = state.get("current_odds", {})
 
     print(f"Trial: {state.get('trial_id', 'unknown')}")
     print(f"Agent: {state.get('agent_id', 'unknown')}")
     status_label = state.get("status", "unknown")
-    if running:
+    if daemon_running:
         print(f"Status: {status_label} (daemon running)")
     else:
         print(f"Status: {status_label} (daemon not running)")
@@ -226,78 +285,35 @@ def cmd_status(args: argparse.Namespace) -> int:
         away_prob = odds.get("away_probability", 0)
         print(f"Odds: Home {home_prob:.0%}, Away {away_prob:.0%}")
 
-    # Fetch fresh balance from server if possible
-    balance = state.get("balance", 0)
-    trial_id_val = state.get("trial_id")
-    agent_id = state.get("agent_id")
-    if trial_id_val and agent_id:
-        gateway_url = load_config().get_gateway_url(trial_id_val)
-        fresh_balance = _fetch_server_balance(gateway_url, agent_id)
-        if fresh_balance is not None:
-            balance = fresh_balance
-            # Update local state if different
-            if balance != state.get("balance", 0):
-                _update_local_balance(state_dir, balance)
-
-    print(f"Balance: ${balance:.2f}")
+    print(f"Balance: ${state.get('balance', 0):.2f}")
     print(f"Last Update: {state.get('last_updated', 'never')}")
 
-    # Show bet history
+
+def _print_bet_history(state_dir: Path) -> None:
+    """Print bet history from bets.jsonl."""
     bets_file = state_dir / "bets.jsonl"
-    if bets_file.exists():
-        lines = bets_file.read_text().strip().split("\n")
-        bets = []
-        for line in lines:
-            if line:
-                try:
-                    bets.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        if bets:
-            total_wagered = sum(b.get("amount", 0) for b in bets)
-            print(f"\nBets ({len(bets)}, ${total_wagered:.2f} wagered):")
-            for b in bets:
-                amt = b.get("amount", 0)
-                market = b.get("market", "?")
-                selection = b.get("selection", "?")
-                prob = b.get("probability", 0)
-                ts = b.get("placed_at", "")[:16]  # Trim to minute
-                prob_str = f" @ {prob:.0%}" if prob else ""
-                print(f"  ${amt:.0f} on {selection} ({market}){prob_str} - {ts}")
+    if not bets_file.exists():
+        return
 
-    return 0
-
-
-def _fetch_server_balance(gateway_url: str, agent_id: str) -> float | None:
-    """Fetch fresh balance from server."""
-    import httpx
-
-    try:
-        resp = httpx.get(
-            f"{gateway_url}/balance",
-            headers={"X-Agent-ID": agent_id},
-            timeout=5.0,
-        )
-        if resp.status_code == 200:
-            return float(resp.json().get("balance", 0))
-    except Exception:
-        pass
-    return None
-
-
-def _update_local_balance(state_dir: Path, balance: float) -> None:
-    """Update balance in local state.json."""
-    from datetime import datetime
-
-    state_file = state_dir / "state.json"
-    if state_file.exists():
-        try:
-            state = json.loads(state_file.read_text())
-            state["balance"] = balance
-            state["last_updated"] = datetime.now().isoformat()
-            state_file.write_text(json.dumps(state, indent=2))
-        except Exception:
-            pass
+    lines = bets_file.read_text().strip().split("\n")
+    bets = []
+    for line in lines:
+        if line:
+            try:
+                bets.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    if bets:
+        total_wagered = sum(b.get("amount", 0) for b in bets)
+        print(f"\nBets ({len(bets)}, ${total_wagered:.2f} wagered):")
+        for b in bets:
+            amt = b.get("amount", 0)
+            market = b.get("market", "?")
+            selection = b.get("selection", "?")
+            prob = b.get("probability", 0)
+            ts = b.get("placed_at", "")[:16]
+            prob_str = f" @ {prob:.0%}" if prob else ""
+            print(f"  ${amt:.0f} on {selection} ({market}){prob_str} - {ts}")
 
 
 def cmd_logs(args: argparse.Namespace) -> int:
@@ -325,16 +341,8 @@ def cmd_logs(args: argparse.Namespace) -> int:
 
 
 def cmd_prediction(args: argparse.Namespace) -> int:
-    """Place a prediction via daemon RPC or REST API."""
+    """Place a prediction via daemon RPC."""
     trial_id = getattr(args, "trial_id", None)
-    state_dir = _get_state_dir(args)
-    state = get_daemon_status(trial_id=trial_id, state_dir=state_dir)
-
-    if not state:
-        print("No active trial. Use 'start <trial-id>' first.", file=sys.stderr)
-        return 1
-
-    actual_trial_id: str = state.get("trial_id", trial_id or "")
 
     spread_value: float | None = getattr(args, "spread_value", None)
     total_value: float | None = getattr(args, "total_value", None)
@@ -346,122 +354,27 @@ def cmd_prediction(args: argparse.Namespace) -> int:
         print("Error: --total-value required for total predictions", file=sys.stderr)
         return 1
 
-    # Try unified daemon RPC first (keeps local state in sync)
-    if is_unified_daemon_running():
-        client = RPCClient(SOCKET_PATH)
-        try:
-            result = client.call_sync(
-                "bet",
-                trial_id=actual_trial_id,
-                amount=args.amount,
-                market=args.market,
-                selection=args.selection,
-                spread_value=spread_value,
-                total_value=total_value,
-            )
-            print(
-                f"Prediction placed: ${args.amount} on {args.selection} ({args.market})"
-            )
-            print(f"Prediction ID: {result.get('bet_id')}")
-            return 0
-        except RPCError as e:
-            print(f"Error: {e.message}", file=sys.stderr)
-            return 1
-
-    # Fallback to direct REST API (legacy per-trial daemon mode)
-    import httpx
-
-    gateway_url = load_config().get_gateway_url(actual_trial_id)
-    agent_id = state.get("agent_id", "")
-
-    try:
-        body: dict[str, Any] = {
-            "market": args.market,
-            "selection": args.selection,
-            "amount": str(args.amount),
-        }
-        if spread_value is not None:
-            body["spreadValue"] = spread_value
-        if total_value is not None:
-            body["totalValue"] = total_value
-
-        resp = httpx.post(
-            f"{gateway_url}/bets",
-            headers={"X-Agent-ID": agent_id},
-            json=body,
-            timeout=10.0,
-        )
-
-        if resp.status_code != 200:
-            try:
-                error = resp.json().get("error", {})
-                print(f"Error: {error.get('message', resp.text)}", file=sys.stderr)
-            except Exception:
-                print(f"Error: {resp.status_code} - {resp.text}", file=sys.stderr)
-            return 1
-
-        data = resp.json()
-        bet_id = data.get("betId")
-        print(f"Prediction placed: ${args.amount} on {args.selection} ({args.market})")
-        print(f"Prediction ID: {bet_id}")
-
-        # Update local state for legacy mode
-        _update_local_state_after_bet(state_dir, gateway_url, agent_id, data)
-
-        return 0
-
-    except httpx.ConnectError as e:
-        print(f"Connection error: {e}", file=sys.stderr)
+    if not is_daemon_running():
+        print("Daemon not running. Use 'start <trial-id>' first.", file=sys.stderr)
         return 1
 
-
-def _update_local_state_after_bet(
-    state_dir: Path, gateway_url: str, agent_id: str, bet_data: dict[str, Any]
-) -> None:
-    """Update local state after placing a bet (legacy mode).
-
-    Fetches fresh balance from server and updates state.json and bets.jsonl.
-    """
-    import httpx
-    from datetime import datetime
-
-    # Fetch fresh balance
+    client = RPCClient(SOCKET_PATH)
     try:
-        resp = httpx.get(
-            f"{gateway_url}/agents/balance",
-            headers={"X-Agent-ID": agent_id},
-            timeout=5.0,
+        result = client.call_sync(
+            "bet",
+            trial_id=trial_id,
+            amount=args.amount,
+            market=args.market,
+            selection=args.selection,
+            spread_value=spread_value,
+            total_value=total_value,
         )
-        if resp.status_code == 200:
-            balance_data = resp.json()
-            new_balance = float(balance_data.get("balance", 0))
-
-            # Update state.json
-            state_file = state_dir / "state.json"
-            if state_file.exists():
-                state = json.loads(state_file.read_text())
-                state["balance"] = new_balance
-                state["last_updated"] = datetime.now().isoformat()
-                state_file.write_text(json.dumps(state, indent=2))
-    except Exception:
-        pass  # Best effort - don't fail the bet command
-
-    # Append to bets.jsonl
-    try:
-        bets_file = state_dir / "bets.jsonl"
-        bet_record = {
-            "bet_id": bet_data.get("betId"),
-            "market": bet_data.get("market"),
-            "selection": bet_data.get("selection"),
-            "amount": float(bet_data.get("amount", 0)),
-            "probability": float(bet_data.get("probability", 0)),
-            "status": bet_data.get("status", "placed"),
-            "placed_at": datetime.now().isoformat(),
-        }
-        with open(bets_file, "a") as f:
-            f.write(json.dumps(bet_record) + "\n")
-    except Exception:
-        pass  # Best effort
+        print(f"Prediction placed: ${args.amount} on {args.selection} ({args.market})")
+        print(f"Prediction ID: {result.get('bet_id')}")
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
 
 
 def _format_event_summary(payload: dict[str, Any], home: str, away: str) -> str:
@@ -629,51 +542,29 @@ def cmd_predictions(args: argparse.Namespace) -> int:
 
 
 def cmd_list(_: argparse.Namespace) -> int:
-    """List all running trials with fresh balances."""
-    # Try RPC first for live data with refreshed balances
-    if is_unified_daemon_running():
-        client = RPCClient(SOCKET_PATH)
-        try:
-            result = client.call_sync("list")
-            trials = result.get("trials", {})
-
-            if not trials:
-                print("No trials connected")
-                return 0
-
-            print(f"Running trials ({len(trials)}):")
-            for trial_id, info in trials.items():
-                status = "connected" if info.get("connected") else "disconnected"
-                balance = info.get("balance", 0)
-                print(f"  {trial_id}: {status}, balance=${balance:.2f}")
-            return 0
-        except (RPCError, ConnectionError):
-            pass  # Fall back to disk-based status
-
-    # Fall back to reading from disk (may be stale)
-    running = list_running_trials()
-
-    if not running:
-        print("No daemons running")
+    """List all connected trials."""
+    if not is_daemon_running():
+        print("Daemon not running")
         return 0
 
-    print(f"Running trials ({len(running)}):")
-    for trial_id in running:
-        state = get_daemon_status(trial_id=trial_id)
-        if state:
-            status = state.get("status", "unknown")
-            balance = state.get("balance", 0)
-            agent_id = state.get("agent_id")
-            if agent_id:
-                gateway_url = load_config().get_gateway_url(trial_id)
-                fresh = _fetch_server_balance(gateway_url, agent_id)
-                if fresh is not None:
-                    balance = fresh
-            print(f"  {trial_id}: {status}, balance=${balance:.2f}")
-        else:
-            print(f"  {trial_id}: (status unknown)")
+    client = RPCClient(SOCKET_PATH)
+    try:
+        result = client.call_sync("list")
+        trials = result.get("trials", {})
 
-    return 0
+        if not trials:
+            print("No trials connected")
+            return 0
+
+        print(f"Connected trials ({len(trials)}):")
+        for trial_id, info in trials.items():
+            status = "connected" if info.get("connected") else "disconnected"
+            balance = info.get("balance", 0)
+            print(f"  {trial_id}: {status}, balance=${balance:.2f}")
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
 
 
 def cmd_discover(args: argparse.Namespace) -> int:
@@ -700,17 +591,12 @@ def cmd_discover(args: argparse.Namespace) -> int:
     return 0
 
 
-# =============================================================================
-# Unified Daemon Commands (New Architecture)
-# =============================================================================
-
-
 def cmd_daemon_start(args: argparse.Namespace) -> int:
-    """Start the unified daemon."""
+    """Start the daemon process (internal entry point)."""
     profile = _get_profile(args)
     profile_dir = get_profile_dir(profile)
 
-    if is_unified_daemon_running():
+    if is_daemon_running():
         print("Unified daemon already running")
         return 1
 
@@ -761,20 +647,6 @@ def cmd_daemon_start(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("\nStopping daemon...")
     return 0
-
-
-def cmd_daemon_stop(_: argparse.Namespace) -> int:
-    """Stop the unified daemon."""
-    if not is_unified_daemon_running():
-        print("Unified daemon not running")
-        return 1
-
-    if stop_unified_daemon():
-        print("Unified daemon stopped")
-        return 0
-    else:
-        print("Failed to stop daemon", file=sys.stderr)
-        return 1
 
 
 def _detect_token_type(key: str) -> str:
@@ -889,31 +761,6 @@ def cmd_config(args: argparse.Namespace) -> int:
     return 1
 
 
-def cmd_join(args: argparse.Namespace) -> int:
-    """Join a trial via unified daemon."""
-    if not is_unified_daemon_running():
-        print(
-            "Unified daemon not running. Start with 'dojozero-agent daemon -b'",
-            file=sys.stderr,
-        )
-        return 1
-
-    client = RPCClient(SOCKET_PATH)
-    try:
-        result = client.call_sync(
-            "join",
-            trial_id=args.trial_id,
-        )
-        print(f"Joined trial {args.trial_id} as {result.get('agent_id')}")
-        return 0
-    except RPCError as e:
-        print(f"Error: {e.message}", file=sys.stderr)
-        return 1
-    except ConnectionError as e:
-        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
-        return 1
-
-
 def cmd_leave(args: argparse.Namespace) -> int:
     """Leave a trial — unregister from server.
 
@@ -923,7 +770,7 @@ def cmd_leave(args: argparse.Namespace) -> int:
     trial_id = args.trial_id
 
     # Try via daemon first
-    if is_unified_daemon_running():
+    if is_daemon_running():
         client = RPCClient(SOCKET_PATH)
         try:
             client.call_sync("leave", trial_id=trial_id, unregister=True)
@@ -969,94 +816,6 @@ def cmd_leave(args: argparse.Namespace) -> int:
         return 0
     except Exception as e:
         print(f"Failed to unregister: {e}", file=sys.stderr)
-        return 1
-
-
-def cmd_rpc_prediction(args: argparse.Namespace) -> int:
-    """Place a prediction via unified daemon RPC."""
-    if not is_unified_daemon_running():
-        print("Unified daemon not running", file=sys.stderr)
-        return 1
-
-    client = RPCClient(SOCKET_PATH)
-    try:
-        result = client.call_sync(
-            "bet",
-            trial_id=args.trial_id,
-            amount=args.amount,
-            market=args.market,
-            selection=args.selection,
-        )
-        print(f"Prediction placed: ${args.amount} on {args.selection} ({args.market})")
-        print(f"Prediction ID: {result.get('bet_id')}")
-        return 0
-    except RPCError as e:
-        print(f"Error: {e.message}", file=sys.stderr)
-        return 1
-    except ConnectionError as e:
-        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
-        return 1
-
-
-def cmd_rpc_status(args: argparse.Namespace) -> int:
-    """Get status via unified daemon RPC."""
-    if not is_unified_daemon_running():
-        print("Unified daemon not running", file=sys.stderr)
-        return 1
-
-    client = RPCClient(SOCKET_PATH)
-    try:
-        trial_id = getattr(args, "trial_id", None)
-        result = client.call_sync("status", trial_id=trial_id)
-
-        print(f"Trial: {result.get('trial_id', 'unknown')}")
-        print(f"Agent: {result.get('agent_id', 'unknown')}")
-        print(f"Status: {result.get('status', 'unknown')}")
-        print(f"Balance: ${result.get('balance', 0):.2f}")
-
-        odds = result.get("current_odds", {})
-        if odds:
-            print(
-                f"Odds: Home {odds.get('home_probability', 0):.0%}, Away {odds.get('away_probability', 0):.0%}"
-            )
-
-        print(f"Last Update: {result.get('last_updated', 'never')}")
-        return 0
-    except RPCError as e:
-        print(f"Error: {e.message}", file=sys.stderr)
-        return 1
-    except ConnectionError as e:
-        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
-        return 1
-
-
-def cmd_rpc_list(_: argparse.Namespace) -> int:
-    """List trials via unified daemon RPC."""
-    if not is_unified_daemon_running():
-        print("Unified daemon not running", file=sys.stderr)
-        return 1
-
-    client = RPCClient(SOCKET_PATH)
-    try:
-        result = client.call_sync("list")
-        trials = result.get("trials", {})
-
-        if not trials:
-            print("No trials connected")
-            return 0
-
-        print(f"Connected trials ({len(trials)}):")
-        for trial_id, info in trials.items():
-            status = "connected" if info.get("connected") else "disconnected"
-            balance = info.get("balance", 0)
-            print(f"  {trial_id}: {status}, balance=${balance:.2f}")
-
-        return 0
-    except RPCError as e:
-        print(f"Error: {e.message}", file=sys.stderr)
-        return 1
-    except ConnectionError as e:
-        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
         return 1
 
 
@@ -1201,13 +960,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p_discover.set_defaults(func=cmd_discover)
 
-    # =========================================================================
-    # Unified Daemon Commands (New Architecture)
-    # =========================================================================
-
-    # daemon - start unified daemon
+    # daemon - start daemon process (internal, used by auto-start)
     p_daemon = subparsers.add_parser(
-        "daemon", help="Start unified daemon (manages multiple trials)"
+        "daemon", help="Start daemon process (usually auto-started by 'start')"
     )
     p_daemon.add_argument(
         "--background",
@@ -1216,10 +971,6 @@ def create_parser() -> argparse.ArgumentParser:
         help="Run in background",
     )
     p_daemon.set_defaults(func=cmd_daemon_start)
-
-    # daemon-stop - stop unified daemon
-    p_daemon_stop = subparsers.add_parser("daemon-stop", help="Stop the unified daemon")
-    p_daemon_stop.set_defaults(func=cmd_daemon_stop)
 
     # config - configure credentials and settings
     p_config = subparsers.add_parser(
@@ -1254,12 +1005,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p_config.set_defaults(func=cmd_config)
 
-    # join - join a trial via daemon RPC
-    p_join = subparsers.add_parser("join", help="Join a trial (via unified daemon)")
-    p_join.add_argument("trial_id", help="Trial ID to join")
-    p_join.set_defaults(func=cmd_join)
-
-    # leave - leave a trial via daemon RPC
+    # leave - leave a trial
     p_leave = subparsers.add_parser(
         "leave",
         help="Leave a trial and unregister from server (balance/bets lost)",
