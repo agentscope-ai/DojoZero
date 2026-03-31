@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 from dojozero_client._exceptions import (
@@ -43,7 +43,7 @@ class BetResult:
         placed_at = (
             datetime.fromisoformat(placed_at_str.replace("Z", "+00:00"))
             if placed_at_str
-            else datetime.now()
+            else datetime.now(timezone.utc)
         )
         return cls(
             bet_id=data["betId"],
