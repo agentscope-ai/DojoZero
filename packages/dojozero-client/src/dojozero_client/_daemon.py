@@ -202,6 +202,7 @@ class Daemon:
         self._state = DaemonState()
         self._stop_event: asyncio.Event | None = None
         self._seen_uids: set[str] = set()
+        self._needs_balance_refresh = False
 
     async def start(self) -> None:
         """Start the daemon main loop."""
@@ -342,6 +343,25 @@ class Daemon:
         # Update state from event
         self._update_state_from_event(event_dict)
 
+        # Deferred balance refresh after a failed post-bet refresh
+        if self._needs_balance_refresh:
+            try:
+                balance = await trial.get_balance()
+                self._state.balance = balance.balance
+                self._state.holdings = [
+                    {
+                        "bet_type": h.bet_type,
+                        "selection": h.selection,
+                        "shares": h.shares,
+                    }
+                    for h in balance.holdings
+                ]
+                self._needs_balance_refresh = False
+                self._save_state()
+                logger.info("Deferred balance refresh succeeded")
+            except Exception:
+                pass  # Will retry on next event
+
         # Check for notable events -> notify
         if notification := self._check_notification(event_dict):
             self._write_notification(notification)
@@ -381,16 +401,48 @@ class Daemon:
                         decision["amount"],
                     )
                     # Refresh balance after bet
-                    balance = await trial.get_balance()
-                    self._state.balance = balance.balance
-                    self._state.holdings = [
-                        {
-                            "bet_type": h.bet_type,
-                            "selection": h.selection,
-                            "shares": h.shares,
-                        }
-                        for h in balance.holdings
-                    ]
+                    try:
+                        balance = await trial.get_balance()
+                        self._state.balance = balance.balance
+                        self._state.holdings = [
+                            {
+                                "bet_type": h.bet_type,
+                                "selection": h.selection,
+                                "shares": h.shares,
+                            }
+                            for h in balance.holdings
+                        ]
+                        self._needs_balance_refresh = False
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to refresh balance after auto-bet, applying optimistic update: %s",
+                            e,
+                        )
+                        self._state.balance = max(
+                            0.0, self._state.balance - decision["amount"]
+                        )
+                        existing = next(
+                            (
+                                h
+                                for h in self._state.holdings
+                                if h.get("bet_type") == decision["market"]
+                                and h.get("selection") == decision["selection"]
+                            ),
+                            None,
+                        )
+                        if existing:
+                            existing["shares"] = (
+                                existing.get("shares", 0) + decision["amount"]
+                            )
+                        else:
+                            self._state.holdings.append(
+                                {
+                                    "bet_type": decision["market"],
+                                    "selection": decision["selection"],
+                                    "shares": decision["amount"],
+                                }
+                            )
+                        self._needs_balance_refresh = True
                     self._save_state()
             except Exception as e:
                 logger.warning("Strategy decision error: %s", e)
@@ -775,6 +827,7 @@ class TrialHandler:
         self._event_task: asyncio.Task[None] | None = None
         self._running = False
         self._seen_uids: set[str] = set()
+        self._needs_balance_refresh = False
 
     @property
     def agent_id(self) -> str:
@@ -915,19 +968,54 @@ class TrialHandler:
         self._append_bet(bet_record)
 
         # Refresh balance and holdings from server
-        balance = await self._trial.get_balance()
-        self._state.balance = balance.balance
-        self._state.holdings = [
-            {
-                "bet_type": h.bet_type,
-                "selection": h.selection,
-                "shares": h.shares,
-            }
-            for h in balance.holdings
-        ]
-        self._save_state()
+        await self._refresh_balance_after_bet(
+            result.amount, result.market, result.selection
+        )
 
         return bet_record
+
+    async def _refresh_balance_after_bet(
+        self, amount: float, market: str, selection: str
+    ) -> None:
+        """Refresh balance from server after a bet, with optimistic fallback."""
+        try:
+            if self._trial:
+                balance = await self._trial.get_balance()
+                self._state.balance = balance.balance
+                self._state.holdings = [
+                    {
+                        "bet_type": h.bet_type,
+                        "selection": h.selection,
+                        "shares": h.shares,
+                    }
+                    for h in balance.holdings
+                ]
+                self._needs_balance_refresh = False
+        except Exception as e:
+            logger.warning(
+                "Trial %s: Failed to refresh balance after bet, applying optimistic update: %s",
+                self.trial_id,
+                e,
+            )
+            # Optimistic: deduct amount and add holding
+            self._state.balance = max(0.0, self._state.balance - amount)
+            # Merge into existing holdings
+            existing = next(
+                (
+                    h
+                    for h in self._state.holdings
+                    if h.get("bet_type") == market and h.get("selection") == selection
+                ),
+                None,
+            )
+            if existing:
+                existing["shares"] = existing.get("shares", 0) + amount
+            else:
+                self._state.holdings.append(
+                    {"bet_type": market, "selection": selection, "shares": amount}
+                )
+            self._needs_balance_refresh = True
+        self._save_state()
 
     async def get_balance(self) -> dict[str, Any]:
         """Get current balance."""
@@ -1040,6 +1128,27 @@ class TrialHandler:
 
         # Update state
         self._update_state_from_event(event_dict)
+
+        # Deferred balance refresh after a failed post-bet refresh
+        if self._needs_balance_refresh and self._trial:
+            try:
+                balance = await self._trial.get_balance()
+                self._state.balance = balance.balance
+                self._state.holdings = [
+                    {
+                        "bet_type": h.bet_type,
+                        "selection": h.selection,
+                        "shares": h.shares,
+                    }
+                    for h in balance.holdings
+                ]
+                self._needs_balance_refresh = False
+                self._save_state()
+                logger.info(
+                    "Trial %s: Deferred balance refresh succeeded", self.trial_id
+                )
+            except Exception:
+                pass  # Will retry on next event
 
     def _update_state_from_event(self, event: dict[str, Any]) -> None:
         """Update state from an event."""
