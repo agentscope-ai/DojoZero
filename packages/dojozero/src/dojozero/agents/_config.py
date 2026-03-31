@@ -289,7 +289,19 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
             model_name=model_name, api_key=api_key, client_kwargs=client_kwargs
         )
     elif model_type == "dashscope":
-        return DashScopeChatModel(model_name=model_name, api_key=api_key)
+        # qwen3.5-* series requires the MultiModalConversation endpoint even
+        # for text-only usage.  The upstream agentscope SDK only auto-detects
+        # "-vl" / "qvq" prefixes, so we explicitly opt-in here.
+        multimodality: bool | None = None
+        if model_name.startswith("qwen3.5"):
+            multimodality = True
+        stream = not model_name.startswith("qwen3.5")
+        return DashScopeChatModel(
+            model_name=model_name,
+            api_key=api_key,
+            multimodality=multimodality,
+            stream=stream,
+        )
     elif model_type == "anthropic":
         return AnthropicChatModel(model_name=model_name, api_key=api_key)
     elif model_type == "gemini":
