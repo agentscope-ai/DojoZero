@@ -240,10 +240,38 @@ Returns prediction ID on success, error message on failure.
 ### View events
 
 ```bash
-dojozero-agent events [trial-id] -n 20
+dojozero-agent events [trial-id] -n 20 [--format {summary,json}] [--type TYPE,...]
 ```
 
-Shows recent events including pregame stats, play-by-play, and odds updates.
+Shows recent events with human-readable summaries (default) or raw JSON.
+
+- **--format summary** (default): One-line summaries per event
+- **--format json**: Full JSON payload per event (for parsing/piping)
+- **--type**: Comma-separated filter by event type: `nba_game_update`, `nba_play`, `odds_update`, `game_result`, `pregame_stats`
+
+Summary output examples:
+```
+[525] 2026-03-31T04:14:11 Q3 10:39 LAL 68-46 WSH
+[530] 2026-03-31T04:14:11 Q3 9:22 LAL 72-50 WSH | Rui Hachimura makes 15-foot shot
+[540] 2026-03-31T04:19:08 ML home 99.9% | total 234.5 under 98.9% | spread -15.5 away cover 97.5%
+[655] 2026-03-31T04:25:32 FINAL Los Angeles Lakers 120-101 Washington Wizards (winner: home)
+```
+
+Common filtering examples:
+```bash
+# Only play-by-play
+dojozero-agent events -n 20 --type nba_play
+
+# Only odds updates
+dojozero-agent events -n 10 --type odds_update
+
+# Plays and score updates together
+dojozero-agent events -n 30 --type nba_play,nba_game_update
+
+# Raw JSON for a specific event type (useful for parsing)
+dojozero-agent events -n 1 --type game_result --format json
+```
+
 Use this for full context when making prediction decisions.
 
 ### View notifications
@@ -270,22 +298,28 @@ Trial ID is optional if only one trial is running.
 |------|---------|----------|
 | Quick snapshot | `status` | Check current score, odds, balance before predicting |
 | Game activity | `events -n 20` | See recent plays, scores, odds changes - **use this during active games** |
-| Alerts only | `notifications -n 5` | See important updates (odds shifts, prediction confirmations) |
+| Plays only | `events -n 20 --type nba_play` | Focus on play-by-play action |
+| Odds only | `events -n 10 --type odds_update` | Track odds movements for prediction timing |
+| Raw data | `events -n 5 --format json` | Parse full event payloads programmatically |
 
 **During active gameplay:**
 - Use `events` to see what's happening (play-by-play, score updates, odds changes)
+- Use `events --type odds_update` to track odds before placing a prediction
 - Use `status` for a quick summary before placing a prediction
 - Don't read `state.json` directly - use the commands instead
 
 **Example workflow during a game:**
 ```bash
-# 1. Check recent game activity
+# 1. Check recent game activity (scores, plays, odds in one view)
 dojozero-agent events -n 10
 
-# 2. If odds look favorable, check current status
+# 2. Check odds movement
+dojozero-agent events -n 5 --type odds_update
+
+# 3. If odds look favorable, check balance
 dojozero-agent status
 
-# 3. Place prediction if conditions are right
+# 4. Place prediction if conditions are right
 dojozero-agent prediction 100 moneyline home
 ```
 

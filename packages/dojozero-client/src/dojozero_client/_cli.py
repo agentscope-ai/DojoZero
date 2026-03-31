@@ -492,6 +492,61 @@ def cmd_notifications(args: argparse.Namespace) -> int:
     return 0
 
 
+def _format_event_summary(payload: dict[str, Any], home: str, away: str) -> str:
+    """Format an event payload as a human-readable summary line."""
+    event_type = payload.get("event_type", "")
+
+    if event_type == "event.nba_game_update":
+        period = payload.get("period", "?")
+        clock = payload.get("game_clock", "")
+        h_score = payload.get("home_score", "?")
+        a_score = payload.get("away_score", "?")
+        quarter = f"Q{period}" if isinstance(period, int) else str(period)
+        time_str = f"{quarter} {clock}" if clock else quarter
+        return f"{time_str} {home} {h_score}-{a_score} {away}"
+
+    if event_type == "event.nba_play":
+        period = payload.get("period", "?")
+        clock = payload.get("clock", "")
+        h_score = payload.get("home_score", "?")
+        a_score = payload.get("away_score", "?")
+        desc = payload.get("description", "")
+        quarter = f"Q{period}" if isinstance(period, int) else str(period)
+        time_str = f"{quarter} {clock}" if clock else quarter
+        score = f"{home} {h_score}-{a_score} {away}"
+        return f"{time_str} {score} | {desc}" if desc else f"{time_str} {score}"
+
+    if event_type == "event.odds_update":
+        odds = payload.get("odds", {})
+        parts: list[str] = []
+        ml = odds.get("moneyline", {})
+        if ml:
+            hp = ml.get("home_probability", 0)
+            parts.append(f"ML home {hp:.1%}")
+        for t in odds.get("totals", [])[:1]:
+            total_val = t.get("total", "?")
+            under_p = t.get("under_probability", 0)
+            parts.append(f"total {total_val} under {under_p:.1%}")
+        for s in odds.get("spreads", [])[:1]:
+            spread_val = s.get("spread", "?")
+            away_p = s.get("away_probability", 0)
+            parts.append(f"spread {spread_val:+g} away cover {away_p:.1%}")
+        return " | ".join(parts) if parts else "odds update"
+
+    if event_type == "event.pregame_stats":
+        return "pregame stats"
+
+    if event_type == "event.game_result":
+        winner = payload.get("winner", "?")
+        h_score = payload.get("home_score", "?")
+        a_score = payload.get("away_score", "?")
+        h_name = payload.get("home_team_name", home)
+        a_name = payload.get("away_team_name", away)
+        return f"FINAL {h_name} {h_score}-{a_score} {a_name} (winner: {winner})"
+
+    return event_type
+
+
 def cmd_events(args: argparse.Namespace) -> int:
     """Show recent events."""
     state_dir = _get_state_dir(args)
@@ -501,20 +556,73 @@ def cmd_events(args: argparse.Namespace) -> int:
         print("No events")
         return 0
 
+    output_format: str = getattr(args, "format", "summary")
+    type_filter: set[str] | None = None
+    if raw_types := getattr(args, "type", None):
+        type_filter = {
+            f"event.{t}" if not t.startswith("event.") else t
+            for t in raw_types.split(",")
+        }
+
     lines = events_file.read_text().strip().split("\n")
     count = args.count if hasattr(args, "count") and args.count else 20
 
-    for line in lines[-count:]:
+    # First pass: discover team tricodes from odds/result events
+    home_tri = "HOME"
+    away_tri = "AWAY"
+    for line in lines:
+        if not line:
+            continue
+        try:
+            payload = json.loads(line).get("payload", {})
+            # odds_update has top-level tricodes
+            if payload.get("home_tricode"):
+                home_tri = payload["home_tricode"]
+                away_tri = payload.get("away_tricode", "AWAY")
+                break
+            # nba_game_update sometimes has tricodes in team_stats
+            h_stats = payload.get("home_team_stats", {})
+            if h_stats.get("team_tricode"):
+                home_tri = h_stats["team_tricode"]
+                away_tri = (
+                    payload.get("away_team_stats", {}).get("team_tricode") or "AWAY"
+                )
+                break
+            # game_result has full team names
+            if payload.get("home_team_name"):
+                home_tri = payload["home_team_name"]
+                away_tri = payload.get("away_team_name", "AWAY")
+                break
+        except (json.JSONDecodeError, AttributeError):
+            continue
+
+    shown = 0
+    # Iterate from end to collect last `count` matching events
+    matching: list[str] = []
+    for line in reversed(lines):
         if not line:
             continue
         try:
             event = json.loads(line)
-            seq = event.get("sequence", "?")
-            etype = event.get("type", "unknown")
-            ts = event.get("timestamp", "")[:19]
-            print(f"[{seq}] {ts} {etype}")
         except json.JSONDecodeError:
             continue
+        payload = event.get("payload", {})
+        event_type = payload.get("event_type", "")
+        if type_filter and event_type not in type_filter:
+            continue
+        seq = event.get("sequence", "?")
+        if output_format == "json":
+            matching.append(json.dumps(event))
+        else:
+            summary = _format_event_summary(payload, home_tri, away_tri)
+            ts = event.get("timestamp", "")[:19]
+            matching.append(f"[{seq}] {ts} {summary}")
+        shown += 1
+        if shown >= count:
+            break
+
+    for line in reversed(matching):
+        print(line)
 
     return 0
 
@@ -1061,6 +1169,17 @@ def create_parser() -> argparse.ArgumentParser:
         "trial_id", nargs="?", help="Trial ID (optional if only one running)"
     )
     p_events.add_argument("-n", "--count", type=int, default=20, help="Number to show")
+    p_events.add_argument(
+        "--format",
+        choices=["summary", "json"],
+        default="summary",
+        help="Output format (default: summary)",
+    )
+    p_events.add_argument(
+        "--type",
+        default=None,
+        help="Filter by event type, comma-separated (e.g., odds_update,nba_play,nba_game_update)",
+    )
     p_events.set_defaults(func=cmd_events)
 
     # predictions
