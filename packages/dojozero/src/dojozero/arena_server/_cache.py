@@ -519,6 +519,12 @@ class ReplayMetaInfo:
     odds_update_indices: list[int] = field(
         default_factory=list
     )  # Indices of odds_update events
+    broker_state_update_indices: list[int] = field(
+        default_factory=list
+    )  # Indices of broker.state_update events
+    broker_final_stats_indices: list[int] = field(
+        default_factory=list
+    )  # Indices of broker.final_stats events
 
 
 @dataclass
