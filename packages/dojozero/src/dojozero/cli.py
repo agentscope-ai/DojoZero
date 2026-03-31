@@ -350,6 +350,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Disable automatic resuming of interrupted trials from previous shutdown.",
     )
     serve_parser.add_argument(
+        "--no-scheduler",
+        dest="no_scheduler",
+        action="store_true",
+        help="Disable the trial scheduler entirely. No trial sources will be loaded "
+        "or auto-resolved, and persisted sources will be ignored.",
+    )
+    serve_parser.add_argument(
         "--stale-threshold-hours",
         dest="stale_threshold_hours",
         type=float,
@@ -1981,13 +1988,17 @@ async def _serve_command(args: argparse.Namespace) -> int:
     trace_backend = getattr(args, "trace_backend", None)
     trace_ingest_endpoint = getattr(args, "trace_ingest_endpoint", None)
     service_name = getattr(args, "service_name", "dojozero")
+    no_scheduler = getattr(args, "no_scheduler", False)
     trial_source_files: list[str] = getattr(args, "trial_sources", []) or []
     auto_resume = not getattr(args, "no_auto_resume", False)
     stale_threshold_hours = getattr(args, "stale_threshold_hours", 24.0)
 
-    # Auto-resolve trial sources from DOJOZERO_ENV / SIGMA_APP_STAGE if not
-    # explicitly provided via --trial-source.
-    if not trial_source_files:
+    if no_scheduler:
+        trial_source_files = []
+        LOGGER.info("Scheduler disabled via --no-scheduler")
+    elif not trial_source_files:
+        # Auto-resolve trial sources from DOJOZERO_ENV / SIGMA_APP_STAGE if not
+        # explicitly provided via --trial-source.
         env_tier = _resolve_env_tier()
         trial_sources_dir = Path("trial_sources") / env_tier
         if trial_sources_dir.is_dir():
@@ -2112,6 +2123,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         stale_threshold_hours=stale_threshold_hours,
         enable_gateway=enable_gateway,
         authenticator=authenticator,
+        no_scheduler=no_scheduler,
     )
     return 0
 

@@ -269,6 +269,7 @@ def create_dashboard_app(
     enable_gateway: bool = True,
     data_dir: str | Path | None = None,
     authenticator: "AgentAuthenticator | None" = None,
+    no_scheduler: bool = False,
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
@@ -288,6 +289,8 @@ def create_dashboard_app(
             under this directory). If None, trials must provide their own persistence_file.
         authenticator: AgentAuthenticator for validating agent API keys. If None and
             agent_keys.yaml exists, uses LocalAgentAuthenticator. Otherwise NoOpAuthenticator.
+        no_scheduler: Disable the ScheduleManager entirely (no auto-scheduling, no
+            loading persisted sources). Useful for manual trial management.
 
     """
 
@@ -311,13 +314,15 @@ def create_dashboard_app(
             authenticator=authenticator,
         )
 
-        # Create schedule manager
-        from ._scheduler import ScheduleManager
+        # Create schedule manager (unless disabled)
+        schedule_manager = None
+        if not no_scheduler:
+            from ._scheduler import ScheduleManager
 
-        schedule_manager = ScheduleManager(
-            trial_manager=trial_manager,
-            store=scheduler_store,
-        )
+            schedule_manager = ScheduleManager(
+                trial_manager=trial_manager,
+                store=scheduler_store,
+            )
 
         # Store state on app.state instead of global variable
         app.state.server_state = DashboardServerState(
@@ -333,11 +338,14 @@ def create_dashboard_app(
         await trial_manager.start()
 
         # Start schedule manager
-        await schedule_manager.start()
-        LOGGER.info("ScheduleManager started")
+        if schedule_manager is not None:
+            await schedule_manager.start()
+            LOGGER.info("ScheduleManager started")
+        else:
+            LOGGER.info("ScheduleManager disabled via --no-scheduler")
 
         # Register initial trial sources if provided
-        if initial_trial_sources:
+        if initial_trial_sources and schedule_manager is not None:
             from ._scheduler import TrialSourceConfig
 
             for source_data in initial_trial_sources:
@@ -1396,6 +1404,7 @@ async def run_dashboard_server(
     enable_gateway: bool = True,
     data_dir: str | Path | None = None,
     authenticator: "AgentAuthenticator | None" = None,
+    no_scheduler: bool = False,
 ) -> None:
     """Run the Dashboard Server.
 
@@ -1416,6 +1425,7 @@ async def run_dashboard_server(
         data_dir: Base directory for trial data files (persistence_file will be generated
             under this directory). If None, trials must provide their own persistence_file.
         authenticator: AgentAuthenticator for validating agent API keys
+        no_scheduler: Disable the ScheduleManager entirely
     """
     import uvicorn
 
@@ -1433,6 +1443,7 @@ async def run_dashboard_server(
         enable_gateway=enable_gateway,
         data_dir=data_dir,
         authenticator=authenticator,
+        no_scheduler=no_scheduler,
     )
 
     config = uvicorn.Config(

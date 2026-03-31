@@ -859,6 +859,89 @@ class TrialManager:
         """
         return await self._stop_trial_internal(trial_id, QueuedTrialPhase.COMPLETED)
 
+    async def _ensure_settlement(self, trial_id: str) -> None:
+        """Ensure broker settles all bets before the trial is stopped.
+
+        When the ScheduleManager detects game completion via ESPN polling,
+        the game_result event may not have reached the broker yet. This method
+        checks for unsettled bets and, if found, reads the game_result from
+        the persistence file and feeds it directly to the broker.
+        """
+        from dojozero.betting import BrokerOperator
+        from dojozero.data import GameResultEvent
+
+        try:
+            runtime = self._orchestrator._trials.get(trial_id)
+            if runtime is None:
+                return
+
+            # Find broker
+            broker: BrokerOperator | None = None
+            for actor_runtime in runtime.actors.values():
+                if isinstance(actor_runtime.instance, BrokerOperator):
+                    broker = actor_runtime.instance
+                    break
+
+            if broker is None or not broker.has_unsettled_bets:
+                return
+
+            self._logger.info(
+                "Trial '%s' has unsettled bets — looking for game_result in persistence",
+                trial_id,
+            )
+
+            # Read game_result from persistence JSONL
+            persistence_path = self._get_jsonl_path(trial_id)
+            if persistence_path is None or not persistence_path.exists():
+                self._logger.warning(
+                    "No persistence file found for trial '%s', cannot settle",
+                    trial_id,
+                )
+                return
+
+            # Scan persistence file for game_result event
+            game_result: GameResultEvent | None = None
+            import json as _json
+
+            with open(persistence_path) as f:
+                for line in f:
+                    try:
+                        data = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+                    if data.get("event_type") == "event.game_result":
+                        game_result = GameResultEvent.model_validate(data)
+                        break
+
+            if game_result is None:
+                self._logger.warning(
+                    "No game_result event in persistence for trial '%s'",
+                    trial_id,
+                )
+                return
+
+            # Feed game_result to broker to trigger settlement
+            event_id = game_result.game_id
+            self._logger.info(
+                "Settling trial '%s' — winner=%s, score=%s",
+                trial_id,
+                game_result.winner,
+                game_result.final_score,
+            )
+            await broker._handle_game_result(game_result, event_id)
+
+            self._logger.info(
+                "Settlement complete for trial '%s'",
+                trial_id,
+            )
+        except Exception as e:
+            self._logger.error(
+                "Error during settlement for trial '%s': %s",
+                trial_id,
+                e,
+                exc_info=True,
+            )
+
     async def _stop_trial_internal(
         self, trial_id: str, final_phase: QueuedTrialPhase
     ) -> bool:
@@ -894,6 +977,12 @@ class TrialManager:
             # Update phase first
             queued.phase = final_phase
             self._logger.info("%s trial: %s", phase_name.capitalize(), trial_id)
+
+            # For completed trials, ensure broker settles bets before stopping.
+            # The game_result event may still be in the pipeline when the
+            # ScheduleManager detects game completion via ESPN polling.
+            if final_phase == QueuedTrialPhase.COMPLETED:
+                await self._ensure_settlement(trial_id)
 
             # Cancel task if still running
             task = self._running_tasks.get(trial_id)

@@ -380,13 +380,27 @@ class Daemon:
                         decision["selection"],
                         decision["amount"],
                     )
+                    # Refresh balance after bet
+                    balance = await trial.get_balance()
+                    self._state.balance = balance.balance
+                    self._state.holdings = [
+                        {
+                            "bet_type": h.bet_type,
+                            "selection": h.selection,
+                            "shares": h.shares,
+                        }
+                        for h in balance.holdings
+                    ]
+                    self._save_state()
             except Exception as e:
                 logger.warning("Strategy decision error: %s", e)
 
     def _update_state_from_event(self, event: dict[str, Any]) -> None:
         """Update daemon state from an event."""
-        event_type = event.get("type", "")
         payload = event.get("payload", {})
+        # Use the inner event_type (e.g., "event.nba_game_update") not the
+        # outer SSE type (always "event").
+        event_type = payload.get("event_type", "") or event.get("type", "")
         sequence = event.get("sequence", 0)
 
         if sequence > self._state.last_event_sequence:
@@ -431,8 +445,8 @@ class Daemon:
 
     def _check_notification(self, event: dict[str, Any]) -> dict[str, Any] | None:
         """Determine if event warrants user notification."""
-        event_type = event.get("type", "")
         payload = event.get("payload", {})
+        event_type = payload.get("event_type", "") or event.get("type", "")
 
         # Game updates (scores, quarter changes)
         if any(k in event_type.lower() for k in ("game", "play", "score")):
@@ -872,9 +886,17 @@ class TrialHandler:
         }
         self._append_bet(bet_record)
 
-        # Update balance
+        # Refresh balance and holdings from server
         balance = await self._trial.get_balance()
         self._state.balance = balance.balance
+        self._state.holdings = [
+            {
+                "bet_type": h.bet_type,
+                "selection": h.selection,
+                "shares": h.shares,
+            }
+            for h in balance.holdings
+        ]
         self._save_state()
 
         return bet_record
@@ -993,8 +1015,10 @@ class TrialHandler:
 
     def _update_state_from_event(self, event: dict[str, Any]) -> None:
         """Update state from an event."""
-        event_type = event.get("type", "")
         payload = event.get("payload", {})
+        # Use the inner event_type (e.g., "event.odds_update") not the
+        # outer SSE type (always "event").
+        event_type = payload.get("event_type", "") or event.get("type", "")
         sequence = event.get("sequence", 0)
 
         if sequence > self._state.last_event_sequence:
