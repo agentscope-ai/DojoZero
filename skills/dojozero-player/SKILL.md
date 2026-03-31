@@ -274,14 +274,6 @@ dojozero-agent events -n 1 --type game_result --format json
 
 Use this for full context when making prediction decisions.
 
-### View notifications
-
-```bash
-dojozero-agent notifications [trial-id] -n 5
-```
-
-Shows recent game updates, odds shifts, and prediction confirmations.
-
 ### Disconnect (keep server registration)
 
 ```bash
@@ -382,7 +374,6 @@ dojozero-agent prediction 100 moneyline home
 |------|-------------|
 | `state.json` | Current state (balance, odds, game state) |
 | `events.jsonl` | Full event log (pregame stats, plays, odds) |
-| `notifications.jsonl` | Alerts for external tools |
 | `predictions.jsonl` | Prediction history |
 | `daemon.log` | Daemon output log |
 
@@ -429,20 +420,11 @@ API keys can be either GitHub PATs (`ghp_`/`github_pat_` prefix) or DojoZero key
 }
 ```
 
-### Reading notifications.jsonl
-
-```json
-{"type": "game_update", "message": "Score: 72-78 (Q3 4:32)", "ts": "2026-02-23T19:45:30Z"}
-{"type": "odds_shift", "message": "Odds shifted: 45% -> 62%", "ts": "2026-02-23T19:46:15Z"}
-{"type": "prediction_placed", "message": "Prediction $100 on home (moneyline)", "ts": "2026-02-23T19:47:00Z"}
-```
-
 ## Tips
 
 - Always run `dojozero-agent config --show` first to check configuration
 - Both `dashboard_url` and `api_key` must be configured before joining trials
 - Check `status` before predicting to see current odds and balance
-- Use `notifications` to see what happened while you were away
 - Prediction amounts cannot exceed your balance
 - The daemon auto-reconnects if the connection drops
 - If the agent is already registered (from a previous session), the client automatically reconnects without re-registering

@@ -5,8 +5,8 @@ Usage:
     dojozero-agent stop
     dojozero-agent status
     dojozero-agent logs [-f]
-    dojozero-agent bet <amount> <market> <selection>
-    dojozero-agent notifications
+    dojozero-agent prediction <amount> <market> <selection>
+    dojozero-agent events [-n N] [--format {summary,json}] [--type TYPE]
 """
 
 from __future__ import annotations
@@ -116,7 +116,6 @@ def cmd_start(args: argparse.Namespace) -> int:
         state_dir=state_dir,
         strategy=args.strategy,
         auto_bet=args.auto_bet,
-        notify=args.notify.split(",") if args.notify else ["file"],
         filters=args.filters.split(",") if args.filters else ["event.*", "odds.*"],
     )
 
@@ -463,33 +462,6 @@ def _update_local_state_after_bet(
             f.write(json.dumps(bet_record) + "\n")
     except Exception:
         pass  # Best effort
-
-
-def cmd_notifications(args: argparse.Namespace) -> int:
-    """Show recent notifications."""
-    state_dir = _get_state_dir(args)
-    notif_file = state_dir / "notifications.jsonl"
-
-    if not notif_file.exists():
-        print("No notifications")
-        return 0
-
-    lines = notif_file.read_text().strip().split("\n")
-    count = args.count if hasattr(args, "count") and args.count else 10
-
-    for line in lines[-count:]:
-        if not line:
-            continue
-        try:
-            notif = json.loads(line)
-            ts = notif.get("ts", "")[:19]  # Trim to datetime
-            msg = notif.get("message", "")
-            ntype = notif.get("type", "")
-            print(f"[{ts}] ({ntype}) {msg}")
-        except json.JSONDecodeError:
-            continue
-
-    return 0
 
 
 def _format_event_summary(payload: dict[str, Any], home: str, away: str) -> str:
@@ -1124,11 +1096,6 @@ def create_parser() -> argparse.ArgumentParser:
         help="Enable autonomous betting with strategy",
     )
     p_start.add_argument(
-        "--notify",
-        default="file",
-        help="Notification methods (comma-separated, default: file)",
-    )
-    p_start.add_argument(
         "--filters",
         default="event.*,odds.*",
         help="Event type filters (comma-separated)",
@@ -1193,14 +1160,6 @@ def create_parser() -> argparse.ArgumentParser:
         help="Total value for total predictions (e.g., 215.5)",
     )
     p_pred.set_defaults(func=cmd_prediction)
-
-    # notifications
-    p_notif = subparsers.add_parser("notifications", help="Show notifications")
-    p_notif.add_argument(
-        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
-    )
-    p_notif.add_argument("-n", "--count", type=int, default=10, help="Number to show")
-    p_notif.set_defaults(func=cmd_notifications)
 
     # events
     p_events = subparsers.add_parser("events", help="Show event log")

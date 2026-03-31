@@ -94,10 +94,6 @@ def _trial_state_dir(trial_id: str) -> Path:
     return CONFIG_DIR / "trials" / trial_id
 
 
-def _default_notify() -> list[str]:
-    return ["file"]
-
-
 def _default_filters() -> list[str]:
     return ["event.*", "odds.*"]
 
@@ -125,7 +121,6 @@ class DaemonConfig:
     strategy: str | None = None
     strategy_config: dict[str, Any] = field(default_factory=_default_strategy_config)
     auto_bet: bool = False
-    notify: list[str] = field(default_factory=_default_notify)
     filters: list[str] = field(default_factory=_default_filters)
 
     def __post_init__(self) -> None:
@@ -385,10 +380,6 @@ class Daemon:
             except Exception:
                 pass  # Will retry on next event
 
-        # Check for notable events -> notify
-        if notification := self._check_notification(event_dict):
-            self._write_notification(notification)
-
         # Maybe make betting decision
         if self.config.auto_bet and self.strategy:
             try:
@@ -409,12 +400,6 @@ class Daemon:
                             "probability": result.probability,
                             "status": result.status,
                             "placed_at": result.placed_at.isoformat(),
-                        }
-                    )
-                    self._write_notification(
-                        {
-                            "type": "bet_placed",
-                            "message": f"Bet ${decision['amount']} on {decision['selection']} ({decision['market']})",
                         }
                     )
                     logger.info(
@@ -539,48 +524,6 @@ class Daemon:
 
         self._save_state()
 
-    def _check_notification(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        """Determine if event warrants user notification."""
-        payload = event.get("payload", {})
-        event_type = payload.get("event_type", "") or event.get("type", "")
-
-        # Game updates (scores, quarter changes)
-        if any(k in event_type.lower() for k in ("game", "play", "score")):
-            home = payload.get("homeScore", payload.get("home_score", "?"))
-            away = payload.get("awayScore", payload.get("away_score", "?"))
-            period = payload.get("period", payload.get("quarter", ""))
-            clock = payload.get(
-                "game_clock", payload.get("clock", payload.get("time", ""))
-            )
-            return {
-                "type": "game_update",
-                "message": f"Score: {away}-{home} (Q{period} {clock})",
-            }
-
-        # Significant odds shifts (>5%)
-        if "odds" in event_type.lower():
-            prev = self._state.current_odds.get("home_probability", 0)
-            odds_data = payload.get("odds", {})
-            moneyline = odds_data.get("moneyline", {})
-            curr = moneyline.get(
-                "home_probability",
-                payload.get("homeProbability", payload.get("home_probability", 0)),
-            )
-            if prev and abs(curr - prev) > 0.05:
-                return {
-                    "type": "odds_shift",
-                    "message": f"Odds shifted: {prev:.0%} -> {curr:.0%}",
-                }
-
-        # Bet settlements
-        if "settle" in event_type.lower():
-            return {
-                "type": "bet_settled",
-                "message": f"Bet settled: {payload.get('result', 'unknown')}",
-            }
-
-        return None
-
     def _load_strategy(
         self, module_path: str, config: dict[str, Any]
     ) -> Strategy | None:
@@ -642,16 +585,6 @@ class Daemon:
         bets_file = self.state_dir / "bets.jsonl"
         with open(bets_file, "a") as f:
             f.write(json.dumps(bet) + "\n")
-
-    def _write_notification(self, notif: dict[str, Any]) -> None:
-        """Write notification for external consumers."""
-        if "file" not in self.config.notify:
-            return
-
-        notif["ts"] = datetime.now(timezone.utc).isoformat()
-        notif_file = self.state_dir / "notifications.jsonl"
-        with open(notif_file, "a") as f:
-            f.write(json.dumps(notif) + "\n")
 
     def _write_pid(self) -> None:
         """Write PID file for process management."""
