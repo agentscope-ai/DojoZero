@@ -133,6 +133,9 @@ class DataHub:
         # Pregame callbacks: invoked after GameInitializeEvent with stores paused
         self._on_game_initialized_callbacks: list[Callable[[str], Awaitable[None]]] = []
 
+        # Game result callbacks: invoked after GameResultEvent is fully dispatched
+        self._on_game_result_callbacks: list[Callable[[str], Awaitable[None]]] = []
+
         # Deduplication: track event keys to prevent duplicate events on resume
         self._dedup_keys: set[str] = set()
 
@@ -403,6 +406,20 @@ class DataHub:
         # Dispatch to subscribed handlers
         await self._dispatch_event(event)
 
+        # Fire game result callbacks after dispatch (broker has already processed)
+        if isinstance(event, GameResultEvent) and self._on_game_result_callbacks:
+            event_game_id = getattr(event, "game_id", "") or ""
+            if event_game_id:
+                try:
+                    await asyncio.gather(
+                        *(cb(event_game_id) for cb in self._on_game_result_callbacks)
+                    )
+                except Exception:
+                    logger.exception(
+                        "Error in on_game_result callback for game_id=%s",
+                        event_game_id,
+                    )
+
     async def _gated_dispatch(self, envelope: _EventEnvelope) -> None:
         """Dispatch event with lifecycle ordering gate.
 
@@ -653,6 +670,15 @@ class DataHub:
         with pre-game work (e.g., web searches).
         """
         self._on_game_initialized_callbacks.append(callback)
+
+    def add_on_game_result(self, callback: Callable[[str], Awaitable[None]]) -> None:
+        """Register a callback invoked after ``GameResultEvent`` is dispatched.
+
+        The callback receives the ``game_id`` string.  Called after the event
+        has been persisted and dispatched to all subscribers (including the
+        broker for settlement).
+        """
+        self._on_game_result_callbacks.append(callback)
 
     def _pause_connected_stores(self) -> None:
         """Pause polling on all connected stores."""

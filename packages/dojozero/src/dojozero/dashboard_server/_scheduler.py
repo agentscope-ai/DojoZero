@@ -381,6 +381,15 @@ class ScheduleManager:
         self._sync_task: asyncio.Task[None] | None = None
         self._shutdown_event = asyncio.Event()
 
+        # Game IDs confirmed finished by internal pipeline (GameResultEvent)
+        self._confirmed_finished: set[str] = set()
+
+        # Timestamp of first ESPN FINAL status seen (for safety timeout)
+        self._espn_final_first_seen: dict[str, datetime] = {}
+
+        # Safety timeout: force-stop if pipeline hasn't confirmed after this many seconds
+        self._safety_timeout_seconds = 300.0  # 5 minutes
+
         # Game fetchers
         self._nba_fetcher = NBAGameFetcher()
         self._ncaa_fetcher = NCAAGameFetcher()
@@ -676,6 +685,15 @@ class ScheduleManager:
 
         LOGGER.info("Cancelled schedule: %s", schedule_id)
         return True
+
+    def mark_game_finished(self, game_id: str) -> None:
+        """Mark a game as confirmed finished by the internal pipeline.
+
+        Called via DataHub on_game_result callback after GameResultEvent
+        has been dispatched (broker has already settled bets).
+        """
+        LOGGER.info("Game %s confirmed finished by internal pipeline", game_id)
+        self._confirmed_finished.add(game_id)
 
     def get_scheduled(self, schedule_id: str) -> ScheduledTrial | None:
         """Get a scheduled trial by ID."""
@@ -1245,15 +1263,50 @@ class ScheduleManager:
                                     scheduled.game_id,
                                     remaining,
                                 )
-                        else:
-                            # Game transitioned to finished during monitoring
-                            # Stop immediately
+                        elif scheduled.game_id in self._confirmed_finished:
+                            # Pipeline already processed GameResultEvent
                             LOGGER.info(
-                                "Game %s finished for schedule %s, stopping trial",
+                                "Game %s confirmed by pipeline for schedule %s, "
+                                "stopping trial",
                                 scheduled.game_id,
                                 scheduled.schedule_id,
                             )
                             await self._stop_trial(scheduled)
+                        else:
+                            # ESPN says FINAL but pipeline hasn't confirmed
+                            if scheduled.game_id not in self._espn_final_first_seen:
+                                self._espn_final_first_seen[scheduled.game_id] = now
+                                LOGGER.warning(
+                                    "Game %s reported FINAL by ESPN but not "
+                                    "confirmed by internal pipeline (schedule %s). "
+                                    "Waiting for pipeline confirmation or %.0fs "
+                                    "safety timeout.",
+                                    scheduled.game_id,
+                                    scheduled.schedule_id,
+                                    self._safety_timeout_seconds,
+                                )
+                            else:
+                                elapsed = (
+                                    now - self._espn_final_first_seen[scheduled.game_id]
+                                ).total_seconds()
+                                if elapsed >= self._safety_timeout_seconds:
+                                    LOGGER.warning(
+                                        "Safety timeout (%.0fs) expired for "
+                                        "game %s (schedule %s). Force-stopping "
+                                        "trial without pipeline confirmation.",
+                                        elapsed,
+                                        scheduled.game_id,
+                                        scheduled.schedule_id,
+                                    )
+                                    await self._stop_trial(scheduled)
+                                else:
+                                    LOGGER.debug(
+                                        "Game %s: ESPN FINAL, waiting for "
+                                        "pipeline (%.0fs / %.0fs)",
+                                        scheduled.game_id,
+                                        elapsed,
+                                        self._safety_timeout_seconds,
+                                    )
 
                 # Check every 30 seconds
                 await asyncio.sleep(30.0)
@@ -1310,6 +1363,9 @@ class ScheduleManager:
             scheduled.launched_trial_id = trial_id
             scheduled.phase = ScheduledTrialPhase.RUNNING
             self._persist()
+
+            # Register game result callback on trial's DataHub
+            self._register_game_result_callback(scheduled)
 
             LOGGER.info(
                 "Launched trial '%s' for schedule '%s'",
@@ -1375,6 +1431,26 @@ class ScheduleManager:
             )
         return None
 
+    def _register_game_result_callback(self, scheduled: ScheduledTrial) -> None:
+        """Register a DataHub callback to detect game completion from pipeline."""
+        trial_id = scheduled.launched_trial_id
+        if not trial_id:
+            return
+
+        game_id = scheduled.game_id
+
+        async def on_game_result(result_game_id: str) -> None:
+            if result_game_id == game_id:
+                self.mark_game_finished(game_id)
+
+        if not self._trial_manager.register_on_game_result(trial_id, on_game_result):
+            LOGGER.warning(
+                "Failed to register game_result callback for game %s (trial %s). "
+                "Falling back to ESPN-only detection.",
+                game_id,
+                trial_id,
+            )
+
     async def _stop_trial(self, scheduled: ScheduledTrial) -> None:
         """Stop a running trial (game completed normally)."""
         if not scheduled.launched_trial_id:
@@ -1386,6 +1462,10 @@ class ScheduleManager:
 
             scheduled.phase = ScheduledTrialPhase.COMPLETED
             self._persist()
+
+            # Clean up tracking state
+            self._espn_final_first_seen.pop(scheduled.game_id, None)
+            self._confirmed_finished.discard(scheduled.game_id)
 
             LOGGER.info(
                 "Stopped trial '%s' for schedule '%s'",

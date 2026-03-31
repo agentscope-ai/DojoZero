@@ -831,6 +831,45 @@ class TrialManager:
             return Path(persistence_file)
         return None
 
+    def register_on_game_result(
+        self,
+        trial_id: str,
+        callback: Callable[[str], Coroutine[Any, Any, None]],
+    ) -> bool:
+        """Register a callback on a trial's DataHub for GameResultEvent.
+
+        Args:
+            trial_id: Trial identifier
+            callback: Async callback receiving game_id when GameResultEvent fires
+
+        Returns:
+            True if registered successfully, False otherwise
+        """
+        runtime = self._orchestrator._trials.get(trial_id)
+        if runtime is None or runtime._context is None:
+            self._logger.warning(
+                "Cannot register game_result callback: trial '%s' not in orchestrator",
+                trial_id,
+            )
+            return False
+
+        if not runtime._context.data_hubs:
+            self._logger.warning(
+                "Cannot register game_result callback: trial '%s' has no DataHubs",
+                trial_id,
+            )
+            return False
+
+        hub_id = next(iter(runtime._context.data_hubs.keys()))
+        data_hub = runtime._context.data_hubs[hub_id]
+        data_hub.add_on_game_result(callback)
+        self._logger.info(
+            "Registered game_result callback on trial '%s' (hub=%s)",
+            trial_id,
+            hub_id,
+        )
+        return True
+
     async def cancel(self, trial_id: str) -> bool:
         """Cancel a pending or running trial (marks as CANCELLED).
 
