@@ -943,21 +943,60 @@ def cmd_join(args: argparse.Namespace) -> int:
 
 
 def cmd_leave(args: argparse.Namespace) -> int:
-    """Leave a trial via unified daemon."""
-    if not is_unified_daemon_running():
-        print("Unified daemon not running", file=sys.stderr)
+    """Leave a trial — unregister from server.
+
+    Works with or without the daemon running.
+    WARNING: This deletes the broker account (balance and bets are lost).
+    """
+    trial_id = args.trial_id
+
+    # Try via daemon first
+    if is_unified_daemon_running():
+        client = RPCClient(SOCKET_PATH)
+        try:
+            client.call_sync("leave", trial_id=trial_id, unregister=True)
+            print(f"Left trial {trial_id} (unregistered from server)")
+            return 0
+        except RPCError as e:
+            if e.code != "NOT_FOUND":
+                print(f"Error: {e.message}", file=sys.stderr)
+                return 1
+            # Fall through to direct call
+        except ConnectionError:
+            pass  # Fall through to direct call
+
+    # Direct call using stored state
+    state_dir = _trial_state_dir(trial_id)
+    state_file = state_dir / "state.json"
+    if not state_file.exists():
+        print(f"No state found for trial {trial_id}", file=sys.stderr)
         return 1
 
-    client = RPCClient(SOCKET_PATH)
-    try:
-        client.call_sync("leave", trial_id=args.trial_id)
-        print(f"Left trial {args.trial_id}")
-        return 0
-    except RPCError as e:
-        print(f"Error: {e.message}", file=sys.stderr)
+    state = json.loads(state_file.read_text())
+    agent_id = state.get("agent_id", "")
+    session_key = state.get("session_key", "")
+    if not agent_id or not session_key:
+        print(
+            "Missing agent_id or session_key in state file. "
+            "Cannot unregister without session key.",
+            file=sys.stderr,
+        )
         return 1
-    except ConnectionError as e:
-        print(f"Cannot connect to daemon: {e}", file=sys.stderr)
+
+    from dojozero_client._client import DojoClient
+
+    gateway_url = load_config().get_gateway_url(trial_id)
+
+    try:
+        result = asyncio.run(
+            DojoClient.unregister_agent(gateway_url, agent_id, session_key)
+        )
+        print(f"Left trial {trial_id}: {result.get('message', 'OK')}")
+        state["status"] = "unregistered"
+        state_file.write_text(json.dumps(state, indent=2))
+        return 0
+    except Exception as e:
+        print(f"Failed to unregister: {e}", file=sys.stderr)
         return 1
 
 
@@ -1262,7 +1301,10 @@ def create_parser() -> argparse.ArgumentParser:
     p_join.set_defaults(func=cmd_join)
 
     # leave - leave a trial via daemon RPC
-    p_leave = subparsers.add_parser("leave", help="Leave a trial (via unified daemon)")
+    p_leave = subparsers.add_parser(
+        "leave",
+        help="Leave a trial and unregister from server (balance/bets lost)",
+    )
     p_leave.add_argument("trial_id", help="Trial ID to leave")
     p_leave.set_defaults(func=cmd_leave)
 

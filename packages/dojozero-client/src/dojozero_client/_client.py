@@ -579,6 +579,19 @@ class TrialConnection:
         response = await self._transport.request("GET", "/trial/results")
         return TrialResults.from_dict(response)
 
+    async def unregister(self) -> dict[str, Any]:
+        """Unregister this agent from the trial server.
+
+        Calls DELETE /agents/{agent_id} with the session key.
+        WARNING: This deletes the broker account — balance and bets are lost.
+        """
+        response = await self._transport.request(
+            "DELETE",
+            f"/agents/{self._agent_id}",
+            json={"sessionKey": self._session_key},
+        )
+        return response
+
 
 @dataclass
 class GatewayInfo:
@@ -653,6 +666,26 @@ class DojoClient:
             timeout=timeout,
         )
         self._timeout = self._config.timeout
+
+    @staticmethod
+    async def unregister_agent(
+        gateway_url: str,
+        agent_id: str,
+        session_key: str,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        """Unregister an agent from the server without a full connection.
+
+        WARNING: This deletes the broker account — balance and bets are lost.
+        """
+        transport = GatewayTransport(base_url=gateway_url, timeout=timeout)
+        transport.set_agent_id(agent_id)
+        async with transport:
+            return await transport.request(
+                "DELETE",
+                f"/agents/{agent_id}",
+                json={"sessionKey": session_key},
+            )
 
     async def discover_trials(self) -> list[GatewayInfo]:
         """Discover all available trials across configured dashboards.
@@ -817,12 +850,14 @@ class DojoClient:
                     )
                 except RegistrationError as e:
                     # 409 Conflict - agent already registered but we don't have session key
-                    # This is an error state - agent is connected elsewhere
                     error_msg = str(e)
                     if "already" in error_msg.lower():
                         raise ConnectionError(
-                            f"Agent already connected elsewhere and no session key provided. "
-                            f"Either stop the other connection or provide the session key. "
+                            f"Agent already registered on the server. To recover:\n"
+                            f"  1. dojozero-agent leave <trial-id>  (unregister; balance/bets lost)\n"
+                            f"  2. Then: dojozero-agent start <trial-id> -b  (fresh registration)\n"
+                            f"If you have a previous session with a stored session key,\n"
+                            f"reconnection should happen automatically.\n"
                             f"Original error: {error_msg}"
                         ) from e
                     raise

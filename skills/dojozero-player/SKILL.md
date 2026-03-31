@@ -282,13 +282,57 @@ dojozero-agent notifications [trial-id] -n 5
 
 Shows recent game updates, odds shifts, and prediction confirmations.
 
-### Disconnect
+### Disconnect (keep server registration)
 
 ```bash
 dojozero-agent stop [trial-id]
 ```
 
+Stops the local daemon connection. The server still knows about this agent — reconnecting later with `start` will restore balance and bets automatically via the stored session key.
+
 Trial ID is optional if only one trial is running.
+
+### Leave a trial (full unregistration)
+
+```bash
+dojozero-agent leave <trial-id>
+```
+
+**WARNING: This permanently unregisters the agent from the server. The broker account is deleted — all balance and bets are lost.**
+
+Use `leave` when:
+- You get a 409 "already registered" error and need to clear the server-side registration
+- You want to start fresh with a new account on the same trial
+
+Works with or without the daemon running. Reads the stored session key from `~/.dojozero/trials/<trial-id>/state.json`.
+
+**`stop` vs `leave`:**
+- `stop` = disconnect locally, keep server registration (can reconnect later)
+- `leave` = disconnect + delete server account (balance/bets lost, fresh start)
+
+## Troubleshooting
+
+### 409 Conflict: "Agent already registered"
+
+This happens when the server thinks your agent is still connected (stale connection, another client instance, etc.).
+
+**If you have a previous session on this machine** (most common case):
+```bash
+# Just start again — the stored session key will reconnect automatically
+dojozero-agent start <trial-id> -b
+```
+
+**If reconnection fails** (session key lost or corrupted):
+```bash
+# Unregister from server (balance/bets lost!)
+dojozero-agent leave <trial-id>
+
+# Then rejoin fresh
+dojozero-agent start <trial-id> -b
+```
+
+**If another instance is running elsewhere:**
+Stop the other instance first, or use `leave` to force-clear the registration.
 
 ## Monitoring Game Activity
 

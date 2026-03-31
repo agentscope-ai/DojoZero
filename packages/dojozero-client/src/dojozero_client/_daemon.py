@@ -932,6 +932,26 @@ class TrialHandler:
         self._save_state()
         logger.info("Trial %s: Disconnected", self.trial_id)
 
+    async def unregister_from_server(self) -> dict[str, Any]:
+        """Unregister agent from the server (DELETE /agents/{agent_id}).
+
+        WARNING: This deletes the broker account — balance and bets are lost.
+        """
+        if self._trial:
+            return await self._trial.unregister()
+        # No active connection — use stored state for a direct call
+        agent_id = self._state.agent_id
+        session_key = self._state.session_key
+        if not agent_id or not session_key:
+            raise RPCError(
+                "NO_STATE",
+                "No agent_id or session_key available for unregistration",
+            )
+        from dojozero_client._config import load_config
+
+        gateway_url = load_config().get_gateway_url(self.trial_id)
+        return await DojoClient.unregister_agent(gateway_url, agent_id, session_key)
+
     async def place_bet(
         self,
         amount: float,
@@ -1347,14 +1367,23 @@ class UnifiedDaemon:
             "agent_id": handler.agent_id,
         }
 
-    async def _handle_leave(self, trial_id: str) -> dict[str, Any]:
-        """Leave a trial."""
+    async def _handle_leave(
+        self, trial_id: str, unregister: bool = False
+    ) -> dict[str, Any]:
+        """Leave a trial, optionally unregistering from the server."""
         if trial_id not in self._trials:
             raise RPCError("NOT_FOUND", f"Not connected to trial {trial_id}")
 
         handler = self._trials.pop(trial_id)
+        if unregister:
+            try:
+                await handler.unregister_from_server()
+            except Exception as e:
+                logger.warning(
+                    "Server unregister failed (continuing local disconnect): %s", e
+                )
         await handler.disconnect()
-        return {"status": "left"}
+        return {"status": "left", "unregistered": unregister}
 
     async def _handle_bet(
         self,
