@@ -7,6 +7,7 @@ Usage:
     dojozero-agent logs [-f]
     dojozero-agent prediction <amount> <market> <selection>
     dojozero-agent events [-n N] [--format {summary,json}] [--type TYPE]
+    dojozero-agent leaderboard [trial-id] [--format {table,json}]
 """
 
 from __future__ import annotations
@@ -567,6 +568,87 @@ def cmd_list(_: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_leaderboard(args: argparse.Namespace) -> int:
+    """Show trial leaderboard."""
+    import httpx
+
+    trial_id = getattr(args, "trial_id", None)
+
+    # Resolve trial_id: explicit arg > daemon's active trial > error
+    if not trial_id and is_daemon_running():
+        client = RPCClient(SOCKET_PATH)
+        try:
+            result = client.call_sync("status")
+            trial_id = result.get("trial_id")
+        except (RPCError, ConnectionError):
+            pass
+
+    if not trial_id:
+        print(
+            "Trial ID required. Use 'leaderboard <trial-id>' or join a trial first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    gateway_url = load_config().get_gateway_url(trial_id)
+
+    try:
+        resp = httpx.get(f"{gateway_url}/leaderboard", timeout=10.0)
+        if resp.status_code != 200:
+            print(f"Error: {resp.status_code} - {resp.text}", file=sys.stderr)
+            return 1
+
+        data = resp.json()
+        board = data.get("leaderboard", [])
+
+        if not board:
+            print("No agents registered")
+            return 0
+
+        output_format = getattr(args, "format", "table")
+        if output_format == "json":
+            print(json.dumps(data, indent=2))
+            return 0
+
+        # Table format
+        print(f"Leaderboard for {data.get('trial_id', trial_id)}")
+        print(
+            f"  {data.get('total_agents', 0)} agents "
+            f"({data.get('external_agents', 0)} external, "
+            f"{data.get('internal_agents', 0)} internal)"
+        )
+        print()
+        print(
+            f"  {'#':<4} {'Agent':<24} {'Balance':>10} {'P/L':>10} {'Bets':>6} {'Win%':>6} {'ROI':>7}"
+        )
+        print(
+            f"  {'─' * 4} {'─' * 24} {'─' * 10} {'─' * 10} {'─' * 6} {'─' * 6} {'─' * 7}"
+        )
+
+        for i, entry in enumerate(board, 1):
+            agent = entry["agent_id"]
+            if len(agent) > 23:
+                agent = agent[:20] + "..."
+            tag = " *" if entry.get("is_external") else ""
+            balance = float(entry.get("balance", 0))
+            pnl = float(entry.get("net_profit", 0))
+            bets = entry.get("total_bets", 0)
+            wr = entry.get("win_rate", 0)
+            roi = entry.get("roi", 0)
+            print(
+                f"  {i:<4} {agent + tag:<24} ${balance:>9.2f} "
+                f"{'+' if pnl >= 0 else ''}{pnl:>9.2f} {bets:>6} {wr:>5.0%} {roi:>6.0%}"
+            )
+
+        print()
+        print("  * = external agent")
+        return 0
+
+    except httpx.ConnectError as e:
+        print(f"Connection error: {e}", file=sys.stderr)
+        return 1
+
+
 def cmd_discover(args: argparse.Namespace) -> int:
     """Discover available trials from dashboard."""
     from dojozero_client._client import DojoClient
@@ -950,6 +1032,19 @@ def create_parser() -> argparse.ArgumentParser:
     # list - show all running trials
     p_list = subparsers.add_parser("list", help="List running trials")
     p_list.set_defaults(func=cmd_list)
+
+    # leaderboard
+    p_lb = subparsers.add_parser("leaderboard", help="Show trial leaderboard")
+    p_lb.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if connected to a trial)"
+    )
+    p_lb.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table)",
+    )
+    p_lb.set_defaults(func=cmd_leaderboard)
 
     # discover
     p_discover = subparsers.add_parser("discover", help="Discover available trials")
