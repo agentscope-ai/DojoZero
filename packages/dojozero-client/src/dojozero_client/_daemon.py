@@ -408,15 +408,26 @@ class Daemon:
 
         # Update game state from game events
         if "game" in event_type.lower() or "play" in event_type.lower():
+            # Extract game state fields (handle both camelCase and snake_case)
             self._state.game_state.update(
                 {
                     k: v
                     for k, v in payload.items()
                     if k
-                    in ("period", "clock", "homeScore", "awayScore", "quarter", "time")
+                    in (
+                        "period",
+                        "clock",
+                        "game_clock",
+                        "quarter",
+                        "time",
+                        "home_score",
+                        "away_score",
+                        "homeScore",
+                        "awayScore",
+                    )
                 }
             )
-            # Normalize key names
+            # Normalize key names to snake_case
             if "homeScore" in self._state.game_state:
                 self._state.game_state["home_score"] = self._state.game_state.pop(
                     "homeScore"
@@ -425,15 +436,25 @@ class Daemon:
                 self._state.game_state["away_score"] = self._state.game_state.pop(
                     "awayScore"
                 )
+            if "game_clock" in self._state.game_state:
+                self._state.game_state["clock"] = self._state.game_state.pop(
+                    "game_clock"
+                )
 
         # Update odds from odds events
         if "odds" in event_type.lower():
+            # Odds may be nested under payload.odds.moneyline or flat on payload
+            odds_data = payload.get("odds", {})
+            moneyline = odds_data.get("moneyline", {})
+            # Try nested path first, fall back to flat payload
             self._state.current_odds = {
-                "home_probability": payload.get(
-                    "homeProbability", payload.get("home_probability", 0)
+                "home_probability": moneyline.get(
+                    "home_probability",
+                    payload.get("homeProbability", payload.get("home_probability", 0)),
                 ),
-                "away_probability": payload.get(
-                    "awayProbability", payload.get("away_probability", 0)
+                "away_probability": moneyline.get(
+                    "away_probability",
+                    payload.get("awayProbability", payload.get("away_probability", 0)),
                 ),
             }
 
@@ -453,7 +474,9 @@ class Daemon:
             home = payload.get("homeScore", payload.get("home_score", "?"))
             away = payload.get("awayScore", payload.get("away_score", "?"))
             period = payload.get("period", payload.get("quarter", ""))
-            clock = payload.get("clock", payload.get("time", ""))
+            clock = payload.get(
+                "game_clock", payload.get("clock", payload.get("time", ""))
+            )
             return {
                 "type": "game_update",
                 "message": f"Score: {away}-{home} (Q{period} {clock})",
@@ -462,7 +485,12 @@ class Daemon:
         # Significant odds shifts (>5%)
         if "odds" in event_type.lower():
             prev = self._state.current_odds.get("home_probability", 0)
-            curr = payload.get("homeProbability", payload.get("home_probability", 0))
+            odds_data = payload.get("odds", {})
+            moneyline = odds_data.get("moneyline", {})
+            curr = moneyline.get(
+                "home_probability",
+                payload.get("homeProbability", payload.get("home_probability", 0)),
+            )
             if prev and abs(curr - prev) > 0.05:
                 return {
                     "type": "odds_shift",
