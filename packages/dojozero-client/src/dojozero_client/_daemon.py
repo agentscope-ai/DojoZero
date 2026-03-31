@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import signal
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -34,6 +34,24 @@ if TYPE_CHECKING:
     from dojozero_client._client import TrialConnection
 
 logger = logging.getLogger(__name__)
+
+
+def _write_results(
+    results_file: Path,
+    trial_id: str,
+    reason: str,
+    results: list[AgentResult],
+) -> None:
+    """Write final trial results to results.json."""
+    data = {
+        "trial_id": trial_id,
+        "status": reason,
+        "ended_at": datetime.now(timezone.utc).isoformat(),
+        "results": [asdict(r) for r in results],
+    }
+    with open(results_file, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Trial %s: Results written to %s", trial_id, results_file)
 
 
 class Strategy(Protocol):
@@ -286,7 +304,12 @@ class Daemon:
                     )
                     self._state.status = ended.reason
                     if ended.final_results:
-                        self._write_results(ended.reason, ended.final_results)
+                        _write_results(
+                            self.state_dir / "results.json",
+                            self._state.trial_id,
+                            ended.reason,
+                            ended.final_results,
+                        )
                     self._save_state()
 
         except asyncio.CancelledError:
@@ -629,29 +652,6 @@ class Daemon:
         notif_file = self.state_dir / "notifications.jsonl"
         with open(notif_file, "a") as f:
             f.write(json.dumps(notif) + "\n")
-
-    def _write_results(self, reason: str, results: list[AgentResult]) -> None:
-        """Write final trial results to results.json."""
-        results_file = self.state_dir / "results.json"
-        data = {
-            "trial_id": self._state.trial_id,
-            "status": reason,
-            "ended_at": datetime.now(timezone.utc).isoformat(),
-            "results": [
-                {
-                    "agent_id": r.agent_id,
-                    "final_balance": r.final_balance,
-                    "net_profit": r.net_profit,
-                    "total_bets": r.total_bets,
-                    "win_rate": r.win_rate,
-                    "roi": r.roi,
-                }
-                for r in results
-            ],
-        }
-        with open(results_file, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.info("Results written to %s", results_file)
 
     def _write_pid(self) -> None:
         """Write PID file for process management."""
@@ -1098,7 +1098,12 @@ class TrialHandler:
                 )
                 self._state.status = ended.reason
                 if ended.final_results:
-                    self._write_results(ended.reason, ended.final_results)
+                    _write_results(
+                        self.state_dir / "results.json",
+                        self.trial_id,
+                        ended.reason,
+                        ended.final_results,
+                    )
                 self._save_state()
         except asyncio.CancelledError:
             pass
@@ -1215,29 +1220,6 @@ class TrialHandler:
         bets_file = self.state_dir / "bets.jsonl"
         with open(bets_file, "a") as f:
             f.write(json.dumps(bet) + "\n")
-
-    def _write_results(self, reason: str, results: list[AgentResult]) -> None:
-        """Write final trial results to results.json."""
-        results_file = self.state_dir / "results.json"
-        data = {
-            "trial_id": self.trial_id,
-            "status": reason,
-            "ended_at": datetime.now(timezone.utc).isoformat(),
-            "results": [
-                {
-                    "agent_id": r.agent_id,
-                    "final_balance": r.final_balance,
-                    "net_profit": r.net_profit,
-                    "total_bets": r.total_bets,
-                    "win_rate": r.win_rate,
-                    "roi": r.roi,
-                }
-                for r in results
-            ],
-        }
-        with open(results_file, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.info("Trial %s: Results written to %s", self.trial_id, results_file)
 
 
 class UnifiedDaemon:
