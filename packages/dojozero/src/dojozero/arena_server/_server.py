@@ -1473,6 +1473,8 @@ class TrialReplayController:
         The snapshot includes:
         - Meta events: agent_initialize, game_initialize, game_start
         - Latest odds_update before the target position
+        - Latest broker snapshot before the target position
+          (prefer final_stats over state_update)
         - Recent play items up to and including the target
 
         Args:
@@ -1497,6 +1499,15 @@ class TrialReplayController:
         # Collect item indices to include in snapshot (use set to avoid duplicates)
         snapshot_indices: set[int] = set()
 
+        def _latest_index_before(indices: list[int]) -> int | None:
+            latest_idx = None
+            for idx in indices:
+                if idx <= target_item_index:
+                    latest_idx = idx
+                else:
+                    break
+            return latest_idx
+
         # 1. Add meta events (agent_initialize, game_initialize, game_start)
         if self.meta.agent_initialize_item_index is not None:
             snapshot_indices.add(self.meta.agent_initialize_item_index)
@@ -1507,17 +1518,21 @@ class TrialReplayController:
 
         # 2. Find and add the latest odds_update before target_item_index
         if self.meta.odds_update_indices:
-            # Find the largest odds_update index that is <= target_item_index
-            latest_odds_idx = None
-            for idx in self.meta.odds_update_indices:
-                if idx <= target_item_index:
-                    latest_odds_idx = idx
-                else:
-                    break  # odds_update_indices are in chronological order
+            latest_odds_idx = _latest_index_before(self.meta.odds_update_indices)
             if latest_odds_idx is not None:
                 snapshot_indices.add(latest_odds_idx)
 
-        # 3. Add recent items up to and including the target
+        # 3. Add the latest broker snapshot before target_item_index.
+        # final_stats is preferred because it contains the ranking/statistics payload.
+        latest_broker_idx = _latest_index_before(self.meta.broker_final_stats_indices)
+        if latest_broker_idx is None:
+            latest_broker_idx = _latest_index_before(
+                self.meta.broker_state_update_indices
+            )
+        if latest_broker_idx is not None:
+            snapshot_indices.add(latest_broker_idx)
+
+        # 4. Add recent items up to and including the target
         start = max(0, target_item_index + 1 - self.snapshot_size)
         for i in range(start, target_item_index + 1):
             snapshot_indices.add(i)

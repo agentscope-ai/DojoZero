@@ -989,6 +989,7 @@ def _compute_replay_meta(
     - play_item_indices: mapping from play_index to item_index
     - periods: list of PeriodInfo with play counts per period
     - meta event indices: agent_initialize, game_initialize, game_start, odds_update
+    - broker snapshot indices: state_update and final_stats
 
     Args:
         items: List of serialized span dicts with "category" and "data" keys
@@ -1006,6 +1007,8 @@ def _compute_replay_meta(
     game_initialize_item_index: int | None = None
     game_start_item_index: int | None = None
     odds_update_indices: list[int] = []
+    broker_state_update_indices: list[int] = []
+    broker_final_stats_indices: list[int] = []
 
     current_period: int = 1  # Default period
 
@@ -1022,6 +1025,10 @@ def _compute_replay_meta(
             game_start_item_index = item_index
         elif category == "odds_update":
             odds_update_indices.append(item_index)
+        elif category == "state_update":
+            broker_state_update_indices.append(item_index)
+        elif category == "final_stats":
+            broker_final_stats_indices.append(item_index)
 
         # Track core category items (plays)
         if category in core_categories:
@@ -1058,6 +1065,8 @@ def _compute_replay_meta(
         game_initialize_item_index=game_initialize_item_index,
         game_start_item_index=game_start_item_index,
         odds_update_indices=odds_update_indices,
+        broker_state_update_indices=broker_state_update_indices,
+        broker_final_stats_indices=broker_final_stats_indices,
     )
 
 

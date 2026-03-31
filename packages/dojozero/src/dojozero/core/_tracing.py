@@ -168,6 +168,10 @@ class TraceReader(Protocol):
         """
         ...
 
+    async def close(self) -> None:
+        """Release any backend resources held by the reader."""
+        ...
+
 
 class JaegerTraceReader:
     """TraceReader that reads from Jaeger HTTP API."""
