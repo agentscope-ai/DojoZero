@@ -5,7 +5,7 @@ Usage:
     dojozero-agent stop
     dojozero-agent status
     dojozero-agent logs [-f]
-    dojozero-agent prediction <amount> <market> <selection>
+    dojozero-agent bet <amount> <market> <selection>
     dojozero-agent events [-n N] [--format {summary,json}] [--type TYPE]
     dojozero-agent leaderboard [trial-id] [--format {table,json}]
 """
@@ -335,22 +335,22 @@ def cmd_logs(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_prediction(args: argparse.Namespace) -> int:
-    """Place a prediction via daemon RPC."""
+def cmd_bet(args: argparse.Namespace) -> int:
+    """Place a bet via daemon RPC."""
     trial_id = getattr(args, "trial_id", None)
 
     spread_value: float | None = getattr(args, "spread_value", None)
     total_value: float | None = getattr(args, "total_value", None)
 
     if args.market == "spread" and spread_value is None:
-        print("Error: --spread-value required for spread predictions", file=sys.stderr)
+        print("Error: --spread-value required for spread bets", file=sys.stderr)
         return 1
     if args.market == "total" and total_value is None:
-        print("Error: --total-value required for total predictions", file=sys.stderr)
+        print("Error: --total-value required for total bets", file=sys.stderr)
         return 1
 
     if not is_daemon_running():
-        print("Daemon not running. Use 'start <trial-id>' first.", file=sys.stderr)
+        print("Daemon not running. Use 'start <game-id>' first.", file=sys.stderr)
         return 1
 
     client = RPCClient(SOCKET_PATH)
@@ -364,8 +364,8 @@ def cmd_prediction(args: argparse.Namespace) -> int:
             spread_value=spread_value,
             total_value=total_value,
         )
-        print(f"Prediction placed: ${args.amount} on {args.selection} ({args.market})")
-        print(f"Prediction ID: {result.get('bet_id')}")
+        print(f"Bet placed: ${args.amount} on {args.selection} ({args.market})")
+        print(f"Bet ID: {result.get('bet_id')}")
         return 0
     except RPCError as e:
         print(f"Error: {e.message}", file=sys.stderr)
@@ -507,13 +507,13 @@ def cmd_events(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_predictions(args: argparse.Namespace) -> int:
-    """Show prediction history."""
+def cmd_bets(args: argparse.Namespace) -> int:
+    """Show bet history."""
     state_dir = _get_state_dir(args)
     bets_file = state_dir / "bets.jsonl"
 
     if not bets_file.exists():
-        print("No predictions")
+        print("No bets")
         return 0
 
     lines = bets_file.read_text().strip().split("\n")
@@ -960,31 +960,31 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p_logs.set_defaults(func=cmd_logs)
 
-    # prediction
-    p_pred = subparsers.add_parser("prediction", help="Place a prediction")
-    p_pred.add_argument(
-        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    # bet
+    p_bet = subparsers.add_parser("bet", help="Place a bet")
+    p_bet.add_argument(
+        "trial_id", nargs="?", help="Game ID (optional if only one running)"
     )
-    p_pred.add_argument("amount", type=float, help="Prediction amount")
-    p_pred.add_argument(
+    p_bet.add_argument("amount", type=float, help="Bet amount")
+    p_bet.add_argument(
         "market",
         choices=["moneyline", "spread", "total"],
         help="Market type",
     )
-    p_pred.add_argument("selection", help="Selection (e.g., home, away, over, under)")
-    p_pred.add_argument(
+    p_bet.add_argument("selection", help="Selection (e.g., home, away, over, under)")
+    p_bet.add_argument(
         "--spread-value",
         type=float,
         default=None,
-        help="Spread value for spread predictions (e.g., -3.5)",
+        help="Spread value for spread bets (e.g., -3.5)",
     )
-    p_pred.add_argument(
+    p_bet.add_argument(
         "--total-value",
         type=float,
         default=None,
-        help="Total value for total predictions (e.g., 215.5)",
+        help="Total value for total bets (e.g., 215.5)",
     )
-    p_pred.set_defaults(func=cmd_prediction)
+    p_bet.set_defaults(func=cmd_bet)
 
     # events
     p_events = subparsers.add_parser("events", help="Show event log")
@@ -1005,13 +1005,13 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p_events.set_defaults(func=cmd_events)
 
-    # predictions
-    p_preds = subparsers.add_parser("predictions", help="Show prediction history")
-    p_preds.add_argument(
-        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    # bets
+    p_bets = subparsers.add_parser("bets", help="Show bet history")
+    p_bets.add_argument(
+        "trial_id", nargs="?", help="Game ID (optional if only one running)"
     )
-    p_preds.add_argument("-n", "--count", type=int, default=20, help="Number to show")
-    p_preds.set_defaults(func=cmd_predictions)
+    p_bets.add_argument("-n", "--count", type=int, default=20, help="Number to show")
+    p_bets.set_defaults(func=cmd_bets)
 
     # list - show all running trials
     p_list = subparsers.add_parser("list", help="List running trials")
