@@ -350,7 +350,7 @@ def cmd_bet(args: argparse.Namespace) -> int:
         return 1
 
     if not is_daemon_running():
-        print("Daemon not running. Use 'start <game-id>' first.", file=sys.stderr)
+        print("Daemon not running. Use 'start <trial-id>' first.", file=sys.stderr)
         return 1
 
     client = RPCClient(SOCKET_PATH)
@@ -963,7 +963,7 @@ def create_parser() -> argparse.ArgumentParser:
     # bet
     p_bet = subparsers.add_parser("bet", help="Place a bet")
     p_bet.add_argument(
-        "trial_id", nargs="?", help="Game ID (optional if only one running)"
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
     )
     p_bet.add_argument("amount", type=float, help="Bet amount")
     p_bet.add_argument(
@@ -1008,7 +1008,7 @@ def create_parser() -> argparse.ArgumentParser:
     # bets
     p_bets = subparsers.add_parser("bets", help="Show bet history")
     p_bets.add_argument(
-        "trial_id", nargs="?", help="Game ID (optional if only one running)"
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
     )
     p_bets.add_argument("-n", "--count", type=int, default=20, help="Number to show")
     p_bets.set_defaults(func=cmd_bets)
