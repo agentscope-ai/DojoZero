@@ -3,7 +3,6 @@
 Provides a long-running process that:
 - Maintains SSE connections to one or more trials
 - Persists state to ~/.dojozero/
-- Supports strategy plugins for automated betting
 - Exposes Unix socket RPC for CLI commands
 """
 
@@ -17,7 +16,7 @@ import signal
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from dojozero_client._client import AgentResult, DojoClient, EventEnvelope
 from dojozero_client._config import (
@@ -52,41 +51,6 @@ def _write_results(
     with open(results_file, "w") as f:
         json.dump(data, f, indent=2)
     logger.info("Trial %s: Results written to %s", trial_id, results_file)
-
-
-class Strategy(Protocol):
-    """Protocol for betting strategy plugins.
-
-    Strategies receive events and state, and return betting decisions.
-
-    Example implementation:
-        class MyStrategy:
-            def __init__(self, config: dict[str, Any]):
-                self.min_edge = config.get("min_edge", 0.10)
-
-            def decide(self, event: dict, state: dict) -> dict | None:
-                if "odds" not in event.get("type", ""):
-                    return None
-                odds = event.get("payload", {})
-                if odds.get("home_probability", 0.5) > 0.6:
-                    return {"market": "moneyline", "selection": "home", "amount": 50}
-                return None
-    """
-
-    def decide(
-        self, event: dict[str, Any], state: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """Make a betting decision based on event and current state.
-
-        Args:
-            event: The incoming event dict with 'type' and 'payload'
-            state: Current daemon state (balance, holdings, game_state, etc.)
-
-        Returns:
-            Betting decision dict with 'market', 'selection', 'amount' keys,
-            or None to skip betting.
-        """
-        ...
 
 
 def _trial_state_dir(trial_id: str) -> Path:
@@ -194,9 +158,6 @@ class TrialHandler:
         api_key: str,
         client: DojoClient,
         filters: list[str] | None = None,
-        strategy: str | None = None,
-        strategy_config: dict[str, Any] | None = None,
-        auto_bet: bool = False,
     ):
         """Initialize trial handler.
 
@@ -205,17 +166,11 @@ class TrialHandler:
             api_key: API key for authentication
             client: Shared DojoClient instance
             filters: Event type filters
-            strategy: Strategy module path (e.g., "dojozero_client._strategy.conservative")
-            strategy_config: Configuration dict to pass to strategy
-            auto_bet: Enable autonomous betting with strategy
         """
         self.trial_id = trial_id
         self.api_key = api_key
         self.client = client
         self.filters = filters or ["event.*", "odds.*"]
-        self._strategy_path = strategy
-        self._strategy_config = strategy_config or {}
-        self.auto_bet = auto_bet
 
         self.state_dir = TRIALS_DIR / trial_id
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -227,7 +182,6 @@ class TrialHandler:
         self._running = False
         self._seen_uids: set[str] = set()
         self._needs_balance_refresh = False
-        self.strategy: Strategy | None = None
 
     @property
     def agent_id(self) -> str:
@@ -243,12 +197,6 @@ class TrialHandler:
         """Connect to the trial and start event streaming."""
         if self._running:
             return
-
-        # Load strategy plugin if configured
-        if self._strategy_path:
-            self.strategy = self._load_strategy(
-                self._strategy_path, self._strategy_config
-            )
 
         # Seed seen UIDs from existing events.jsonl to prevent duplicates on reconnect
         self._seen_uids = self._load_seen_uids()
@@ -590,43 +538,6 @@ class TrialHandler:
             except Exception:
                 pass  # Will retry on next event
 
-        # Maybe make betting decision (auto-bet with strategy)
-        if self.auto_bet and self.strategy and self._trial:
-            try:
-                decision = self.strategy.decide(event_dict, self._state.to_dict())
-                if decision:
-                    result = await self._trial.place_bet(
-                        market=decision["market"],
-                        selection=decision["selection"],
-                        amount=decision["amount"],
-                        reference_sequence=event.sequence,
-                    )
-                    self._append_bet(
-                        {
-                            "bet_id": result.bet_id,
-                            "market": result.market,
-                            "selection": result.selection,
-                            "amount": result.amount,
-                            "probability": result.probability,
-                            "status": result.status,
-                            "placed_at": result.placed_at.isoformat(),
-                        }
-                    )
-                    logger.info(
-                        "Trial %s: Auto-bet %s on %s for $%s",
-                        self.trial_id,
-                        decision["market"],
-                        decision["selection"],
-                        decision["amount"],
-                    )
-                    await self._refresh_balance_after_bet(
-                        result.amount, result.market, result.selection
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Trial %s: Strategy decision error: %s", self.trial_id, e
-                )
-
     def _update_state_from_event(self, event: dict[str, Any]) -> None:
         """Update state from an event."""
         payload = event.get("payload", {})
@@ -690,33 +601,6 @@ class TrialHandler:
             self._state.balance = payload.get("balance", self._state.balance)
 
         self._save_state()
-
-    def _load_strategy(
-        self, module_path: str, config: dict[str, Any]
-    ) -> Strategy | None:
-        """Load a strategy plugin from a module path.
-
-        Args:
-            module_path: Dot-separated module path (e.g., "strategies.conservative")
-            config: Configuration dict to pass to strategy
-
-        Returns:
-            Strategy instance or None if loading fails
-        """
-        import importlib
-
-        try:
-            module = importlib.import_module(module_path)
-            strategy_cls = getattr(module, "Strategy")
-            return strategy_cls(config)
-        except Exception as e:
-            logger.error(
-                "Trial %s: Failed to load strategy %s: %s",
-                self.trial_id,
-                module_path,
-                e,
-            )
-            return None
 
     def _save_state(self) -> None:
         """Save current state to disk."""
@@ -847,9 +731,6 @@ class UnifiedDaemon:
         self,
         trial_id: str,
         filters: list[str] | None = None,
-        strategy: str | None = None,
-        strategy_config: dict[str, Any] | None = None,
-        auto_bet: bool = False,
     ) -> dict[str, Any]:
         """Join a trial."""
         if trial_id in self._trials:
@@ -867,9 +748,6 @@ class UnifiedDaemon:
             api_key=self._api_key,
             client=self._client,
             filters=filters,
-            strategy=strategy,
-            strategy_config=strategy_config,
-            auto_bet=auto_bet,
         )
 
         try:
@@ -1035,7 +913,6 @@ def stop_unified_daemon() -> bool:
 
 __all__ = [
     "DaemonState",
-    "Strategy",
     "get_daemon_status",
     "UnifiedDaemon",
     "TrialHandler",

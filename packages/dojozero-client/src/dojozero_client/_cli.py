@@ -129,8 +129,6 @@ def cmd_start(args: argparse.Namespace) -> int:
     profile = _get_profile(args)
 
     filters = args.filters.split(",") if args.filters else ["event.*", "odds.*"]
-    strategy: str | None = getattr(args, "strategy", None)
-    auto_bet: bool = getattr(args, "auto_bet", False)
 
     if args.background:
         # Ensure daemon is running, then join via RPC
@@ -143,8 +141,6 @@ def cmd_start(args: argparse.Namespace) -> int:
                 "join",
                 trial_id=args.trial_id,
                 filters=filters,
-                strategy=strategy,
-                auto_bet=auto_bet,
             )
             status = result.get("status", "joined")
             agent_id = result.get("agent_id", "")
@@ -181,8 +177,6 @@ def cmd_start(args: argparse.Namespace) -> int:
             await daemon._handle_join(
                 trial_id=args.trial_id,
                 filters=filters,
-                strategy=strategy,
-                auto_bet=auto_bet,
             )
             logger.info("Joined trial %s in foreground mode", args.trial_id)
             await daemon._stop_event.wait()
@@ -925,16 +919,6 @@ def create_parser() -> argparse.ArgumentParser:
     p_start.add_argument(
         "--api-key",
         help="API key for authentication (required, or set $DOJOZERO_AGENT_API_KEY)",
-    )
-    p_start.add_argument(
-        "--strategy",
-        "-s",
-        help="Strategy module path (e.g., dojozero_client._strategy.conservative)",
-    )
-    p_start.add_argument(
-        "--auto-bet",
-        action="store_true",
-        help="Enable autonomous betting with strategy",
     )
     p_start.add_argument(
         "--filters",

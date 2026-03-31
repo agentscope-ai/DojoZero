@@ -38,7 +38,6 @@ from dojozero_client._config import (
 )
 from dojozero_client._daemon import (
     DaemonState,
-    Strategy,
     TrialHandler,
     UnifiedDaemon,
     get_daemon_status,
@@ -84,7 +83,6 @@ __all__ = [
     # Daemon (agent mode)
     "UnifiedDaemon",
     "TrialHandler",
-    "Strategy",
     "DaemonState",
     "get_daemon_status",
     "is_daemon_running",
