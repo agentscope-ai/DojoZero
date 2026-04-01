@@ -398,7 +398,11 @@ class TrialHandler:
             "amount": result.amount,
             "probability": result.probability,
             "status": result.status,
-            "placed_at": result.placed_at.isoformat(),
+            "placed_at": (
+                result.placed_at.replace(tzinfo=timezone.utc)
+                if result.placed_at.tzinfo is None
+                else result.placed_at
+            ).isoformat(),
         }
         self._append_bet(bet_record)
 
