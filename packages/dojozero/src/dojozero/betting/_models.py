@@ -435,6 +435,10 @@ class AgentInfo(BaseModel):
     """Agent registration payload for tracing (agent.agent_initialize span)."""
 
     agent_id: str = Field(default="", description="Unique ID for the agent")
+    display_name: str = Field(
+        default="",
+        description="Human-readable display name (e.g., GitHub username or custom name)",
+    )
     persona: str = Field(
         default="", description="Agent persona tag (e.g., 'degen', 'whale', 'shark')"
     )

@@ -15,6 +15,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from dojozero.betting._models import (
+    AgentInfo,
+    AgentList,
     BetRequestMoneyline,
     BetRequestSpread,
     BetRequestTotal,
@@ -192,6 +194,9 @@ class ExternalAgentAdapter:
         )
         self._agents[agent_id] = state
 
+        # Emit agent.agent_initialize span so arena frontend picks up this agent
+        self._emit_agent_initialize_span(state)
+
         auth_status = "authenticated" if authenticated else "unauthenticated"
         logger.info(
             "Registered external agent: agent_id=%s, display_name=%s, persona=%s, balance=%s, %s",
@@ -324,6 +329,51 @@ class ExternalAgentAdapter:
     def is_registered(self, agent_id: str) -> bool:
         """Check if agent is registered."""
         return agent_id in self._agents
+
+    # =========================================================================
+    # Tracing
+    # =========================================================================
+
+    def _emit_agent_initialize_span(self, state: ExternalAgentState) -> None:
+        """Emit an agent.agent_initialize span for an external agent.
+
+        This ensures the arena frontend cache picks up the agent's metadata
+        (display_name, cdn_url for GitHub avatar, persona, model, etc.).
+        """
+        import json
+        import time
+        from uuid import uuid4
+
+        from dojozero.core._tracing import SpanData, emit_span
+
+        agent_info = AgentInfo(
+            agent_id=state.agent_id,
+            display_name=state.display_name or "",
+            persona=state.persona or state.display_name or state.agent_id,
+            model=state.model or "",
+            model_display_name=state.model_display_name or "",
+            cdn_url=state.cdn_url or "",
+        )
+        agent_list = AgentList(agents=[agent_info])
+
+        now_us = int(time.time() * 1_000_000)
+        span = SpanData(
+            trace_id=self._trial_id,
+            span_id=uuid4().hex[:16],
+            operation_name="agent.agent_initialize",
+            start_time=now_us,
+            duration=0,
+            tags={
+                "agents": json.dumps(
+                    [a.model_dump() for a in agent_list.agents]
+                ),
+            },
+        )
+        emit_span(span)
+        logger.debug(
+            "Emitted agent.agent_initialize span for external agent %s",
+            state.agent_id,
+        )
 
     # =========================================================================
     # Subscription Management
