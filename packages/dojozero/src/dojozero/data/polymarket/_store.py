@@ -198,6 +198,7 @@ class PolymarketStore(DataStore):
             events.append(
                 OddsUpdateEvent(
                     timestamp=timestamp,
+                    game_timestamp=timestamp,
                     game_id=game_id,
                     home_tricode=home_tricode,
                     away_tricode=away_tricode,
