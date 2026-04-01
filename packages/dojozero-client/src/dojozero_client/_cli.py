@@ -299,7 +299,19 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
     if odds:
         home_prob = odds.get("home_probability", 0)
         away_prob = odds.get("away_probability", 0)
-        print(f"Odds: {home_label} {home_prob:.0%}, {away_label} {away_prob:.0%}")
+        print(f"Moneyline: {home_label} {home_prob:.1%}, {away_label} {away_prob:.1%}")
+        for s in odds.get("spreads", []):
+            spread_val = s.get("spread", 0)
+            h_p = s.get("home_probability", 0)
+            a_p = s.get("away_probability", 0)
+            print(
+                f"Spread {spread_val:+g}: {home_label} {h_p:.1%}, {away_label} {a_p:.1%}"
+            )
+        for t in odds.get("totals", []):
+            total_val = t.get("total", 0)
+            over_p = t.get("over_probability", 0)
+            under_p = t.get("under_probability", 0)
+            print(f"Total {total_val}: over {over_p:.1%}, under {under_p:.1%}")
 
     print(f"Balance: ${state.get('balance', 0):.2f}")
     print(f"Last Update: {state.get('last_updated', 'never')}")

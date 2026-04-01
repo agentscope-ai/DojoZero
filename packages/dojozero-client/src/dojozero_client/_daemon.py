@@ -683,6 +683,8 @@ class TrialHandler:
                 "away_probability": moneyline.get(
                     "away_probability", odds_data.get("away_probability", 0)
                 ),
+                "spreads": odds_data.get("spreads", []),
+                "totals": odds_data.get("totals", []),
             }
 
         # Update balance from balance events
