@@ -259,8 +259,19 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
     """Print formatted status output."""
     game_state = state.get("game_state", {})
     odds = state.get("current_odds", {})
+    home_team = state.get("home_team", "")
+    away_team = state.get("away_team", "")
 
     print(f"Trial: {state.get('trial_id', 'unknown')}")
+    if home_team and away_team:
+        sport = state.get("sport_type", "")
+        game_time = state.get("game_time", "")
+        matchup = f"Game: {away_team} @ {home_team}"
+        if sport:
+            matchup += f" ({sport})"
+        if game_time:
+            matchup += f" - {game_time}"
+        print(matchup)
     print(f"Agent: {state.get('agent_id', 'unknown')}")
     status_label = state.get("status", "unknown")
     if daemon_running:
@@ -269,16 +280,22 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
         print(f"Status: {status_label} (daemon not running)")
 
     if game_state:
-        home = game_state.get("home_score", "?")
-        away = game_state.get("away_score", "?")
+        home_score = game_state.get("home_score", "?")
+        away_score = game_state.get("away_score", "?")
         period = game_state.get("period", game_state.get("quarter", "?"))
         clock = game_state.get("clock", game_state.get("time", ""))
-        print(f"Score: {away}-{home} (Q{period} {clock})")
+        home_label = home_team or "Home"
+        away_label = away_team or "Away"
+        print(
+            f"Score: {home_label} {home_score} - {away_label} {away_score} (Q{period} {clock})"
+        )
 
     if odds:
         home_prob = odds.get("home_probability", 0)
         away_prob = odds.get("away_probability", 0)
-        print(f"Odds: Home {home_prob:.0%}, Away {away_prob:.0%}")
+        home_label = home_team or "Home"
+        away_label = away_team or "Away"
+        print(f"Odds: {home_label} {home_prob:.0%}, {away_label} {away_prob:.0%}")
 
     print(f"Balance: ${state.get('balance', 0):.2f}")
     print(f"Last Update: {state.get('last_updated', 'never')}")

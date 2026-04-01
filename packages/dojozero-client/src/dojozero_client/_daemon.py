@@ -82,6 +82,10 @@ class DaemonState:
     holdings: list[dict[str, Any]] = field(default_factory=_default_holdings)
     last_event_sequence: int = 0
     last_updated: str = ""
+    home_team: str = ""
+    away_team: str = ""
+    sport_type: str = ""
+    game_time: str = ""
     game_state: dict[str, Any] = field(default_factory=_default_game_state)
     current_odds: dict[str, Any] = field(default_factory=_default_current_odds)
 
@@ -96,6 +100,10 @@ class DaemonState:
             "holdings": self.holdings,
             "last_event_sequence": self.last_event_sequence,
             "last_updated": self.last_updated,
+            "home_team": self.home_team,
+            "away_team": self.away_team,
+            "sport_type": self.sport_type,
+            "game_time": self.game_time,
             "game_state": self.game_state,
             "current_odds": self.current_odds,
         }
@@ -112,6 +120,10 @@ class DaemonState:
             holdings=data.get("holdings", []),
             last_event_sequence=data.get("last_event_sequence", 0),
             last_updated=data.get("last_updated", ""),
+            home_team=data.get("home_team", ""),
+            away_team=data.get("away_team", ""),
+            sport_type=data.get("sport_type", ""),
+            game_time=data.get("game_time", ""),
             game_state=data.get("game_state", {}),
             current_odds=data.get("current_odds", {}),
         )
@@ -237,6 +249,28 @@ class TrialHandler:
 
         # Initialize state (preserve session key from connection)
         balance = await trial.get_balance()
+
+        # Fetch trial metadata (home/away teams, sport, game time)
+        home_team = ""
+        away_team = ""
+        sport_type = ""
+        game_time = ""
+        try:
+            meta = await trial.get_trial_metadata()
+            home_team = meta.home_team
+            away_team = meta.away_team
+            sport_type = meta.sport_type
+            game_time = meta.game_time.isoformat() if meta.game_time else ""
+            logger.info(
+                "Trial %s: %s vs %s (%s)",
+                self.trial_id,
+                home_team,
+                away_team,
+                sport_type,
+            )
+        except Exception as e:
+            logger.warning("Trial %s: Failed to fetch metadata: %s", self.trial_id, e)
+
         self._state = DaemonState(
             trial_id=self.trial_id,
             agent_id=trial.agent_id,
@@ -253,6 +287,10 @@ class TrialHandler:
                 for h in balance.holdings
             ],
             last_event_sequence=resume_sequence,
+            home_team=home_team,
+            away_team=away_team,
+            sport_type=sport_type,
+            game_time=game_time,
         )
         self._save_state()
         logger.info("Trial %s: Connected as agent %s", self.trial_id, trial.agent_id)
