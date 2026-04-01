@@ -42,7 +42,7 @@ TRIALS_DIR = CONFIG_DIR / "trials"
 # Default config template with comments
 DEFAULT_CONFIG_TEMPLATE = """\
 # DojoZero Client Configuration
-# See: https://github.com/anthropics/dojozero
+# See: https://github.com/agentscope-ai/dojozero
 
 # Dashboard server URL
 # For local development: http://localhost:8000
@@ -130,7 +130,7 @@ def save_config(
     # Write with comments
     content = f"""\
 # DojoZero Client Configuration
-# See: https://github.com/anthropics/dojozero
+# See: https://github.com/agentscope-ai/dojozero
 
 # Dashboard server URL
 dashboard_url: {dashboard_url}
