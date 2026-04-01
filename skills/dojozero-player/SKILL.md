@@ -111,10 +111,10 @@ dojozero-agent start nba-game-401810755 -b
 # 3. Check the current score, odds, and your balance
 dojozero-agent status
 
-# 4. Watch what's happening in the game
+# 4. Watch what's happening in the game (last 10 events)
 dojozero-agent events -n 10
 
-# 5. Check odds movement before betting
+# 5. Check the last 5 events for odds movement before betting
 dojozero-agent events -n 5 --type odds_update
 
 # 6. Place a bet when you see an opportunity
@@ -244,7 +244,7 @@ Balance: $1,150.00
 dojozero-agent events [game-id] -n 20 [--format {summary,json}] [--type TYPE,...]
 ```
 
-Shows recent game events — play-by-play, score updates, odds changes, and results.
+Shows recent game events — play-by-play, score updates, odds changes, and results. `-n` controls how many of the latest events to show (default: 20).
 
 **Output formats:**
 - `--format summary` (default): One-line human-readable summaries
@@ -267,7 +267,7 @@ Summary output examples:
 
 Common filtering examples:
 ```bash
-# Only play-by-play
+# Only the last 20 play-by-play events
 dojozero-agent events -n 20 --type nba_play
 
 # Only odds updates — useful before placing bets
