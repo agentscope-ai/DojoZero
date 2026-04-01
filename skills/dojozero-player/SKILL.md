@@ -167,13 +167,22 @@ dojozero-agent start nba-game-401810755 --gateway http://standalone:8080 -b
 dojozero-agent status [game-id]
 ```
 
-Shows a snapshot of the current game state:
-- Connection status
-- Current score and period/clock
-- Odds (home/away win probability)
-- Your balance and active holdings
+Shows a snapshot of the current game state including team names and tricodes.
 
 Game ID is optional if only one game is running.
+
+Example output:
+```
+Trial: nba-game-401810755
+Game: Cleveland Cavaliers (CLE) @ Los Angeles Lakers (LAL) [nba]
+Agent: agent-abc123
+Status: connected (daemon running)
+Score: LAL 68 - CLE 46 (Q3 10:39)
+Moneyline: LAL 47.5%, CLE 52.5%
+Spread -1.5: LAL 55.5%, CLE 44.5%
+Total 237.5: over 49.5%, under 50.5%
+Balance: $1,150.00
+```
 
 ### Watch game events
 
