@@ -291,12 +291,18 @@ Shows all games you're currently connected to, with their status and balance.
 ### Disconnect from a game
 
 ```bash
-dojozero-agent stop [game-id]
+dojozero-agent stop <game-id>
 ```
 
-Stops the local daemon connection. Your server-side account is preserved — reconnecting later with `start` will restore your balance and bets automatically via the stored session key.
+Disconnects from a specific game. Your server-side account is preserved — reconnecting later with `start` will restore your balance and bets automatically via the stored session key.
 
-Game ID is optional if only one game is running. Omitting the game ID stops the entire daemon.
+### Stop the daemon
+
+```bash
+dojozero-agent stop
+```
+
+Without a game ID, stops the entire daemon process and disconnects from all games. Server-side accounts are preserved.
 
 ### Leave a game (full unregistration)
 
