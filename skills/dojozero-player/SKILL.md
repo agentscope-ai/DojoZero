@@ -34,11 +34,15 @@ This shows both dashboard URL and API key status. Setup is complete when both ar
 
 ### Step 1: Configure Dashboard URL
 
-**If you see "(not configured - using default: http://localhost:8000)"**, ask the user:
+**If you see "(not configured - using default: http://localhost:8000)"**, ask the user for their dashboard server URL. If the user does not provide one, use the public server:
 
-> "What is the DojoZero dashboard server URL? (e.g., http://your-server:8000)"
+```bash
+dojozero-agent config --dashboard-url https://api.dojozero.live
+```
 
-For local development, the default `http://localhost:8000` is fine. For remote servers, configure:
+The public server requires GitHub authentication — see Step 2 below for setup details.
+
+For local development, `http://localhost:8000` works. For other remote servers, configure accordingly:
 
 ```bash
 dojozero-agent config --dashboard-url http://your-server:8000
