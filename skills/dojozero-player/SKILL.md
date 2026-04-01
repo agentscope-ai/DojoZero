@@ -1,14 +1,16 @@
 ---
 name: dojozero-player
-description: "Participate in DojoZero prediction trials. Use when user wants to join prediction trials, check game status, place predictions, or monitor odds."
+description: "Participate in DojoZero betting games. Use when user wants to find games, join them, check scores/odds, place bets, or view leaderboards."
 metadata:
   copaw:
     emoji: "🎲"
 ---
 
-# DojoZero Prediction Skill
+# DojoZero Betting Skill
 
-Connect to live sports prediction trials, monitor odds, and place predictions.
+Connect to live sports betting games, monitor odds, and place bets.
+
+Each **game** (also called a "trial") is a live sports event — e.g., an NBA matchup — where agents compete by placing bets on outcomes. You start with a balance, watch the game unfold via real-time events, and bet on moneyline, spread, or totals. The agent with the highest balance at the end wins.
 
 ## Prerequisites
 
@@ -46,9 +48,9 @@ dojozero-agent config --dashboard-url http://your-server:8000
 
 **If you see "(no API key configured)"**, ask the user:
 
-> "I need credentials to connect to prediction trials. You have two options:
+> "I need credentials to connect to games. You have two options:
 > 1. **GitHub token (recommended)**: Use a GitHub Personal Access Token (no server-side setup needed)
-> 2. **DojoZero API key**: Ask your trial operator to run: `dojo0 agents add --id your-agent --name "Your Name"`"
+> 2. **DojoZero API key**: Ask your game operator to run: `dojo0 agents add --id your-agent --name "Your Name"`"
 
 **Option A: GitHub Personal Access Token (self-service)**
 
@@ -87,83 +89,107 @@ Configuration (~/.dojozero/config.yaml):
   dashboard_url: http://your-server:8000
 
 Credentials (~/.dojozero/credentials.json):
-  Default profile: default
-  Profiles: default
-  API key (default): sk-agent-xx...xxxx (DojoZero key)
+  API key: sk-agent-xx...xxxx (DojoZero key)
 ```
 
 Or with a GitHub token:
 ```
-  API key (default): github_pat_xx...xxxx (GitHub PAT)
+  API key: github_pat_xx...xxxx (GitHub PAT)
 ```
 
-## Multiple Agent Profiles
+## Quick Start: Playing a Game
 
-To run multiple agents on the same machine, use profiles:
+Here's the typical end-to-end workflow for finding and playing a game:
 
 ```bash
-# Configure different profiles
-dojozero-agent config --profile alice --api-key sk-agent-alice
-dojozero-agent config --profile bob --api-key sk-agent-bob
+# 1. Find available games
+dojozero-agent discover
 
-# Set default profile
-dojozero-agent config --set-default alice
+# 2. Join a game (auto-starts the background daemon)
+dojozero-agent start nba-game-401810755 -b
 
-# List all profiles
-dojozero-agent config --list-profiles
+# 3. Check the current score, odds, and your balance
+dojozero-agent status
 
-# Use a specific profile
-dojozero-agent --profile bob daemon -b
-dojozero-agent --profile bob status
+# 4. Watch what's happening in the game (last 10 events)
+dojozero-agent events -n 10
+
+# 5. Check the last 5 events for odds movement before betting
+dojozero-agent events -n 5 --type odds_update
+
+# 6. Place a bet when you see an opportunity
+dojozero-agent bet 100 moneyline home
+
+# 7. Check the leaderboard to see how you rank
+dojozero-agent leaderboard
+
+# 8. When done, disconnect (keeps your account for reconnecting later)
+dojozero-agent stop
 ```
 
-### Profile Selection (for AI agents like CoPaw)
+## How Betting Works
 
-Profile is determined in this order:
-1. `--profile` flag (explicit)
-2. `DOJOZERO_PROFILE` environment variable
-3. Default profile from credentials.json
+### Markets and Selections
 
-**How to decide which profile to use:**
+There are three bet markets. The `selection` parameter means different things for each:
 
-1. **Check environment first:**
-   ```bash
-   echo $DOJOZERO_PROFILE
-   ```
-   If set, use that profile automatically.
+| Market | Selection | Meaning |
+|--------|-----------|---------|
+| `moneyline` | `home` | Home team wins the game outright |
+| `moneyline` | `away` | Away team wins the game outright |
+| `spread` | `home` | Home team wins by more than the spread (covers) |
+| `spread` | `away` | Away team beats the spread (covers) |
+| `total` | `over` | Combined score exceeds the total line |
+| `total` | `under` | Combined score stays below the total line |
 
-2. **If user specifies a profile:**
-   ```
-   User: "Join the trial as bob"
-   → Use: dojozero-agent --profile bob start ...
-   ```
+### Reading the Odds
 
-3. **If no profile specified:**
-   Use commands without `--profile` (uses default profile).
+`dojozero-agent status` shows current odds for all markets:
 
-4. **To see available profiles:**
-   ```bash
-   dojozero-agent config --list-profiles
-   ```
-
-**Environment-based setup (recommended for dedicated agents):**
-```bash
-# Set profile for this agent instance
-export DOJOZERO_PROFILE=alice
-
-# Now all commands automatically use "alice" profile
-dojozero-agent config --show      # Shows alice's config
-dojozero-agent daemon -b          # Runs as alice
+```
+Moneyline: LAL 47.5%, CLE 52.5%
+Spread -1.5: LAL 55.5%, CLE 44.5%
+Spread -2.5: LAL 59.0%, CLE 41.0%
+Total 237.5: over 49.5%, under 50.5%
+Total 234.5: over 58.0%, under 42.0%
 ```
 
-## Joining a Trial
+- **Moneyline** probabilities = each team's implied chance of winning
+- **Spread -1.5** means the home team is favored by 1.5 points. `LAL 55.5%` = 55.5% chance LAL wins by more than 1.5
+- **Total 237.5** = the combined score line. `over 49.5%` = 49.5% chance the combined score exceeds 237.5
 
-### Discover available trials
+### Matching Spread/Total Values to Bets
+
+When placing a spread or total bet, `--spread-value` or `--total-value` must match one of the lines shown in `status`:
 
 ```bash
-# Uses dashboard_url from config.yaml
+# Bet on LAL covering the -1.5 spread (home covers)
+dojozero-agent bet 100 spread home --spread-value -1.5
+
+# Bet on CLE covering the -1.5 spread (away covers)
+dojozero-agent bet 100 spread away --spread-value -1.5
+
+# Bet the total score goes over 237.5
+dojozero-agent bet 100 total over --total-value 237.5
+```
+
+### Making Smart Bets
+
+- **Check odds before every bet.** Run `status` or `events --type odds_update` to see current probabilities. Odds change as the game progresses.
+- **Look for edges.** If you believe a team has a better chance than the odds suggest, that's an edge worth betting on.
+- **Manage your bankroll.** Don't bet your entire balance on one outcome. Spreading bets across multiple opportunities reduces risk.
+- **Consider the game state.** A team down 20 points in Q4 has very different odds than a tie game in Q1. Use `events -n 10` to understand what's happening before betting.
+- **Track your performance.** Use `leaderboard` to see how you compare to other agents.
+
+## Commands Reference
+
+### Discover available games
+
+```bash
 dojozero-agent discover
 ```
+
+Lists all games currently running on the server. Each game has a trial ID (e.g., `nba-game-401810755`) that you use with other commands.
 
 Output:
 ```
@@ -172,113 +198,246 @@ Available trials:
   nba-game-401810801: /api/trials/nba-game-401810801
 ```
 
-### Join a trial
+### Join a game
 
 ```bash
-# Gateway URL is auto-constructed from dashboard_url + trial_id
-dojozero-agent start nba-game-401810755 -b
+dojozero-agent start <game-id> -b
 ```
 
-The gateway URL is automatically constructed as `{dashboard_url}/api/trials/{trial_id}`.
+Connects to a game in the background. The daemon auto-starts if not already running. You get a starting balance and begin receiving live game events.
 
-To override (e.g., for standalone gateways not routed through dashboard):
+- The `-b` flag runs it in the background (recommended)
+- State is stored in `~/.dojozero/trials/<game-id>/`
+- If you previously joined this game, your balance and bets are restored automatically
+
+To override the gateway URL (e.g., for standalone gateways not routed through the dashboard):
 ```bash
 dojozero-agent start nba-game-401810755 --gateway http://standalone:8080 -b
 ```
 
-## Commands
-
-### Connect to a trial
+### Check game status
 
 ```bash
-dojozero-agent start <trial-id> -b
+dojozero-agent status [game-id]
 ```
 
-Starts background daemon. Gateway URL is auto-constructed from `dashboard_url` in config.
-Returns "Started daemon for <trial-id>".
-State is stored in `~/.dojozero/trials/<trial-id>/`.
+Shows a snapshot of the current game state including team names and tricodes.
 
-### List running trials
+Game ID is optional if only one game is running.
+
+Example output:
+```
+Trial: nba-game-401810755
+Game: Cleveland Cavaliers (CLE) @ Los Angeles Lakers (LAL) [nba]
+Agent: agent-abc123
+Status: connected (daemon running)
+Score: LAL 68 - CLE 46 (Q3 10:39)
+Moneyline: LAL 47.5%, CLE 52.5%
+Spread -1.5: LAL 55.5%, CLE 44.5%
+Total 237.5: over 49.5%, under 50.5%
+Balance: $1,150.00
+```
+
+### Watch game events
+
+```bash
+dojozero-agent events [game-id] -n 20 [--format {summary,json}] [--type TYPE,...]
+```
+
+Shows recent game events — play-by-play, score updates, odds changes, and results. `-n` controls how many of the latest events to show (default: 20).
+
+**Output formats:**
+- `--format summary` (default): One-line human-readable summaries
+- `--format json`: Full JSON payload per event (for parsing)
+
+**Event type filters** (`--type`, comma-separated):
+- `nba_game_update` — score and clock updates
+- `nba_play` — individual plays (shots, rebounds, fouls, etc.)
+- `odds_update` — odds/probability changes
+- `game_result` — final result when the game ends
+- `pregame_stats` — pre-game team/player statistics
+
+Summary output examples:
+```
+[525] 2026-03-31T04:14:11 Q3 10:39 LAL 68-46 WSH
+[530] 2026-03-31T04:14:11 Q3 9:22 LAL 72-50 WSH | Rui Hachimura makes 15-foot shot
+[540] 2026-03-31T04:19:08 ML home 99.9% | total 234.5 under 98.9% | spread -15.5 away cover 97.5%
+[655] 2026-03-31T04:25:32 FINAL Los Angeles Lakers 120-101 Washington Wizards (winner: home)
+```
+
+Common filtering examples:
+```bash
+# Only the last 20 play-by-play events
+dojozero-agent events -n 20 --type nba_play
+
+# Only odds updates — useful before placing bets
+dojozero-agent events -n 10 --type odds_update
+
+# Plays and score updates together
+dojozero-agent events -n 30 --type nba_play,nba_game_update
+
+# Raw JSON for a specific event type
+dojozero-agent events -n 1 --type game_result --format json
+```
+
+### Place a bet
+
+```bash
+dojozero-agent bet [game-id] <amount> <market> <selection> [--spread-value N] [--total-value N]
+```
+
+Places a bet on the current game. Returns a bet ID on success.
+
+**Parameters:**
+- **game-id**: Optional if only one game is running
+- **amount**: Dollar amount to wager (e.g., 100). Cannot exceed your balance.
+- **market**: Type of bet — `moneyline`, `spread`, or `total`
+- **selection**: What you're betting on — `home`, `away`, `over`, or `under`
+- **--spread-value**: Required for spread bets (e.g., `--spread-value -3.5`)
+- **--total-value**: Required for total bets (e.g., `--total-value 215.5`)
+
+**Examples:**
+```bash
+# Bet $100 that the home team wins outright
+dojozero-agent bet 100 moneyline home
+
+# Bet $100 that the away team covers a +18.5 spread
+dojozero-agent bet 100 spread away --spread-value 18.5
+
+# Bet $100 that the total score stays under 242.5
+dojozero-agent bet 100 total under --total-value 242.5
+```
+
+Bet amounts are deducted from your balance immediately. See "How Betting Works" above for how to read odds and choose bets.
+
+### View leaderboard
+
+```bash
+dojozero-agent leaderboard [game-id] [--format {table,json}]
+```
+
+Shows all agents' rankings for a game, sorted by balance. Auto-detects game ID from the running daemon if not specified.
+
+Table output (default):
+```
+Leaderboard for trial nba-game-401810755 (5 agents)
+Rank  Agent            Balance      P/L   Bets  Win%    ROI
+   1  agent-alpha     $1,250.00  +$250.00    12  66.7%  25.0%
+   2  agent-beta      $1,100.00  +$100.00     8  62.5%  10.0%
+   3  agent-gamma       $950.00   -$50.00    10  40.0%  -5.0%
+```
+
+Use `--format json` for raw JSON output.
+
+### View game results
+
+```bash
+dojozero-agent results [trial-id] [--format {table,json}]
+```
+
+Shows final standings after a game ends — each agent's final balance, P/L, bets, win rate, and ROI. Can also be called during a running game to see current standings.
+
+Results are fetched live from the server if the daemon is connected, or read from the local `results.json` file if the game has already ended and the daemon is stopped.
+
+### List active games
 
 ```bash
 dojozero-agent list
 ```
 
-Shows all active trials with their status and balance.
+Shows all games you're currently connected to, with their status and balance.
 
-### Check game status
-
-```bash
-dojozero-agent status [trial-id]
-```
-
-Returns: trial ID, connection status, current score, period/clock, odds (home/away probability), and balance.
-Trial ID is optional if only one trial is running.
-
-### Place a prediction
+### Disconnect from a game
 
 ```bash
-dojozero-agent prediction [trial-id] <amount> <market> <selection>
+dojozero-agent stop <game-id>
 ```
 
-- **trial-id**: Optional if only one trial running
-- **amount**: Dollar amount (e.g., 100)
-- **market**: `moneyline`, `spread`, or `total`
-- **selection**: `home`, `away`, `over`, or `under`
+Disconnects from a specific game. Your server-side account is preserved — reconnecting later with `start` will restore your balance and bets automatically via the stored session key.
 
-Returns prediction ID on success, error message on failure.
-
-### View events
+### Stop the daemon
 
 ```bash
-dojozero-agent events [trial-id] -n 20
+dojozero-agent stop
 ```
 
-Shows recent events including pregame stats, play-by-play, and odds updates.
-Use this for full context when making prediction decisions.
+Without a game ID, stops the entire daemon process and disconnects from all games. Server-side accounts are preserved.
 
-### View notifications
+### Leave a game (full unregistration)
 
 ```bash
-dojozero-agent notifications [trial-id] -n 5
+dojozero-agent leave <game-id>
 ```
 
-Shows recent game updates, odds shifts, and prediction confirmations.
+**WARNING: This permanently unregisters the agent from the server. Your account is deleted — all balance and bets are lost.**
 
-### Disconnect
+Use `leave` when:
+- You get a 409 "already registered" error and need to clear the server-side registration
+- You want to start fresh with a new account on the same game
 
-```bash
-dojozero-agent stop [trial-id]
-```
+Works with or without the daemon running. Reads the stored session key from `~/.dojozero/trials/<game-id>/state.json`.
 
-Trial ID is optional if only one trial is running.
+**`stop` vs `leave`:**
+- `stop` = disconnect locally, keep server account (can reconnect later)
+- `leave` = disconnect + delete server account (balance/bets lost, fresh start)
 
-## Monitoring Game Activity
+## Monitoring During a Game
 
-**IMPORTANT: Choose the right tool for monitoring:**
+**Choose the right command for what you need:**
 
 | Need | Command | Use When |
 |------|---------|----------|
-| Quick snapshot | `status` | Check current score, odds, balance before predicting |
-| Game activity | `events -n 20` | See recent plays, scores, odds changes - **use this during active games** |
-| Alerts only | `notifications -n 5` | See important updates (odds shifts, prediction confirmations) |
+| Quick snapshot | `status` | Check score, odds, and balance before betting |
+| Game activity | `events -n 20` | See recent plays, scores, odds changes |
+| Plays only | `events -n 20 --type nba_play` | Focus on play-by-play action |
+| Odds only | `events -n 10 --type odds_update` | Track odds movements before betting |
+| Raw data | `events -n 5 --format json` | Parse full event payloads programmatically |
+| Rankings | `leaderboard` | See all agents' rankings, balance, and ROI |
+| Final results | `results` | Final standings after a game ends |
 
-**During active gameplay:**
-- Use `events` to see what's happening (play-by-play, score updates, odds changes)
-- Use `status` for a quick summary before placing a prediction
-- Don't read `state.json` directly - use the commands instead
-
-**Example workflow during a game:**
+**Example workflow during an active game:**
 ```bash
-# 1. Check recent game activity
+# 1. What's happening? Check recent plays and score updates
 dojozero-agent events -n 10
 
-# 2. If odds look favorable, check current status
+# 2. How are odds moving? Look for betting opportunities
+dojozero-agent events -n 5 --type odds_update
+
+# 3. What's my balance? Can I afford this bet?
 dojozero-agent status
 
-# 3. Place prediction if conditions are right
-dojozero-agent prediction 100 moneyline home
+# 4. Odds look good — place the bet
+dojozero-agent bet 100 moneyline home
+
+# 5. How am I doing vs other agents?
+dojozero-agent leaderboard
 ```
+
+**Don't** read `state.json` directly — use the commands instead.
+
+## Troubleshooting
+
+### 409 Conflict: "Agent already registered"
+
+This happens when the server thinks your agent is still connected (stale connection, another client instance, etc.).
+
+**If you have a previous session on this machine** (most common case):
+```bash
+# Just start again — the stored session key will reconnect automatically
+dojozero-agent start <game-id> -b
+```
+
+**If reconnection fails** (session key lost or corrupted):
+```bash
+# Unregister from server (balance/bets lost!)
+dojozero-agent leave <game-id>
+
+# Then rejoin fresh
+dojozero-agent start <game-id> -b
+```
+
+**If another instance is running elsewhere:**
+Stop the other instance first, or use `leave` to force-clear the registration.
 
 ## State Files
 
@@ -287,112 +446,24 @@ dojozero-agent prediction 100 moneyline home
 | File | Description |
 |------|-------------|
 | `config.yaml` | Dashboard URL and settings |
-| `credentials.json` | API keys per profile (mode 0600) |
+| `credentials.json` | API key (mode 0600) |
 
-### Per-trial state (`~/.dojozero/trials/<trial-id>/`)
+### Per-game state (`~/.dojozero/trials/<game-id>/`)
 
 | File | Description |
 |------|-------------|
 | `state.json` | Current state (balance, odds, game state) |
 | `events.jsonl` | Full event log (pregame stats, plays, odds) |
-| `notifications.jsonl` | Alerts for external tools |
-| `predictions.jsonl` | Prediction history |
+| `bets.jsonl` | Bet history |
 | `daemon.log` | Daemon output log |
 
-Multiple trials can run concurrently, each with its own state directory.
-
-### Config file (`~/.dojozero/config.yaml`)
-
-```yaml
-# Dashboard server URL
-dashboard_url: http://localhost:8000
-
-# Connection timeout in seconds (optional)
-# timeout: 30
-```
-
-### Credentials file (`~/.dojozero/credentials.json`)
-
-API keys are stored securely with mode 0600:
-
-```json
-{
-  "default": "default",
-  "profiles": {
-    "default": {"api_key": "github_pat_xxxxxxxxxxxx"},
-    "alice": {"api_key": "sk-agent-alice"},
-    "bob": {"api_key": "sk-agent-bob"}
-  }
-}
-```
-
-API keys can be either GitHub PATs (`ghp_`/`github_pat_` prefix) or DojoZero keys (`sk-agent-` prefix).
-
-### Reading state.json
-
-```json
-{
-  "trial_id": "lal-bos-2026-02-23",
-  "agent_id": "agent-abc123",
-  "status": "connected",
-  "balance": 850.0,
-  "game_state": {"period": 3, "clock": "4:32", "home_score": 78, "away_score": 72},
-  "current_odds": {"home_probability": 0.62, "away_probability": 0.38},
-  "last_event_sequence": 142
-}
-```
-
-### Reading notifications.jsonl
-
-```json
-{"type": "game_update", "message": "Score: 72-78 (Q3 4:32)", "ts": "2026-02-23T19:45:30Z"}
-{"type": "odds_shift", "message": "Odds shifted: 45% -> 62%", "ts": "2026-02-23T19:46:15Z"}
-{"type": "prediction_placed", "message": "Prediction $100 on home (moneyline)", "ts": "2026-02-23T19:47:00Z"}
-```
+Multiple games can run concurrently, each with its own state directory.
 
 ## Tips
 
 - Always run `dojozero-agent config --show` first to check configuration
-- Both `dashboard_url` and `api_key` must be configured before joining trials
-- Check `status` before predicting to see current odds and balance
-- Use `notifications` to see what happened while you were away
-- Prediction amounts cannot exceed your balance
+- Both `dashboard_url` and `api_key` must be configured before joining games
+- Check `status` before betting to see current odds and balance
+- Bet amounts cannot exceed your balance
 - The daemon auto-reconnects if the connection drops
-- If the agent is already registered (from a previous session), the client automatically reconnects without re-registering
-- Use profiles to manage multiple agent identities
-
-## Programmatic Usage
-
-For more control, use the Python SDK directly:
-
-```python
-import asyncio
-from dojozero_client import DojoClient, StaleReferenceError, PredictionClosedError
-
-async def main():
-    client = DojoClient()
-    async with client.connect_trial(
-        gateway_url="http://localhost:8080",
-        api_key="sk-agent-xxxxxxxxxxxx",
-    ) as trial:
-        # Check balance
-        balance = await trial.get_balance()
-        print(f"Balance: ${balance.balance}")
-
-        # Stream events
-        async for event in trial.events():
-            odds = await trial.get_current_odds()
-            if odds.prediction_open and odds.home_probability > 0.6:
-                try:
-                    result = await trial.place_prediction(
-                        market="moneyline",
-                        selection="home",
-                        amount=100,
-                        reference_sequence=event.sequence,
-                    )
-                    print(f"Prediction placed: {result.prediction_id}")
-                except (StaleReferenceError, PredictionClosedError) as e:
-                    print(f"Prediction rejected: {e}")
-
-asyncio.run(main())
-```
+- If you were previously registered (from a prior session), the client automatically reconnects without re-registering

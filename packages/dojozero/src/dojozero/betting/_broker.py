@@ -262,6 +262,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             len(self._bets),
         )
 
+    @property
+    def has_unsettled_bets(self) -> bool:
+        """Return True if there are active (unsettled) bets."""
+        return any(bet.status == BetStatus.ACTIVE for bet in self._bets.values())
+
     def ensure_event_initialized(
         self,
         event_id: str,
