@@ -84,6 +84,8 @@ class DaemonState:
     last_updated: str = ""
     home_team: str = ""
     away_team: str = ""
+    home_team_tricode: str = ""
+    away_team_tricode: str = ""
     sport_type: str = ""
     game_time: str = ""
     game_state: dict[str, Any] = field(default_factory=_default_game_state)
@@ -102,6 +104,8 @@ class DaemonState:
             "last_updated": self.last_updated,
             "home_team": self.home_team,
             "away_team": self.away_team,
+            "home_team_tricode": self.home_team_tricode,
+            "away_team_tricode": self.away_team_tricode,
             "sport_type": self.sport_type,
             "game_time": self.game_time,
             "game_state": self.game_state,
@@ -122,6 +126,8 @@ class DaemonState:
             last_updated=data.get("last_updated", ""),
             home_team=data.get("home_team", ""),
             away_team=data.get("away_team", ""),
+            home_team_tricode=data.get("home_team_tricode", ""),
+            away_team_tricode=data.get("away_team_tricode", ""),
             sport_type=data.get("sport_type", ""),
             game_time=data.get("game_time", ""),
             game_state=data.get("game_state", {}),
@@ -250,22 +256,28 @@ class TrialHandler:
         # Initialize state (preserve session key from connection)
         balance = await trial.get_balance()
 
-        # Fetch trial metadata (home/away teams, sport, game time)
+        # Fetch trial metadata (home/away teams, tricodes, sport, game time)
         home_team = ""
         away_team = ""
+        home_team_tricode = ""
+        away_team_tricode = ""
         sport_type = ""
         game_time = ""
         try:
             meta = await trial.get_trial_metadata()
             home_team = meta.home_team
             away_team = meta.away_team
+            home_team_tricode = meta.metadata.get("home_team_tricode", "")
+            away_team_tricode = meta.metadata.get("away_team_tricode", "")
             sport_type = meta.sport_type
             game_time = meta.game_time.isoformat() if meta.game_time else ""
             logger.info(
-                "Trial %s: %s vs %s (%s)",
+                "Trial %s: %s (%s) vs %s (%s) [%s]",
                 self.trial_id,
                 home_team,
+                home_team_tricode,
                 away_team,
+                away_team_tricode,
                 sport_type,
             )
         except Exception as e:
@@ -289,6 +301,8 @@ class TrialHandler:
             last_event_sequence=resume_sequence,
             home_team=home_team,
             away_team=away_team,
+            home_team_tricode=home_team_tricode,
+            away_team_tricode=away_team_tricode,
             sport_type=sport_type,
             game_time=game_time,
         )

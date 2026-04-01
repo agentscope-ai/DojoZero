@@ -261,14 +261,18 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
     odds = state.get("current_odds", {})
     home_team = state.get("home_team", "")
     away_team = state.get("away_team", "")
+    home_tri = state.get("home_team_tricode", "")
+    away_tri = state.get("away_team_tricode", "")
 
     print(f"Trial: {state.get('trial_id', 'unknown')}")
     if home_team and away_team:
         sport = state.get("sport_type", "")
         game_time = state.get("game_time", "")
-        matchup = f"Game: {away_team} @ {home_team}"
+        home_display = f"{home_team} ({home_tri})" if home_tri else home_team
+        away_display = f"{away_team} ({away_tri})" if away_tri else away_team
+        matchup = f"Game: {away_display} @ {home_display}"
         if sport:
-            matchup += f" ({sport})"
+            matchup += f" [{sport}]"
         if game_time:
             matchup += f" - {game_time}"
         print(matchup)
@@ -279,13 +283,15 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
     else:
         print(f"Status: {status_label} (daemon not running)")
 
+    # Use tricodes for compact score/odds, fall back to full name or "Home"/"Away"
+    home_label = home_tri or home_team or "Home"
+    away_label = away_tri or away_team or "Away"
+
     if game_state:
         home_score = game_state.get("home_score", "?")
         away_score = game_state.get("away_score", "?")
         period = game_state.get("period", game_state.get("quarter", "?"))
         clock = game_state.get("clock", game_state.get("time", ""))
-        home_label = home_team or "Home"
-        away_label = away_team or "Away"
         print(
             f"Score: {home_label} {home_score} - {away_label} {away_score} (Q{period} {clock})"
         )
@@ -293,8 +299,6 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
     if odds:
         home_prob = odds.get("home_probability", 0)
         away_prob = odds.get("away_probability", 0)
-        home_label = home_team or "Home"
-        away_label = away_team or "Away"
         print(f"Odds: {home_label} {home_prob:.0%}, {away_label} {away_prob:.0%}")
 
     print(f"Balance: ${state.get('balance', 0):.2f}")
