@@ -8,6 +8,7 @@ are valid and their model endpoints work correctly.
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -23,6 +24,7 @@ from dojozero.agents import (
     LLMConfig,
     AgentConfig,
 )
+from dojozero.agents._config import ModelType
 from dojozero.betting._agent import BettingAgent
 from dojozero.core import StreamEvent
 
@@ -238,6 +240,109 @@ class TestAgentConfigLoading:
             assert isinstance(single_config["llm"], dict), (
                 "Expanded config 'llm' should be a dict"
             )
+
+
+class TestCreateModelFlags:
+    """Unit tests for create_model() constructor flags (no network calls)."""
+
+    _FAKE_KEY_ENV = "_TEST_FAKE_API_KEY"
+
+    @pytest.fixture(autouse=True)
+    def _set_fake_key(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(self._FAKE_KEY_ENV, "sk-fake")
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ["qwen3.5-plus", "qwen3.5-max"],
+        ids=lambda n: n,
+    )
+    def test_dashscope_qwen35_multimodal_and_no_stream(self, model_name: str):
+        """qwen3.5-* models must set multimodality=True and stream=False."""
+        cfg: LLMConfig = {
+            "model_type": "dashscope",
+            "model_name": model_name,
+            "api_key_env": self._FAKE_KEY_ENV,
+        }
+        with pytest.MonkeyPatch.context() as mp:
+            from unittest.mock import MagicMock
+
+            sentinel = MagicMock()
+            mp.setattr(
+                "dojozero.agents._config.DashScopeChatModel",
+                sentinel,
+            )
+            create_model(cfg)
+            sentinel.assert_called_once()
+            kwargs = sentinel.call_args[1]
+            assert kwargs["multimodality"] is True
+            assert kwargs["stream"] is False
+
+    def test_dashscope_non_qwen35_no_multimodality(self):
+        """Non-qwen3.5 dashscope models must NOT force multimodality."""
+        cfg: LLMConfig = {
+            "model_type": "dashscope",
+            "model_name": "qwen-max",
+            "api_key_env": self._FAKE_KEY_ENV,
+        }
+        with pytest.MonkeyPatch.context() as mp:
+            from unittest.mock import MagicMock
+
+            sentinel = MagicMock()
+            mp.setattr(
+                "dojozero.agents._config.DashScopeChatModel",
+                sentinel,
+            )
+            create_model(cfg)
+            kwargs = sentinel.call_args[1]
+            assert kwargs.get("multimodality") is None
+            assert kwargs["stream"] is False
+
+    @pytest.mark.parametrize(
+        "model_type,cls_attr",
+        [
+            ("openai", "OpenAIChatModel"),
+            ("anthropic", "AnthropicChatModel"),
+            ("gemini", "GeminiChatModel"),
+        ],
+    )
+    def test_other_providers_stream_false(
+        self,
+        model_type: ModelType,
+        cls_attr: str,
+    ):
+        """All non-dashscope providers must also pass stream=False."""
+        cfg: LLMConfig = {
+            "model_type": cast(ModelType, model_type),
+            "model_name": "test-model",
+            "api_key_env": self._FAKE_KEY_ENV,
+        }
+        with pytest.MonkeyPatch.context() as mp:
+            from unittest.mock import MagicMock
+
+            sentinel = MagicMock()
+            mp.setattr(f"dojozero.agents._config.{cls_attr}", sentinel)
+            create_model(cfg)
+            sentinel.assert_called_once()
+            kwargs = sentinel.call_args[1]
+            assert kwargs["stream"] is False
+
+    def test_grok_stream_false(self):
+        """Grok (via OpenAIChatModel) must pass stream=False."""
+        cfg: LLMConfig = {
+            "model_type": "grok",
+            "model_name": "grok-3",
+            "api_key_env": self._FAKE_KEY_ENV,
+        }
+        with pytest.MonkeyPatch.context() as mp:
+            from unittest.mock import MagicMock
+
+            sentinel = MagicMock()
+            mp.setattr("dojozero.agents._config.OpenAIChatModel", sentinel)
+            create_model(cfg)
+            sentinel.assert_called_once()
+            kwargs = sentinel.call_args[1]
+            assert kwargs["stream"] is False
+            assert kwargs["client_kwargs"]["base_url"] == "https://api.x.ai/v1"
 
 
 class TestModelCreation:
