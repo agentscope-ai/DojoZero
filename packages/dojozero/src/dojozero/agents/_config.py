@@ -278,7 +278,10 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
     if model_type in "grok":
         grok_client_kwargs: dict[str, Any] = {"base_url": "https://api.x.ai/v1"}
         return OpenAIChatModel(
-            model_name=model_name, api_key=api_key, client_kwargs=grok_client_kwargs
+            model_name=model_name,
+            api_key=api_key,
+            stream=False,
+            client_kwargs=grok_client_kwargs,
         )
     elif model_type == "openai":
         if base_url:
@@ -286,14 +289,36 @@ def create_model(llm_config: LLMConfig) -> ChatModelBase:
         else:
             client_kwargs = {}
         return OpenAIChatModel(
-            model_name=model_name, api_key=api_key, client_kwargs=client_kwargs
+            model_name=model_name,
+            api_key=api_key,
+            stream=False,
+            client_kwargs=client_kwargs,
         )
     elif model_type == "dashscope":
-        return DashScopeChatModel(model_name=model_name, api_key=api_key)
+        # qwen3.5-* series requires the MultiModalConversation endpoint even
+        # for text-only usage.  The upstream agentscope SDK only auto-detects
+        # "-vl" / "qvq" suffixes/name patterns, so we explicitly opt-in here.
+        multimodality: bool | None = None
+        if model_name.startswith("qwen3.5"):
+            multimodality = True
+        return DashScopeChatModel(
+            model_name=model_name,
+            api_key=api_key,
+            multimodality=multimodality,
+            stream=False,
+        )
     elif model_type == "anthropic":
-        return AnthropicChatModel(model_name=model_name, api_key=api_key)
+        return AnthropicChatModel(
+            model_name=model_name,
+            api_key=api_key,
+            stream=False,
+        )
     elif model_type == "gemini":
-        return GeminiChatModel(model_name=model_name, api_key=api_key)
+        return GeminiChatModel(
+            model_name=model_name,
+            api_key=api_key,
+            stream=False,
+        )
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 

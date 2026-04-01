@@ -1,6 +1,6 @@
 llm:
   - model_type: dashscope
-    model_name: qwen3-max
+    model_name: qwen3.5-plus
     api_key_env: DOJOZERO_DASHSCOPE_API_KEY
     model_display_name: Qwen
     cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01Aw7RHL1p4f2kNbTEg_!!6000000005307-2-tps-200-200.png

@@ -516,12 +516,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
             summary_request = self._build_summary_request()
             if summary_request:
                 model = self._react_agent.model
-                original_stream = model.stream
-                model.stream = False
-                try:
-                    resp = await model(summary_request)
-                finally:
-                    model.stream = original_stream
+                resp = await model(summary_request)
                 resp_content = getattr(resp, "content", None)
                 events_summary, _ = _parse_response_content(resp_content)
                 if not events_summary:
