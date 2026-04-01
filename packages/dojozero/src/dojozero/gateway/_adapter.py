@@ -364,9 +364,7 @@ class ExternalAgentAdapter:
             start_time=now_us,
             duration=0,
             tags={
-                "agents": json.dumps(
-                    [a.model_dump() for a in agent_list.agents]
-                ),
+                "agents": json.dumps([a.model_dump() for a in agent_list.agents]),
             },
         )
         emit_span(span)
