@@ -76,7 +76,7 @@ class TestLoadConfig:
     def test_defaults(self):
         """Test loading with no overrides."""
         with patch.dict(os.environ, {}, clear=True):
-            config = load_config()
+            config = load_config(config_file=Path("/nonexistent/config.yaml"))
             assert config.dashboard_url == DEFAULT_DASHBOARD_URL
             assert config.dashboard_urls == []
             assert config.timeout == 30.0
