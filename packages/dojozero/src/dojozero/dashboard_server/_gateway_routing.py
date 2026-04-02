@@ -147,7 +147,9 @@ def create_gateway_router(
         gateway = gateway_router.get_gateway(trial_id)
         if gateway is None:
             # Reverse-proxy to the owning server if peer registry is available
-            if peer_registry is not None:
+            # but only if this request hasn't already been forwarded (prevent loops)
+            is_forwarded = request.headers.get("x-dojozero-forwarded") is not None
+            if peer_registry is not None and not is_forwarded:
                 try:
                     peer = await peer_registry.get_peer_for_trial(trial_id)
                     if peer is not None and peer.server_url:
@@ -225,9 +227,10 @@ async def _reverse_proxy_to_peer(
     if request.query_params:
         target_url = f"{target_url}?{request.query_params}"
 
-    # Forward headers (drop host to avoid conflicts)
+    # Forward headers (drop host to avoid conflicts, add forwarding marker)
     headers = dict(request.headers)
     headers.pop("host", None)
+    headers["x-dojozero-forwarded"] = "1"
 
     body = await request.body()
 

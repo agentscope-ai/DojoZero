@@ -50,7 +50,7 @@ from dojozero.core._types import RuntimeContext
 
 from ._cluster import ClusterConfig, LeaderElector, PeerRegistry, create_cluster
 from ._scheduler import SchedulerStore
-from ._trial_manager import TrialManager
+from ._trial_manager import QueuedTrialPhase, TrialManager
 from ._types import InitialTrialSourceDict
 
 LOGGER = logging.getLogger("dojozero.dashboard_server")
@@ -698,6 +698,23 @@ def create_dashboard_app(
                 "source": "dashboard",
             }
             result.append(trial_info)
+            seen_ids.add(trial_status.trial_id)
+
+        # In cluster mode, include trials from the shared store that
+        # this server doesn't have in memory (e.g. trials on other servers).
+        for record in state.orchestrator.store.list_trial_records():
+            if record.trial_id in seen_ids:
+                continue
+            trial_info = {
+                "id": record.trial_id,
+                "phase": (
+                    record.last_status.phase.value if record.last_status else "unknown"
+                ),
+                "metadata": asdict(record.spec.metadata),
+                "owner_server_id": record.owner_server_id,
+                "source": "store",
+            }
+            result.append(trial_info)
 
         return JSONResponse(content=result)
 
@@ -1005,7 +1022,8 @@ def create_dashboard_app(
         """
         # First check TrialManager for queued/pending trials
         queued = state.trial_manager.get_status(trial_id)
-        if queued is not None:
+        if queued is not None and queued.phase not in (QueuedTrialPhase.RUNNING,):
+            # Trial is queued but not yet running — return queue status
             return JSONResponse(
                 content={
                     "id": queued.trial_id,
@@ -1016,10 +1034,22 @@ def create_dashboard_app(
                 }
             )
 
-        # Fall back to Dashboard for active/completed trials
+        # Check orchestrator for active/completed trials (full status with actors)
         try:
             status = state.orchestrator.get_trial_status(trial_id)
         except TrialNotFoundError:
+            # In cluster mode, trial may live on another server
+            if queued is not None:
+                # We know about it in the queue but orchestrator doesn't have it yet
+                return JSONResponse(
+                    content={
+                        "id": queued.trial_id,
+                        "phase": queued.phase.value,
+                        "metadata": asdict(queued.spec.metadata),
+                        "error": queued.error,
+                        "source": "queue",
+                    }
+                )
             return JSONResponse(
                 content={"error": f"Trial '{trial_id}' not found"},
                 status_code=404,

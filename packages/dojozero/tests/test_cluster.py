@@ -475,3 +475,102 @@ async def test_notify_active_trials() -> None:
     assert peers[0].active_trials == 2
 
     await registry.stop()
+
+
+# ---------------------------------------------------------------------------
+# Gateway reverse-proxy loop prevention
+# ---------------------------------------------------------------------------
+
+
+def test_gateway_router_no_proxy_when_forwarded() -> None:
+    """Requests with X-Dojozero-Forwarded should not be re-proxied."""
+    from unittest.mock import AsyncMock
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from dojozero.dashboard_server._gateway_routing import (
+        GatewayRouter,
+        create_gateway_router,
+    )
+
+    gw_router = GatewayRouter()
+
+    # Create a mock peer registry that would return a peer
+    mock_registry = AsyncMock()
+    mock_peer = MagicMock()
+    mock_peer.server_url = "http://localhost:8001"
+    mock_registry.get_peer_for_trial = AsyncMock(return_value=mock_peer)
+
+    app = FastAPI()
+    router = create_gateway_router(gw_router, peer_registry=mock_registry)
+    app.include_router(router)
+    client = TestClient(app)
+
+    # With forwarding header: should return 404 immediately, no proxy attempt
+    resp = client.get(
+        "/api/trials/nonexistent-trial/agents",
+        headers={"X-Dojozero-Forwarded": "1"},
+    )
+    assert resp.status_code == 404
+    # The peer registry should NOT have been consulted
+    mock_registry.get_peer_for_trial.assert_not_called()
+
+
+def test_gateway_router_proxies_without_forwarded_header() -> None:
+    """Requests without X-Dojozero-Forwarded should attempt peer lookup."""
+    from unittest.mock import AsyncMock
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from dojozero.dashboard_server._gateway_routing import (
+        GatewayRouter,
+        create_gateway_router,
+    )
+
+    gw_router = GatewayRouter()
+
+    # Create a mock peer registry that returns None (no owner found)
+    mock_registry = AsyncMock()
+    mock_registry.get_peer_for_trial = AsyncMock(return_value=None)
+
+    app = FastAPI()
+    router = create_gateway_router(gw_router, peer_registry=mock_registry)
+    app.include_router(router)
+    client = TestClient(app)
+
+    resp = client.get("/api/trials/nonexistent-trial/agents")
+    assert resp.status_code == 404
+    # The peer registry SHOULD have been consulted
+    mock_registry.get_peer_for_trial.assert_called_once_with("nonexistent-trial")
+
+
+# ---------------------------------------------------------------------------
+# StaticPeerRegistry URL-based keying
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_static_peer_active_trials_keyed_by_url() -> None:
+    """Active trial counts should be keyed by URL internally."""
+    registry = StaticPeerRegistry(
+        server_id="server-1",
+        server_url="http://localhost:8000",
+        peer_urls=["http://localhost:8001"],
+    )
+    await registry.start()
+
+    # Update using server_id (mapped to URL internally)
+    await registry.update_active_trials("server-1", 3)
+    peers = await registry.get_peers()
+    self_peer = [p for p in peers if p.server_id == "server-1"][0]
+    assert self_peer.active_trials == 3
+
+    # Update remote peer using URL (stays as URL)
+    await registry.update_active_trials("http://localhost:8001", 7)
+    peers = await registry.get_peers()
+    remote_peer = [p for p in peers if p.server_url == "http://localhost:8001"][0]
+    assert remote_peer.active_trials == 7
+
+    await registry.stop()

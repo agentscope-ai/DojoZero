@@ -249,14 +249,21 @@ class PeerRegistry(Protocol):
 
 
 class StaticPeerRegistry:
-    """Peer registry from a static list of URLs (dev/testing)."""
+    """Peer registry from a static list of URLs (dev/testing).
+
+    In static mode we only know peer URLs, not their server IDs.
+    We use ``server_url`` as the canonical key everywhere so that
+    ``register_trial``, ``update_active_trials``, and ``get_peers``
+    are all consistent.  A ``_url_for_id`` helper maps a server_id
+    (like ``"server-1"``) to the corresponding URL when needed.
+    """
 
     def __init__(self, server_id: str, server_url: str, peer_urls: list[str]) -> None:
         self._server_id = server_id
         self._server_url = server_url
         self._peer_urls = peer_urls
         self._trial_owners: dict[str, str] = {}  # trial_id -> server_url
-        self._active_counts: dict[str, int] = {}  # server_id -> count
+        self._active_counts: dict[str, int] = {}  # server_url -> count
 
     async def start(self) -> None:
         logger.info(
@@ -266,12 +273,24 @@ class StaticPeerRegistry:
     async def stop(self) -> None:
         pass
 
+    def _url_for_id(self, server_id: str) -> str:
+        """Resolve a server_id to a URL.
+
+        If *server_id* matches our own id we return our URL.
+        If it looks like a URL already (contains ``://``) return as-is.
+        Otherwise fall back to returning it unchanged.
+        """
+        if server_id == self._server_id:
+            return self._server_url
+        # Already a URL (the common case for static peers)
+        return server_id
+
     async def get_peers(self) -> list[PeerInfo]:
         peers = [
             PeerInfo(
                 server_id=self._server_id,
                 server_url=self._server_url,
-                active_trials=self._active_counts.get(self._server_id, 0),
+                active_trials=self._active_counts.get(self._server_url, 0),
                 last_heartbeat=time.time(),
             )
         ]
@@ -295,19 +314,14 @@ class StaticPeerRegistry:
         return PeerInfo(
             server_id=owner_id,
             server_url=owner_url,
-            active_trials=self._active_counts.get(owner_id, 0),
+            active_trials=self._active_counts.get(owner_url, 0),
         )
 
     async def register_trial(self, trial_id: str, server_id: str) -> None:
-        # Map trial to the URL of the owning server
-        if server_id == self._server_id:
-            self._trial_owners[trial_id] = self._server_url
-        else:
-            # For static peers, server_id is the URL
-            self._trial_owners[trial_id] = server_id
+        self._trial_owners[trial_id] = self._url_for_id(server_id)
 
     async def update_active_trials(self, server_id: str, count: int) -> None:
-        self._active_counts[server_id] = count
+        self._active_counts[self._url_for_id(server_id)] = count
 
 
 class RedisPeerRegistry:
