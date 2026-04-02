@@ -1042,8 +1042,11 @@ def create_dashboard_app(
         """
         # First check TrialManager for queued/pending trials
         queued = state.trial_manager.get_status(trial_id)
-        if queued is not None and queued.phase not in (QueuedTrialPhase.RUNNING,):
-            # Trial is queued but not yet running — return queue status
+        if queued is not None and queued.phase in (
+            QueuedTrialPhase.PENDING,
+            QueuedTrialPhase.STARTING,
+        ):
+            # Trial is queued but not yet launched — return queue status
             return JSONResponse(
                 content={
                     "id": queued.trial_id,
