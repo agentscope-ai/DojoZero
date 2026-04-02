@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Clock, TrendingUp, Users, Play, Activity, Wifi, WifiOff } from "lucide-react";
 import { motion } from "framer-motion";
 import { useTrialWebSocket } from "../hooks/useTrialWebSocket";
+import AgentAvatar, { getAgentDisplayName } from "../components/AgentAvatar";
 
 export default function GameDetailPage() {
   const { trialId } = useParams();
@@ -334,24 +335,10 @@ function FeedItem({ event, gameInfo }) {
               <div style={{ marginTop: 8 }}>
                 {agents.map((agent, idx) => (
                   <div key={agent.agent_id} style={{ ...styles.infoDetail, marginTop: idx > 0 ? 6 : 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{
-                      width: 24,
-                      height: 24,
-                      borderRadius: '50%',
-                      background: agent.color || '#6B7280',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'white',
-                      fontSize: 11,
-                      fontWeight: 700,
-                      flexShrink: 0,
-                    }}>
-                      {agent.avatar || agent.agent_id?.[0]?.toUpperCase() || '?'}
-                    </div>
+                    <AgentAvatar agent={agent} size={24} borderRadius="50%" fontSize={11} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
-                        {agent.agent_id}
+                        {getAgentDisplayName(agent)}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                         {agent.model_display_name} ({agent.model})
@@ -673,14 +660,9 @@ function AgentCard({ agent }) {
 
   return (
     <div style={styles.agentCard}>
-      <div style={{
-        ...styles.agentAvatar,
-        background: agent.color || "#6B7280",
-      }}>
-        {agent.avatar || agent.name?.charAt(0) || "A"}
-      </div>
+      <AgentAvatar agent={agent} size={36} borderRadius={10} fontSize={14} />
       <div style={styles.agentInfo}>
-        <div style={styles.agentName}>{agent.name || "Unknown Agent"}</div>
+        <div style={styles.agentName}>{getAgentDisplayName(agent) || "Unknown Agent"}</div>
 
         {/* Show final statistics if game is completed */}
         {hasFinalStats ? (
@@ -775,14 +757,9 @@ function AgentRankings({ agents }) {
                 {index + 1}
               </div>
             </div>
-            <div style={{
-              ...styles.rankingAvatar,
-              background: agent.color || "#6B7280",
-            }}>
-              {agent.avatar || agent.name?.charAt(0) || "A"}
-            </div>
+            <AgentAvatar agent={agent} size={32} borderRadius={8} fontSize={13} />
             <div style={styles.rankingInfo}>
-              <div style={styles.rankingName}>{agent.name || "Unknown Agent"}</div>
+              <div style={styles.rankingName}>{getAgentDisplayName(agent) || "Unknown Agent"}</div>
               <div style={styles.rankingRecord}>
                 {agent.finalStats.wins || 0}W - {agent.finalStats.losses || 0}L
               </div>

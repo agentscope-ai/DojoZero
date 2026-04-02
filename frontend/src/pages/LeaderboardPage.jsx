@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Trophy, TrendingUp } from "lucide-react";
 import { useDataSource } from "../hooks/useDataSource";
+import AgentAvatar, { getAgentDisplayName } from "../components/AgentAvatar";
 
 // Podium Display for top 3
 function PodiumSection({ leaderboardData }) {
@@ -45,17 +46,11 @@ function PodiumSection({ leaderboardData }) {
               transition={{ duration: 0.5, delay }}
             >
               {/* Agent Avatar */}
-              <div style={{
-                ...styles.podiumAvatar,
-                background: entry.agent.color,
-                boxShadow: `0 0 20px ${entry.agent.color}40`,
-              }}>
-                {entry.agent.avatar}
-              </div>
+              <AgentAvatar agent={entry.agent} size={64} borderRadius={16} fontSize={24} />
 
               {/* Agent Info */}
               <div style={styles.podiumInfo}>
-                <span style={styles.podiumName}>{entry.agent.persona || entry.agent.agent_id}</span>
+                <span style={styles.podiumName}>{getAgentDisplayName(entry.agent)}</span>
                 <span style={styles.podiumWinnings}>
                   +${entry.winnings.toLocaleString()}
                 </span>
@@ -188,14 +183,9 @@ function RankingTable({ selectedAgent, setSelectedAgent, leaderboardData }) {
               </td>
               <td>
                 <div style={styles.agentCell}>
-                  <span style={{
-                    ...styles.agentAvatar,
-                    background: entry.agent.color,
-                  }}>
-                    {entry.agent.avatar}
-                  </span>
+                  <AgentAvatar agent={entry.agent} size={36} borderRadius={10} fontSize={14} />
                   <div>
-                    <span style={styles.agentName}>{entry.agent.persona || entry.agent.agent_id}</span>
+                    <span style={styles.agentName}>{getAgentDisplayName(entry.agent)}</span>
                     <span style={styles.agentModel}>{entry.agent.model}</span>
                   </div>
                 </div>
@@ -247,14 +237,9 @@ function AgentDetailPanel({ agent }) {
     >
       <div style={styles.detailHeader}>
         <div style={styles.detailAgent}>
-          <span style={{
-            ...styles.detailAvatar,
-            background: agent.agent.color,
-          }}>
-            {agent.agent.avatar}
-          </span>
+          <AgentAvatar agent={agent.agent} size={48} borderRadius={12} fontSize={18} />
           <div>
-            <h3 style={styles.detailName}>{agent.agent.persona || agent.agent.agent_id}</h3>
+            <h3 style={styles.detailName}>{getAgentDisplayName(agent.agent)}</h3>
             <span style={styles.detailModel}>Model: {agent.agent.model}</span>
           </div>
         </div>
