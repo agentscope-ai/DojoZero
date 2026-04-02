@@ -120,7 +120,7 @@ def _ensure_daemon_running(profile: str | None) -> bool:
         time.sleep(0.3)
         if is_daemon_running():
             return True
-    print("Error: Daemon failed to start. Check logs.", file=sys.stderr)
+    print("Error: Failed to start. Check logs.", file=sys.stderr)
     return False
 
 
@@ -153,7 +153,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             print(f"Error: {e.message}", file=sys.stderr)
             return 1
         except ConnectionError as e:
-            print(f"Cannot connect to daemon: {e}", file=sys.stderr)
+            print(f"Cannot connect: {e}", file=sys.stderr)
             return 1
 
     # Foreground mode: run daemon in-process with a single trial
@@ -186,20 +186,20 @@ def cmd_start(args: argparse.Namespace) -> int:
     try:
         asyncio.run(_run_foreground())
     except KeyboardInterrupt:
-        print("\nStopping daemon...")
+        print("\nStopping...")
     return 0
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
-    """Stop a trial or the entire daemon."""
+    """Stop a trial or the entire background process."""
     trial_id = getattr(args, "trial_id", None)
 
     if not is_daemon_running():
-        print("Daemon not running")
+        print("Not running")
         return 1
 
     if trial_id:
-        # Disconnect from a specific trial (keep daemon running)
+        # Disconnect from a specific trial (keep background process running)
         client = RPCClient(SOCKET_PATH)
         try:
             client.call_sync("leave", trial_id=trial_id)
@@ -209,12 +209,12 @@ def cmd_stop(args: argparse.Namespace) -> int:
             print(f"Error: {e.message}", file=sys.stderr)
             return 1
     else:
-        # Stop the entire daemon
+        # Stop the entire background process
         if stop_daemon():
-            print("Daemon stopped")
+            print("Stopped")
             return 0
         else:
-            print("Failed to stop daemon", file=sys.stderr)
+            print("Failed to stop", file=sys.stderr)
             return 1
 
 
@@ -279,9 +279,9 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
     print(f"Agent: {state.get('agent_id', 'unknown')}")
     status_label = state.get("status", "unknown")
     if daemon_running:
-        print(f"Status: {status_label} (daemon running)")
+        print(f"Status: {status_label} (running)")
     else:
-        print(f"Status: {status_label} (daemon not running)")
+        print(f"Status: {status_label} (not running)")
 
     # Use tricodes for compact score/odds, fall back to full name or "Home"/"Away"
     home_label = home_tri or home_team or "Home"
@@ -383,7 +383,7 @@ def cmd_bet(args: argparse.Namespace) -> int:
         return 1
 
     if not is_daemon_running():
-        print("Daemon not running. Use 'start <trial-id>' first.", file=sys.stderr)
+        print("Not running. Use 'start <trial-id>' first.", file=sys.stderr)
         return 1
 
     client = RPCClient(SOCKET_PATH)
@@ -572,7 +572,7 @@ def cmd_bets(args: argparse.Namespace) -> int:
 def cmd_list(_: argparse.Namespace) -> int:
     """List all connected trials."""
     if not is_daemon_running():
-        print("Daemon not running")
+        print("Not running")
         return 0
 
     client = RPCClient(SOCKET_PATH)
@@ -807,7 +807,7 @@ def cmd_daemon_start(args: argparse.Namespace) -> int:
     profile_dir = get_profile_dir(profile)
 
     if is_daemon_running():
-        print("Unified daemon already running")
+        print("Already running")
         return 1
 
     if not has_api_key(profile):
@@ -841,7 +841,7 @@ def cmd_daemon_start(args: argparse.Namespace) -> int:
                 env=env,
             )
         profile_msg = f" (profile: {profile})" if profile else ""
-        print(f"Started unified daemon{profile_msg} (background)")
+        print(f"Started{profile_msg} (background)")
         print(f"Logs: {log_file}")
         return 0
 
@@ -855,7 +855,7 @@ def cmd_daemon_start(args: argparse.Namespace) -> int:
     try:
         asyncio.run(daemon.start())
     except KeyboardInterrupt:
-        print("\nStopping daemon...")
+        print("\nStopping...")
     return 0
 
 
@@ -1033,7 +1033,7 @@ def create_parser() -> argparse.ArgumentParser:
     """Create argument parser."""
     parser = argparse.ArgumentParser(
         prog="dojozero-agent",
-        description="DojoZero agent daemon for persistent trial connections",
+        description="DojoZero agent for persistent trial connections",
     )
     parser.add_argument(
         "--state-dir",
@@ -1048,7 +1048,7 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # start
-    p_start = subparsers.add_parser("start", help="Start daemon for a trial")
+    p_start = subparsers.add_parser("start", help="Join a trial")
     p_start.add_argument("trial_id", help="Trial ID to connect to")
     p_start.add_argument(
         "--api-key",
@@ -1068,21 +1068,21 @@ def create_parser() -> argparse.ArgumentParser:
     p_start.set_defaults(func=cmd_start)
 
     # stop
-    p_stop = subparsers.add_parser("stop", help="Stop the daemon")
+    p_stop = subparsers.add_parser("stop", help="Disconnect from a trial or stop")
     p_stop.add_argument(
         "trial_id", nargs="?", help="Trial ID (optional if only one running)"
     )
     p_stop.set_defaults(func=cmd_stop)
 
     # status
-    p_status = subparsers.add_parser("status", help="Show daemon status")
+    p_status = subparsers.add_parser("status", help="Show trial status")
     p_status.add_argument(
         "trial_id", nargs="?", help="Trial ID (optional if only one running)"
     )
     p_status.set_defaults(func=cmd_status)
 
     # logs
-    p_logs = subparsers.add_parser("logs", help="Show daemon logs")
+    p_logs = subparsers.add_parser("logs", help="Show logs")
     p_logs.add_argument(
         "trial_id", nargs="?", help="Trial ID (optional if only one running)"
     )
@@ -1186,9 +1186,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p_discover.set_defaults(func=cmd_discover)
 
-    # daemon - start daemon process (internal, used by auto-start)
+    # daemon - start background process (internal, used by auto-start)
     p_daemon = subparsers.add_parser(
-        "daemon", help="Start daemon process (usually auto-started by 'start')"
+        "daemon", help="Start background process (usually auto-started by 'start')"
     )
     p_daemon.add_argument(
         "--background",
