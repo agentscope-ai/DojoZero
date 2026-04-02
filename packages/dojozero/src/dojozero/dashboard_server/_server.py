@@ -338,23 +338,32 @@ def create_dashboard_app(
             peer_registry=peer_registry_instance,
         )
 
-        # Create schedule manager — gated on leadership in cluster mode
-        schedule_manager = None
-        should_schedule = not no_scheduler
-        if should_schedule and leader_elector_instance is not None:
-            should_schedule = leader_elector_instance.is_leader()
-            if not should_schedule:
-                LOGGER.info("ScheduleManager disabled: this server is not the leader")
-
-        if should_schedule:
+        # Helper to create and start the ScheduleManager
+        def _create_schedule_manager() -> Any:
             from ._scheduler import ScheduleManager
 
-            schedule_manager = ScheduleManager(
+            return ScheduleManager(
                 trial_manager=trial_manager,
                 store=scheduler_store,
                 peer_registry=peer_registry_instance,
                 server_id=server_id,
             )
+
+        # Create schedule manager — gated on leadership in cluster mode
+        schedule_manager = None
+        if not no_scheduler:
+            if leader_elector_instance is not None:
+                # Wait for the first election round to complete
+                LOGGER.info("Waiting for leader election result...")
+                await leader_elector_instance.wait_for_leader()
+                if leader_elector_instance.is_leader():
+                    schedule_manager = _create_schedule_manager()
+                else:
+                    LOGGER.info(
+                        "ScheduleManager deferred: this server is not the leader"
+                    )
+            else:
+                schedule_manager = _create_schedule_manager()
 
         # Store state on app.state instead of global variable
         app.state.server_state = DashboardServerState(
@@ -375,14 +384,57 @@ def create_dashboard_app(
         # Start schedule manager
         if schedule_manager is not None:
             await schedule_manager.start()
-            LOGGER.info("ScheduleManager started")
-        else:
-            if no_scheduler:
-                LOGGER.info("ScheduleManager disabled via --no-scheduler")
-            elif leader_elector_instance is not None:
-                LOGGER.info("ScheduleManager disabled (not leader)")
-            else:
-                LOGGER.info("ScheduleManager disabled")
+            LOGGER.info("ScheduleManager started (this server is leader)")
+        elif no_scheduler:
+            LOGGER.info("ScheduleManager disabled via --no-scheduler")
+
+        # Background task: watch for leadership changes in cluster mode
+        leader_watch_task: asyncio.Task[None] | None = None
+        if leader_elector_instance is not None and not no_scheduler:
+
+            async def _leader_watch() -> None:
+                """Monitor leadership changes and start/stop ScheduleManager."""
+                state = app.state.server_state
+                while True:
+                    await asyncio.sleep(5)
+                    is_leader = leader_elector_instance.is_leader()  # type: ignore[union-attr]
+                    has_scheduler = state.schedule_manager is not None
+
+                    if is_leader and not has_scheduler:
+                        LOGGER.info("Acquired leadership — starting ScheduleManager")
+                        mgr = _create_schedule_manager()
+                        await mgr.start()
+                        state.schedule_manager = mgr
+                        # Register initial trial sources
+                        if initial_trial_sources:
+                            from ._scheduler import TrialSourceConfig as _TSC
+
+                            for src in initial_trial_sources:
+                                sid = src["source_id"]
+                                cfg_data = src.get("config", {})
+                                cfg = _TSC(**cfg_data)
+                                existing = mgr.get_source(sid)
+                                if existing is None:
+                                    try:
+                                        mgr.register_source(
+                                            source_id=sid,
+                                            sport_type=src["sport_type"],
+                                            config=cfg,
+                                        )
+                                    except ValueError:
+                                        pass
+
+                    elif not is_leader and has_scheduler:
+                        LOGGER.info("Lost leadership — stopping ScheduleManager")
+                        try:
+                            mgr_to_stop = state.schedule_manager
+                            state.schedule_manager = None
+                            if mgr_to_stop is not None:
+                                await mgr_to_stop.stop()
+                        except Exception as e:
+                            LOGGER.error("Error stopping scheduler: %s", e)
+
+            leader_watch_task = asyncio.create_task(_leader_watch())
 
         # Register initial trial sources if provided
         if initial_trial_sources and schedule_manager is not None:
@@ -506,11 +558,21 @@ def create_dashboard_app(
         )
         yield
 
+        # Cancel leader watch task
+        if leader_watch_task is not None:
+            leader_watch_task.cancel()
+            try:
+                await leader_watch_task
+            except asyncio.CancelledError:
+                pass
+
         # Graceful shutdown: stop schedule manager first
-        if schedule_manager is not None:
+        # Use app state because leadership changes may have swapped the manager
+        active_scheduler = getattr(app.state.server_state, "schedule_manager", None)
+        if active_scheduler is not None:
             LOGGER.info("Dashboard Server shutting down - stopping schedule manager")
             try:
-                await schedule_manager.stop()
+                await active_scheduler.stop()
             except Exception as e:
                 LOGGER.error("Error stopping schedule manager: %s", e)
 
