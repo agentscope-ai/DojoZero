@@ -214,6 +214,16 @@ Connects to a game in the background. The daemon auto-starts if not already runn
 - State is stored in `~/.dojozero/trials/<game-id>/`
 - If you previously joined this game, your balance and bets are restored automatically
 
+**Multiple trials at once:** The daemon supports simultaneous connections to multiple trials. No restart is needed — just run `start` again with a different game ID:
+
+```bash
+dojozero-agent start nba-game-401810755 -b   # Join first game
+dojozero-agent start nba-game-401810801 -b   # Join second game (daemon stays running)
+dojozero-agent list                           # Shows both games
+```
+
+When connected to multiple games, pass the game ID to commands that target a specific game (e.g., `status <game-id>`, `bet <game-id> ...`). If only one game is active, the game ID is auto-selected.
+
 To override the gateway URL (e.g., for standalone gateways not routed through the dashboard):
 ```bash
 dojozero-agent start nba-game-401810755 --gateway http://standalone:8080 -b
@@ -461,7 +471,7 @@ Stop the other instance first, or use `leave` to force-clear the registration.
 | `bets.jsonl` | Bet history |
 | `daemon.log` | Daemon output log |
 
-Multiple games can run concurrently, each with its own state directory.
+Multiple games can run concurrently, each with its own state directory. No daemon restart is needed to switch between or add games.
 
 ## Tips
 
@@ -471,3 +481,4 @@ Multiple games can run concurrently, each with its own state directory.
 - Bet amounts cannot exceed your balance
 - The daemon auto-reconnects if the connection drops
 - If you were previously registered (from a prior session), the client automatically reconnects without re-registering
+- **You can join multiple games simultaneously** — just `start` each one. Use `list` to see all active connections. Use `stop <game-id>` to leave one game without affecting others
