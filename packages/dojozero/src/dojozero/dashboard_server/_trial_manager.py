@@ -30,6 +30,7 @@ from dojozero.dashboard_server._jsonl_utils import (
 from dojozero.gateway import NoOpAuthenticator
 
 if TYPE_CHECKING:
+    from ._cluster import PeerRegistry
     from ._gateway_routing import GatewayRouter
     from dojozero.gateway import AgentAuthenticator
 
@@ -90,6 +91,8 @@ class TrialManager:
         gateway_router: "GatewayRouter | None" = None,
         gateway_grace_period: float = 5.0,
         authenticator: "AgentAuthenticator | None" = None,
+        server_id: str | None = None,
+        peer_registry: "PeerRegistry | None" = None,
     ):
         """Initialize the TrialManager.
 
@@ -117,6 +120,8 @@ class TrialManager:
         self._gateway_router = gateway_router
         self._gateway_grace_period = gateway_grace_period
         self._authenticator = authenticator
+        self._server_id = server_id
+        self._peer_registry: PeerRegistry | None = peer_registry
 
         # Queue for pending trials
         self._pending: asyncio.Queue[QueuedTrial] = asyncio.Queue()
@@ -537,6 +542,17 @@ class TrialManager:
             if status.phase not in (TrialPhase.RUNNING, TrialPhase.STARTING):
                 continue
 
+            # Owner-aware resume: only resume trials owned by this server
+            # or owned by no server (legacy / standalone mode).
+            if self._server_id is not None and record.owner_server_id is not None:
+                if record.owner_server_id != self._server_id:
+                    self._logger.debug(
+                        "Skipping trial '%s' owned by different server '%s'",
+                        trial_id,
+                        record.owner_server_id,
+                    )
+                    continue
+
             # Check if trial is stale (based on checkpoint timestamp or skip)
             checkpoints = store.list_checkpoints(trial_id)
             if checkpoints:
@@ -568,7 +584,9 @@ class TrialManager:
                         last_error="Server shutdown without checkpoint - cannot resume",
                     )
                     failed_record = TrialRecord(
-                        spec=record.spec, last_status=failed_status
+                        spec=record.spec,
+                        last_status=failed_status,
+                        owner_server_id=record.owner_server_id,
                     )
                     store.upsert_trial_record(failed_record)
                 continue
@@ -1049,6 +1067,14 @@ class TrialManager:
         """Number of currently running trials."""
         return len(self._running_tasks)
 
+    def _notify_active_trials(self) -> None:
+        """Push current running count to peer registry (fire-and-forget)."""
+        if self._peer_registry is not None and self._server_id is not None:
+            count = self.running_count
+            asyncio.ensure_future(
+                self._peer_registry.update_active_trials(self._server_id, count)
+            )
+
     async def _worker_loop(self) -> None:
         """Background worker that processes the queue."""
         while not self._shutdown_event.is_set():
@@ -1076,6 +1102,7 @@ class TrialManager:
                 # Launch trial in background task
                 task = asyncio.create_task(self._run_trial(queued))
                 self._running_tasks[queued.trial_id] = task
+                self._notify_active_trials()
                 self._logger.info(
                     "Launched trial '%s' (running=%d/%d, pending=%d)",
                     queued.trial_id,
@@ -1103,6 +1130,8 @@ class TrialManager:
                 len(self._running_tasks),
                 self._max_concurrent,
             )
+        if completed:
+            self._notify_active_trials()
 
     async def _monitor_resumed_trial(self, queued: QueuedTrial) -> None:
         """Monitor a resumed trial until completion.
@@ -1251,7 +1280,9 @@ class TrialManager:
             if queued.launch_coro_factory:
                 await queued.launch_coro_factory()
             else:
-                await self._orchestrator.launch_trial(queued.spec)
+                await self._orchestrator.launch_trial(
+                    queued.spec, owner_server_id=self._server_id
+                )
 
             queued.phase = QueuedTrialPhase.RUNNING
             self._logger.info("Trial '%s' is now running", trial_id)

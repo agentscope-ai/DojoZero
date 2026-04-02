@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -35,6 +35,9 @@ from dojozero.utils import utc_to_us_date, us_game_day_today
 from ._game_discovery import GameInfo, NBAGameFetcher, NCAAGameFetcher, NFLGameFetcher
 from ._trial_manager import TrialManager
 from ._types import GameMetadata, ScheduledGameMetadata
+
+if TYPE_CHECKING:
+    from ._cluster import PeerRegistry
 
 LOGGER = logging.getLogger("dojozero.scheduler")
 
@@ -342,6 +345,8 @@ class ScheduleManager:
         sync_interval_seconds: float = 300.0,  # 5 minutes default
         max_concurrent_launches: int = 10,  # Max trials to launch concurrently
         grace_period_seconds: float = 60.0,  # Safety net (self-stop is primary at 10s)
+        peer_registry: "PeerRegistry | None" = None,
+        server_id: str | None = None,
     ):
         """Initialize the ScheduleManager.
 
@@ -355,12 +360,16 @@ class ScheduleManager:
             grace_period_seconds: Grace period in seconds for games that are already
                 finished when monitoring starts. This allows time for final data
                 collection before stopping the trial. Default: 300 (5 minutes)
+            peer_registry: Optional peer registry for multi-server trial assignment.
+            server_id: This server's identifier (for cluster mode).
         """
         self._trial_manager = trial_manager
         self._store = store
         self._sync_interval = sync_interval_seconds
         self._max_concurrent_launches = max_concurrent_launches
         self._grace_period_seconds = grace_period_seconds
+        self._peer_registry: PeerRegistry | None = peer_registry
+        self._server_id = server_id
 
         # All scheduled trials by ID
         self._schedules: dict[str, ScheduledTrial] = {}
@@ -395,6 +404,9 @@ class ScheduleManager:
         self._ncaa_fetcher = NCAAGameFetcher()
         self._nfl_fetcher = NFLGameFetcher()
 
+        # Shared HTTP session for remote submissions (created in start())
+        self._http_session: Any = None  # aiohttp.ClientSession
+
     async def start(self) -> None:
         """Start the schedule manager."""
         self._shutdown_event.clear()
@@ -419,6 +431,13 @@ class ScheduleManager:
                     source_id = s.metadata.get("source_id")
                     if source_id:
                         self._scheduled_events[(source_id, s.game_id)] = s.schedule_id
+
+        # Create shared HTTP session for remote submissions
+        import aiohttp
+
+        self._http_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30),
+        )
 
         # Start background tasks
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
@@ -453,6 +472,11 @@ class ScheduleManager:
         self._scheduler_task = None
         self._monitor_task = None
         self._sync_task = None
+
+        # Close shared HTTP session
+        if self._http_session is not None:
+            await self._http_session.close()
+            self._http_session = None
 
         # Save state
         self._persist()
@@ -1357,15 +1381,86 @@ class ScheduleManager:
             # with sport_type and espn_game_id already populated by the builder.
             # No need to add schedule_id/game_id - they're tracked in ScheduledTrial.
 
-            # Submit to trial manager
-            await self._trial_manager.submit(spec)
+            # Pick target server if peer registry available
+            target_peer = None
+            if self._peer_registry is not None:
+                try:
+                    peers = await self._peer_registry.get_peers()
+                    if peers:
+                        # Pick peer with fewest active trials
+                        target_peer = min(peers, key=lambda p: p.active_trials)
+                except Exception as e:
+                    LOGGER.warning("Failed to query peers for scheduling: %s", e)
+
+            # Submit to target server
+            if (
+                target_peer is not None
+                and self._server_id is not None
+                and target_peer.server_id != self._server_id
+            ):
+                # Remote submission via HTTP
+                remote_url = f"{target_peer.server_url.rstrip('/')}/api/trials"
+                payload = {
+                    "trial_id": trial_id,
+                    "scenario": {
+                        "name": scheduled.scenario_name,
+                        "config": scheduled.scenario_config,
+                    },
+                }
+                try:
+                    async with self._http_session.post(
+                        remote_url,
+                        json=payload,
+                        headers={
+                            "X-Dojozero-Forwarded": self._server_id or "scheduler"
+                        },
+                    ) as resp:
+                        if resp.status not in (200, 201):
+                            body = await resp.text()
+                            raise RuntimeError(
+                                f"Remote submission failed ({resp.status}): {body}"
+                            )
+                    LOGGER.info(
+                        "Submitted trial '%s' to remote peer '%s'",
+                        trial_id,
+                        target_peer.server_id,
+                    )
+                except Exception as e:
+                    LOGGER.warning(
+                        "Remote submission to '%s' failed, falling back to local: %s",
+                        target_peer.server_id,
+                        e,
+                    )
+                    await self._trial_manager.submit(spec)
+            else:
+                # Local submission
+                await self._trial_manager.submit(spec)
+
+            # Register trial ownership in peer registry
+            if self._peer_registry is not None:
+                owner = (
+                    target_peer.server_id
+                    if target_peer is not None
+                    and self._server_id is not None
+                    and target_peer.server_id != self._server_id
+                    else self._server_id or ""
+                )
+                try:
+                    await self._peer_registry.register_trial(trial_id, owner)
+                except Exception as e:
+                    LOGGER.debug("Failed to register trial ownership: %s", e)
 
             scheduled.launched_trial_id = trial_id
             scheduled.phase = ScheduledTrialPhase.RUNNING
             self._persist()
 
-            # Register game result callback on trial's DataHub
-            self._register_game_result_callback(scheduled)
+            # Register game result callback on trial's DataHub (local trials only)
+            if (
+                target_peer is None
+                or self._server_id is None
+                or target_peer.server_id == self._server_id
+            ):
+                self._register_game_result_callback(scheduled)
 
             LOGGER.info(
                 "Launched trial '%s' for schedule '%s'",

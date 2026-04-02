@@ -13,12 +13,13 @@ Refactored from core/_dashboard_server.py to separate server code from core abst
 import asyncio
 import logging
 import os
+import platform
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request
 
 if TYPE_CHECKING:
     from dojozero.gateway import AgentAuthenticator
@@ -48,8 +49,9 @@ from dojozero.core._tracing import (
 )
 from dojozero.core._types import RuntimeContext
 
+from ._cluster import ClusterConfig, LeaderElector, PeerRegistry, create_cluster
 from ._scheduler import SchedulerStore
-from ._trial_manager import TrialManager
+from ._trial_manager import QueuedTrialPhase, TrialManager
 from ._types import InitialTrialSourceDict
 
 LOGGER = logging.getLogger("dojozero.dashboard_server")
@@ -143,6 +145,11 @@ class DashboardServerState:
     data_dir: Path | None = None  # Base directory for trial data files
     imported_modules: set[str] = field(default_factory=set)
     import_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    server_id: str | None = None
+    leader_elector: LeaderElector | None = None
+    peer_registry: PeerRegistry | None = None
+    http_session: Any = None  # aiohttp.ClientSession for cross-server forwarding
+    http_client: Any = None  # httpx.AsyncClient for cross-server forwarding
 
 
 def get_server_state(request: Request) -> DashboardServerState:
@@ -270,6 +277,7 @@ def create_dashboard_app(
     data_dir: str | Path | None = None,
     authenticator: "AgentAuthenticator | None" = None,
     no_scheduler: bool = False,
+    cluster_config: ClusterConfig | None = None,
 ) -> FastAPI:
     """Create the Dashboard Server FastAPI application.
 
@@ -296,13 +304,39 @@ def create_dashboard_app(
 
     # Create gateway router early so it can be passed to TrialManager
     gateway_router = None
+    peer_registry_instance: PeerRegistry | None = None
+    leader_elector_instance: LeaderElector | None = None
+    server_id: str | None = None
+
     if enable_gateway:
         from ._gateway_routing import GatewayRouter
 
         gateway_router = GatewayRouter()
 
+    # Set up cluster primitives if configured
+    if cluster_config is not None:
+        leader_elector_instance, peer_registry_instance = create_cluster(cluster_config)
+        server_id = cluster_config.server_id or platform.node()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Start cluster components
+        if leader_elector_instance is not None:
+            await leader_elector_instance.start()
+            LOGGER.info("Leader elector started (server_id=%s)", server_id)
+        if peer_registry_instance is not None:
+            await peer_registry_instance.start()
+            LOGGER.info("Peer registry started")
+
+        # Create shared HTTP clients for cross-server communication
+        import aiohttp
+        import httpx
+
+        shared_aiohttp_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30),
+        )
+        shared_httpx_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
+
         # Create trial manager with gateway router if enabled
         trial_manager = TrialManager(
             orchestrator=orchestrator,
@@ -312,17 +346,36 @@ def create_dashboard_app(
             stale_threshold_hours=stale_threshold_hours,
             gateway_router=gateway_router,
             authenticator=authenticator,
+            server_id=server_id,
+            peer_registry=peer_registry_instance,
         )
 
-        # Create schedule manager (unless disabled)
-        schedule_manager = None
-        if not no_scheduler:
+        # Helper to create and start the ScheduleManager
+        def _create_schedule_manager() -> Any:
             from ._scheduler import ScheduleManager
 
-            schedule_manager = ScheduleManager(
+            return ScheduleManager(
                 trial_manager=trial_manager,
                 store=scheduler_store,
+                peer_registry=peer_registry_instance,
+                server_id=server_id,
             )
+
+        # Create schedule manager — gated on leadership in cluster mode
+        schedule_manager = None
+        if not no_scheduler:
+            if leader_elector_instance is not None:
+                # Wait for the first election round to complete
+                LOGGER.info("Waiting for leader election result...")
+                await leader_elector_instance.wait_for_leader()
+                if leader_elector_instance.is_leader():
+                    schedule_manager = _create_schedule_manager()
+                else:
+                    LOGGER.info(
+                        "ScheduleManager deferred: this server is not the leader"
+                    )
+            else:
+                schedule_manager = _create_schedule_manager()
 
         # Store state on app.state instead of global variable
         app.state.server_state = DashboardServerState(
@@ -332,6 +385,11 @@ def create_dashboard_app(
             trace_backend=trace_backend,
             oss_backup=oss_backup,
             data_dir=Path(data_dir).resolve() if data_dir else None,
+            server_id=server_id,
+            leader_elector=leader_elector_instance,
+            peer_registry=peer_registry_instance,
+            http_session=shared_aiohttp_session,
+            http_client=shared_httpx_client,
         )
 
         # Start trial manager worker
@@ -340,9 +398,57 @@ def create_dashboard_app(
         # Start schedule manager
         if schedule_manager is not None:
             await schedule_manager.start()
-            LOGGER.info("ScheduleManager started")
-        else:
+            LOGGER.info("ScheduleManager started (this server is leader)")
+        elif no_scheduler:
             LOGGER.info("ScheduleManager disabled via --no-scheduler")
+
+        # Background task: watch for leadership changes in cluster mode
+        leader_watch_task: asyncio.Task[None] | None = None
+        if leader_elector_instance is not None and not no_scheduler:
+
+            async def _leader_watch() -> None:
+                """Monitor leadership changes and start/stop ScheduleManager."""
+                state = app.state.server_state
+                while True:
+                    await asyncio.sleep(5)
+                    is_leader = leader_elector_instance.is_leader()  # type: ignore[union-attr]
+                    has_scheduler = state.schedule_manager is not None
+
+                    if is_leader and not has_scheduler:
+                        LOGGER.info("Acquired leadership — starting ScheduleManager")
+                        mgr = _create_schedule_manager()
+                        await mgr.start()
+                        state.schedule_manager = mgr
+                        # Register initial trial sources
+                        if initial_trial_sources:
+                            from ._scheduler import TrialSourceConfig as _TSC
+
+                            for src in initial_trial_sources:
+                                sid = src["source_id"]
+                                cfg_data = src.get("config", {})
+                                cfg = _TSC(**cfg_data)
+                                existing = mgr.get_source(sid)
+                                if existing is None:
+                                    try:
+                                        mgr.register_source(
+                                            source_id=sid,
+                                            sport_type=src["sport_type"],
+                                            config=cfg,
+                                        )
+                                    except ValueError:
+                                        pass
+
+                    elif not is_leader and has_scheduler:
+                        LOGGER.info("Lost leadership — stopping ScheduleManager")
+                        try:
+                            mgr_to_stop = state.schedule_manager
+                            state.schedule_manager = None
+                            if mgr_to_stop is not None:
+                                await mgr_to_stop.stop()
+                        except Exception as e:
+                            LOGGER.error("Error stopping scheduler: %s", e)
+
+            leader_watch_task = asyncio.create_task(_leader_watch())
 
         # Register initial trial sources if provided
         if initial_trial_sources and schedule_manager is not None:
@@ -466,11 +572,21 @@ def create_dashboard_app(
         )
         yield
 
+        # Cancel leader watch task
+        if leader_watch_task is not None:
+            leader_watch_task.cancel()
+            try:
+                await leader_watch_task
+            except asyncio.CancelledError:
+                pass
+
         # Graceful shutdown: stop schedule manager first
-        if schedule_manager is not None:
+        # Use app state because leadership changes may have swapped the manager
+        active_scheduler = getattr(app.state.server_state, "schedule_manager", None)
+        if active_scheduler is not None:
             LOGGER.info("Dashboard Server shutting down - stopping schedule manager")
             try:
-                await schedule_manager.stop()
+                await active_scheduler.stop()
             except Exception as e:
                 LOGGER.error("Error stopping schedule manager: %s", e)
 
@@ -517,6 +633,28 @@ def create_dashboard_app(
         if sls_log_exporter is not None:
             sls_log_exporter.shutdown()
             set_sls_log_exporter(None)
+
+        # Close shared HTTP clients
+        try:
+            await shared_aiohttp_session.close()
+        except Exception as e:
+            LOGGER.error("Error closing aiohttp session: %s", e)
+        try:
+            await shared_httpx_client.aclose()
+        except Exception as e:
+            LOGGER.error("Error closing httpx client: %s", e)
+
+        # Stop cluster components
+        if peer_registry_instance is not None:
+            try:
+                await peer_registry_instance.stop()
+            except Exception as e:
+                LOGGER.error("Error stopping peer registry: %s", e)
+        if leader_elector_instance is not None:
+            try:
+                await leader_elector_instance.stop()
+            except Exception as e:
+                LOGGER.error("Error stopping leader elector: %s", e)
 
         LOGGER.info("Dashboard Server shutdown complete")
 
@@ -584,6 +722,23 @@ def create_dashboard_app(
                 "source": "dashboard",
             }
             result.append(trial_info)
+            seen_ids.add(trial_status.trial_id)
+
+        # In cluster mode, include trials from the shared store that
+        # this server doesn't have in memory (e.g. trials on other servers).
+        for record in state.orchestrator.store.list_trial_records():
+            if record.trial_id in seen_ids:
+                continue
+            trial_info = {
+                "id": record.trial_id,
+                "phase": (
+                    record.last_status.phase.value if record.last_status else "unknown"
+                ),
+                "metadata": asdict(record.spec.metadata),
+                "owner_server_id": record.owner_server_id,
+                "source": "store",
+            }
+            result.append(trial_info)
 
         return JSONResponse(content=result)
 
@@ -591,6 +746,7 @@ def create_dashboard_app(
     async def submit_trial(
         request: TrialSubmitRequest,
         state: DashboardServerState = Depends(get_server_state),
+        x_dojozero_forwarded: str | None = Header(None),
     ) -> JSONResponse:
         """Submit a new trial to the dashboard server.
 
@@ -791,6 +947,53 @@ def create_dashboard_app(
 
             launch_coro_factory = make_backtest_coro
 
+        # In cluster mode, forward to least-loaded peer if not a
+        # backtest/resume and not already forwarded from another peer.
+        is_forwarded = x_dojozero_forwarded is not None
+        if (
+            not is_forwarded
+            and state.peer_registry is not None
+            and state.server_id is not None
+            and launch_coro_factory is None
+            and not (
+                request.resume
+                and (request.resume.checkpoint_id or request.resume.latest)
+            )
+        ):
+            try:
+                peers = await state.peer_registry.get_peers()
+                if peers:
+                    target = min(peers, key=lambda p: p.active_trials)
+                    if target.server_id != state.server_id and target.server_url:
+                        remote_url = f"{target.server_url.rstrip('/')}/api/trials"
+                        payload = request.model_dump(exclude_none=True)
+                        payload["trial_id"] = trial_id
+                        try:
+                            async with state.http_session.post(
+                                remote_url,
+                                json=payload,
+                                headers={
+                                    "X-Dojozero-Forwarded": state.server_id,
+                                },
+                            ) as resp:
+                                body = await resp.json()
+                                if resp.status in (200, 201, 202):
+                                    await state.peer_registry.register_trial(
+                                        trial_id, target.server_id
+                                    )
+                                    return JSONResponse(
+                                        content=body,
+                                        status_code=resp.status,
+                                    )
+                        except Exception as e:
+                            LOGGER.warning(
+                                "Remote submission to '%s' failed, running locally: %s",
+                                target.server_id,
+                                e,
+                            )
+            except Exception as e:
+                LOGGER.debug("Peer lookup for trial distribution failed: %s", e)
+
         # Queue the trial for execution (returns immediately)
         try:
             trial_id = await state.trial_manager.submit(
@@ -808,6 +1011,13 @@ def create_dashboard_app(
                 content={"error": f"Failed to queue trial: {e}"},
                 status_code=500,
             )
+
+        # Register local ownership in peer registry
+        if state.peer_registry is not None and state.server_id is not None:
+            try:
+                await state.peer_registry.register_trial(trial_id, state.server_id)
+            except Exception:
+                pass
 
         # Return immediately with pending status
         return JSONResponse(
@@ -832,7 +1042,11 @@ def create_dashboard_app(
         """
         # First check TrialManager for queued/pending trials
         queued = state.trial_manager.get_status(trial_id)
-        if queued is not None:
+        if queued is not None and queued.phase in (
+            QueuedTrialPhase.PENDING,
+            QueuedTrialPhase.STARTING,
+        ):
+            # Trial is queued but not yet launched — return queue status
             return JSONResponse(
                 content={
                     "id": queued.trial_id,
@@ -843,10 +1057,22 @@ def create_dashboard_app(
                 }
             )
 
-        # Fall back to Dashboard for active/completed trials
+        # Check orchestrator for active/completed trials (full status with actors)
         try:
             status = state.orchestrator.get_trial_status(trial_id)
         except TrialNotFoundError:
+            # In cluster mode, trial may live on another server
+            if queued is not None:
+                # We know about it in the queue but orchestrator doesn't have it yet
+                return JSONResponse(
+                    content={
+                        "id": queued.trial_id,
+                        "phase": queued.phase.value,
+                        "metadata": asdict(queued.spec.metadata),
+                        "error": queued.error,
+                        "source": "queue",
+                    }
+                )
             return JSONResponse(
                 content={"error": f"Trial '{trial_id}' not found"},
                 status_code=404,
@@ -1370,13 +1596,69 @@ def create_dashboard_app(
         }
 
     # -------------------------------------------------------------------------
+    # Cluster Endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/cluster/status")
+    async def cluster_status(
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Return cluster status: server_id, leadership, and peers."""
+        is_leader = (
+            state.leader_elector.is_leader()
+            if state.leader_elector is not None
+            else True  # standalone = implicit leader
+        )
+        peers: list[dict[str, Any]] = []
+        if state.peer_registry is not None:
+            try:
+                peer_list = await state.peer_registry.get_peers()
+                peers = [p.model_dump() for p in peer_list]
+            except Exception:
+                pass
+        return JSONResponse(
+            content={
+                "server_id": state.server_id,
+                "is_leader": is_leader,
+                "peers": peers,
+            }
+        )
+
+    @app.get("/api/cluster/trial-location/{trial_id}")
+    async def trial_location(
+        trial_id: str,
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> JSONResponse:
+        """Return the owning server URL for a given trial."""
+        if state.peer_registry is not None:
+            try:
+                peer = await state.peer_registry.get_peer_for_trial(trial_id)
+                if peer is not None:
+                    return JSONResponse(
+                        content={
+                            "trial_id": trial_id,
+                            "server_id": peer.server_id,
+                            "server_url": peer.server_url,
+                        }
+                    )
+            except Exception:
+                pass
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Trial '{trial_id}' location unknown"},
+        )
+
+    # -------------------------------------------------------------------------
     # Gateway Routing (for external agents)
     # -------------------------------------------------------------------------
 
     if enable_gateway and gateway_router is not None:
         from ._gateway_routing import create_gateway_router
 
-        gateway_api_router = create_gateway_router(gateway_router)
+        gateway_api_router = create_gateway_router(
+            gateway_router,
+            peer_registry=peer_registry_instance,
+        )
 
         # Include the gateway router (catch-all route added after specific routes)
         app.include_router(gateway_api_router)
@@ -1405,6 +1687,7 @@ async def run_dashboard_server(
     data_dir: str | Path | None = None,
     authenticator: "AgentAuthenticator | None" = None,
     no_scheduler: bool = False,
+    cluster_config: ClusterConfig | None = None,
 ) -> None:
     """Run the Dashboard Server.
 
@@ -1444,6 +1727,7 @@ async def run_dashboard_server(
         data_dir=data_dir,
         authenticator=authenticator,
         no_scheduler=no_scheduler,
+        cluster_config=cluster_config,
     )
 
     config = uvicorn.Config(

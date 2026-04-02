@@ -389,6 +389,33 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable HTTP gateway for external agents (gateway is enabled by default).",
     )
+    # Cluster arguments
+    serve_parser.add_argument(
+        "--server-id",
+        dest="server_id",
+        default=None,
+        help="Unique server identifier for cluster mode (default: hostname).",
+    )
+    serve_parser.add_argument(
+        "--server-url",
+        dest="server_url",
+        default=None,
+        help="Externally reachable URL for this server (default: http://{host}:{port}).",
+    )
+    serve_parser.add_argument(
+        "--cluster-peers",
+        dest="cluster_peers",
+        action="append",
+        default=[],
+        help="Peer server URL for static cluster discovery (repeatable).",
+    )
+    serve_parser.add_argument(
+        "--cluster-redis-url",
+        dest="cluster_redis_url",
+        default=os.environ.get("DOJOZERO_CLUSTER_REDIS_URL"),
+        help="Redis URL for cluster leader election and peer discovery (enables redis mode). "
+        "Falls back to DOJOZERO_CLUSTER_REDIS_URL env var.",
+    )
 
     # Arena Server command
     arena_parser = subparsers.add_parser(
@@ -2109,6 +2136,33 @@ async def _serve_command(args: argparse.Namespace) -> int:
         "enabled" if local_auth else "disabled",
     )
 
+    # Build cluster config if any cluster arguments were provided
+    cluster_config = None
+    cluster_peers: list[str] = getattr(args, "cluster_peers", []) or []
+    cluster_redis_url: str | None = getattr(args, "cluster_redis_url", None)
+    server_id_arg: str | None = getattr(args, "server_id", None)
+    server_url_arg: str | None = getattr(args, "server_url", None)
+
+    if cluster_peers or cluster_redis_url:
+        from dojozero.dashboard_server._cluster import ClusterConfig
+
+        server_url = server_url_arg or f"http://{host}:{port}"
+        cluster_config = ClusterConfig(
+            server_id=server_id_arg or "",
+            server_url=server_url,
+            leader_election="redis" if cluster_redis_url else "file",
+            discovery="redis" if cluster_redis_url else "static",
+            peers=cluster_peers,
+            redis_url=cluster_redis_url,
+            shared_store_path=str(store_path / "leader.lock"),
+        )
+        LOGGER.info(
+            "Cluster mode enabled (election=%s, discovery=%s, peers=%d)",
+            cluster_config.leader_election,
+            cluster_config.discovery,
+            len(cluster_peers),
+        )
+
     await run_dashboard_server(
         orchestrator=orchestrator,
         scheduler_store=scheduler_store,
@@ -2124,6 +2178,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         enable_gateway=enable_gateway,
         authenticator=authenticator,
         no_scheduler=no_scheduler,
+        cluster_config=cluster_config,
     )
     return 0
 

@@ -16,6 +16,8 @@ from fastapi.responses import StreamingResponse
 if TYPE_CHECKING:
     from dojozero.gateway._server import GatewayState
 
+    from ._cluster import PeerRegistry
+
 logger = logging.getLogger(__name__)
 
 # Header name for agent ID
@@ -98,7 +100,10 @@ class GatewayRouter:
         return list(self._gateways.keys())
 
 
-def create_gateway_router(gateway_router: GatewayRouter) -> APIRouter:
+def create_gateway_router(
+    gateway_router: GatewayRouter,
+    peer_registry: "PeerRegistry | None" = None,
+) -> APIRouter:
     """Create an APIRouter for gateway routing.
 
     Routes:
@@ -141,6 +146,28 @@ def create_gateway_router(gateway_router: GatewayRouter) -> APIRouter:
         """
         gateway = gateway_router.get_gateway(trial_id)
         if gateway is None:
+            # Reverse-proxy to the owning server if peer registry is available
+            # but only if this request hasn't already been forwarded (prevent loops)
+            is_forwarded = request.headers.get("x-dojozero-forwarded") is not None
+            if peer_registry is not None and not is_forwarded:
+                try:
+                    peer = await peer_registry.get_peer_for_trial(trial_id)
+                    if peer is not None and peer.server_url:
+                        # Use shared httpx client from app state if available
+                        shared_client = getattr(
+                            getattr(request.app.state, "server_state", None),
+                            "http_client",
+                            None,
+                        )
+                        return await _reverse_proxy_to_peer(
+                            request,
+                            peer.server_url,
+                            trial_id,
+                            path,
+                            client=shared_client,
+                        )
+                except Exception as exc:
+                    logger.debug("Peer lookup failed for trial %s: %s", trial_id, exc)
             raise HTTPException(
                 status_code=404,
                 detail={
@@ -193,6 +220,86 @@ def create_gateway_router(gateway_router: GatewayRouter) -> APIRouter:
         return response
 
     return router
+
+
+async def _reverse_proxy_to_peer(
+    request: Request,
+    peer_url: str,
+    trial_id: str,
+    path: str,
+    client: "httpx.AsyncClient | None" = None,
+) -> Response:
+    """Reverse-proxy a request to the owning peer server.
+
+    The client never sees the internal peer URL — this server fetches
+    the response and returns it transparently.
+    """
+    target_url = f"{peer_url.rstrip('/')}/api/trials/{trial_id}/{path}"
+    if request.query_params:
+        target_url = f"{target_url}?{request.query_params}"
+
+    # Forward headers (drop host to avoid conflicts, add forwarding marker)
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    headers["x-dojozero-forwarded"] = "1"
+
+    body = await request.body()
+
+    accept_header = request.headers.get("accept", "")
+    is_sse = "text/event-stream" in accept_header
+
+    if is_sse:
+        # SSE streams are long-lived — use a dedicated client per stream
+        async def _stream_from_peer():
+            async with httpx.AsyncClient() as sse_client:
+                async with sse_client.stream(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=body if body else None,
+                    timeout=None,
+                ) as resp:
+                    async for chunk in resp.aiter_bytes():
+                        yield chunk
+
+        return StreamingResponse(
+            _stream_from_peer(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # Regular request: use shared client if available, else create one-off
+    if client is not None:
+        resp = await client.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body if body else None,
+            timeout=30.0,
+        )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+        )
+
+    async with httpx.AsyncClient() as fallback_client:
+        resp = await fallback_client.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body if body else None,
+            timeout=30.0,
+        )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+        )
 
 
 async def _handle_sse_directly(

@@ -297,6 +297,7 @@ class TrialRecord:
 
     spec: TrialSpec
     last_status: TrialStatus | None = None
+    owner_server_id: str | None = None
 
     @property
     def trial_id(self) -> str:
@@ -448,15 +449,24 @@ class TrialOrchestrator:
         """Access the underlying OrchestratorStore."""
         return self._store
 
-    async def launch_trial(self, spec: TrialSpec) -> TrialStatus:
-        """Instantiate and start every actor defined in *spec*."""
+    async def launch_trial(
+        self,
+        spec: TrialSpec,
+        owner_server_id: str | None = None,
+    ) -> TrialStatus:
+        """Instantiate and start every actor defined in *spec*.
+
+        Args:
+            spec: Trial specification.
+            owner_server_id: Server that owns this trial (cluster mode).
+        """
 
         LOGGER.info("launching trial '%s'", spec.trial_id)
         spec = self._apply_resume_from_spec(spec)
         normalized_spec = self._normalize_spec(spec)
         record = self._catalog.get(spec.trial_id)
         if record is None:
-            record = TrialRecord(spec=normalized_spec)
+            record = TrialRecord(spec=normalized_spec, owner_server_id=owner_server_id)
         elif record.spec != normalized_spec:
             raise OrchestratorError(
                 f"trial '{spec.trial_id}' already registered with a different configuration"

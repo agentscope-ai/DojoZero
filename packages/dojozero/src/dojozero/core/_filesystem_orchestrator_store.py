@@ -74,12 +74,22 @@ class FileSystemOrchestratorStore(OrchestratorStore):
         spec = self._read_spec(spec_path)
         status_path = trial_dir / self.STATUS_FILE
         status = self._read_status(status_path) if status_path.exists() else None
-        return TrialRecord(spec=spec, last_status=status)
+        # Read owner_server_id from spec file (stored alongside spec)
+        spec_payload = self._read_json(spec_path)
+        owner_server_id = spec_payload.get("owner_server_id")
+        return TrialRecord(
+            spec=spec,
+            last_status=status,
+            owner_server_id=owner_server_id,
+        )
 
     def upsert_trial_record(self, record: TrialRecord) -> None:
         trial_dir = self._trial_dir(record.trial_id)
         trial_dir.mkdir(parents=True, exist_ok=True)
-        self._write_json(trial_dir / self.SPEC_FILE, self._serialize_spec(record.spec))
+        spec_data = self._serialize_spec(record.spec)
+        if record.owner_server_id is not None:
+            spec_data["owner_server_id"] = record.owner_server_id
+        self._write_json(trial_dir / self.SPEC_FILE, spec_data)
         if record.last_status is not None:
             self._write_json(
                 trial_dir / self.STATUS_FILE, self._serialize_status(record.last_status)

@@ -64,6 +64,88 @@ Scheduling knobs (when present in your template) typically include:
 - `--runtime-provider {local,ray}`: execution backend.
 - `--ray-config`: Ray initialization YAML file.
 
+## 5. Cluster Mode
+
+Run multiple dashboard servers to distribute trial execution across machines. One server wins leader election and runs the scheduler; all servers accept trial submissions and execute trials.
+
+### Single Server (default)
+
+No extra flags needed — everything works as before:
+
+```bash
+dojo0 serve
+```
+
+### Dev Cluster (file-based election, static peers)
+
+Start two or more servers on the same machine or network, pointing at a shared store:
+
+```bash
+# Server 1
+dojo0 serve --port 8000 \
+    --server-id server-1 \
+    --server-url http://localhost:8000 \
+    --cluster-peers http://localhost:8001 \
+    --store-directory ./store
+
+# Server 2
+dojo0 serve --port 8001 \
+    --server-id server-2 \
+    --server-url http://localhost:8001 \
+    --cluster-peers http://localhost:8000 \
+    --store-directory ./store
+```
+
+Leader election determines which server runs the scheduler automatically — no need for `--no-scheduler`. Use `--no-scheduler` only if you want to disable scheduling on all servers (e.g. when submitting trials manually).
+
+Leader election uses `fcntl.flock` on a file in the store directory. Both servers must share the same `--store-directory`.
+
+### Production Cluster (Redis-based election and discovery)
+
+```bash
+dojo0 serve --port 8000 \
+    --server-id server-1 \
+    --server-url http://10.0.1.10:8000 \
+    --cluster-redis-url redis://redis:6379
+```
+
+Or use an environment variable:
+
+```bash
+export DOJOZERO_CLUSTER_REDIS_URL=redis://redis:6379
+dojo0 serve --port 8000 \
+    --server-id server-1 \
+    --server-url http://10.0.1.10:8000
+```
+
+Redis mode uses `SET NX EX` for leader election and a hash with TTL heartbeats for peer discovery. No manual Redis setup is required — keys are created automatically.
+
+### CLI Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--server-id` | hostname | Unique identifier for this server instance |
+| `--server-url` | `http://{host}:{port}` | Externally reachable URL for this server |
+| `--cluster-peers` | (none) | Peer server URLs (repeatable, for static discovery) |
+| `--cluster-redis-url` | `$DOJOZERO_CLUSTER_REDIS_URL` | Redis URL (enables Redis election + discovery) |
+
+### How It Works
+
+- **Trial distribution**: When a trial is submitted, the receiving server forwards it to the least-loaded peer. Each trial is tagged with `owner_server_id` in the store.
+- **Gateway routing**: If a gateway request arrives at the wrong server, it is reverse-proxied to the owning server transparently.
+- **Auto-resume**: On restart, each server only resumes trials it owns. Legacy trials (no owner) are resumed by any server.
+- **Leader failover**: If the leader goes down, another server acquires leadership and starts the scheduler.
+
+### Cluster Status API
+
+```bash
+# Check cluster state
+curl http://localhost:8000/api/cluster/status
+
+# Find which server owns a trial
+curl http://localhost:8000/api/cluster/trial-location/{trial_id}
+```
+
 ## What's Next
 
 - **Observe trials**: Add `--trace-backend jaeger` to `dojo0 serve` to export OpenTelemetry traces for all trials managed by the server. See [Tracing](./tracing.md) for backend setup and [Arena](./arena.md) for a browser-based trace timeline.
