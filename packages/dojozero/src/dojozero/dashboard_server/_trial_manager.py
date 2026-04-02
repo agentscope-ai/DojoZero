@@ -542,37 +542,16 @@ class TrialManager:
             if status.phase not in (TrialPhase.RUNNING, TrialPhase.STARTING):
                 continue
 
-            # Owner-aware resume: only resume trials owned by this server,
-            # owned by no server (legacy), or whose owner is dead.
+            # Owner-aware resume: only resume trials owned by this server
+            # or owned by no server (legacy / standalone mode).
             if self._server_id is not None and record.owner_server_id is not None:
                 if record.owner_server_id != self._server_id:
-                    # Check if owner is still alive via peer registry
-                    if self._peer_registry is not None:
-                        try:
-                            peers = await self._peer_registry.get_peers()
-                            alive_ids = {p.server_id for p in peers}
-                            if record.owner_server_id in alive_ids:
-                                self._logger.debug(
-                                    "Skipping trial '%s' owned by live peer '%s'",
-                                    trial_id,
-                                    record.owner_server_id,
-                                )
-                                continue
-                            self._logger.info(
-                                "Adopting trial '%s' from dead peer '%s'",
-                                trial_id,
-                                record.owner_server_id,
-                            )
-                        except Exception as e:
-                            self._logger.warning(
-                                "Failed to check peer status for trial '%s': %s",
-                                trial_id,
-                                e,
-                            )
-                            continue
-                    else:
-                        # No peer registry: cannot verify owner, skip
-                        continue
+                    self._logger.debug(
+                        "Skipping trial '%s' owned by different server '%s'",
+                        trial_id,
+                        record.owner_server_id,
+                    )
+                    continue
 
             # Check if trial is stale (based on checkpoint timestamp or skip)
             checkpoints = store.list_checkpoints(trial_id)
