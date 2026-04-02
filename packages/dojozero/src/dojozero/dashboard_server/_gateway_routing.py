@@ -146,22 +146,13 @@ def create_gateway_router(
         """
         gateway = gateway_router.get_gateway(trial_id)
         if gateway is None:
-            # Try cross-server redirect if peer registry is available
+            # Reverse-proxy to the owning server if peer registry is available
             if peer_registry is not None:
                 try:
                     peer = await peer_registry.get_peer_for_trial(trial_id)
                     if peer is not None and peer.server_url:
-                        redirect_url = (
-                            f"{peer.server_url.rstrip('/')}"
-                            f"/api/trials/{trial_id}/{path}"
-                        )
-                        if request.query_params:
-                            redirect_url = f"{redirect_url}?{request.query_params}"
-                        from fastapi.responses import RedirectResponse
-
-                        return RedirectResponse(
-                            url=redirect_url,
-                            status_code=307,
+                        return await _reverse_proxy_to_peer(
+                            request, peer.server_url, trial_id, path
                         )
                 except Exception as exc:
                     logger.debug("Peer lookup failed for trial %s: %s", trial_id, exc)
@@ -217,6 +208,70 @@ def create_gateway_router(
         return response
 
     return router
+
+
+async def _reverse_proxy_to_peer(
+    request: Request,
+    peer_url: str,
+    trial_id: str,
+    path: str,
+) -> Response:
+    """Reverse-proxy a request to the owning peer server.
+
+    The client never sees the internal peer URL — this server fetches
+    the response and returns it transparently.
+    """
+    target_url = f"{peer_url.rstrip('/')}/api/trials/{trial_id}/{path}"
+    if request.query_params:
+        target_url = f"{target_url}?{request.query_params}"
+
+    # Forward headers (drop host to avoid conflicts)
+    headers = dict(request.headers)
+    headers.pop("host", None)
+
+    body = await request.body()
+
+    accept_header = request.headers.get("accept", "")
+    is_sse = "text/event-stream" in accept_header
+
+    if is_sse:
+        # Stream SSE responses through
+        async def _stream_from_peer():
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    method=request.method,
+                    url=target_url,
+                    headers=headers,
+                    content=body if body else None,
+                    timeout=None,
+                ) as resp:
+                    async for chunk in resp.aiter_bytes():
+                        yield chunk
+
+        return StreamingResponse(
+            _stream_from_peer(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # Regular request: forward and return
+    async with httpx.AsyncClient() as client:
+        resp = await client.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body if body else None,
+            timeout=30.0,
+        )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+        )
 
 
 async def _handle_sse_directly(
