@@ -147,6 +147,7 @@ class DashboardServerState:
     server_id: str | None = None
     leader_elector: LeaderElector | None = None
     peer_registry: PeerRegistry | None = None
+    http_session: Any = None  # aiohttp.ClientSession for cluster forwarding
 
 
 def get_server_state(request: Request) -> DashboardServerState:
@@ -311,12 +312,27 @@ def create_dashboard_app(
         gateway_router = GatewayRouter()
 
     # Set up cluster primitives if configured
+    httpx_client: "httpx.AsyncClient | None" = None
     if cluster_config is not None:
+        import platform as _platform
+
+        import httpx
+
         leader_elector_instance, peer_registry_instance = create_cluster(cluster_config)
-        server_id = cluster_config.server_id or __import__("platform").node()
+        server_id = cluster_config.server_id or _platform.node()
+        httpx_client = httpx.AsyncClient(timeout=30.0)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Create shared HTTP session for cluster forwarding
+        http_session = None
+        if peer_registry_instance is not None:
+            import aiohttp
+
+            http_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30),
+            )
+
         # Start cluster components
         if leader_elector_instance is not None:
             await leader_elector_instance.start()
@@ -376,6 +392,7 @@ def create_dashboard_app(
             server_id=server_id,
             leader_elector=leader_elector_instance,
             peer_registry=peer_registry_instance,
+            http_session=http_session,
         )
 
         # Start trial manager worker
@@ -619,6 +636,12 @@ def create_dashboard_app(
         if sls_log_exporter is not None:
             sls_log_exporter.shutdown()
             set_sls_log_exporter(None)
+
+        # Close shared HTTP sessions
+        if http_session is not None:
+            await http_session.close()
+        if httpx_client is not None:
+            await httpx_client.aclose()
 
         # Stop cluster components
         if peer_registry_instance is not None:
@@ -923,31 +946,27 @@ def create_dashboard_app(
                 peers = await state.peer_registry.get_peers()
                 if peers:
                     target = min(peers, key=lambda p: p.active_trials)
-                    if target.server_id != state.server_id and target.server_url:
-                        import aiohttp
-
+                    if target.server_id != state.server_id and target.server_url and state.http_session is not None:
                         remote_url = f"{target.server_url.rstrip('/')}/api/trials"
                         payload = request.model_dump(exclude_none=True)
                         payload["trial_id"] = trial_id
                         try:
-                            async with aiohttp.ClientSession() as session:
-                                async with session.post(
-                                    remote_url,
-                                    json=payload,
-                                    headers={
-                                        "X-Dojozero-Forwarded": state.server_id,
-                                    },
-                                    timeout=aiohttp.ClientTimeout(total=30),
-                                ) as resp:
-                                    body = await resp.json()
-                                    if resp.status in (200, 201, 202):
-                                        await state.peer_registry.register_trial(
-                                            trial_id, target.server_id
-                                        )
-                                        return JSONResponse(
-                                            content=body,
-                                            status_code=resp.status,
-                                        )
+                            async with state.http_session.post(
+                                remote_url,
+                                json=payload,
+                                headers={
+                                    "X-Dojozero-Forwarded": state.server_id,
+                                },
+                            ) as resp:
+                                body = await resp.json()
+                                if resp.status in (200, 201, 202):
+                                    await state.peer_registry.register_trial(
+                                        trial_id, target.server_id
+                                    )
+                                    return JSONResponse(
+                                        content=body,
+                                        status_code=resp.status,
+                                    )
                         except Exception as e:
                             LOGGER.warning(
                                 "Remote submission to '%s' failed, running locally: %s",
@@ -1605,6 +1624,7 @@ def create_dashboard_app(
         gateway_api_router = create_gateway_router(
             gateway_router,
             peer_registry=peer_registry_instance,
+            http_client=httpx_client,
         )
 
         # Include the gateway router (catch-all route added after specific routes)

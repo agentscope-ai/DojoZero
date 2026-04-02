@@ -103,6 +103,7 @@ class GatewayRouter:
 def create_gateway_router(
     gateway_router: GatewayRouter,
     peer_registry: "PeerRegistry | None" = None,
+    http_client: httpx.AsyncClient | None = None,
 ) -> APIRouter:
     """Create an APIRouter for gateway routing.
 
@@ -152,7 +153,8 @@ def create_gateway_router(
                     peer = await peer_registry.get_peer_for_trial(trial_id)
                     if peer is not None and peer.server_url:
                         return await _reverse_proxy_to_peer(
-                            request, peer.server_url, trial_id, path
+                            request, peer.server_url, trial_id, path,
+                            client=http_client,
                         )
                 except Exception as exc:
                     logger.debug("Peer lookup failed for trial %s: %s", trial_id, exc)
@@ -215,6 +217,7 @@ async def _reverse_proxy_to_peer(
     peer_url: str,
     trial_id: str,
     path: str,
+    client: httpx.AsyncClient | None = None,
 ) -> Response:
     """Reverse-proxy a request to the owning peer server.
 
@@ -234,11 +237,15 @@ async def _reverse_proxy_to_peer(
     accept_header = request.headers.get("accept", "")
     is_sse = "text/event-stream" in accept_header
 
+    # Use shared client if available, otherwise create a one-off client
+    _client = client or httpx.AsyncClient()
+    _owns_client = client is None
+
     if is_sse:
         # Stream SSE responses through
         async def _stream_from_peer():
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
+            try:
+                async with _client.stream(
                     method=request.method,
                     url=target_url,
                     headers=headers,
@@ -247,6 +254,9 @@ async def _reverse_proxy_to_peer(
                 ) as resp:
                     async for chunk in resp.aiter_bytes():
                         yield chunk
+            finally:
+                if _owns_client:
+                    await _client.aclose()
 
         return StreamingResponse(
             _stream_from_peer(),
@@ -259,8 +269,8 @@ async def _reverse_proxy_to_peer(
         )
 
     # Regular request: forward and return
-    async with httpx.AsyncClient() as client:
-        resp = await client.request(
+    try:
+        resp = await _client.request(
             method=request.method,
             url=target_url,
             headers=headers,
@@ -272,6 +282,9 @@ async def _reverse_proxy_to_peer(
             status_code=resp.status_code,
             headers=dict(resp.headers),
         )
+    finally:
+        if _owns_client:
+            await _client.aclose()
 
 
 async def _handle_sse_directly(
