@@ -404,6 +404,9 @@ class ScheduleManager:
         self._ncaa_fetcher = NCAAGameFetcher()
         self._nfl_fetcher = NFLGameFetcher()
 
+        # Shared HTTP session for remote submissions (created in start())
+        self._http_session: Any = None  # aiohttp.ClientSession
+
     async def start(self) -> None:
         """Start the schedule manager."""
         self._shutdown_event.clear()
@@ -428,6 +431,13 @@ class ScheduleManager:
                     source_id = s.metadata.get("source_id")
                     if source_id:
                         self._scheduled_events[(source_id, s.game_id)] = s.schedule_id
+
+        # Create shared HTTP session for remote submissions
+        import aiohttp
+
+        self._http_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30),
+        )
 
         # Start background tasks
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
@@ -462,6 +472,11 @@ class ScheduleManager:
         self._scheduler_task = None
         self._monitor_task = None
         self._sync_task = None
+
+        # Close shared HTTP session
+        if self._http_session is not None:
+            await self._http_session.close()
+            self._http_session = None
 
         # Save state
         self._persist()
@@ -1384,8 +1399,6 @@ class ScheduleManager:
                 and target_peer.server_id != self._server_id
             ):
                 # Remote submission via HTTP
-                import aiohttp
-
                 remote_url = f"{target_peer.server_url.rstrip('/')}/api/trials"
                 payload = {
                     "trial_id": trial_id,
@@ -1395,17 +1408,18 @@ class ScheduleManager:
                     },
                 }
                 try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.post(
-                            remote_url,
-                            json=payload,
-                            timeout=aiohttp.ClientTimeout(total=30),
-                        ) as resp:
-                            if resp.status not in (200, 201):
-                                body = await resp.text()
-                                raise RuntimeError(
-                                    f"Remote submission failed ({resp.status}): {body}"
-                                )
+                    async with self._http_session.post(
+                        remote_url,
+                        json=payload,
+                        headers={
+                            "X-Dojozero-Forwarded": self._server_id or "scheduler"
+                        },
+                    ) as resp:
+                        if resp.status not in (200, 201):
+                            body = await resp.text()
+                            raise RuntimeError(
+                                f"Remote submission failed ({resp.status}): {body}"
+                            )
                     LOGGER.info(
                         "Submitted trial '%s' to remote peer '%s'",
                         trial_id,

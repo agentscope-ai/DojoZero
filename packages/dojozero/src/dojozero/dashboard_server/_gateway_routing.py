@@ -153,8 +153,18 @@ def create_gateway_router(
                 try:
                     peer = await peer_registry.get_peer_for_trial(trial_id)
                     if peer is not None and peer.server_url:
+                        # Use shared httpx client from app state if available
+                        shared_client = getattr(
+                            getattr(request.app.state, "server_state", None),
+                            "http_client",
+                            None,
+                        )
                         return await _reverse_proxy_to_peer(
-                            request, peer.server_url, trial_id, path
+                            request,
+                            peer.server_url,
+                            trial_id,
+                            path,
+                            client=shared_client,
                         )
                 except Exception as exc:
                     logger.debug("Peer lookup failed for trial %s: %s", trial_id, exc)
@@ -217,6 +227,7 @@ async def _reverse_proxy_to_peer(
     peer_url: str,
     trial_id: str,
     path: str,
+    client: "httpx.AsyncClient | None" = None,
 ) -> Response:
     """Reverse-proxy a request to the owning peer server.
 
@@ -238,10 +249,10 @@ async def _reverse_proxy_to_peer(
     is_sse = "text/event-stream" in accept_header
 
     if is_sse:
-        # Stream SSE responses through
+        # SSE streams are long-lived — use a dedicated client per stream
         async def _stream_from_peer():
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
+            async with httpx.AsyncClient() as sse_client:
+                async with sse_client.stream(
                     method=request.method,
                     url=target_url,
                     headers=headers,
@@ -261,9 +272,23 @@ async def _reverse_proxy_to_peer(
             },
         )
 
-    # Regular request: forward and return
-    async with httpx.AsyncClient() as client:
+    # Regular request: use shared client if available, else create one-off
+    if client is not None:
         resp = await client.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body if body else None,
+            timeout=30.0,
+        )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+        )
+
+    async with httpx.AsyncClient() as fallback_client:
+        resp = await fallback_client.request(
             method=request.method,
             url=target_url,
             headers=headers,
