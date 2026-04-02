@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request
 
 if TYPE_CHECKING:
     from dojozero.gateway import AgentAuthenticator
@@ -643,6 +643,7 @@ def create_dashboard_app(
     async def submit_trial(
         request: TrialSubmitRequest,
         state: DashboardServerState = Depends(get_server_state),
+        x_dojozero_forwarded: str | None = Header(None),
     ) -> JSONResponse:
         """Submit a new trial to the dashboard server.
 
@@ -843,6 +844,57 @@ def create_dashboard_app(
 
             launch_coro_factory = make_backtest_coro
 
+        # In cluster mode, forward to least-loaded peer if not a
+        # backtest/resume and not already forwarded from another peer.
+        is_forwarded = x_dojozero_forwarded is not None
+        if (
+            not is_forwarded
+            and state.peer_registry is not None
+            and state.server_id is not None
+            and launch_coro_factory is None
+            and not (
+                request.resume
+                and (request.resume.checkpoint_id or request.resume.latest)
+            )
+        ):
+            try:
+                peers = await state.peer_registry.get_peers()
+                if peers:
+                    target = min(peers, key=lambda p: p.active_trials)
+                    if target.server_id != state.server_id and target.server_url:
+                        import aiohttp
+
+                        remote_url = f"{target.server_url.rstrip('/')}/api/trials"
+                        payload = request.model_dump(exclude_none=True)
+                        payload["trial_id"] = trial_id
+                        try:
+                            async with aiohttp.ClientSession() as session:
+                                async with session.post(
+                                    remote_url,
+                                    json=payload,
+                                    headers={
+                                        "X-Dojozero-Forwarded": state.server_id,
+                                    },
+                                    timeout=aiohttp.ClientTimeout(total=30),
+                                ) as resp:
+                                    body = await resp.json()
+                                    if resp.status in (200, 201, 202):
+                                        await state.peer_registry.register_trial(
+                                            trial_id, target.server_id
+                                        )
+                                        return JSONResponse(
+                                            content=body,
+                                            status_code=resp.status,
+                                        )
+                        except Exception as e:
+                            LOGGER.warning(
+                                "Remote submission to '%s' failed, running locally: %s",
+                                target.server_id,
+                                e,
+                            )
+            except Exception as e:
+                LOGGER.debug("Peer lookup for trial distribution failed: %s", e)
+
         # Queue the trial for execution (returns immediately)
         try:
             trial_id = await state.trial_manager.submit(
@@ -860,6 +912,13 @@ def create_dashboard_app(
                 content={"error": f"Failed to queue trial: {e}"},
                 status_code=500,
             )
+
+        # Register local ownership in peer registry
+        if state.peer_registry is not None and state.server_id is not None:
+            try:
+                await state.peer_registry.register_trial(trial_id, state.server_id)
+            except Exception:
+                pass
 
         # Return immediately with pending status
         return JSONResponse(

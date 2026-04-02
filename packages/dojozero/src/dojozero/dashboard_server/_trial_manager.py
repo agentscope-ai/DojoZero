@@ -1100,6 +1100,14 @@ class TrialManager:
         """Number of currently running trials."""
         return len(self._running_tasks)
 
+    def _notify_active_trials(self) -> None:
+        """Push current running count to peer registry (fire-and-forget)."""
+        if self._peer_registry is not None and self._server_id is not None:
+            count = self.running_count
+            asyncio.ensure_future(
+                self._peer_registry.update_active_trials(self._server_id, count)
+            )
+
     async def _worker_loop(self) -> None:
         """Background worker that processes the queue."""
         while not self._shutdown_event.is_set():
@@ -1127,6 +1135,7 @@ class TrialManager:
                 # Launch trial in background task
                 task = asyncio.create_task(self._run_trial(queued))
                 self._running_tasks[queued.trial_id] = task
+                self._notify_active_trials()
                 self._logger.info(
                     "Launched trial '%s' (running=%d/%d, pending=%d)",
                     queued.trial_id,
@@ -1154,6 +1163,8 @@ class TrialManager:
                 len(self._running_tasks),
                 self._max_concurrent,
             )
+        if completed:
+            self._notify_active_trials()
 
     async def _monitor_resumed_trial(self, queued: QueuedTrial) -> None:
         """Monitor a resumed trial until completion.
