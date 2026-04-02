@@ -8,6 +8,10 @@ This package provides the Dashboard Server functionality including:
 Moved from core module to keep server-related code separate from core abstractions.
 """
 
+from ._cluster import (
+    ClusterConfig,
+    PeerInfo,
+)
 from ._game_discovery import (
     GameInfo,
     NBAGameFetcher,
@@ -60,6 +64,9 @@ from ._types import (
 )
 
 __all__ = [
+    # Cluster
+    "ClusterConfig",
+    "PeerInfo",
     # Server
     "create_dashboard_app",
     "run_dashboard_server",

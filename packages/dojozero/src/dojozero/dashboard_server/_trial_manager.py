@@ -30,6 +30,7 @@ from dojozero.dashboard_server._jsonl_utils import (
 from dojozero.gateway import NoOpAuthenticator
 
 if TYPE_CHECKING:
+    from ._cluster import PeerRegistry
     from ._gateway_routing import GatewayRouter
     from dojozero.gateway import AgentAuthenticator
 
@@ -90,6 +91,8 @@ class TrialManager:
         gateway_router: "GatewayRouter | None" = None,
         gateway_grace_period: float = 5.0,
         authenticator: "AgentAuthenticator | None" = None,
+        server_id: str | None = None,
+        peer_registry: "PeerRegistry | None" = None,
     ):
         """Initialize the TrialManager.
 
@@ -117,6 +120,8 @@ class TrialManager:
         self._gateway_router = gateway_router
         self._gateway_grace_period = gateway_grace_period
         self._authenticator = authenticator
+        self._server_id = server_id
+        self._peer_registry: PeerRegistry | None = peer_registry
 
         # Queue for pending trials
         self._pending: asyncio.Queue[QueuedTrial] = asyncio.Queue()
@@ -537,6 +542,38 @@ class TrialManager:
             if status.phase not in (TrialPhase.RUNNING, TrialPhase.STARTING):
                 continue
 
+            # Owner-aware resume: only resume trials owned by this server,
+            # owned by no server (legacy), or whose owner is dead.
+            if self._server_id is not None and record.owner_server_id is not None:
+                if record.owner_server_id != self._server_id:
+                    # Check if owner is still alive via peer registry
+                    if self._peer_registry is not None:
+                        try:
+                            peers = await self._peer_registry.get_peers()
+                            alive_ids = {p.server_id for p in peers}
+                            if record.owner_server_id in alive_ids:
+                                self._logger.debug(
+                                    "Skipping trial '%s' owned by live peer '%s'",
+                                    trial_id,
+                                    record.owner_server_id,
+                                )
+                                continue
+                            self._logger.info(
+                                "Adopting trial '%s' from dead peer '%s'",
+                                trial_id,
+                                record.owner_server_id,
+                            )
+                        except Exception as e:
+                            self._logger.warning(
+                                "Failed to check peer status for trial '%s': %s",
+                                trial_id,
+                                e,
+                            )
+                            continue
+                    else:
+                        # No peer registry: cannot verify owner, skip
+                        continue
+
             # Check if trial is stale (based on checkpoint timestamp or skip)
             checkpoints = store.list_checkpoints(trial_id)
             if checkpoints:
@@ -782,6 +819,20 @@ class TrialManager:
             launch_coro_factory=launch_coro_factory,
         )
         self._trials[trial_id] = queued
+
+        # Set owner_server_id on the persisted record if in cluster mode
+        if self._server_id is not None:
+            try:
+                record = self._orchestrator.store.get_trial_record(trial_id)
+                if record is not None and record.owner_server_id is None:
+                    record = TrialRecord(
+                        spec=record.spec,
+                        last_status=record.last_status,
+                        owner_server_id=self._server_id,
+                    )
+                    self._orchestrator.store.upsert_trial_record(record)
+            except Exception as e:
+                self._logger.debug("Could not set owner_server_id: %s", e)
 
         # Add to queue
         await self._pending.put(queued)

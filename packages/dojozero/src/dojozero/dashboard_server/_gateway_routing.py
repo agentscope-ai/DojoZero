@@ -16,6 +16,8 @@ from fastapi.responses import StreamingResponse
 if TYPE_CHECKING:
     from dojozero.gateway._server import GatewayState
 
+    from ._cluster import PeerRegistry
+
 logger = logging.getLogger(__name__)
 
 # Header name for agent ID
@@ -98,7 +100,10 @@ class GatewayRouter:
         return list(self._gateways.keys())
 
 
-def create_gateway_router(gateway_router: GatewayRouter) -> APIRouter:
+def create_gateway_router(
+    gateway_router: GatewayRouter,
+    peer_registry: "PeerRegistry | None" = None,
+) -> APIRouter:
     """Create an APIRouter for gateway routing.
 
     Routes:
@@ -141,6 +146,25 @@ def create_gateway_router(gateway_router: GatewayRouter) -> APIRouter:
         """
         gateway = gateway_router.get_gateway(trial_id)
         if gateway is None:
+            # Try cross-server redirect if peer registry is available
+            if peer_registry is not None:
+                try:
+                    peer = await peer_registry.get_peer_for_trial(trial_id)
+                    if peer is not None and peer.server_url:
+                        redirect_url = (
+                            f"{peer.server_url.rstrip('/')}"
+                            f"/api/trials/{trial_id}/{path}"
+                        )
+                        if request.query_params:
+                            redirect_url = f"{redirect_url}?{request.query_params}"
+                        from fastapi.responses import RedirectResponse
+
+                        return RedirectResponse(
+                            url=redirect_url,
+                            status_code=307,
+                        )
+                except Exception as exc:
+                    logger.debug("Peer lookup failed for trial %s: %s", trial_id, exc)
             raise HTTPException(
                 status_code=404,
                 detail={

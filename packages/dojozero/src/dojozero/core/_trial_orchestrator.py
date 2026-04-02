@@ -297,6 +297,7 @@ class TrialRecord:
 
     spec: TrialSpec
     last_status: TrialStatus | None = None
+    owner_server_id: str | None = None
 
     @property
     def trial_id(self) -> str:
