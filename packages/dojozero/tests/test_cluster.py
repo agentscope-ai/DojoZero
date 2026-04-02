@@ -2,14 +2,27 @@
 
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from dojozero.core import (
+    BaseTrialMetadata,
+    FileSystemOrchestratorStore,
+    TrialOrchestrator,
+    TrialPhase,
+    TrialRecord,
+    TrialSpec,
+    TrialStatus,
+)
 from dojozero.dashboard_server._cluster import (
     ClusterConfig,
     FileLeaderElector,
     StaticPeerRegistry,
     create_cluster,
+)
+from dojozero.dashboard_server._trial_manager import (
+    TrialManager,
 )
 
 
@@ -266,3 +279,199 @@ def test_trial_record_owner_none_persisted(tmp_path: Path) -> None:
     loaded = store.get_trial_record("no-owner")
     assert loaded is not None
     assert loaded.owner_server_id is None
+
+
+# ---------------------------------------------------------------------------
+# Leader failover
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_file_leader_failover(tmp_path: Path) -> None:
+    """When the leader stops, the other elector acquires leadership."""
+    lock_file = str(tmp_path / "leader.lock")
+    elector1 = FileLeaderElector(server_id="server-1", lock_path=lock_file)
+    elector2 = FileLeaderElector(server_id="server-2", lock_path=lock_file)
+
+    await elector1.start()
+    await asyncio.sleep(0.3)
+    assert elector1.is_leader()
+
+    await elector2.start()
+    await asyncio.sleep(0.3)
+    assert not elector2.is_leader()
+
+    # Leader stops — server-2 should take over
+    await elector1.stop()
+    # Wait for elector2's election loop to acquire (loops every 5s, but
+    # we need at most one cycle)
+    for _ in range(12):
+        await asyncio.sleep(0.5)
+        if elector2.is_leader():
+            break
+    assert elector2.is_leader()
+
+    await elector2.stop()
+
+
+# ---------------------------------------------------------------------------
+# Owner-aware resume
+# ---------------------------------------------------------------------------
+
+
+def _make_spec(trial_id: str) -> TrialSpec:
+    metadata = BaseTrialMetadata(
+        hub_id="test_hub",
+        persistence_file="/tmp/test.jsonl",
+        store_types=(),
+    )
+    return TrialSpec(
+        trial_id=trial_id,
+        metadata=metadata,
+        operators=(),
+        agents=(),
+        data_streams=(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_skips_other_servers_trials(tmp_path: Path) -> None:
+    """Trials owned by a different server should not be resumed."""
+    store = FileSystemOrchestratorStore(tmp_path)
+    spec = _make_spec("trial-other")
+
+    # Create a trial record owned by a different server, with RUNNING status
+    status = TrialStatus(
+        trial_id="trial-other",
+        phase=TrialPhase.RUNNING,
+        actors=(),
+        metadata={},
+        last_error=None,
+    )
+    record = TrialRecord(spec=spec, last_status=status, owner_server_id="server-B")
+    store.upsert_trial_record(record)
+
+    # Save a checkpoint so it's resumable
+    from dojozero.core._trial_orchestrator import TrialCheckpoint
+
+    store.save_checkpoint(
+        TrialCheckpoint(trial_id="trial-other", actor_states={}, checkpoint_id="cp1")
+    )
+
+    orchestrator = TrialOrchestrator(store=store)
+    manager = TrialManager(
+        orchestrator=orchestrator,
+        auto_resume=True,
+        server_id="server-A",
+    )
+
+    count = await manager._resume_interrupted_trials()
+    assert count == 0  # Should skip — owned by server-B
+
+
+@pytest.mark.asyncio
+async def test_resume_own_trials(tmp_path: Path) -> None:
+    """Trials owned by this server should be resumed."""
+    store = FileSystemOrchestratorStore(tmp_path)
+    spec = _make_spec("trial-mine")
+
+    status = TrialStatus(
+        trial_id="trial-mine",
+        phase=TrialPhase.RUNNING,
+        actors=(),
+        metadata={},
+        last_error=None,
+    )
+    record = TrialRecord(spec=spec, last_status=status, owner_server_id="server-A")
+    store.upsert_trial_record(record)
+
+    from dojozero.core._trial_orchestrator import TrialCheckpoint
+
+    store.save_checkpoint(
+        TrialCheckpoint(trial_id="trial-mine", actor_states={}, checkpoint_id="cp1")
+    )
+
+    orchestrator = TrialOrchestrator(store=store)
+    # Mock resume_trial to avoid actually launching
+    orchestrator.resume_trial = AsyncMock()
+
+    manager = TrialManager(
+        orchestrator=orchestrator,
+        auto_resume=True,
+        server_id="server-A",
+    )
+
+    count = await manager._resume_interrupted_trials()
+    assert count == 1
+    orchestrator.resume_trial.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_legacy_trial_no_owner(tmp_path: Path) -> None:
+    """Trials with no owner_server_id (legacy) should be resumed by any server."""
+    store = FileSystemOrchestratorStore(tmp_path)
+    spec = _make_spec("trial-legacy")
+
+    status = TrialStatus(
+        trial_id="trial-legacy",
+        phase=TrialPhase.RUNNING,
+        actors=(),
+        metadata={},
+        last_error=None,
+    )
+    record = TrialRecord(spec=spec, last_status=status)  # no owner
+    store.upsert_trial_record(record)
+
+    from dojozero.core._trial_orchestrator import TrialCheckpoint
+
+    store.save_checkpoint(
+        TrialCheckpoint(trial_id="trial-legacy", actor_states={}, checkpoint_id="cp1")
+    )
+
+    orchestrator = TrialOrchestrator(store=store)
+    orchestrator.resume_trial = AsyncMock()
+
+    manager = TrialManager(
+        orchestrator=orchestrator,
+        auto_resume=True,
+        server_id="server-A",
+    )
+
+    count = await manager._resume_interrupted_trials()
+    assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# Active trial count notification
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_notify_active_trials() -> None:
+    """_notify_active_trials pushes count to peer registry."""
+    registry = StaticPeerRegistry(
+        server_id="self",
+        server_url="http://localhost:8000",
+        peer_urls=[],
+    )
+    await registry.start()
+
+    orchestrator = MagicMock()
+    manager = TrialManager(
+        orchestrator=orchestrator,
+        server_id="self",
+        peer_registry=registry,
+    )
+
+    # Simulate running tasks
+    manager._running_tasks["t1"] = MagicMock()
+    manager._running_tasks["t2"] = MagicMock()
+    manager._notify_active_trials()
+
+    # Give the fire-and-forget coroutine a chance to run
+    await asyncio.sleep(0.1)
+
+    peers = await registry.get_peers()
+    assert peers[0].active_trials == 2
+
+    await registry.stop()
