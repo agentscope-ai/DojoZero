@@ -55,9 +55,7 @@ async def test_file_leader_elector_only_one_leader(tmp_path: Path) -> None:
     await elector2.start()
     await asyncio.sleep(0.3)
     # Only one can be leader at a time
-    assert elector1.is_leader() != elector2.is_leader() or (
-        elector1.is_leader() and not elector2.is_leader()
-    )
+    assert elector1.is_leader() and not elector2.is_leader()
 
     await elector1.stop()
     await elector2.stop()

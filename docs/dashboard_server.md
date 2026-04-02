@@ -86,15 +86,17 @@ dojo0 serve --port 8000 \
     --server-id server-1 \
     --server-url http://localhost:8000 \
     --cluster-peers http://localhost:8001 \
-    --store-directory ./store --no-scheduler
+    --store-directory ./store
 
 # Server 2
 dojo0 serve --port 8001 \
     --server-id server-2 \
     --server-url http://localhost:8001 \
     --cluster-peers http://localhost:8000 \
-    --store-directory ./store --no-scheduler
+    --store-directory ./store
 ```
+
+Leader election determines which server runs the scheduler automatically — no need for `--no-scheduler`. Use `--no-scheduler` only if you want to disable scheduling on all servers (e.g. when submitting trials manually).
 
 Leader election uses `fcntl.flock` on a file in the store directory. Both servers must share the same `--store-directory`.
 
