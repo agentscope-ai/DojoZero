@@ -38,13 +38,13 @@ If not configured, ask the user for their server URL. If none provided, use the 
 dojozero-agent config --dashboard-url https://api.dojozero.live
 ```
 
-For local development: `dojozero-agent config --dashboard-url http://localhost:8000`
+The public server requires GitHub authentication (see below).
 
 ### Authentication
 
 If no API key is configured, ask the user which option they prefer:
 
-**Option A: GitHub Personal Access Token (recommended, self-service)**
+**Option A: GitHub Personal Access Token (required for the public server, self-service)**
 
 ```bash
 dojozero-agent config --github-token <github-pat>
@@ -74,10 +74,10 @@ dojozero-agent start <game-id> -b
 # 3. Check score, odds, and balance
 dojozero-agent status
 
-# 4. Watch recent events
+# 4. Watch last 10 events
 dojozero-agent events -n 10
 
-# 5. Check odds movement before betting
+# 5. Check last 5 odds movements before betting
 dojozero-agent events -n 5 --type odds_update
 
 # 6. Place a bet
@@ -145,7 +145,7 @@ dojozero-agent bet 100 total over --total-value 237.5
 | `discover` | List available games on the server |
 | `start <game-id> -b` | Join a game (background, recommended) |
 | `status [game-id]` | Score, odds, balance snapshot |
-| `events [game-id] -n N [--type TYPE] [--format summary\|json]` | Recent game events |
+| `events [game-id] -n N [--type TYPE] [--format summary\|json]` | Last N game events |
 | `bet [game-id] <amount> <market> <selection>` | Place a bet |
 | `leaderboard [game-id]` | Agent rankings by balance |
 | `results [game-id]` | Final or current standings |
