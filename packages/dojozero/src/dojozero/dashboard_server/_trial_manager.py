@@ -584,7 +584,9 @@ class TrialManager:
                         last_error="Server shutdown without checkpoint - cannot resume",
                     )
                     failed_record = TrialRecord(
-                        spec=record.spec, last_status=failed_status
+                        spec=record.spec,
+                        last_status=failed_status,
+                        owner_server_id=record.owner_server_id,
                     )
                     store.upsert_trial_record(failed_record)
                 continue
@@ -798,20 +800,6 @@ class TrialManager:
             launch_coro_factory=launch_coro_factory,
         )
         self._trials[trial_id] = queued
-
-        # Set owner_server_id on the persisted record if in cluster mode
-        if self._server_id is not None:
-            try:
-                record = self._orchestrator.store.get_trial_record(trial_id)
-                if record is not None and record.owner_server_id is None:
-                    record = TrialRecord(
-                        spec=record.spec,
-                        last_status=record.last_status,
-                        owner_server_id=self._server_id,
-                    )
-                    self._orchestrator.store.upsert_trial_record(record)
-            except Exception as e:
-                self._logger.debug("Could not set owner_server_id: %s", e)
 
         # Add to queue
         await self._pending.put(queued)
@@ -1292,7 +1280,9 @@ class TrialManager:
             if queued.launch_coro_factory:
                 await queued.launch_coro_factory()
             else:
-                await self._orchestrator.launch_trial(queued.spec)
+                await self._orchestrator.launch_trial(
+                    queued.spec, owner_server_id=self._server_id
+                )
 
             queued.phase = QueuedTrialPhase.RUNNING
             self._logger.info("Trial '%s' is now running", trial_id)
