@@ -262,6 +262,92 @@ def _get_sls_otlp_endpoint() -> str:
     return f"https://{project}.{endpoint}"
 
 
+def _register_initial_sources(
+    schedule_manager: Any,
+    initial_trial_sources: list[Any],
+    *,
+    cluster_mode: bool = False,
+) -> None:
+    """Register initial trial sources from YAML into the ScheduleManager.
+
+    In cluster mode, validates that the local YAML sources match what was
+    already loaded from Redis.  If Redis contains sources not present in
+    the local YAML (or vice-versa), this raises ``RuntimeError`` to prevent
+    silent divergence between cluster peers.
+    """
+    from ._scheduler import TrialSourceConfig
+
+    yaml_source_ids = {src["source_id"] for src in initial_trial_sources}
+
+    # In cluster mode, check for disagreement with Redis-loaded sources.
+    if cluster_mode:
+        redis_source_ids = set(schedule_manager.list_source_ids())
+        # Only check if Redis already has sources (not first boot).
+        if redis_source_ids:
+            extra_in_redis = redis_source_ids - yaml_source_ids
+            extra_in_yaml = yaml_source_ids - redis_source_ids
+            if extra_in_redis or extra_in_yaml:
+                parts: list[str] = []
+                if extra_in_redis:
+                    parts.append(
+                        f"in Redis but not in local YAML: {sorted(extra_in_redis)}"
+                    )
+                if extra_in_yaml:
+                    parts.append(
+                        f"in local YAML but not in Redis: {sorted(extra_in_yaml)}"
+                    )
+                raise RuntimeError(
+                    "Cluster trial source mismatch — all peers must deploy "
+                    "identical trial source YAMLs. Differences: " + "; ".join(parts)
+                )
+
+    for source_data in initial_trial_sources:
+        source_id = source_data["source_id"]
+        sport_type = source_data["sport_type"]
+
+        config_data = source_data.get("config", {})
+        config = TrialSourceConfig(
+            scenario_name=config_data.get("scenario_name", ""),
+            scenario_config=config_data.get("scenario_config", {}),
+            pre_start_hours=config_data.get("pre_start_hours", 2.0),
+            check_interval_seconds=config_data.get("check_interval_seconds", 60.0),
+            auto_stop_on_completion=config_data.get("auto_stop_on_completion", True),
+            data_dir=config_data.get("data_dir"),
+            sync_interval_seconds=config_data.get("sync_interval_seconds", 300.0),
+            max_daily_games=config_data.get("max_daily_games", 0),
+        )
+
+        # Update config if already registered (YAML is authoritative)
+        existing = schedule_manager.get_source(source_id)
+        if existing is not None:
+            existing.config = config
+            existing.sport_type = sport_type
+            schedule_manager._persist_sources()
+            LOGGER.info(
+                "Updated trial source '%s' config from YAML",
+                source_id,
+            )
+            continue
+
+        try:
+            schedule_manager.register_source(
+                source_id=source_id,
+                sport_type=sport_type,
+                config=config,
+            )
+            LOGGER.info(
+                "Registered initial trial source '%s' for %s",
+                source_id,
+                sport_type,
+            )
+        except ValueError as e:
+            LOGGER.warning(
+                "Failed to register trial source '%s': %s",
+                source_id,
+                e,
+            )
+
+
 def create_dashboard_app(
     orchestrator: TrialOrchestrator,
     scheduler_store: SchedulerStore,
@@ -419,24 +505,12 @@ def create_dashboard_app(
                         mgr = _create_schedule_manager()
                         await mgr.start()
                         state.schedule_manager = mgr
-                        # Register initial trial sources
                         if initial_trial_sources:
-                            from ._scheduler import TrialSourceConfig as _TSC
-
-                            for src in initial_trial_sources:
-                                sid = src["source_id"]
-                                cfg_data = src.get("config", {})
-                                cfg = _TSC(**cfg_data)
-                                existing = mgr.get_source(sid)
-                                if existing is None:
-                                    try:
-                                        mgr.register_source(
-                                            source_id=sid,
-                                            sport_type=src["sport_type"],
-                                            config=cfg,
-                                        )
-                                    except ValueError:
-                                        pass
+                            _register_initial_sources(
+                                mgr,
+                                initial_trial_sources,
+                                cluster_mode=cluster_config is not None,
+                            )
 
                     elif not is_leader and has_scheduler:
                         LOGGER.info("Lost leadership — stopping ScheduleManager")
@@ -452,60 +526,11 @@ def create_dashboard_app(
 
         # Register initial trial sources if provided
         if initial_trial_sources and schedule_manager is not None:
-            from ._scheduler import TrialSourceConfig
-
-            for source_data in initial_trial_sources:
-                source_id = source_data["source_id"]
-                sport_type = source_data["sport_type"]
-
-                # Convert config
-                config_data = source_data.get("config", {})
-                config = TrialSourceConfig(
-                    scenario_name=config_data.get("scenario_name", ""),
-                    scenario_config=config_data.get("scenario_config", {}),
-                    pre_start_hours=config_data.get("pre_start_hours", 2.0),
-                    check_interval_seconds=config_data.get(
-                        "check_interval_seconds", 60.0
-                    ),
-                    auto_stop_on_completion=config_data.get(
-                        "auto_stop_on_completion", True
-                    ),
-                    data_dir=config_data.get("data_dir"),
-                    sync_interval_seconds=config_data.get(
-                        "sync_interval_seconds", 300.0
-                    ),
-                    max_daily_games=config_data.get("max_daily_games", 0),
-                )
-
-                # Update config if already registered (YAML is authoritative)
-                existing = schedule_manager.get_source(source_id)
-                if existing is not None:
-                    existing.config = config
-                    existing.sport_type = sport_type
-                    schedule_manager._persist_sources()
-                    LOGGER.info(
-                        "Updated trial source '%s' config from YAML",
-                        source_id,
-                    )
-                    continue
-
-                try:
-                    schedule_manager.register_source(
-                        source_id=source_id,
-                        sport_type=sport_type,
-                        config=config,
-                    )
-                    LOGGER.info(
-                        "Registered initial trial source '%s' for %s",
-                        source_id,
-                        sport_type,
-                    )
-                except ValueError as e:
-                    LOGGER.warning(
-                        "Failed to register trial source '%s': %s",
-                        source_id,
-                        e,
-                    )
+            _register_initial_sources(
+                schedule_manager,
+                initial_trial_sources,
+                cluster_mode=cluster_config is not None,
+            )
 
         # Initialize OTel exporter based on backend
         otel_exporter = None

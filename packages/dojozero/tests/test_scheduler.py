@@ -9,6 +9,7 @@ import pytest
 
 from dojozero.dashboard_server._scheduler import (
     FileSchedulerStore,
+    RedisSchedulerStore,
     ScheduledTrial,
     ScheduledTrialPhase,
     ScheduleManager,
@@ -1110,3 +1111,156 @@ class TestClusterDedup:
 
         # Should schedule without any claim check
         assert len(result) == 1
+
+
+class _FakeRedis:
+    """Minimal in-memory Redis substitute for testing."""
+
+    def __init__(self):
+        self._data: dict[str, dict[str, str]] = {}
+
+    def pipeline(self):
+        return _FakePipeline(self)
+
+    def hgetall(self, key):
+        return {k.encode(): v.encode() for k, v in self._data.get(key, {}).items()}
+
+    def hset(self, key, field, value):
+        self._data.setdefault(key, {})[field] = value
+
+    def delete(self, key):
+        self._data.pop(key, None)
+
+
+class _FakePipeline:
+    def __init__(self, redis: _FakeRedis):
+        self._redis = redis
+        self._ops: list[tuple] = []
+
+    def delete(self, key):
+        self._ops.append(("delete", key))
+        return self
+
+    def hset(self, key, field, value):
+        self._ops.append(("hset", key, field, value))
+        return self
+
+    def execute(self):
+        for op in self._ops:
+            if op[0] == "delete":
+                self._redis.delete(op[1])
+            elif op[0] == "hset":
+                self._redis.hset(op[1], op[2], op[3])
+
+
+class TestRedisSchedulerStore:
+    """Tests for RedisSchedulerStore using in-memory fake Redis."""
+
+    @pytest.fixture
+    def redis_store(self):
+        """Create a RedisSchedulerStore backed by fake Redis."""
+        store = RedisSchedulerStore.__new__(RedisSchedulerStore)
+        store._redis = _FakeRedis()  # type: ignore[assignment]
+        return store
+
+    def test_save_and_load(self, redis_store):
+        """Test saving and loading schedules via Redis."""
+        now = datetime.now(timezone.utc)
+        event_time = now + timedelta(hours=2)
+        start_time = event_time - timedelta(hours=2)
+
+        trial = ScheduledTrial(
+            schedule_id="sched-test-001",
+            scenario_name="test-scenario",
+            scenario_config={"key": "value"},
+            sport_type="nba",
+            game_id="001",
+            event_time=event_time,
+            scheduled_start_time=start_time,
+            pre_start_hours=2.0,
+            check_interval_seconds=60.0,
+            auto_stop_on_completion=True,
+            created_at=now,
+        )
+
+        redis_store.save([trial])
+
+        loaded = redis_store.load()
+        assert len(loaded) == 1
+        assert loaded[0].schedule_id == "sched-test-001"
+        assert loaded[0].scenario_name == "test-scenario"
+
+    def test_load_empty(self, redis_store):
+        """Test loading from empty Redis returns empty list."""
+        loaded = redis_store.load()
+        assert loaded == []
+
+    def test_save_replaces_all(self, redis_store):
+        """Test that save replaces all previous entries."""
+        now = datetime.now(timezone.utc)
+
+        trial1 = ScheduledTrial(
+            schedule_id="sched-1",
+            scenario_name="test",
+            scenario_config={},
+            sport_type="nba",
+            game_id="001",
+            event_time=now,
+            scheduled_start_time=now,
+            pre_start_hours=2.0,
+            check_interval_seconds=60.0,
+            auto_stop_on_completion=True,
+            created_at=now,
+        )
+        trial2 = ScheduledTrial(
+            schedule_id="sched-2",
+            scenario_name="test",
+            scenario_config={},
+            sport_type="nba",
+            game_id="002",
+            event_time=now,
+            scheduled_start_time=now,
+            pre_start_hours=2.0,
+            check_interval_seconds=60.0,
+            auto_stop_on_completion=True,
+            created_at=now,
+        )
+
+        redis_store.save([trial1, trial2])
+        assert len(redis_store.load()) == 2
+
+        # Save only one — the other should be gone
+        redis_store.save([trial1])
+        loaded = redis_store.load()
+        assert len(loaded) == 1
+        assert loaded[0].schedule_id == "sched-1"
+
+    def test_save_and_load_sources(self, redis_store):
+        """Test saving and loading trial sources via Redis."""
+        now = datetime.now(timezone.utc)
+
+        config = TrialSourceConfig(
+            scenario_name="nba-moneyline",
+            scenario_config={"key": "value"},
+            pre_start_hours=2.0,
+        )
+
+        source = TrialSource(
+            source_id="test-source",
+            sport_type="nba",
+            config=config,
+            enabled=True,
+            created_at=now,
+        )
+
+        redis_store.save_sources([source])
+
+        loaded = redis_store.load_sources()
+        assert len(loaded) == 1
+        assert loaded[0].source_id == "test-source"
+        assert loaded[0].config.scenario_name == "nba-moneyline"
+
+    def test_load_empty_sources(self, redis_store):
+        """Test loading sources from empty Redis returns empty list."""
+        loaded = redis_store.load_sources()
+        assert loaded == []

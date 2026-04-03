@@ -21,6 +21,7 @@ from ._game_discovery import (
 )
 from ._scheduler import (
     FileSchedulerStore,
+    RedisSchedulerStore,
     ScheduledTrial,
     ScheduledTrialPhase,
     ScheduleManager,
@@ -85,6 +86,7 @@ __all__ = [
     "ScheduledTrialPhase",
     "SchedulerStore",
     "FileSchedulerStore",
+    "RedisSchedulerStore",
     # Trial Sources
     "TrialSource",
     "TrialSourceConfig",

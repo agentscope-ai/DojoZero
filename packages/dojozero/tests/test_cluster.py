@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -17,8 +17,7 @@ from dojozero.core import (
 )
 from dojozero.dashboard_server._cluster import (
     ClusterConfig,
-    FileLeaderElector,
-    StaticPeerRegistry,
+    RedisLeaderElector,
     create_cluster,
 )
 from dojozero.dashboard_server._trial_manager import (
@@ -27,126 +26,86 @@ from dojozero.dashboard_server._trial_manager import (
 
 
 # ---------------------------------------------------------------------------
-# FileLeaderElector
+# RedisLeaderElector (with mocked Redis)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_file_leader_elector_acquires_leadership(tmp_path: Path) -> None:
-    lock_file = str(tmp_path / "leader.lock")
-    elector = FileLeaderElector(server_id="server-1", lock_path=lock_file)
-    await elector.start()
-    # Give the election loop a moment to acquire
-    await asyncio.sleep(0.3)
-    assert elector.is_leader()
-    await elector.stop()
-    assert not elector.is_leader()
+async def test_redis_leader_atomic_renewal() -> None:
+    """Lua-based renewal should atomically check ownership and extend TTL."""
+    elector = RedisLeaderElector(server_id="server-1", redis_url="redis://fake")
 
+    # Mock the Redis client and Lua script
+    mock_redis = AsyncMock()
+    mock_script = AsyncMock()
 
-@pytest.mark.asyncio
-async def test_file_leader_elector_only_one_leader(tmp_path: Path) -> None:
-    lock_file = str(tmp_path / "leader.lock")
-    elector1 = FileLeaderElector(server_id="server-1", lock_path=lock_file)
-    elector2 = FileLeaderElector(server_id="server-2", lock_path=lock_file)
-    await elector1.start()
-    await asyncio.sleep(0.3)
-    assert elector1.is_leader()
+    elector._redis = mock_redis
+    elector._renew_script = mock_script
+    elector._is_leader = True
 
-    await elector2.start()
-    await asyncio.sleep(0.3)
-    # Only one can be leader at a time
-    assert elector1.is_leader() and not elector2.is_leader()
+    # Test the renewal path directly
+    elector._is_leader = True
+    mock_script.return_value = 1
 
-    await elector1.stop()
-    await elector2.stop()
+    # Run one iteration of election loop
+    elector._stop_event = asyncio.Event()
 
+    async def run_one_iteration():
+        """Run exactly one iteration of the election loop."""
+        try:
+            if elector._is_leader:
+                renewed = await elector._renew_script(
+                    keys=[elector.LOCK_KEY],
+                    args=[elector._server_id, elector.TTL_SECONDS],
+                )
+                if not renewed:
+                    elector._is_leader = False
+        except Exception:
+            pass
 
-@pytest.mark.asyncio
-async def test_file_leader_elector_wait_for_leader(tmp_path: Path) -> None:
-    lock_file = str(tmp_path / "leader.lock")
-    elector = FileLeaderElector(server_id="server-1", lock_path=lock_file)
-    await elector.start()
-    leader_id = await asyncio.wait_for(elector.wait_for_leader(), timeout=5.0)
-    assert leader_id == "server-1"
-    await elector.stop()
-
-
-# ---------------------------------------------------------------------------
-# StaticPeerRegistry
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_static_peer_registry_get_peers() -> None:
-    registry = StaticPeerRegistry(
-        server_id="self",
-        server_url="http://localhost:8000",
-        peer_urls=["http://localhost:8001", "http://localhost:8002"],
+    # Successful renewal — stays leader
+    mock_script.return_value = 1
+    await run_one_iteration()
+    assert elector._is_leader is True
+    mock_script.assert_awaited_with(
+        keys=[RedisLeaderElector.LOCK_KEY],
+        args=["server-1", 30],
     )
-    await registry.start()
-    peers = await registry.get_peers()
-    assert len(peers) == 3  # self + 2 peers
-    urls = {p.server_url for p in peers}
-    assert "http://localhost:8000" in urls
-    assert "http://localhost:8001" in urls
-    assert "http://localhost:8002" in urls
-    await registry.stop()
+
+    # Failed renewal (someone else owns the key) — loses leadership
+    mock_script.return_value = 0
+    await run_one_iteration()
+    assert elector._is_leader is False
 
 
 @pytest.mark.asyncio
-async def test_static_peer_registry_trial_ownership() -> None:
-    registry = StaticPeerRegistry(
-        server_id="self",
-        server_url="http://localhost:8000",
-        peer_urls=["http://localhost:8001"],
-    )
-    await registry.start()
-
-    # No owner initially
-    peer = await registry.get_peer_for_trial("trial-1")
-    assert peer is None
-
-    # Register trial ownership
-    await registry.register_trial("trial-1", "self")
-    peer = await registry.get_peer_for_trial("trial-1")
-    assert peer is not None
-    assert peer.server_url == "http://localhost:8000"
-
-    # Register trial on remote peer
-    await registry.register_trial("trial-2", "http://localhost:8001")
-    peer = await registry.get_peer_for_trial("trial-2")
-    assert peer is not None
-    assert peer.server_url == "http://localhost:8001"
-
-    await registry.stop()
+async def test_redis_leader_ttl_is_30() -> None:
+    """TTL should be 30 seconds (6 renewal chances at 5s interval)."""
+    assert RedisLeaderElector.TTL_SECONDS == 30
+    assert RedisLeaderElector.RENEW_INTERVAL == 5
 
 
 @pytest.mark.asyncio
-async def test_static_peer_registry_active_trials() -> None:
-    registry = StaticPeerRegistry(
-        server_id="self",
-        server_url="http://localhost:8000",
-        peer_urls=[],
-    )
-    await registry.start()
-    await registry.update_active_trials("self", 5)
-    peers = await registry.get_peers()
-    assert peers[0].active_trials == 5
-    await registry.stop()
+async def test_redis_leader_registers_lua_script() -> None:
+    """start() should register the Lua renewal script."""
+    elector = RedisLeaderElector(server_id="server-1", redis_url="redis://fake")
 
+    mock_redis = MagicMock()
+    mock_script = MagicMock()
+    mock_redis.register_script.return_value = mock_script
 
-@pytest.mark.asyncio
-async def test_static_peer_deduplicates_self() -> None:
-    """Self URL should not be duplicated even if listed in peer_urls."""
-    registry = StaticPeerRegistry(
-        server_id="self",
-        server_url="http://localhost:8000",
-        peer_urls=["http://localhost:8000"],  # same as self
-    )
-    await registry.start()
-    peers = await registry.get_peers()
-    assert len(peers) == 1
-    await registry.stop()
+    with patch("redis.asyncio.from_url", return_value=mock_redis):
+        # Don't actually start the loop
+        with patch.object(asyncio, "create_task"):
+            await elector.start()
+
+    mock_redis.register_script.assert_called_once()
+    assert elector._renew_script is mock_script
+
+    # Cleanup
+    elector._stop_event.set()
+    elector._is_leader = False
+    elector._redis = None
 
 
 # ---------------------------------------------------------------------------
@@ -154,18 +113,29 @@ async def test_static_peer_deduplicates_self() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_create_cluster_file_static(tmp_path: Path) -> None:
+def test_create_cluster_redis_only() -> None:
+    """create_cluster should always create Redis-backed instances."""
     config = ClusterConfig(
         server_id="test-server",
         server_url="http://localhost:8000",
-        leader_election="file",
-        discovery="static",
-        peers=["http://localhost:8001"],
-        shared_store_path=str(tmp_path / "leader.lock"),
+        redis_url="redis://localhost:6379/0",
     )
     elector, registry = create_cluster(config)
-    assert isinstance(elector, FileLeaderElector)
-    assert isinstance(registry, StaticPeerRegistry)
+    assert isinstance(elector, RedisLeaderElector)
+    from dojozero.dashboard_server._cluster import RedisPeerRegistry
+
+    assert isinstance(registry, RedisPeerRegistry)
+
+
+def test_create_cluster_requires_redis_url() -> None:
+    """create_cluster should raise if redis_url is empty."""
+    config = ClusterConfig(
+        server_id="test",
+        server_url="http://localhost:8000",
+        redis_url="",
+    )
+    with pytest.raises(ValueError, match="redis_url is required"):
+        create_cluster(config)
 
 
 def test_create_cluster_defaults_server_id() -> None:
@@ -175,21 +145,11 @@ def test_create_cluster_defaults_server_id() -> None:
     config = ClusterConfig(
         server_id="",
         server_url="http://localhost:8000",
+        redis_url="redis://localhost:6379/0",
     )
     elector, _registry = create_cluster(config)
-    # FileLeaderElector should have the hostname as server_id
-    assert isinstance(elector, FileLeaderElector)
+    assert isinstance(elector, RedisLeaderElector)
     assert elector._server_id == platform.node()
-
-
-def test_create_cluster_redis_requires_url() -> None:
-    config = ClusterConfig(
-        server_id="test",
-        server_url="http://localhost:8000",
-        leader_election="redis",
-    )
-    with pytest.raises(ValueError, match="redis_url required"):
-        create_cluster(config)
 
 
 # ---------------------------------------------------------------------------
@@ -277,39 +237,6 @@ def test_trial_record_owner_none_persisted(tmp_path: Path) -> None:
     loaded = store.get_trial_record("no-owner")
     assert loaded is not None
     assert loaded.owner_server_id is None
-
-
-# ---------------------------------------------------------------------------
-# Leader failover
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_file_leader_failover(tmp_path: Path) -> None:
-    """When the leader stops, the other elector acquires leadership."""
-    lock_file = str(tmp_path / "leader.lock")
-    elector1 = FileLeaderElector(server_id="server-1", lock_path=lock_file)
-    elector2 = FileLeaderElector(server_id="server-2", lock_path=lock_file)
-
-    await elector1.start()
-    await asyncio.sleep(0.3)
-    assert elector1.is_leader()
-
-    await elector2.start()
-    await asyncio.sleep(0.3)
-    assert not elector2.is_leader()
-
-    # Leader stops — server-2 should take over
-    await elector1.stop()
-    # Wait for elector2's election loop to acquire (loops every 5s, but
-    # we need at most one cycle)
-    for _ in range(12):
-        await asyncio.sleep(0.5)
-        if elector2.is_leader():
-            break
-    assert elector2.is_leader()
-
-    await elector2.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -447,12 +374,9 @@ async def test_resume_legacy_trial_no_owner(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_notify_active_trials() -> None:
     """_notify_active_trials pushes count to peer registry."""
-    registry = StaticPeerRegistry(
-        server_id="self",
-        server_url="http://localhost:8000",
-        peer_urls=[],
-    )
-    await registry.start()
+    registry = AsyncMock()
+    registry.update_active_trials = AsyncMock()
+    registry.start = AsyncMock()
 
     orchestrator = MagicMock()
     manager = TrialManager(
@@ -469,10 +393,7 @@ async def test_notify_active_trials() -> None:
     # Give the fire-and-forget coroutine a chance to run
     await asyncio.sleep(0.1)
 
-    peers = await registry.get_peers()
-    assert peers[0].active_trials == 2
-
-    await registry.stop()
+    registry.update_active_trials.assert_awaited_once_with("self", 2)
 
 
 # ---------------------------------------------------------------------------
@@ -542,117 +463,3 @@ def test_gateway_router_proxies_without_forwarded_header() -> None:
     assert resp.status_code == 404
     # The peer registry SHOULD have been consulted
     mock_registry.get_peer_for_trial.assert_called_once_with("nonexistent-trial")
-
-
-# ---------------------------------------------------------------------------
-# StaticPeerRegistry URL-based keying
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Game Claims (StaticPeerRegistry)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_static_claim_game_success() -> None:
-    """A single server can claim a game successfully."""
-    registry = StaticPeerRegistry(
-        server_id="server-1",
-        server_url="http://localhost:8000",
-        peer_urls=[],
-    )
-    await registry.start()
-    result = await registry.claim_game("nba", "401810490", "server-1")
-    assert result is True
-    await registry.stop()
-
-
-@pytest.mark.asyncio
-async def test_static_claim_game_already_claimed() -> None:
-    """A game claimed by server-1 cannot be claimed by server-2."""
-    registry = StaticPeerRegistry(
-        server_id="server-1",
-        server_url="http://localhost:8000",
-        peer_urls=["http://localhost:8001"],
-    )
-    await registry.start()
-
-    assert await registry.claim_game("nba", "401810490", "server-1") is True
-    assert await registry.claim_game("nba", "401810490", "server-2") is False
-
-    await registry.stop()
-
-
-@pytest.mark.asyncio
-async def test_static_claim_game_same_server_idempotent() -> None:
-    """Same server claiming the same game twice returns True (idempotent)."""
-    registry = StaticPeerRegistry(
-        server_id="server-1",
-        server_url="http://localhost:8000",
-        peer_urls=[],
-    )
-    await registry.start()
-
-    assert await registry.claim_game("nba", "401810490", "server-1") is True
-    assert await registry.claim_game("nba", "401810490", "server-1") is True
-
-    await registry.stop()
-
-
-@pytest.mark.asyncio
-async def test_static_is_game_claimed() -> None:
-    """is_game_claimed returns correct state before and after claiming."""
-    registry = StaticPeerRegistry(
-        server_id="server-1",
-        server_url="http://localhost:8000",
-        peer_urls=[],
-    )
-    await registry.start()
-
-    assert await registry.is_game_claimed("nba", "401810490") is False
-    await registry.claim_game("nba", "401810490", "server-1")
-    assert await registry.is_game_claimed("nba", "401810490") is True
-
-    await registry.stop()
-
-
-@pytest.mark.asyncio
-async def test_static_claim_different_sports_independent() -> None:
-    """Claims are scoped by sport_type — same game_id in different sports are independent."""
-    registry = StaticPeerRegistry(
-        server_id="server-1",
-        server_url="http://localhost:8000",
-        peer_urls=[],
-    )
-    await registry.start()
-
-    assert await registry.claim_game("nba", "12345", "server-1") is True
-    assert await registry.claim_game("nfl", "12345", "server-2") is True
-
-    await registry.stop()
-
-
-@pytest.mark.asyncio
-async def test_static_peer_active_trials_keyed_by_url() -> None:
-    """Active trial counts should be keyed by URL internally."""
-    registry = StaticPeerRegistry(
-        server_id="server-1",
-        server_url="http://localhost:8000",
-        peer_urls=["http://localhost:8001"],
-    )
-    await registry.start()
-
-    # Update using server_id (mapped to URL internally)
-    await registry.update_active_trials("server-1", 3)
-    peers = await registry.get_peers()
-    self_peer = [p for p in peers if p.server_id == "server-1"][0]
-    assert self_peer.active_trials == 3
-
-    # Update remote peer using URL (stays as URL)
-    await registry.update_active_trials("http://localhost:8001", 7)
-    peers = await registry.get_peers()
-    remote_peer = [p for p in peers if p.server_url == "http://localhost:8001"][0]
-    assert remote_peer.active_trials == 7
-
-    await registry.stop()

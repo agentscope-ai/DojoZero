@@ -4,10 +4,8 @@ Provides leader election and peer discovery so that multiple Dashboard Server
 instances can cooperate: one leader runs the ScheduleManager while all
 instances accept trial submissions and serve gateway requests.
 
-Two back-ends are supported for each primitive:
-
-* **file** (dev): ``fcntl.flock`` on a shared filesystem path.
-* **redis** (prod): ``SET NX EX`` for leader election, hash-based peer registry.
+Redis is the only supported back-end. ``--cluster-redis-url`` enables cluster
+mode; standalone mode (no ``ClusterConfig``) needs no Redis.
 
 When no ``ClusterConfig`` is provided the server runs in standalone mode and
 these primitives are not used.
@@ -16,7 +14,6 @@ these primitives are not used.
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import logging
 import platform
 import time
@@ -37,11 +34,7 @@ class ClusterConfig(BaseModel):
 
     server_id: str = ""
     server_url: str = ""
-    leader_election: str = "file"  # "file" | "redis"
-    discovery: str = "static"  # "static" | "redis"
-    peers: list[str] = []  # static peer URLs (dev)
-    redis_url: str | None = None  # for redis mode (prod)
-    shared_store_path: str | None = None  # NFS path for file lock
+    redis_url: str = ""
 
 
 class PeerInfo(BaseModel):
@@ -70,84 +63,23 @@ class LeaderElector(Protocol):
         ...
 
 
-class FileLeaderElector:
-    """Leader election using ``fcntl.flock`` on a shared filesystem.
-
-    Suitable for development clusters sharing an NFS / local directory.
-    """
-
-    def __init__(self, server_id: str, lock_path: str) -> None:
-        self._server_id = server_id
-        self._lock_path = lock_path
-        self._is_leader = False
-        self._task: asyncio.Task[None] | None = None
-        self._stop_event = asyncio.Event()
-        self._fd: Any | None = None
-
-    async def start(self) -> None:
-        self._stop_event.clear()
-        self._task = asyncio.create_task(self._election_loop())
-
-    async def stop(self) -> None:
-        self._stop_event.set()
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        self._release_lock()
-
-    def is_leader(self) -> bool:
-        return self._is_leader
-
-    async def wait_for_leader(self) -> str:
-        # In file-based election, we can only know about ourselves.
-        while not self._is_leader and not self._stop_event.is_set():
-            await asyncio.sleep(0.5)
-        return self._server_id
-
-    # -- internals --
-
-    async def _election_loop(self) -> None:
-        while not self._stop_event.is_set():
-            acquired = await asyncio.get_event_loop().run_in_executor(
-                None, self._try_acquire_lock
-            )
-            if acquired and not self._is_leader:
-                self._is_leader = True
-                logger.info("This server (%s) became leader", self._server_id)
-            elif not acquired and self._is_leader:
-                self._is_leader = False
-                logger.info("This server (%s) lost leadership", self._server_id)
-            await asyncio.sleep(5)
-
-    def _try_acquire_lock(self) -> bool:
-        try:
-            if self._fd is None:
-                self._fd = open(self._lock_path, "w")  # noqa: SIM115
-            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except (OSError, IOError):
-            return False
-
-    def _release_lock(self) -> None:
-        if self._fd is not None:
-            try:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
-                self._fd.close()
-            except Exception:
-                pass
-            self._fd = None
-        self._is_leader = False
-
-
 class RedisLeaderElector:
     """Leader election using Redis ``SET NX EX`` with periodic renewal."""
 
     LOCK_KEY = "dojozero:leader"
-    TTL_SECONDS = 15
+    TTL_SECONDS = 30
     RENEW_INTERVAL = 5
+
+    # Lua script for atomic check-and-renew: only extend TTL if we still own
+    # the key.  This prevents the race where GET succeeds but the key expires
+    # before the subsequent EXPIRE call.
+    _RENEW_LUA = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("expire", KEYS[1], ARGV[2])
+else
+    return 0
+end
+"""
 
     def __init__(self, server_id: str, redis_url: str) -> None:
         self._server_id = server_id
@@ -156,11 +88,13 @@ class RedisLeaderElector:
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._redis: Any = None  # noqa: F821
+        self._renew_script: Any = None
 
     async def start(self) -> None:
         import redis.asyncio as aioredis
 
         self._redis = aioredis.from_url(self._redis_url)
+        self._renew_script = self._redis.register_script(self._RENEW_LUA)
         self._stop_event.clear()
         self._task = asyncio.create_task(self._election_loop())
 
@@ -203,11 +137,12 @@ class RedisLeaderElector:
         while not self._stop_event.is_set():
             try:
                 if self._is_leader:
-                    # Renew our lease
-                    current = await self._redis.get(self.LOCK_KEY)
-                    if current and current.decode() == self._server_id:
-                        await self._redis.expire(self.LOCK_KEY, self.TTL_SECONDS)
-                    else:
+                    # Atomically check ownership and extend TTL
+                    renewed = await self._renew_script(
+                        keys=[self.LOCK_KEY],
+                        args=[self._server_id, self.TTL_SECONDS],
+                    )
+                    if not renewed:
                         self._is_leader = False
                         logger.info(
                             "Server %s lost leadership (key changed)",
@@ -250,94 +185,6 @@ class PeerRegistry(Protocol):
         self, sport_type: str, game_id: str, server_id: str
     ) -> bool: ...
     async def is_game_claimed(self, sport_type: str, game_id: str) -> bool: ...
-
-
-class StaticPeerRegistry:
-    """Peer registry from a static list of URLs (dev/testing).
-
-    In static mode we only know peer URLs, not their server IDs.
-    We use ``server_url`` as the canonical key everywhere so that
-    ``register_trial``, ``update_active_trials``, and ``get_peers``
-    are all consistent.  A ``_url_for_id`` helper maps a server_id
-    (like ``"server-1"``) to the corresponding URL when needed.
-    """
-
-    def __init__(self, server_id: str, server_url: str, peer_urls: list[str]) -> None:
-        self._server_id = server_id
-        self._server_url = server_url
-        self._peer_urls = peer_urls
-        self._trial_owners: dict[str, str] = {}  # trial_id -> server_url
-        self._active_counts: dict[str, int] = {}  # server_url -> count
-        self._game_claims: dict[str, str] = {}  # "{sport}:{game_id}" -> server_id
-
-    async def start(self) -> None:
-        logger.info(
-            "Static peer registry started with %d peer(s)", len(self._peer_urls)
-        )
-
-    async def stop(self) -> None:
-        pass
-
-    def _url_for_id(self, server_id: str) -> str:
-        """Resolve a server_id to a URL.
-
-        If *server_id* matches our own id we return our URL.
-        If it looks like a URL already (contains ``://``) return as-is.
-        Otherwise fall back to returning it unchanged.
-        """
-        if server_id == self._server_id:
-            return self._server_url
-        # Already a URL (the common case for static peers)
-        return server_id
-
-    async def get_peers(self) -> list[PeerInfo]:
-        peers = [
-            PeerInfo(
-                server_id=self._server_id,
-                server_url=self._server_url,
-                active_trials=self._active_counts.get(self._server_url, 0),
-                last_heartbeat=time.time(),
-            )
-        ]
-        for url in self._peer_urls:
-            if url != self._server_url:
-                peers.append(
-                    PeerInfo(
-                        server_id=url,
-                        server_url=url,
-                        active_trials=self._active_counts.get(url, 0),
-                        last_heartbeat=time.time(),
-                    )
-                )
-        return peers
-
-    async def get_peer_for_trial(self, trial_id: str) -> PeerInfo | None:
-        owner_url = self._trial_owners.get(trial_id)
-        if owner_url is None:
-            return None
-        owner_id = self._server_id if owner_url == self._server_url else owner_url
-        return PeerInfo(
-            server_id=owner_id,
-            server_url=owner_url,
-            active_trials=self._active_counts.get(owner_url, 0),
-        )
-
-    async def register_trial(self, trial_id: str, server_id: str) -> None:
-        self._trial_owners[trial_id] = self._url_for_id(server_id)
-
-    async def update_active_trials(self, server_id: str, count: int) -> None:
-        self._active_counts[self._url_for_id(server_id)] = count
-
-    async def claim_game(self, sport_type: str, game_id: str, server_id: str) -> bool:
-        key = f"{sport_type}:{game_id}"
-        existing = self._game_claims.get(key)
-        if existing is None or existing == server_id:
-            self._game_claims[key] = server_id
-            return True
-        return False
-
-    async def is_game_claimed(self, sport_type: str, game_id: str) -> bool:
-        return f"{sport_type}:{game_id}" in self._game_claims
 
 
 class RedisPeerRegistry:
@@ -499,45 +346,35 @@ def create_cluster(
 ) -> tuple[LeaderElector, PeerRegistry]:
     """Create leader elector and peer registry from configuration.
 
+    Requires ``redis_url`` to be set.
+
     Args:
         config: Cluster configuration.
 
     Returns:
         Tuple of (LeaderElector, PeerRegistry).
+
+    Raises:
+        ValueError: If ``redis_url`` is not set.
     """
+    if not config.redis_url:
+        raise ValueError("redis_url is required for cluster mode")
+
     server_id = config.server_id or platform.node()
     server_url = config.server_url
 
-    # Leader election
-    if config.leader_election == "redis":
-        if not config.redis_url:
-            raise ValueError("redis_url required for redis leader election")
-        elector: LeaderElector = RedisLeaderElector(server_id, config.redis_url)
-    else:
-        lock_path = config.shared_store_path or "/tmp/dojozero_leader.lock"
-        elector = FileLeaderElector(server_id, lock_path)
-
-    # Peer discovery
-    if config.discovery == "redis":
-        if not config.redis_url:
-            raise ValueError("redis_url required for redis discovery")
-        registry: PeerRegistry = RedisPeerRegistry(
-            server_id, server_url, config.redis_url
-        )
-    else:
-        registry = StaticPeerRegistry(server_id, server_url, config.peers)
+    elector: LeaderElector = RedisLeaderElector(server_id, config.redis_url)
+    registry: PeerRegistry = RedisPeerRegistry(server_id, server_url, config.redis_url)
 
     return elector, registry
 
 
 __all__ = [
     "ClusterConfig",
-    "FileLeaderElector",
     "LeaderElector",
     "PeerInfo",
     "PeerRegistry",
     "RedisLeaderElector",
     "RedisPeerRegistry",
-    "StaticPeerRegistry",
     "create_cluster",
 ]

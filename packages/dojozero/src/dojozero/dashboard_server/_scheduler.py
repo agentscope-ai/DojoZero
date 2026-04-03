@@ -323,6 +323,69 @@ class FileSchedulerStore:
             return []
 
 
+class RedisSchedulerStore:
+    """Redis-backed scheduler store using hashes.
+
+    Uses two Redis hashes:
+    - ``dojozero:schedules`` — ``schedule_id → JSON(ScheduledTrial)``
+    - ``dojozero:trial_sources`` — ``source_id → JSON(TrialSource)``
+    """
+
+    SCHEDULES_KEY = "dojozero:schedules"
+    SOURCES_KEY = "dojozero:trial_sources"
+
+    def __init__(self, redis_url: str) -> None:
+        import redis as sync_redis
+
+        self._redis: Any = sync_redis.from_url(redis_url)
+
+    def save(self, schedules: list[ScheduledTrial]) -> None:
+        pipe = self._redis.pipeline()
+        pipe.delete(self.SCHEDULES_KEY)
+        for s in schedules:
+            pipe.hset(
+                self.SCHEDULES_KEY, s.schedule_id, json.dumps(s.to_dict(), default=str)
+            )
+        pipe.execute()
+        LOGGER.debug("Saved %d schedules to Redis", len(schedules))
+
+    def load(self) -> list[ScheduledTrial]:
+        try:
+            raw: dict[bytes, bytes] = self._redis.hgetall(self.SCHEDULES_KEY)
+            schedules = []
+            for _key, val in raw.items():
+                data = json.loads(val)
+                schedules.append(ScheduledTrial.from_dict(data))
+            LOGGER.info("Loaded %d schedules from Redis", len(schedules))
+            return schedules
+        except Exception as e:
+            LOGGER.error("Error loading schedules from Redis: %s", e)
+            return []
+
+    def save_sources(self, sources: list[TrialSource]) -> None:
+        pipe = self._redis.pipeline()
+        pipe.delete(self.SOURCES_KEY)
+        for s in sources:
+            pipe.hset(
+                self.SOURCES_KEY, s.source_id, json.dumps(s.to_dict(), default=str)
+            )
+        pipe.execute()
+        LOGGER.debug("Saved %d trial sources to Redis", len(sources))
+
+    def load_sources(self) -> list[TrialSource]:
+        try:
+            raw: dict[bytes, bytes] = self._redis.hgetall(self.SOURCES_KEY)
+            sources = []
+            for _key, val in raw.items():
+                data = json.loads(val)
+                sources.append(TrialSource.from_dict(data))
+            LOGGER.info("Loaded %d trial sources from Redis", len(sources))
+            return sources
+        except Exception as e:
+            LOGGER.error("Error loading trial sources from Redis: %s", e)
+            return []
+
+
 class ScheduleManager:
     """Manages scheduled trials based on registered trial sources.
 
@@ -853,6 +916,10 @@ class ScheduleManager:
         """List all registered trial sources."""
         return list(self._sources.values())
 
+    def list_source_ids(self) -> list[str]:
+        """Return all registered source IDs."""
+        return list(self._sources.keys())
+
     def set_source_enabled(self, source_id: str, enabled: bool) -> bool:
         """Enable or disable a trial source.
 
@@ -1094,8 +1161,9 @@ class ScheduleManager:
         Each source has its own sync_interval_seconds in config. The loop checks
         each source and syncs it if enough time has passed since last_sync_at.
         """
-        # Initial sync on startup (after a small delay)
-        await asyncio.sleep(5.0)
+        # Initial delay: longer in cluster mode so peers can register heartbeats
+        initial_delay = 30.0 if self._peer_registry is not None else 5.0
+        await asyncio.sleep(initial_delay)
 
         # Do initial sync for all sources
         for source in list(self._sources.values()):
