@@ -1051,6 +1051,17 @@ class ScheduleManager:
             if (source.source_id, game.game_id) in self._scheduled_events:
                 continue
 
+            # Enforce max_daily_games limit (before claiming, to avoid orphaned claims)
+            if max_games > 0 and remaining_slots <= 0:
+                LOGGER.info(
+                    "Source '%s': skipping game %s (%s) — max_daily_games=%d reached",
+                    source.source_id,
+                    game.game_id,
+                    game.short_name,
+                    max_games,
+                )
+                continue
+
             # Cluster-wide game dedup: claim this game atomically
             if self._peer_registry is not None and self._server_id is not None:
                 try:
@@ -1068,17 +1079,6 @@ class ScheduleManager:
                     LOGGER.warning("Failed to claim game %s: %s", game.game_id, e)
                     # Fail-closed: don't schedule if claim check fails
                     continue
-
-            # Enforce max_daily_games limit
-            if max_games > 0 and remaining_slots <= 0:
-                LOGGER.info(
-                    "Source '%s': skipping game %s (%s) — max_daily_games=%d reached",
-                    source.source_id,
-                    game.game_id,
-                    game.short_name,
-                    max_games,
-                )
-                continue
 
             # Build config for this game (deep copy to avoid shared nested dicts)
             game_config = copy.deepcopy(config.scenario_config)
@@ -1436,28 +1436,9 @@ class ScheduleManager:
 
         scheduled.phase = ScheduledTrialPhase.LAUNCHING
 
-        # Verify game claim before launching (guard against stale schedules)
-        if self._peer_registry is not None and self._server_id is not None:
-            try:
-                claimed = await self._peer_registry.claim_game(
-                    scheduled.sport_type, scheduled.game_id, self._server_id
-                )
-                if not claimed:
-                    LOGGER.warning(
-                        "Game %s claimed by another server, skipping launch of %s",
-                        scheduled.game_id,
-                        scheduled.schedule_id,
-                    )
-                    scheduled.phase = ScheduledTrialPhase.CANCELLED
-                    scheduled.error = "Game claimed by another server"
-                    self._persist()
-                    return
-            except Exception as e:
-                LOGGER.warning(
-                    "Failed to verify game claim for %s: %s",
-                    scheduled.game_id,
-                    e,
-                )
+        # No game claim re-check here. The schedule is already committed
+        # in the store — whoever is leader should launch it. Claims are only
+        # for dedup at scheduling time in the sync loop.
 
         try:
             # Get builder definition

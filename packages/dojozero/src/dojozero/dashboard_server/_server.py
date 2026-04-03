@@ -318,16 +318,9 @@ def _register_initial_sources(
             max_daily_games=config_data.get("max_daily_games", 0),
         )
 
-        # Update config if already registered (YAML is authoritative)
+        # Skip if already registered (loaded from Redis).
         existing = schedule_manager.get_source(source_id)
         if existing is not None:
-            existing.config = config
-            existing.sport_type = sport_type
-            schedule_manager._persist_sources()
-            LOGGER.info(
-                "Updated trial source '%s' config from YAML",
-                source_id,
-            )
             continue
 
         try:
