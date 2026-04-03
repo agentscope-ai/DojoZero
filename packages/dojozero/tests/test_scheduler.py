@@ -1073,9 +1073,7 @@ class TestClusterDedup:
         assert len(result) == 0
 
     @pytest.mark.asyncio
-    async def test_sync_source_no_claim_without_peer_registry(
-        self, mock_trial_manager
-    ):
+    async def test_sync_source_no_claim_without_peer_registry(self, mock_trial_manager):
         """Without a peer_registry, scheduling proceeds without claim checks."""
         scheduler = ScheduleManager(
             trial_manager=mock_trial_manager,

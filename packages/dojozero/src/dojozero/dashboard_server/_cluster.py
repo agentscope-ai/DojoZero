@@ -328,9 +328,7 @@ class StaticPeerRegistry:
     async def update_active_trials(self, server_id: str, count: int) -> None:
         self._active_counts[self._url_for_id(server_id)] = count
 
-    async def claim_game(
-        self, sport_type: str, game_id: str, server_id: str
-    ) -> bool:
+    async def claim_game(self, sport_type: str, game_id: str, server_id: str) -> bool:
         key = f"{sport_type}:{game_id}"
         existing = self._game_claims.get(key)
         if existing is None or existing == server_id:
@@ -472,15 +470,11 @@ class RedisPeerRegistry:
                 logger.warning("Peer heartbeat error: %s", e)
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
 
-    async def claim_game(
-        self, sport_type: str, game_id: str, server_id: str
-    ) -> bool:
+    async def claim_game(self, sport_type: str, game_id: str, server_id: str) -> bool:
         """Atomically claim a game for scheduling. Returns True if claimed."""
         field_key = f"{sport_type}:{game_id}"
         # HSETNX: set only if the field does not exist (atomic)
-        was_set = await self._redis.hsetnx(
-            self.GAME_CLAIMS_KEY, field_key, server_id
-        )
+        was_set = await self._redis.hsetnx(self.GAME_CLAIMS_KEY, field_key, server_id)
         if was_set:
             return True
         # Field already exists — check if we already own it

@@ -992,16 +992,13 @@ class ScheduleManager:
                     )
                     if not claimed:
                         LOGGER.info(
-                            "Game %s (%s) already claimed by another server, "
-                            "skipping",
+                            "Game %s (%s) already claimed by another server, skipping",
                             game.game_id,
                             game.short_name,
                         )
                         continue
                 except Exception as e:
-                    LOGGER.warning(
-                        "Failed to claim game %s: %s", game.game_id, e
-                    )
+                    LOGGER.warning("Failed to claim game %s: %s", game.game_id, e)
                     # Fail-closed: don't schedule if claim check fails
                     continue
 
@@ -1379,8 +1376,7 @@ class ScheduleManager:
                 )
                 if not claimed:
                     LOGGER.warning(
-                        "Game %s claimed by another server, "
-                        "skipping launch of %s",
+                        "Game %s claimed by another server, skipping launch of %s",
                         scheduled.game_id,
                         scheduled.schedule_id,
                     )
