@@ -110,8 +110,26 @@ Leader election determines which server runs the scheduler automatically — no 
 | Flag | Default | Description |
 |---|---|---|
 | `--server-id` | hostname | Unique identifier for this server instance |
-| `--server-url` | `http://{host}:{port}` | Externally reachable URL for this server |
+| `--server-url` | Auto-detected (see below) | Externally reachable URL for this server |
 | `--cluster-redis-url` | `$DOJOZERO_CLUSTER_REDIS_URL` | Redis URL (enables cluster mode) |
+
+### Kubernetes / Container Setup
+
+When pods listen on `0.0.0.0` (the default), each server must advertise a **routable IP** so peers can forward trials to it. If `--server-url` is not set and the bind host is `0.0.0.0`, the server auto-detects its IP using the `POD_IP` environment variable (with a `socket.gethostbyname()` fallback).
+
+Expose `POD_IP` via the Kubernetes Downward API in your pod spec:
+
+```yaml
+env:
+  - name: POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
+```
+
+This ensures each peer registers as e.g. `http://10.0.1.42:8000` instead of `http://0.0.0.0:8000`. Without this, trial forwarding between peers will loop back to the sender.
+
+For local development with multiple servers on different ports, this is not needed — `http://localhost:8000` and `http://localhost:8001` are already distinct and reachable.
 
 ### How It Works
 

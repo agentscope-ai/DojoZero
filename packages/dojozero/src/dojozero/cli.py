@@ -2145,7 +2145,28 @@ async def _serve_command(args: argparse.Namespace) -> int:
     if cluster_redis_url:
         from dojozero.dashboard_server._cluster import ClusterConfig
 
-        server_url = server_url_arg or f"http://{host}:{port}"
+        if server_url_arg:
+            server_url = server_url_arg
+        elif host in ("0.0.0.0", "::"):
+            # Resolve to a reachable IP so peers can forward trials to us.
+            # In Kubernetes, expose status.podIP as the POD_IP env var via
+            # the Downward API.  The socket fallback works on plain VMs but
+            # may return 127.0.0.1 inside containers — warn if that happens.
+            import socket
+
+            pod_ip = os.environ.get("POD_IP", "").strip()
+            if not pod_ip:
+                pod_ip = socket.gethostbyname(socket.gethostname())
+                if pod_ip.startswith("127."):
+                    LOGGER.warning(
+                        "Resolved server IP is %s which is not routable by "
+                        "peers. Set --server-url or the POD_IP env var to "
+                        "this server's reachable address.",
+                        pod_ip,
+                    )
+            server_url = f"http://{pod_ip}:{port}"
+        else:
+            server_url = f"http://{host}:{port}"
         cluster_config = ClusterConfig(
             server_id=server_id_arg or "",
             server_url=server_url,
