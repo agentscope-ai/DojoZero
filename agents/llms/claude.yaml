@@ -1,8 +1,14 @@
 llm:
   - model_type: anthropic
-    # model_name: claude-opus-4-5-20251101
     model_name: claude-haiku-4-5-20251001
     api_key_env: DOJOZERO_ANTHROPIC_API_KEY
     model_display_name: Claude
+    old_cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01kiSypx1Oxcwxq1bPV_!!6000000001772-55-tps-24-24.svg
+    cdn_url: https://img.alicdn.com/imgextra/i3/O1CN01bbhJZa1W0YnVufCiY_!!6000000002726-2-tps-200-200.png
+  - model_type: openai
+    model_name: claude-opus-4-5-20251101
+    api_key_env: DOJOZERO_DASHSCOPE_API_KEY
+    model_display_name: Claude
+    base_url_env: DOJOZERO_OPENAI_BASE_URL
     old_cdn_url: https://img.alicdn.com/imgextra/i2/O1CN01kiSypx1Oxcwxq1bPV_!!6000000001772-55-tps-24-24.svg
     cdn_url: https://img.alicdn.com/imgextra/i3/O1CN01bbhJZa1W0YnVufCiY_!!6000000002726-2-tps-200-200.png

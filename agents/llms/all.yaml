@@ -6,4 +6,7 @@ include:
   - claude.yaml
   - openai.yaml
   - grok.yaml
+  - glm.yaml
+  - minimax.yaml
+  - kimi.yaml
  
