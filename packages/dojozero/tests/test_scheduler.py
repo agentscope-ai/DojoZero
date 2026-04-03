@@ -189,7 +189,7 @@ class TestScheduleManager:
                 check_interval_seconds=60.0,
             )
 
-            assert schedule_id.startswith("sched-nba-001-")
+            assert schedule_id == "sched-nba-001"
 
             # Check it was persisted
             loaded = store.load()
@@ -285,7 +285,7 @@ class TestScheduleManager:
         )
 
         # Same game produces same schedule_id (deterministic for cluster dedup)
-        assert schedule_id_1.startswith(f"sched-{sport_type}-{game_id}-")
+        assert schedule_id_1 == f"sched-{sport_type}-{game_id}"
 
         # Different games produce different IDs
         schedule_id_other = await scheduler.schedule_trial(
@@ -318,9 +318,7 @@ class TestScheduleManager:
 
         # Should have the correct format
         schedule_id = schedule_ids.pop()
-        assert schedule_id.startswith(f"sched-{sport_type}-{game_id}-")
-        hash_part = schedule_id.split("-")[-1]
-        assert len(hash_part) == 8
+        assert schedule_id == f"sched-{sport_type}-{game_id}"
 
     @pytest.mark.asyncio
     async def test_persistence_file_with_schedule_id(self, mock_trial_manager):

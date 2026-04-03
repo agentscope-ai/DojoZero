@@ -10,7 +10,6 @@ Handles automatic scheduling of trials based on registered trial sources:
 
 import asyncio
 import copy
-import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -494,9 +493,7 @@ class ScheduleManager:
         Returns:
             Unique schedule ID
         """
-        hash_input = f"{sport_type}-{game_id}"
-        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        return f"sched-{sport_type}-{game_id}-{hash_suffix}"
+        return f"sched-{sport_type}-{game_id}"
 
     async def schedule_trial(
         self,
@@ -1409,9 +1406,7 @@ class ScheduleManager:
                 return
 
             # Generate trial ID (deterministic: same game always gets same ID)
-            hash_input = f"{scheduled.sport_type}-{scheduled.game_id}"
-            hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-            trial_id = f"{scheduled.sport_type}-game-{scheduled.game_id}-{hash_suffix}"
+            trial_id = f"{scheduled.sport_type}-game-{scheduled.game_id}"
 
             # Build trial spec - uses build_async which handles both sync and async builders
             try:
