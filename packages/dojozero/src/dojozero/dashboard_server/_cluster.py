@@ -246,6 +246,10 @@ class PeerRegistry(Protocol):
     async def get_peer_for_trial(self, trial_id: str) -> PeerInfo | None: ...
     async def register_trial(self, trial_id: str, server_id: str) -> None: ...
     async def update_active_trials(self, server_id: str, count: int) -> None: ...
+    async def claim_game(
+        self, sport_type: str, game_id: str, server_id: str
+    ) -> bool: ...
+    async def is_game_claimed(self, sport_type: str, game_id: str) -> bool: ...
 
 
 class StaticPeerRegistry:
@@ -264,6 +268,7 @@ class StaticPeerRegistry:
         self._peer_urls = peer_urls
         self._trial_owners: dict[str, str] = {}  # trial_id -> server_url
         self._active_counts: dict[str, int] = {}  # server_url -> count
+        self._game_claims: dict[str, str] = {}  # "{sport}:{game_id}" -> server_id
 
     async def start(self) -> None:
         logger.info(
@@ -323,12 +328,24 @@ class StaticPeerRegistry:
     async def update_active_trials(self, server_id: str, count: int) -> None:
         self._active_counts[self._url_for_id(server_id)] = count
 
+    async def claim_game(self, sport_type: str, game_id: str, server_id: str) -> bool:
+        key = f"{sport_type}:{game_id}"
+        existing = self._game_claims.get(key)
+        if existing is None or existing == server_id:
+            self._game_claims[key] = server_id
+            return True
+        return False
+
+    async def is_game_claimed(self, sport_type: str, game_id: str) -> bool:
+        return f"{sport_type}:{game_id}" in self._game_claims
+
 
 class RedisPeerRegistry:
     """Peer registry backed by Redis with TTL-based heartbeats."""
 
     PEERS_KEY = "dojozero:peers"
     TRIALS_KEY = "dojozero:trial_owners"
+    GAME_CLAIMS_KEY = "dojozero:game_claims"
     HEARTBEAT_INTERVAL = 10
     PEER_TTL = 30
 
@@ -452,6 +469,24 @@ class RedisPeerRegistry:
             except Exception as e:
                 logger.warning("Peer heartbeat error: %s", e)
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
+
+    async def claim_game(self, sport_type: str, game_id: str, server_id: str) -> bool:
+        """Atomically claim a game for scheduling. Returns True if claimed."""
+        field_key = f"{sport_type}:{game_id}"
+        # HSETNX: set only if the field does not exist (atomic)
+        was_set = await self._redis.hsetnx(self.GAME_CLAIMS_KEY, field_key, server_id)
+        if was_set:
+            return True
+        # Field already exists — check if we already own it
+        existing = await self._redis.hget(self.GAME_CLAIMS_KEY, field_key)
+        if existing is not None:
+            owner = existing.decode() if isinstance(existing, bytes) else existing
+            return owner == server_id
+        return False
+
+    async def is_game_claimed(self, sport_type: str, game_id: str) -> bool:
+        field_key = f"{sport_type}:{game_id}"
+        return bool(await self._redis.hexists(self.GAME_CLAIMS_KEY, field_key))
 
 
 # ---------------------------------------------------------------------------

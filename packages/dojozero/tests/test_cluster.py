@@ -549,6 +549,90 @@ def test_gateway_router_proxies_without_forwarded_header() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Game Claims (StaticPeerRegistry)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_static_claim_game_success() -> None:
+    """A single server can claim a game successfully."""
+    registry = StaticPeerRegistry(
+        server_id="server-1",
+        server_url="http://localhost:8000",
+        peer_urls=[],
+    )
+    await registry.start()
+    result = await registry.claim_game("nba", "401810490", "server-1")
+    assert result is True
+    await registry.stop()
+
+
+@pytest.mark.asyncio
+async def test_static_claim_game_already_claimed() -> None:
+    """A game claimed by server-1 cannot be claimed by server-2."""
+    registry = StaticPeerRegistry(
+        server_id="server-1",
+        server_url="http://localhost:8000",
+        peer_urls=["http://localhost:8001"],
+    )
+    await registry.start()
+
+    assert await registry.claim_game("nba", "401810490", "server-1") is True
+    assert await registry.claim_game("nba", "401810490", "server-2") is False
+
+    await registry.stop()
+
+
+@pytest.mark.asyncio
+async def test_static_claim_game_same_server_idempotent() -> None:
+    """Same server claiming the same game twice returns True (idempotent)."""
+    registry = StaticPeerRegistry(
+        server_id="server-1",
+        server_url="http://localhost:8000",
+        peer_urls=[],
+    )
+    await registry.start()
+
+    assert await registry.claim_game("nba", "401810490", "server-1") is True
+    assert await registry.claim_game("nba", "401810490", "server-1") is True
+
+    await registry.stop()
+
+
+@pytest.mark.asyncio
+async def test_static_is_game_claimed() -> None:
+    """is_game_claimed returns correct state before and after claiming."""
+    registry = StaticPeerRegistry(
+        server_id="server-1",
+        server_url="http://localhost:8000",
+        peer_urls=[],
+    )
+    await registry.start()
+
+    assert await registry.is_game_claimed("nba", "401810490") is False
+    await registry.claim_game("nba", "401810490", "server-1")
+    assert await registry.is_game_claimed("nba", "401810490") is True
+
+    await registry.stop()
+
+
+@pytest.mark.asyncio
+async def test_static_claim_different_sports_independent() -> None:
+    """Claims are scoped by sport_type — same game_id in different sports are independent."""
+    registry = StaticPeerRegistry(
+        server_id="server-1",
+        server_url="http://localhost:8000",
+        peer_urls=[],
+    )
+    await registry.start()
+
+    assert await registry.claim_game("nba", "12345", "server-1") is True
+    assert await registry.claim_game("nfl", "12345", "server-2") is True
+
+    await registry.stop()
+
+
 @pytest.mark.asyncio
 async def test_static_peer_active_trials_keyed_by_url() -> None:
     """Active trial counts should be keyed by URL internally."""

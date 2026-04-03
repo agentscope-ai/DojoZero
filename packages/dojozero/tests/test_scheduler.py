@@ -3,7 +3,7 @@
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -189,7 +189,7 @@ class TestScheduleManager:
                 check_interval_seconds=60.0,
             )
 
-            assert schedule_id.startswith("sched-nba-001-")
+            assert schedule_id == "sched-nba-001"
 
             # Check it was persisted
             loaded = store.load()
@@ -264,8 +264,8 @@ class TestScheduleManager:
         assert len(schedules) == 2
 
     @pytest.mark.asyncio
-    async def test_unique_persistence_files_for_same_game(self, mock_trial_manager):
-        """Test that multiple trials for the same game get unique persistence files."""
+    async def test_deterministic_schedule_ids_for_same_game(self, mock_trial_manager):
+        """Test that the same game always produces the same schedule_id (deterministic)."""
         scheduler = ScheduleManager(
             trial_manager=mock_trial_manager,
             store=None,
@@ -276,7 +276,6 @@ class TestScheduleManager:
         game_id = "401810525"
         sport_type = "nba"
 
-        # Schedule two trials for the same game
         schedule_id_1 = await scheduler.schedule_trial(
             scenario_name="nba-moneyline",
             scenario_config={"hub": {}},
@@ -285,49 +284,22 @@ class TestScheduleManager:
             event_time=event_time,
         )
 
-        # Add a small delay to ensure different timestamps
-        import asyncio
+        # Same game produces same schedule_id (deterministic for cluster dedup)
+        assert schedule_id_1 == f"sched-{sport_type}-{game_id}"
 
-        await asyncio.sleep(0.01)
-
-        schedule_id_2 = await scheduler.schedule_trial(
+        # Different games produce different IDs
+        schedule_id_other = await scheduler.schedule_trial(
             scenario_name="nba-moneyline",
             scenario_config={"hub": {}},
             sport_type=sport_type,
-            game_id=game_id,
+            game_id="401810526",
             event_time=event_time,
         )
-
-        # Verify schedule IDs are different
-        assert schedule_id_1 != schedule_id_2
-        assert schedule_id_1.startswith(f"sched-{sport_type}-{game_id}-")
-        assert schedule_id_2.startswith(f"sched-{sport_type}-{game_id}-")
-
-        # Retrieve the scheduled trials
-        trial_1 = scheduler.get_scheduled(schedule_id_1)
-        trial_2 = scheduler.get_scheduled(schedule_id_2)
-
-        assert trial_1 is not None
-        assert trial_2 is not None
-
-        # Extract persistence files from configs if they exist
-        persistence_file_1 = trial_1.scenario_config.get("hub", {}).get(
-            "persistence_file"
-        )
-        persistence_file_2 = trial_2.scenario_config.get("hub", {}).get(
-            "persistence_file"
-        )
-
-        # If persistence files are set, they should be different
-        if persistence_file_1 and persistence_file_2:
-            assert persistence_file_1 != persistence_file_2
-            # Each should contain the unique schedule_id
-            assert schedule_id_1 in persistence_file_1
-            assert schedule_id_2 in persistence_file_2
+        assert schedule_id_1 != schedule_id_other
 
     @pytest.mark.asyncio
-    async def test_schedule_id_generation_is_unique(self, mock_trial_manager):
-        """Test that _generate_schedule_id creates unique IDs for same game."""
+    async def test_schedule_id_generation_is_deterministic(self, mock_trial_manager):
+        """Test that _generate_schedule_id is deterministic for same game."""
         scheduler = ScheduleManager(
             trial_manager=mock_trial_manager,
             store=None,
@@ -336,29 +308,21 @@ class TestScheduleManager:
         sport_type = "nba"
         game_id = "401810525"
 
-        # Generate multiple schedule IDs for the same game
+        # Generate multiple schedule IDs for the same game — all should be identical
         schedule_ids = set()
         for _ in range(5):
             schedule_id = scheduler._generate_schedule_id(sport_type, game_id)
             schedule_ids.add(schedule_id)
-            # Small delay to ensure different timestamps
-            import asyncio
 
-            await asyncio.sleep(0.001)
+        assert len(schedule_ids) == 1
 
-        # All IDs should be unique
-        assert len(schedule_ids) == 5
-
-        # All should have the correct format
-        for schedule_id in schedule_ids:
-            assert schedule_id.startswith(f"sched-{sport_type}-{game_id}-")
-            # Should have 8-char hash suffix
-            hash_part = schedule_id.split("-")[-1]
-            assert len(hash_part) == 8
+        # Should have the correct format
+        schedule_id = schedule_ids.pop()
+        assert schedule_id == f"sched-{sport_type}-{game_id}"
 
     @pytest.mark.asyncio
     async def test_persistence_file_with_schedule_id(self, mock_trial_manager):
-        """Test that scheduling with data_dir creates unique persistence files."""
+        """Test that persistence files use deterministic schedule_id."""
         with tempfile.TemporaryDirectory() as tmpdir:
             scheduler = ScheduleManager(
                 trial_manager=mock_trial_manager,
@@ -370,62 +334,33 @@ class TestScheduleManager:
             game_id = "401810525"
             sport_type = "nba"
 
-            # Schedule two trials for the same game with data_dir
-            # First, pre-generate schedule IDs and set persistence_file
-            schedule_id_1 = scheduler._generate_schedule_id(sport_type, game_id)
+            schedule_id = scheduler._generate_schedule_id(sport_type, game_id)
             game_date = "2026-01-27"
-            persistence_file_1 = f"{tmpdir}/{game_date}/{schedule_id_1}.jsonl"
+            persistence_file = f"{tmpdir}/{game_date}/{schedule_id}.jsonl"
 
-            import asyncio
+            config = {"hub": {"persistence_file": persistence_file}}
 
-            await asyncio.sleep(0.01)
-
-            schedule_id_2 = scheduler._generate_schedule_id(sport_type, game_id)
-            persistence_file_2 = f"{tmpdir}/{game_date}/{schedule_id_2}.jsonl"
-
-            # Schedule trials with pre-determined persistence files
-            config_1 = {"hub": {"persistence_file": persistence_file_1}}
-            config_2 = {"hub": {"persistence_file": persistence_file_2}}
-
-            returned_id_1 = await scheduler.schedule_trial(
+            returned_id = await scheduler.schedule_trial(
                 scenario_name="nba-moneyline",
-                scenario_config=config_1,
+                scenario_config=config,
                 sport_type=sport_type,
                 game_id=game_id,
                 event_time=event_time,
-                schedule_id=schedule_id_1,
+                schedule_id=schedule_id,
             )
 
-            returned_id_2 = await scheduler.schedule_trial(
-                scenario_name="nba-moneyline",
-                scenario_config=config_2,
-                sport_type=sport_type,
-                game_id=game_id,
-                event_time=event_time,
-                schedule_id=schedule_id_2,
-            )
+            assert returned_id == schedule_id
 
-            # Verify schedule IDs are different
-            assert returned_id_1 != returned_id_2
-            assert returned_id_1 == schedule_id_1
-            assert returned_id_2 == schedule_id_2
+            trial = scheduler.get_scheduled(schedule_id)
+            assert trial is not None
 
-            # Retrieve the scheduled trials
-            trial_1 = scheduler.get_scheduled(schedule_id_1)
-            trial_2 = scheduler.get_scheduled(schedule_id_2)
+            pf = trial.scenario_config.get("hub", {}).get("persistence_file")
+            assert pf == persistence_file
+            assert schedule_id in pf
 
-            assert trial_1 is not None
-            assert trial_2 is not None
-
-            # Verify persistence files are different and contain schedule_id
-            pf_1 = trial_1.scenario_config.get("hub", {}).get("persistence_file")
-            pf_2 = trial_2.scenario_config.get("hub", {}).get("persistence_file")
-
-            assert pf_1 == persistence_file_1
-            assert pf_2 == persistence_file_2
-            assert pf_1 != pf_2
-            assert schedule_id_1 in pf_1
-            assert schedule_id_2 in pf_2
+            # Different game produces different persistence path
+            schedule_id_2 = scheduler._generate_schedule_id(sport_type, "401810526")
+            assert schedule_id != schedule_id_2
 
     @pytest.mark.asyncio
     async def test_start_loads_persisted(self, mock_trial_manager):
@@ -942,3 +877,236 @@ class TestScheduleManagerConcurrencyAndGracePeriod:
 
         assert trial.monitoring_started_at is None
         assert trial.initial_game_status is None
+
+
+class TestClusterDedup:
+    """Tests for cluster-wide game deduplication."""
+
+    @pytest.fixture
+    def mock_trial_manager(self):
+        """Create a mock TrialManager."""
+        manager = MagicMock()
+        manager.submit = AsyncMock(return_value="trial-123")
+        manager.cancel = AsyncMock(return_value=True)
+        manager.dashboard = MagicMock()
+        manager.dashboard.stop_trial = AsyncMock()
+        return manager
+
+    @pytest.fixture
+    def mock_peer_registry(self):
+        """Create a mock PeerRegistry with claim_game support."""
+        registry = MagicMock()
+        registry.claim_game = AsyncMock(return_value=True)
+        registry.is_game_claimed = AsyncMock(return_value=False)
+        registry.get_peers = AsyncMock(return_value=[])
+        registry.register_trial = AsyncMock()
+        return registry
+
+    def test_generate_schedule_id_deterministic(self, mock_trial_manager):
+        """Same sport_type+game_id always produces the same schedule_id."""
+        scheduler = ScheduleManager(
+            trial_manager=mock_trial_manager,
+            store=None,
+        )
+
+        id1 = scheduler._generate_schedule_id("nba", "401810490")
+        id2 = scheduler._generate_schedule_id("nba", "401810490")
+        assert id1 == id2
+
+        # Different game_id produces different schedule_id
+        id3 = scheduler._generate_schedule_id("nba", "401810491")
+        assert id1 != id3
+
+    def test_generate_schedule_id_cross_host_consistent(self, mock_trial_manager):
+        """Two ScheduleManagers produce the same schedule_id for the same game."""
+        scheduler_a = ScheduleManager(
+            trial_manager=mock_trial_manager,
+            store=None,
+            server_id="server-a",
+        )
+        scheduler_b = ScheduleManager(
+            trial_manager=mock_trial_manager,
+            store=None,
+            server_id="server-b",
+        )
+
+        id_a = scheduler_a._generate_schedule_id("nba", "401810490")
+        id_b = scheduler_b._generate_schedule_id("nba", "401810490")
+        assert id_a == id_b
+
+    @pytest.mark.asyncio
+    async def test_sync_source_skips_claimed_game(
+        self, mock_trial_manager, mock_peer_registry
+    ):
+        """When claim_game returns False, the game is skipped."""
+        mock_peer_registry.claim_game = AsyncMock(return_value=False)
+
+        scheduler = ScheduleManager(
+            trial_manager=mock_trial_manager,
+            store=None,
+            peer_registry=mock_peer_registry,
+            server_id="server-1",
+        )
+
+        config = TrialSourceConfig(
+            scenario_name="nba-moneyline",
+            scenario_config={},
+        )
+        source = scheduler.register_source(
+            source_id="nba-source",
+            sport_type="nba",
+            config=config,
+        )
+
+        # Mock the game fetcher to return a game
+        game = MagicMock()
+        game.game_id = "401810490"
+        game.game_time_utc = datetime.now(timezone.utc) + timedelta(hours=3)
+        game.status = 1  # scheduled
+        game.status_text = "Scheduled"
+        game.short_name = "LAL @ BOS"
+        game.home_team = MagicMock(name="Boston Celtics", tricode="BOS")
+        game.away_team = MagicMock(name="Los Angeles Lakers", tricode="LAL")
+
+        with patch.object(
+            scheduler._nba_fetcher,
+            "fetch_games_for_date",
+            new_callable=AsyncMock,
+            return_value=[game],
+        ):
+            result = await scheduler._sync_source(source)
+
+        assert len(result) == 0
+        mock_peer_registry.claim_game.assert_awaited_once_with(
+            "nba", "401810490", "server-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sync_source_claims_game_before_scheduling(
+        self, mock_trial_manager, mock_peer_registry
+    ):
+        """When claim_game returns True, the game is scheduled."""
+        mock_peer_registry.claim_game = AsyncMock(return_value=True)
+
+        scheduler = ScheduleManager(
+            trial_manager=mock_trial_manager,
+            store=None,
+            peer_registry=mock_peer_registry,
+            server_id="server-1",
+        )
+
+        config = TrialSourceConfig(
+            scenario_name="nba-moneyline",
+            scenario_config={},
+        )
+        source = scheduler.register_source(
+            source_id="nba-source",
+            sport_type="nba",
+            config=config,
+        )
+
+        game = MagicMock()
+        game.game_id = "401810490"
+        game.game_time_utc = datetime.now(timezone.utc) + timedelta(hours=3)
+        game.status = 1
+        game.status_text = "Scheduled"
+        game.short_name = "LAL @ BOS"
+        game.home_team = MagicMock(name="Boston Celtics", tricode="BOS")
+        game.away_team = MagicMock(name="Los Angeles Lakers", tricode="LAL")
+
+        with patch.object(
+            scheduler._nba_fetcher,
+            "fetch_games_for_date",
+            new_callable=AsyncMock,
+            return_value=[game],
+        ):
+            result = await scheduler._sync_source(source)
+
+        assert len(result) == 1
+        mock_peer_registry.claim_game.assert_awaited_once_with(
+            "nba", "401810490", "server-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sync_source_fails_closed_on_claim_error(
+        self, mock_trial_manager, mock_peer_registry
+    ):
+        """When claim_game raises, the game is skipped (fail-closed)."""
+        mock_peer_registry.claim_game = AsyncMock(
+            side_effect=ConnectionError("Redis unavailable")
+        )
+
+        scheduler = ScheduleManager(
+            trial_manager=mock_trial_manager,
+            store=None,
+            peer_registry=mock_peer_registry,
+            server_id="server-1",
+        )
+
+        config = TrialSourceConfig(
+            scenario_name="nba-moneyline",
+            scenario_config={},
+        )
+        source = scheduler.register_source(
+            source_id="nba-source",
+            sport_type="nba",
+            config=config,
+        )
+
+        game = MagicMock()
+        game.game_id = "401810490"
+        game.game_time_utc = datetime.now(timezone.utc) + timedelta(hours=3)
+        game.status = 1
+        game.status_text = "Scheduled"
+        game.short_name = "LAL @ BOS"
+        game.home_team = MagicMock(name="Boston Celtics", tricode="BOS")
+        game.away_team = MagicMock(name="Los Angeles Lakers", tricode="LAL")
+
+        with patch.object(
+            scheduler._nba_fetcher,
+            "fetch_games_for_date",
+            new_callable=AsyncMock,
+            return_value=[game],
+        ):
+            result = await scheduler._sync_source(source)
+
+        assert len(result) == 0
+
+    @pytest.mark.asyncio
+    async def test_sync_source_no_claim_without_peer_registry(self, mock_trial_manager):
+        """Without a peer_registry, scheduling proceeds without claim checks."""
+        scheduler = ScheduleManager(
+            trial_manager=mock_trial_manager,
+            store=None,
+            # No peer_registry
+        )
+
+        config = TrialSourceConfig(
+            scenario_name="nba-moneyline",
+            scenario_config={},
+        )
+        source = scheduler.register_source(
+            source_id="nba-source",
+            sport_type="nba",
+            config=config,
+        )
+
+        game = MagicMock()
+        game.game_id = "401810490"
+        game.game_time_utc = datetime.now(timezone.utc) + timedelta(hours=3)
+        game.status = 1
+        game.status_text = "Scheduled"
+        game.short_name = "LAL @ BOS"
+        game.home_team = MagicMock(name="Boston Celtics", tricode="BOS")
+        game.away_team = MagicMock(name="Los Angeles Lakers", tricode="LAL")
+
+        with patch.object(
+            scheduler._nba_fetcher,
+            "fetch_games_for_date",
+            new_callable=AsyncMock,
+            return_value=[game],
+        ):
+            result = await scheduler._sync_source(source)
+
+        # Should schedule without any claim check
+        assert len(result) == 1

@@ -10,7 +10,6 @@ Handles automatic scheduling of trials based on registered trial sources:
 
 import asyncio
 import copy
-import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -494,9 +493,7 @@ class ScheduleManager:
         Returns:
             Unique schedule ID
         """
-        hash_input = f"{sport_type}-{game_id}-{datetime.now(timezone.utc).isoformat()}"
-        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        return f"sched-{sport_type}-{game_id}-{hash_suffix}"
+        return f"sched-{sport_type}-{game_id}"
 
     async def schedule_trial(
         self,
@@ -987,6 +984,24 @@ class ScheduleManager:
             if (source.source_id, game.game_id) in self._scheduled_events:
                 continue
 
+            # Cluster-wide game dedup: claim this game atomically
+            if self._peer_registry is not None and self._server_id is not None:
+                try:
+                    claimed = await self._peer_registry.claim_game(
+                        source.sport_type, game.game_id, self._server_id
+                    )
+                    if not claimed:
+                        LOGGER.info(
+                            "Game %s (%s) already claimed by another server, skipping",
+                            game.game_id,
+                            game.short_name,
+                        )
+                        continue
+                except Exception as e:
+                    LOGGER.warning("Failed to claim game %s: %s", game.game_id, e)
+                    # Fail-closed: don't schedule if claim check fails
+                    continue
+
             # Enforce max_daily_games limit
             if max_games > 0 and remaining_slots <= 0:
                 LOGGER.info(
@@ -1353,6 +1368,29 @@ class ScheduleManager:
 
         scheduled.phase = ScheduledTrialPhase.LAUNCHING
 
+        # Verify game claim before launching (guard against stale schedules)
+        if self._peer_registry is not None and self._server_id is not None:
+            try:
+                claimed = await self._peer_registry.claim_game(
+                    scheduled.sport_type, scheduled.game_id, self._server_id
+                )
+                if not claimed:
+                    LOGGER.warning(
+                        "Game %s claimed by another server, skipping launch of %s",
+                        scheduled.game_id,
+                        scheduled.schedule_id,
+                    )
+                    scheduled.phase = ScheduledTrialPhase.CANCELLED
+                    scheduled.error = "Game claimed by another server"
+                    self._persist()
+                    return
+            except Exception as e:
+                LOGGER.warning(
+                    "Failed to verify game claim for %s: %s",
+                    scheduled.game_id,
+                    e,
+                )
+
         try:
             # Get builder definition
             try:
@@ -1363,10 +1401,8 @@ class ScheduleManager:
                 self._persist()
                 return
 
-            # Generate trial ID
-            hash_input = f"{scheduled.sport_type}-{scheduled.game_id}-{datetime.now(timezone.utc).isoformat()}"
-            hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-            trial_id = f"{scheduled.sport_type}-game-{scheduled.game_id}-{hash_suffix}"
+            # Generate trial ID (deterministic: same game always gets same ID)
+            trial_id = f"{scheduled.sport_type}-game-{scheduled.game_id}"
 
             # Build trial spec - uses build_async which handles both sync and async builders
             try:
