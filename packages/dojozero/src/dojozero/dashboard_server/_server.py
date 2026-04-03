@@ -148,6 +148,7 @@ class DashboardServerState:
     server_id: str | None = None
     leader_elector: LeaderElector | None = None
     peer_registry: PeerRegistry | None = None
+    scheduler_store: SchedulerStore | None = None
     http_session: Any = None  # aiohttp.ClientSession for cross-server forwarding
     http_client: Any = None  # httpx.AsyncClient for cross-server forwarding
 
@@ -474,6 +475,7 @@ def create_dashboard_app(
             server_id=server_id,
             leader_elector=leader_elector_instance,
             peer_registry=peer_registry_instance,
+            scheduler_store=scheduler_store,
             http_session=shared_aiohttp_session,
             http_client=shared_httpx_client,
         )
@@ -1328,15 +1330,16 @@ def create_dashboard_app(
         state: DashboardServerState = Depends(get_server_state),
     ) -> JSONResponse:
         """List all registered trial sources."""
-        if state.schedule_manager is None:
+        if state.schedule_manager is not None:
+            sources = state.schedule_manager.list_sources()
+        elif state.scheduler_store is not None:
+            sources = state.scheduler_store.load_sources()
+        else:
             return JSONResponse(
-                content={
-                    "error": "Scheduling not enabled. Configure filesystem store to enable."
-                },
+                content={"error": "Scheduling not enabled"},
                 status_code=400,
             )
 
-        sources = state.schedule_manager.list_sources()
         return JSONResponse(
             content={
                 "count": len(sources),
@@ -1353,7 +1356,7 @@ def create_dashboard_app(
         if state.schedule_manager is None:
             return JSONResponse(
                 content={
-                    "error": "Scheduling not enabled. Configure filesystem store to enable."
+                    "error": "Scheduling not enabled on this server (not the cluster leader)."
                 },
                 status_code=400,
             )
@@ -1400,13 +1403,20 @@ def create_dashboard_app(
         state: DashboardServerState = Depends(get_server_state),
     ) -> JSONResponse:
         """Get a specific trial source."""
-        if state.schedule_manager is None:
+        source = None
+        if state.schedule_manager is not None:
+            source = state.schedule_manager.get_source(source_id)
+        elif state.scheduler_store is not None:
+            for s in state.scheduler_store.load_sources():
+                if s.source_id == source_id:
+                    source = s
+                    break
+        else:
             return JSONResponse(
                 content={"error": "Scheduling not enabled"},
                 status_code=400,
             )
 
-        source = state.schedule_manager.get_source(source_id)
         if source is None:
             return JSONResponse(
                 content={"error": f"Trial source '{source_id}' not found"},
@@ -1514,17 +1524,33 @@ def create_dashboard_app(
             include_finished: If true, include completed/cancelled/failed trials.
                              Default is false (only active trials).
         """
-        if state.schedule_manager is None:
+        if state.schedule_manager is not None:
+            schedules = state.schedule_manager.list_scheduled(
+                include_finished=include_finished
+            )
+        elif state.scheduler_store is not None:
+            from ._scheduler import ScheduledTrialPhase
+
+            all_schedules = state.scheduler_store.load()
+            if include_finished:
+                schedules = all_schedules
+            else:
+                schedules = [
+                    s
+                    for s in all_schedules
+                    if s.phase
+                    not in (
+                        ScheduledTrialPhase.COMPLETED,
+                        ScheduledTrialPhase.CANCELLED,
+                        ScheduledTrialPhase.FAILED,
+                    )
+                ]
+        else:
             return JSONResponse(
-                content={
-                    "error": "Scheduling not enabled. Configure filesystem store to enable."
-                },
+                content={"error": "Scheduling not enabled"},
                 status_code=400,
             )
 
-        schedules = state.schedule_manager.list_scheduled(
-            include_finished=include_finished
-        )
         return JSONResponse(
             content={
                 "count": len(schedules),
@@ -1538,13 +1564,20 @@ def create_dashboard_app(
         state: DashboardServerState = Depends(get_server_state),
     ) -> JSONResponse:
         """Get status for a specific scheduled trial."""
-        if state.schedule_manager is None:
+        scheduled = None
+        if state.schedule_manager is not None:
+            scheduled = state.schedule_manager.get_scheduled(schedule_id)
+        elif state.scheduler_store is not None:
+            for s in state.scheduler_store.load():
+                if s.schedule_id == schedule_id:
+                    scheduled = s
+                    break
+        else:
             return JSONResponse(
                 content={"error": "Scheduling not enabled"},
                 status_code=400,
             )
 
-        scheduled = state.schedule_manager.get_scheduled(schedule_id)
         if scheduled is None:
             return JSONResponse(
                 content={"error": f"Scheduled trial '{schedule_id}' not found"},

@@ -193,8 +193,13 @@ class GameTrialManager:
         self.events_file = events_file
         self.log_file = log_file
 
-        # Deterministic trial ID: same game always gets the same ID
-        self.trial_id = f"nba-game-{self.game_id}"
+        # Unique trial ID with hash suffix so each run gets its own SLS traces.
+        # Prefixed with adhoc_ to distinguish from scheduler-launched trials.
+        import hashlib
+
+        hash_input = f"{self.game_id}-{datetime.now(timezone.utc).isoformat()}"
+        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+        self.trial_id = f"adhoc_nba_game_{self.game_id}_{hash_suffix}"
 
         # Set up file logger for this game
         self._setup_file_logger()

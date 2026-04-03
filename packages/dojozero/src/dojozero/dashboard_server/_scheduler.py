@@ -1469,8 +1469,15 @@ class ScheduleManager:
                 self._persist()
                 return
 
-            # Generate trial ID (deterministic: same game always gets same ID)
-            trial_id = f"{scheduled.sport_type}-game-{scheduled.game_id}"
+            # Generate trial ID with hash suffix so each attempt is unique in
+            # SLS traces and the orchestrator store.  The schedule_id (without
+            # hash) remains the dedup key.
+            import hashlib
+            import time as _time
+
+            hash_input = f"{scheduled.game_id}-{_time.time()}"
+            hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+            trial_id = f"{scheduled.sport_type}-game-{scheduled.game_id}-{hash_suffix}"
 
             # Build trial spec - uses build_async which handles both sync and async builders
             try:
