@@ -31,7 +31,6 @@ except ImportError:
 
 import argparse
 import asyncio
-import hashlib
 import logging
 import os
 import subprocess
@@ -194,12 +193,8 @@ class GameTrialManager:
         self.events_file = events_file
         self.log_file = log_file
 
-        # Generate unique trial ID with hash postfix to avoid conflicts
-        # Hash includes game_id, date, and timestamp for uniqueness
-        timestamp = datetime.now(timezone.utc).isoformat()
-        hash_input = f"{self.game_id}-{self.game_date or 'unknown'}-{timestamp}"
-        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        self.trial_id = f"nba-game-{self.game_id}-{hash_suffix}"
+        # Deterministic trial ID: same game always gets the same ID
+        self.trial_id = f"nba-game-{self.game_id}"
 
         # Set up file logger for this game
         self._setup_file_logger()
