@@ -66,7 +66,7 @@ Scheduling knobs (when present in your template) typically include:
 
 ## 5. Cluster Mode
 
-Run multiple dashboard servers to distribute trial execution across machines. One server wins leader election and runs the scheduler; all servers accept trial submissions and execute trials.
+Run multiple dashboard servers to distribute trial execution across machines. One server wins leader election and runs the scheduler; all servers accept trial submissions and execute trials. Cluster mode requires Redis.
 
 ### Single Server (default)
 
@@ -76,49 +76,34 @@ No extra flags needed — everything works as before:
 dojo0 serve
 ```
 
-### Dev Cluster (file-based election, static peers)
-
-Start two or more servers on the same machine or network, pointing at a shared store:
+### Cluster (Redis-based election, discovery, and shared state)
 
 ```bash
 # Server 1
 dojo0 serve --port 8000 \
     --server-id server-1 \
     --server-url http://localhost:8000 \
-    --cluster-peers http://localhost:8001 \
-    --store-directory ./store
+    --cluster-redis-url redis://localhost:6379/0 \
+    --trial-source trial_sources/daily/nba.yaml
 
 # Server 2
 dojo0 serve --port 8001 \
     --server-id server-2 \
     --server-url http://localhost:8001 \
-    --cluster-peers http://localhost:8000 \
-    --store-directory ./store
-```
-
-Leader election determines which server runs the scheduler automatically — no need for `--no-scheduler`. Use `--no-scheduler` only if you want to disable scheduling on all servers (e.g. when submitting trials manually).
-
-Leader election uses `fcntl.flock` on a file in the store directory. Both servers must share the same `--store-directory`.
-
-### Production Cluster (Redis-based election and discovery)
-
-```bash
-dojo0 serve --port 8000 \
-    --server-id server-1 \
-    --server-url http://10.0.1.10:8000 \
-    --cluster-redis-url redis://redis:6379
+    --cluster-redis-url redis://localhost:6379/0 \
+    --trial-source trial_sources/daily/nba.yaml
 ```
 
 Or use an environment variable:
 
 ```bash
-export DOJOZERO_CLUSTER_REDIS_URL=redis://redis:6379
+export DOJOZERO_CLUSTER_REDIS_URL=redis://redis:6379/0
 dojo0 serve --port 8000 \
     --server-id server-1 \
     --server-url http://10.0.1.10:8000
 ```
 
-Redis mode uses `SET NX EX` for leader election and a hash with TTL heartbeats for peer discovery. No manual Redis setup is required — keys are created automatically.
+Leader election determines which server runs the scheduler automatically — no need for `--no-scheduler`. Use `--no-scheduler` only if you want to disable scheduling on all servers (e.g. when submitting trials manually).
 
 ### CLI Flags
 
@@ -126,15 +111,50 @@ Redis mode uses `SET NX EX` for leader election and a hash with TTL heartbeats f
 |---|---|---|
 | `--server-id` | hostname | Unique identifier for this server instance |
 | `--server-url` | `http://{host}:{port}` | Externally reachable URL for this server |
-| `--cluster-peers` | (none) | Peer server URLs (repeatable, for static discovery) |
-| `--cluster-redis-url` | `$DOJOZERO_CLUSTER_REDIS_URL` | Redis URL (enables Redis election + discovery) |
+| `--cluster-redis-url` | `$DOJOZERO_CLUSTER_REDIS_URL` | Redis URL (enables cluster mode) |
 
 ### How It Works
 
+- **Leader election**: Uses `SET NX EX` with a Lua script for atomic renewal. TTL is 30 seconds, renewed every 5 seconds.
+- **Peer discovery**: Each server heartbeats into a Redis hash (`dojozero:peers`) with a soft TTL. Stale peers are filtered out automatically.
+- **Shared schedules**: In cluster mode, schedules and trial sources are stored in Redis (`dojozero:schedules`, `dojozero:trial_sources`) instead of local files, so any server that becomes leader sees the same state.
 - **Trial distribution**: When a trial is submitted, the receiving server forwards it to the least-loaded peer. Each trial is tagged with `owner_server_id` in the store.
 - **Gateway routing**: If a gateway request arrives at the wrong server, it is reverse-proxied to the owning server transparently.
+- **Read-only endpoints**: Non-leader servers serve `/api/scheduled-trials` and `/api/trial-sources` by reading directly from Redis, so requests behind a load balancer get valid responses from any server.
 - **Auto-resume**: On restart, each server only resumes trials it owns. Legacy trials (no owner) are resumed by any server.
 - **Leader failover**: If the leader goes down, another server acquires leadership and starts the scheduler.
+- **Source authority**: The leader always overwrites `dojozero:trial_sources` with its local YAML on startup. Stale sources from a previous deployment are removed automatically.
+
+### Redis Keys
+
+| Key | Type | TTL | Purpose |
+|---|---|---|---|
+| `dojozero:leader` | string | 30s | Leader lock (server ID of current leader) |
+| `dojozero:peers` | hash | Soft (heartbeat-based) | Peer registry (`server_id → {url, active_trials, last_heartbeat}`) |
+| `dojozero:schedules` | hash | None | Scheduled trials (`schedule_id → JSON`) |
+| `dojozero:trial_sources` | hash | None | Trial source configs (`source_id → JSON`) |
+| `dojozero:game_claims` | hash | None | Game dedup (`sport:game_id → server_id`) |
+| `dojozero:trial_owners` | hash | None | Trial routing (`trial_id → {server_id, server_url}`) |
+
+### Redis Cleanup on Redeployment
+
+Flush all `dojozero:*` keys before starting a new deployment:
+
+```bash
+redis-cli -u $CLUSTER_REDIS_URL --scan --pattern 'dojozero:*' | xargs redis-cli -u $CLUSTER_REDIS_URL DEL
+```
+
+In a Docker/K8s deployment, add this as an init container or pre-deploy job.
+
+### Trial IDs
+
+| Context | ID Format | Example | Dedup |
+|---|---|---|---|
+| Scheduled trial | `{sport}-game-{game_id}-{hash}` | `nba-game-401810490-a3f1b2c4` | Schedule ID (`{sport}-game-{game_id}`) is deterministic; trial ID is unique per run |
+| Adhoc NBA | `adhoc_nba_game_{game_id}_{hash}` | `adhoc_nba_game_401810490_c7d8e9f0` | No dedup (each run is unique) |
+| Adhoc NCAA | `adhoc_ncaa_game_{game_id}_{hash}` | `adhoc_ncaa_game_401810490_b5a6c7d8` | No dedup (each run is unique) |
+
+The hash suffix ensures each run is unique in SLS traces and the orchestrator store, even if the same game is re-run.
 
 ### Cluster Status API
 

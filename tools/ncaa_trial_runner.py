@@ -200,7 +200,7 @@ class GameTrialManager:
         timestamp = datetime.now(timezone.utc).isoformat()
         hash_input = f"{self.game_id}-{self.game_date or 'unknown'}-{timestamp}"
         hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        self.trial_id = f"ncaa-game-{self.game_id}-{hash_suffix}"
+        self.trial_id = f"adhoc_ncaa_game_{self.game_id}_{hash_suffix}"
 
         # Set up file logger for this game
         self._setup_file_logger()

@@ -34,6 +34,7 @@ from dojozero.data.polymarket import PolymarketAPI
 from dojozero.utils import utc_iso_to_local
 from dojozero.core import TrialBuilderNotFoundError as _TrialBuilderNotFoundError
 from dojozero.dashboard_server import InitialTrialSourceDict
+from dojozero.dashboard_server._scheduler import SchedulerStore
 
 try:  # Optional Ray dependency
     from dojozero.ray_runtime import RayActorRuntimeProvider
@@ -401,13 +402,6 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="server_url",
         default=None,
         help="Externally reachable URL for this server (default: http://{host}:{port}).",
-    )
-    serve_parser.add_argument(
-        "--cluster-peers",
-        dest="cluster_peers",
-        action="append",
-        default=[],
-        help="Peer server URL for static cluster discovery (repeatable).",
     )
     serve_parser.add_argument(
         "--cluster-redis-url",
@@ -2047,10 +2041,17 @@ async def _serve_command(args: argparse.Namespace) -> int:
         args.store_directory if args.store_directory else Path(DEFAULT_STORE_DIRECTORY)
     )
 
-    # Create scheduler store (uses store root directory for persistence)
-    from dojozero.dashboard_server._scheduler import FileSchedulerStore
+    # Create scheduler store — Redis in cluster mode, file otherwise
+    cluster_redis_url: str | None = getattr(args, "cluster_redis_url", None)
 
-    scheduler_store = FileSchedulerStore(store_path)
+    if cluster_redis_url:
+        from dojozero.dashboard_server._scheduler import RedisSchedulerStore
+
+        scheduler_store: SchedulerStore = RedisSchedulerStore(cluster_redis_url)
+    else:
+        from dojozero.dashboard_server._scheduler import FileSchedulerStore
+
+        scheduler_store = FileSchedulerStore(store_path)
 
     # Expand glob patterns and load trial source configurations
     import glob as glob_module
@@ -2136,32 +2137,21 @@ async def _serve_command(args: argparse.Namespace) -> int:
         "enabled" if local_auth else "disabled",
     )
 
-    # Build cluster config if any cluster arguments were provided
+    # Build cluster config if Redis cluster URL is provided
     cluster_config = None
-    cluster_peers: list[str] = getattr(args, "cluster_peers", []) or []
-    cluster_redis_url: str | None = getattr(args, "cluster_redis_url", None)
     server_id_arg: str | None = getattr(args, "server_id", None)
     server_url_arg: str | None = getattr(args, "server_url", None)
 
-    if cluster_peers or cluster_redis_url:
+    if cluster_redis_url:
         from dojozero.dashboard_server._cluster import ClusterConfig
 
         server_url = server_url_arg or f"http://{host}:{port}"
         cluster_config = ClusterConfig(
             server_id=server_id_arg or "",
             server_url=server_url,
-            leader_election="redis" if cluster_redis_url else "file",
-            discovery="redis" if cluster_redis_url else "static",
-            peers=cluster_peers,
             redis_url=cluster_redis_url,
-            shared_store_path=str(store_path / "leader.lock"),
         )
-        LOGGER.info(
-            "Cluster mode enabled (election=%s, discovery=%s, peers=%d)",
-            cluster_config.leader_election,
-            cluster_config.discovery,
-            len(cluster_peers),
-        )
+        LOGGER.info("Cluster mode enabled (redis_url=%s)", cluster_redis_url)
 
     await run_dashboard_server(
         orchestrator=orchestrator,
