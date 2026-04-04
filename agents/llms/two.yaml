@@ -1,5 +1,0 @@
-# Two models — pre-prod configuration.
-# References individual model files to avoid duplication.
-include:
-  - qwen.yaml
-  - claude.yaml

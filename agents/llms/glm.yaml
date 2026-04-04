@@ -1,5 +1,0 @@
-llm:
-  - model_type: dashscope
-    model_name: glm-5
-    api_key_env: DOJOZERO_DASHSCOPE_API_KEY
-    model_display_name: GLM

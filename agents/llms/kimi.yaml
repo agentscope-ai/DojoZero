@@ -1,6 +1,0 @@
-llm:
-  - model_type: openai
-    model_name: kimi-k2.5
-    api_key_env: DOJOZERO_DASHSCOPE_API_KEY
-    base_url_env: DOJOZERO_OPENAI_BASE_URL
-    model_display_name: Kimi
