@@ -621,6 +621,16 @@ class TrialManager:
                 task = asyncio.create_task(self._monitor_resumed_trial(queued))
                 self._running_tasks[trial_id] = task
 
+                # Re-register ownership in peer registry (may have been
+                # lost during a Redis flush or redeployment).
+                if self._peer_registry is not None and self._server_id is not None:
+                    try:
+                        await self._peer_registry.register_trial(
+                            trial_id, self._server_id
+                        )
+                    except Exception:
+                        pass
+
                 resumed_count += 1
                 self._logger.info(
                     "Successfully resumed interrupted trial '%s'",
