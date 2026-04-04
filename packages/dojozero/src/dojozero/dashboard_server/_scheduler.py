@@ -1496,8 +1496,11 @@ class ScheduleManager:
                 continue
 
             # Signal 1: Redis heartbeat staleness
+            # staleness=None means the peer entry was already pruned from
+            # Redis — treat that as definitely dead (skip straight to
+            # signal 2 HTTP check).
             staleness = await self._peer_registry.get_peer_staleness(owner.server_id)
-            if staleness is None or staleness <= self._DEAD_PEER_THRESHOLD:
+            if staleness is not None and staleness <= self._DEAD_PEER_THRESHOLD:
                 continue  # peer is alive or recently seen
 
             # Signal 2: HTTP health check to the peer's last known URL

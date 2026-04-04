@@ -1093,6 +1093,27 @@ def create_dashboard_app(
                         "source": "queue",
                     }
                 )
+            # Try to proxy to the owning peer in cluster mode
+            if state.peer_registry is not None:
+                try:
+                    owner = await state.peer_registry.get_peer_for_trial(trial_id)
+                    if (
+                        owner is not None
+                        and owner.server_url
+                        and owner.server_id != state.server_id
+                    ):
+                        remote_url = (
+                            f"{owner.server_url.rstrip('/')}"
+                            f"/api/trials/{trial_id}/status"
+                        )
+                        async with state.http_session.get(
+                            remote_url,
+                            headers={"X-Dojozero-Forwarded": state.server_id or ""},
+                        ) as resp:
+                            body = await resp.json()
+                            return JSONResponse(content=body, status_code=resp.status)
+                except Exception:
+                    pass  # fall through to 404
             return JSONResponse(
                 content={"error": f"Trial '{trial_id}' not found"},
                 status_code=404,
@@ -1153,6 +1174,27 @@ def create_dashboard_app(
         if results is not None:
             return JSONResponse(content=results)
 
+        # Try to proxy to the owning peer in cluster mode
+        if state.peer_registry is not None:
+            try:
+                owner = await state.peer_registry.get_peer_for_trial(trial_id)
+                if (
+                    owner is not None
+                    and owner.server_url
+                    and owner.server_id != state.server_id
+                ):
+                    remote_url = (
+                        f"{owner.server_url.rstrip('/')}/api/trials/{trial_id}/results"
+                    )
+                    async with state.http_session.get(
+                        remote_url,
+                        headers={"X-Dojozero-Forwarded": state.server_id or ""},
+                    ) as resp:
+                        body = await resp.json()
+                        return JSONResponse(content=body, status_code=resp.status)
+            except Exception:
+                pass  # fall through to 404
+
         # No results available
         return JSONResponse(
             content={
@@ -1171,6 +1213,26 @@ def create_dashboard_app(
         try:
             status = await state.orchestrator.stop_trial(trial_id)
         except TrialNotFoundError:
+            # Try to proxy to the owning peer in cluster mode
+            if state.peer_registry is not None:
+                try:
+                    owner = await state.peer_registry.get_peer_for_trial(trial_id)
+                    if (
+                        owner is not None
+                        and owner.server_url
+                        and owner.server_id != state.server_id
+                    ):
+                        remote_url = (
+                            f"{owner.server_url.rstrip('/')}/api/trials/{trial_id}/stop"
+                        )
+                        async with state.http_session.post(
+                            remote_url,
+                            headers={"X-Dojozero-Forwarded": state.server_id or ""},
+                        ) as resp:
+                            body = await resp.json()
+                            return JSONResponse(content=body, status_code=resp.status)
+                except Exception:
+                    pass
             return JSONResponse(
                 content={"error": f"Trial '{trial_id}' not found"},
                 status_code=404,
@@ -1235,6 +1297,26 @@ def create_dashboard_app(
                 }
             )
         except TrialNotFoundError:
+            # Try to proxy to the owning peer in cluster mode
+            if state.peer_registry is not None:
+                try:
+                    owner = await state.peer_registry.get_peer_for_trial(trial_id)
+                    if (
+                        owner is not None
+                        and owner.server_url
+                        and owner.server_id != state.server_id
+                    ):
+                        remote_url = (
+                            f"{owner.server_url.rstrip('/')}/api/trials/{trial_id}"
+                        )
+                        async with state.http_session.delete(
+                            remote_url,
+                            headers={"X-Dojozero-Forwarded": state.server_id or ""},
+                        ) as resp:
+                            body = await resp.json()
+                            return JSONResponse(content=body, status_code=resp.status)
+                except Exception:
+                    pass
             return JSONResponse(
                 content={"error": f"Trial '{trial_id}' not found"},
                 status_code=404,
