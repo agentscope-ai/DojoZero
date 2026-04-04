@@ -504,28 +504,6 @@ class ScheduleManager:
             for s in loaded:
                 self._schedules[s.schedule_id] = s
 
-            # Reset orphaned schedules stuck in launching with no trial ID.
-            # This is always safe: the trial was never created.  Schedules in
-            # running/monitoring with a launched_trial_id may be executing on
-            # a peer, so we leave those alone — the monitor loop will detect
-            # if the game has finished or the trial is truly lost.
-            orphaned = 0
-            for s in self._schedules.values():
-                if (
-                    s.phase == ScheduledTrialPhase.LAUNCHING
-                    and s.launched_trial_id is None
-                ):
-                    LOGGER.warning(
-                        "Resetting stuck schedule '%s' (phase=launching, "
-                        "no trial ID) to waiting",
-                        s.schedule_id,
-                    )
-                    s.phase = ScheduledTrialPhase.WAITING
-                    orphaned += 1
-            if orphaned:
-                LOGGER.info("Reset %d stuck schedules to waiting", orphaned)
-                self._persist()
-
         # Create shared HTTP session for remote submissions
         import aiohttp
 
@@ -1488,71 +1466,50 @@ class ScheduleManager:
             owner = await self._peer_registry.get_peer_for_trial(
                 scheduled.launched_trial_id
             )
-
-            # Determine if this schedule is orphaned
-            is_orphaned = False
-            owner_label = "unknown"
-
             if owner is None:
-                # No owner recorded (trial_owners flushed or legacy trial).
-                # Check if the trial is running locally — if so, skip.
-                local_status = self._trial_manager.get_status(
-                    scheduled.launched_trial_id
-                )
-                if local_status is not None:
-                    continue  # running locally, monitor loop handles it
-                is_orphaned = True
-                LOGGER.warning(
-                    "Schedule '%s' trial '%s' has no owner and is not "
-                    "running locally — treating as orphaned",
-                    scheduled.schedule_id,
-                    scheduled.launched_trial_id,
-                )
-            elif owner.server_id == self._server_id:
+                # No owner recorded — trial was launched before cluster mode
+                continue
+            if owner.server_id == self._server_id:
                 # We own it — local monitor loop handles this
                 continue
-            else:
-                owner_label = owner.server_id
-                # Signal 1: Redis heartbeat staleness
-                # staleness=None means the peer entry was already pruned
-                # from Redis — treat that as definitely dead.
-                staleness = await self._peer_registry.get_peer_staleness(
-                    owner.server_id
-                )
-                if staleness is not None and staleness <= self._DEAD_PEER_THRESHOLD:
-                    continue  # peer is alive or recently seen
 
-                # Signal 2: HTTP health check to the peer's last known URL
-                if owner.server_url:
-                    try:
-                        health_url = f"{owner.server_url.rstrip('/')}/api/trials"
-                        async with self._http_session.get(
-                            health_url, timeout=5
-                        ) as resp:
-                            if resp.status < 500:
-                                continue  # peer is reachable
-                    except Exception:
-                        pass  # unreachable — confirms dead
-                is_orphaned = True
+            # Signal 1: Redis heartbeat staleness
+            # staleness=None means the peer entry was already pruned from
+            # Redis — treat that as definitely dead (skip straight to
+            # signal 2 HTTP check).
+            staleness = await self._peer_registry.get_peer_staleness(owner.server_id)
+            if staleness is not None and staleness <= self._DEAD_PEER_THRESHOLD:
+                continue  # peer is alive or recently seen
 
-            if not is_orphaned:
-                continue
+            # Signal 2: HTTP health check to the peer's last known URL
+            if owner.server_url:
+                try:
+                    health_url = f"{owner.server_url.rstrip('/')}/api/trials"
+                    async with self._http_session.get(health_url, timeout=5) as resp:
+                        if resp.status < 500:
+                            # Peer is reachable — don't consider it dead
+                            continue
+                except Exception:
+                    pass  # unreachable — confirms dead
 
-            # Schedule is orphaned. Decide action based on game state.
+            # Peer is confirmed dead.  Decide action based on game state.
             LOGGER.warning(
-                "Recovering orphaned schedule '%s' (trial=%s, owner=%s)",
+                "Peer '%s' is dead (%.0fs since last heartbeat). "
+                "Recovering schedule '%s' (trial=%s).",
+                owner.server_id,
+                staleness,
                 scheduled.schedule_id,
                 scheduled.launched_trial_id,
-                owner_label,
             )
 
             status_info = await self._get_game_status_info(scheduled)
             game_status = status_info[0] if status_info else None
 
             if game_status == STATUS_FINAL:
+                # Game finished — mark completed (data is partial but game is over)
                 scheduled.phase = ScheduledTrialPhase.COMPLETED
                 scheduled.error = (
-                    f"Owner peer '{owner_label}' died; game already finished"
+                    f"Owner peer '{owner.server_id}' died; game already finished"
                 )
                 LOGGER.info(
                     "Schedule '%s': game finished, marked completed "
@@ -1560,19 +1517,19 @@ class ScheduleManager:
                     scheduled.schedule_id,
                 )
             elif game_status is not None and game_status < 2:
-                # Game hasn't started — safe to retry
+                # Game hasn't started yet (status 1 = scheduled) — safe to retry
                 scheduled.phase = ScheduledTrialPhase.WAITING
                 scheduled.launched_trial_id = None
                 scheduled.monitoring_started_at = None
                 LOGGER.info(
-                    "Schedule '%s': game not started, reset to waiting",
+                    "Schedule '%s': game not started, reset to waiting for re-launch",
                     scheduled.schedule_id,
                 )
             else:
-                # Game in progress or unknown — mark failed to avoid dupes
+                # Game in progress or unknown — mark failed to avoid duplicates
                 scheduled.phase = ScheduledTrialPhase.FAILED
                 scheduled.error = (
-                    f"Owner peer '{owner_label}' died mid-game; "
+                    f"Owner peer '{owner.server_id}' died mid-game; "
                     f"marked failed to avoid duplicate traces"
                 )
                 LOGGER.warning(
