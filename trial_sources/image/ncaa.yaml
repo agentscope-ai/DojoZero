@@ -1,5 +1,4 @@
-# NCAA Trial Source — Pre-prod environment
-# Full agent matrix (all personas × all models), 1 game.
+# NCAA Trial Source
 source_id: ncaa-moneyline-source
 sport_type: ncaa
 config:
