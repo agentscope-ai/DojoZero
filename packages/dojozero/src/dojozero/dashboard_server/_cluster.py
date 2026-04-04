@@ -185,6 +185,13 @@ class PeerRegistry(Protocol):
         self, sport_type: str, game_id: str, server_id: str
     ) -> bool: ...
     async def is_game_claimed(self, sport_type: str, game_id: str) -> bool: ...
+    async def is_peer_alive(self, server_id: str) -> bool:
+        """Check if a peer has a recent heartbeat."""
+        ...
+
+    async def get_peer_staleness(self, server_id: str) -> float | None:
+        """Seconds since last heartbeat, or None if peer is unknown."""
+        ...
 
 
 class RedisPeerRegistry:
@@ -294,6 +301,24 @@ class RedisPeerRegistry:
             self._active_trials = count
             await self._heartbeat()
 
+    async def is_peer_alive(self, server_id: str) -> bool:
+        """Check if a peer has heartbeated within PEER_TTL."""
+        staleness = await self.get_peer_staleness(server_id)
+        return staleness is not None and staleness <= self.PEER_TTL
+
+    async def get_peer_staleness(self, server_id: str) -> float | None:
+        """Seconds since last heartbeat, or None if peer is unknown."""
+        import json
+
+        raw = await self._redis.hget(self.PEERS_KEY, server_id)
+        if raw is None:
+            return None
+        try:
+            info = json.loads(raw)
+            return time.time() - info.get("last_heartbeat", 0)
+        except Exception:
+            return None
+
     async def _heartbeat(self) -> None:
         import json
 
@@ -313,9 +338,37 @@ class RedisPeerRegistry:
         while not self._stop_event.is_set():
             try:
                 await self._heartbeat()
+                await self._prune_stale_peers()
             except Exception as e:
                 logger.warning("Peer heartbeat error: %s", e)
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
+
+    async def _prune_stale_peers(self) -> None:
+        """Remove peers whose heartbeat has long expired from Redis.
+
+        Uses 2× PEER_TTL so a temporarily unavailable peer has time to
+        recover before its entry is deleted.  ``get_peers()`` already
+        excludes stale peers from scheduling decisions at 1× PEER_TTL.
+        """
+        import json
+
+        prune_threshold = self.PEER_TTL * 2
+        now = time.time()
+        all_peers = await self._redis.hgetall(self.PEERS_KEY)
+        stale = []
+        for _sid, data in all_peers.items():
+            sid = _sid.decode() if isinstance(_sid, bytes) else _sid
+            if sid == self._server_id:
+                continue
+            try:
+                info = json.loads(data)
+                if now - info.get("last_heartbeat", 0) > prune_threshold:
+                    stale.append(sid)
+            except Exception:
+                stale.append(sid)
+        if stale:
+            await self._redis.hdel(self.PEERS_KEY, *stale)
+            logger.info("Pruned %d stale peer(s): %s", len(stale), stale)
 
     async def claim_game(self, sport_type: str, game_id: str, server_id: str) -> bool:
         """Atomically claim a game for scheduling. Returns True if claimed."""

@@ -439,9 +439,8 @@ class ScheduleManager:
         # All trial sources by ID
         self._sources: dict[str, TrialSource] = {}
 
-        # Track which game IDs have been scheduled for each source
-        # Key: (source_id, game_id), Value: schedule_id
-        self._scheduled_events: dict[tuple[str, str], str] = {}
+        # NOTE: _scheduled_events is derived from _schedules on access via the
+        # @property below.  No separate dict to keep in sync.
 
         # Semaphore to limit concurrent trial launches
         self._launch_semaphore = asyncio.Semaphore(max_concurrent_launches)
@@ -469,6 +468,26 @@ class ScheduleManager:
         # Shared HTTP session for remote submissions (created in start())
         self._http_session: Any = None  # aiohttp.ClientSession
 
+    @property
+    def _scheduled_events(self) -> dict[tuple[str, str], str]:
+        """Derive scheduled events from _schedules (single source of truth).
+
+        Returns a dict of ``(source_id, game_id) → schedule_id`` for all
+        schedules that are still active (not completed/cancelled/failed).
+        """
+        result: dict[tuple[str, str], str] = {}
+        for s in self._schedules.values():
+            if s.phase in (
+                ScheduledTrialPhase.COMPLETED,
+                ScheduledTrialPhase.CANCELLED,
+                ScheduledTrialPhase.FAILED,
+            ):
+                continue
+            source_id = s.metadata.get("source_id")
+            if source_id:
+                result[(source_id, s.game_id)] = s.schedule_id
+        return result
+
     async def start(self) -> None:
         """Start the schedule manager."""
         self._shutdown_event.clear()
@@ -484,15 +503,28 @@ class ScheduleManager:
             loaded = self._store.load()
             for s in loaded:
                 self._schedules[s.schedule_id] = s
-                # Track scheduled events for active schedules only
-                if s.phase not in (
-                    ScheduledTrialPhase.COMPLETED,
-                    ScheduledTrialPhase.CANCELLED,
-                    ScheduledTrialPhase.FAILED,
+
+            # Reset orphaned schedules stuck in launching with no trial ID.
+            # This is always safe: the trial was never created.  Schedules in
+            # running/monitoring with a launched_trial_id may be executing on
+            # a peer, so we leave those alone — the monitor loop will detect
+            # if the game has finished or the trial is truly lost.
+            orphaned = 0
+            for s in self._schedules.values():
+                if (
+                    s.phase == ScheduledTrialPhase.LAUNCHING
+                    and s.launched_trial_id is None
                 ):
-                    source_id = s.metadata.get("source_id")
-                    if source_id:
-                        self._scheduled_events[(source_id, s.game_id)] = s.schedule_id
+                    LOGGER.warning(
+                        "Resetting stuck schedule '%s' (phase=launching, "
+                        "no trial ID) to waiting",
+                        s.schedule_id,
+                    )
+                    s.phase = ScheduledTrialPhase.WAITING
+                    orphaned += 1
+            if orphaned:
+                LOGGER.info("Reset %d stuck schedules to waiting", orphaned)
+                self._persist()
 
         # Create shared HTTP session for remote submissions
         import aiohttp
@@ -824,11 +856,6 @@ class ScheduleManager:
                         "Failed to cancel trial %s: %s", scheduled.launched_trial_id, e
                     )
 
-            # Remove from tracking
-            source_id = scheduled.metadata.get("source_id")
-            if source_id:
-                self._scheduled_events.pop((source_id, scheduled.game_id), None)
-
             del self._schedules[schedule_id]
             count += 1
 
@@ -1126,8 +1153,6 @@ class ScheduleManager:
                     schedule_id=schedule_id,
                 )
 
-                # Track this game as scheduled for this source
-                self._scheduled_events[(source.source_id, game.game_id)] = schedule_id
                 remaining_slots -= 1
 
                 scheduled = self._schedules.get(schedule_id)
@@ -1415,6 +1440,9 @@ class ScheduleManager:
                                         self._safety_timeout_seconds,
                                     )
 
+                # Check for orphaned schedules whose owning peer is dead
+                await self._recover_orphaned_schedules()
+
                 # Check every 30 seconds
                 await asyncio.sleep(30.0)
 
@@ -1423,6 +1451,113 @@ class ScheduleManager:
             except Exception as e:
                 LOGGER.error("Monitor loop error: %s", e, exc_info=True)
                 await asyncio.sleep(30.0)
+
+    # Dead-peer threshold: peer must be missing for this long before we
+    # consider its schedules orphaned.  Much longer than PEER_TTL (30s) to
+    # tolerate brief restarts and network blips.
+    _DEAD_PEER_THRESHOLD = 300.0  # 5 minutes
+
+    async def _recover_orphaned_schedules(self) -> None:
+        """Recover schedules whose owning peer has been dead for a long time.
+
+        For running/monitoring schedules with a ``launched_trial_id``, check
+        whether the peer that owns the trial is still alive.  If the peer has
+        been unresponsive for longer than ``_DEAD_PEER_THRESHOLD``:
+
+        - Game already finished → mark schedule ``completed``
+        - Game not started yet  → reset to ``waiting`` (safe to re-launch)
+        - Game in progress      → mark ``failed`` (partial data, don't dupe)
+
+        Two independent signals are required before acting:
+        1. Redis heartbeat stale (>5 min)
+        2. HTTP health check to peer's last known URL fails
+        """
+        if self._peer_registry is None or self._server_id is None:
+            return
+
+        for scheduled in list(self._schedules.values()):
+            if scheduled.phase not in (
+                ScheduledTrialPhase.RUNNING,
+                ScheduledTrialPhase.MONITORING,
+            ):
+                continue
+            if not scheduled.launched_trial_id:
+                continue
+
+            # Look up the owning peer
+            owner = await self._peer_registry.get_peer_for_trial(
+                scheduled.launched_trial_id
+            )
+            if owner is None:
+                # No owner recorded — trial was launched before cluster mode
+                continue
+            if owner.server_id == self._server_id:
+                # We own it — local monitor loop handles this
+                continue
+
+            # Signal 1: Redis heartbeat staleness
+            staleness = await self._peer_registry.get_peer_staleness(owner.server_id)
+            if staleness is None or staleness <= self._DEAD_PEER_THRESHOLD:
+                continue  # peer is alive or recently seen
+
+            # Signal 2: HTTP health check to the peer's last known URL
+            if owner.server_url:
+                try:
+                    health_url = f"{owner.server_url.rstrip('/')}/api/trials"
+                    async with self._http_session.get(health_url, timeout=5) as resp:
+                        if resp.status < 500:
+                            # Peer is reachable — don't consider it dead
+                            continue
+                except Exception:
+                    pass  # unreachable — confirms dead
+
+            # Peer is confirmed dead.  Decide action based on game state.
+            LOGGER.warning(
+                "Peer '%s' is dead (%.0fs since last heartbeat). "
+                "Recovering schedule '%s' (trial=%s).",
+                owner.server_id,
+                staleness,
+                scheduled.schedule_id,
+                scheduled.launched_trial_id,
+            )
+
+            status_info = await self._get_game_status_info(scheduled)
+            game_status = status_info[0] if status_info else None
+
+            if game_status == STATUS_FINAL:
+                # Game finished — mark completed (data is partial but game is over)
+                scheduled.phase = ScheduledTrialPhase.COMPLETED
+                scheduled.error = (
+                    f"Owner peer '{owner.server_id}' died; game already finished"
+                )
+                LOGGER.info(
+                    "Schedule '%s': game finished, marked completed "
+                    "(partial data from dead peer)",
+                    scheduled.schedule_id,
+                )
+            elif game_status is not None and game_status < 2:
+                # Game hasn't started yet (status 1 = scheduled) — safe to retry
+                scheduled.phase = ScheduledTrialPhase.WAITING
+                scheduled.launched_trial_id = None
+                scheduled.monitoring_started_at = None
+                LOGGER.info(
+                    "Schedule '%s': game not started, reset to waiting for re-launch",
+                    scheduled.schedule_id,
+                )
+            else:
+                # Game in progress or unknown — mark failed to avoid duplicates
+                scheduled.phase = ScheduledTrialPhase.FAILED
+                scheduled.error = (
+                    f"Owner peer '{owner.server_id}' died mid-game; "
+                    f"marked failed to avoid duplicate traces"
+                )
+                LOGGER.warning(
+                    "Schedule '%s': game in progress on dead peer, "
+                    "marked failed (avoiding duplicate)",
+                    scheduled.schedule_id,
+                )
+
+            self._persist()
 
     async def _launch_scheduled(self, scheduled: ScheduledTrial) -> None:
         """Launch a scheduled trial."""
