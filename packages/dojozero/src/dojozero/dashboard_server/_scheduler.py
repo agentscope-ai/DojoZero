@@ -504,28 +504,6 @@ class ScheduleManager:
             for s in loaded:
                 self._schedules[s.schedule_id] = s
 
-            # Reset orphaned schedules stuck in launching with no trial ID.
-            # This is always safe: the trial was never created.  Schedules in
-            # running/monitoring with a launched_trial_id may be executing on
-            # a peer, so we leave those alone — the monitor loop will detect
-            # if the game has finished or the trial is truly lost.
-            orphaned = 0
-            for s in self._schedules.values():
-                if (
-                    s.phase == ScheduledTrialPhase.LAUNCHING
-                    and s.launched_trial_id is None
-                ):
-                    LOGGER.warning(
-                        "Resetting stuck schedule '%s' (phase=launching, "
-                        "no trial ID) to waiting",
-                        s.schedule_id,
-                    )
-                    s.phase = ScheduledTrialPhase.WAITING
-                    orphaned += 1
-            if orphaned:
-                LOGGER.info("Reset %d stuck schedules to waiting", orphaned)
-                self._persist()
-
         # Create shared HTTP session for remote submissions
         import aiohttp
 

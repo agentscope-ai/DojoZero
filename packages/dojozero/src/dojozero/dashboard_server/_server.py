@@ -1097,12 +1097,6 @@ def create_dashboard_app(
             if state.peer_registry is not None:
                 try:
                     owner = await state.peer_registry.get_peer_for_trial(trial_id)
-                    LOGGER.info(
-                        "Proxy lookup for trial '%s': owner=%s, self=%s",
-                        trial_id,
-                        f"{owner.server_id}@{owner.server_url}" if owner else None,
-                        state.server_id,
-                    )
                     if (
                         owner is not None
                         and owner.server_url
@@ -1118,12 +1112,8 @@ def create_dashboard_app(
                         ) as resp:
                             body = await resp.json()
                             return JSONResponse(content=body, status_code=resp.status)
-                except Exception as exc:
-                    LOGGER.warning(
-                        "Proxy /status for trial '%s' failed: %s",
-                        trial_id,
-                        exc,
-                    )
+                except Exception:
+                    pass  # fall through to 404
             return JSONResponse(
                 content={"error": f"Trial '{trial_id}' not found"},
                 status_code=404,
