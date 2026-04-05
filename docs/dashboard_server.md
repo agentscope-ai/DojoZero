@@ -25,7 +25,7 @@ dojo0 run \
 ## 2. Scheduling with Trial Sources
 
 ```bash
-dojo0 serve --trial-source "trial_sources/daily/*.yaml"
+dojo0 serve --trial-source "trial_sources/image/*.yaml"
 dojo0 list-sources
 dojo0 list-trials
 dojo0 remove-source <source_id>
@@ -34,7 +34,7 @@ dojo0 clear-schedules
 
 ## 3. Trial Source Parameters
 
-`trial_sources/*.yaml` define what the dashboard server should discover (games) and how it should schedule trials for them.
+`trial_sources/image/*.yaml` define what the dashboard server should discover (games) and how it should schedule trials for them.
 
 At a minimum, most trial source files include:
 
@@ -84,14 +84,14 @@ dojo0 serve --port 8000 \
     --server-id server-1 \
     --server-url http://localhost:8000 \
     --cluster-redis-url redis://localhost:6379/0 \
-    --trial-source trial_sources/daily/nba.yaml
+    --trial-source trial_sources/image/nba.yaml
 
 # Server 2
 dojo0 serve --port 8001 \
     --server-id server-2 \
     --server-url http://localhost:8001 \
     --cluster-redis-url redis://localhost:6379/0 \
-    --trial-source trial_sources/daily/nba.yaml
+    --trial-source trial_sources/image/nba.yaml
 ```
 
 Or use an environment variable:
