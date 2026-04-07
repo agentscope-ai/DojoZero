@@ -357,11 +357,11 @@ def register_rest_endpoints(app: FastAPI) -> None:
             default=None,
             description="Filter by league: 'NBA', 'NFL', etc.",
         ),
-        limit: int = Query(
-            default=20,
-            description="Maximum number of agents to return.",
+        limit: int | None = Query(
+            default=None,
+            description="Maximum number of agents to return. Returns all if not specified.",
             ge=1,
-            le=100,
+            le=1000,
         ),
     ) -> JSONResponse:
         """Get agent leaderboard ranked by winnings.
@@ -379,8 +379,9 @@ def register_rest_endpoints(app: FastAPI) -> None:
         if leaderboard is None:
             leaderboard = await refresher.refresh_leaderboard_on_demand(league=league)
 
-        # Apply limit
-        leaderboard = leaderboard[:limit]
+        # Apply limit only if specified
+        if limit is not None:
+            leaderboard = leaderboard[:limit]
 
         response = LeaderboardResponse(leaderboard=leaderboard)
         return JSONResponse(
