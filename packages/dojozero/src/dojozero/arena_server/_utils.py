@@ -831,7 +831,7 @@ def _compute_leaderboard_from_spans(
     spans_by_trial: dict[str, list[SpanData]],
     agent_info_cache: dict[str, AgentInfo],
     trial_ids: list[str] | None = None,
-    limit: int = 20,
+    limit: int | None = None,
 ) -> list[LeaderboardEntry]:
     """Compute agent leaderboard from pre-fetched spans.
 
@@ -842,7 +842,7 @@ def _compute_leaderboard_from_spans(
         spans_by_trial: Pre-fetched spans grouped by trial_id
         agent_info_cache: Pre-populated agent info cache (agent_id -> AgentInfo)
         trial_ids: Optional list to filter which trials to process (None = all)
-        limit: Maximum entries to return
+        limit: Maximum entries to return (None = all)
 
     Returns:
         List of agents sorted by winnings (highest first)
@@ -937,9 +937,9 @@ def _compute_leaderboard_from_spans(
 
     # Sort by winnings (descending) and add rank
     leaderboard.sort(key=lambda x: x.winnings, reverse=True)
+    entries = leaderboard[:limit] if limit is not None else leaderboard
     ranked = [
-        entry.model_copy(update={"rank": i + 1})
-        for i, entry in enumerate(leaderboard[:limit])
+        entry.model_copy(update={"rank": i + 1}) for i, entry in enumerate(entries)
     ]
 
     return ranked
@@ -949,7 +949,7 @@ async def _compute_leaderboard(
     trace_reader: TraceReader,
     trial_ids: list[str],
     cache: "LandingPageCache | None" = None,
-    limit: int = 20,
+    limit: int | None = None,
 ) -> list[LeaderboardEntry]:
     """Compute agent leaderboard (on-demand version).
 
