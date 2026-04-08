@@ -1344,6 +1344,27 @@ class BackgroundRefresher:
         self.cache.set_agent_actions(actions, league=league)
         return actions
 
+    @property
+    def spans_by_trial(self) -> dict[str, list[SpanData]]:
+        """Public read-only access to cached spans by trial."""
+        return self._spans_by_trial
+
+    def get_trial_metadata(
+        self, trial_ids: list[str] | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Get trial metadata from cache for the given trial IDs.
+
+        Returns:
+            Dict mapping trial_id -> trial info dict (with "phase", "metadata" keys)
+        """
+        ids = trial_ids or self.cache.get_trials_list() or []
+        result: dict[str, dict[str, Any]] = {}
+        for tid in ids:
+            info = self.cache.get_trial_info(tid)
+            if info is not None:
+                result[tid] = info
+        return result
+
 
 # =============================================================================
 # Stream and Replay Controllers

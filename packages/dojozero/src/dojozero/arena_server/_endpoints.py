@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from dojozero.arena_server._models import (
     AgentActionsResponse,
+    ExtendedLeaderboardEntry,
     GameCardData,
     LandingResponse,
     LeaderboardResponse,
@@ -39,6 +40,11 @@ from ._server import (
     StreamController,
     TrialReplayController,
     get_server_state,
+)
+from ._utils import (
+    _compute_agent_profile,
+    _compute_leaderboard_from_spans,
+    _get_agent_extra_info,
 )
 from ._utils import _load_replay_data
 
@@ -363,29 +369,179 @@ def register_rest_endpoints(app: FastAPI) -> None:
             ge=1,
             le=1000,
         ),
+        page: int = Query(
+            default=1,
+            description="Page number (1-based).",
+            ge=1,
+        ),
+        page_size: int = Query(
+            default=20,
+            description="Number of entries per page.",
+            ge=1,
+            le=100,
+        ),
+        start_date: str | None = Query(
+            default=None,
+            description="Start date filter (YYYY-MM-DD). Recomputes stats within range.",
+        ),
+        end_date: str | None = Query(
+            default=None,
+            description="End date filter (YYYY-MM-DD). Recomputes stats within range.",
+        ),
+        agent_type: str | None = Query(
+            default=None,
+            description="Agent type filter: 'built_in' or 'external'.",
+        ),
+        sort_by: str = Query(
+            default="winnings",
+            description="Sort field: 'winnings', 'win_rate', 'roi', 'total_bets'.",
+        ),
+        sort_order: str = Query(
+            default="desc",
+            description="Sort direction: 'asc' or 'desc'.",
+        ),
     ) -> JSONResponse:
-        """Get agent leaderboard ranked by winnings.
+        """Get agent leaderboard ranked by specified field.
 
-        Returns agents sorted by total winnings with win rate and ROI.
-        Data is served from cache (background refresh keeps it fresh).
-        On cache miss, triggers on-demand refresh.
+        Returns agents sorted by the requested field with win rate and ROI.
+        Supports date-range filtering (recomputes stats within range),
+        agent type filtering, custom sorting, and pagination.
         """
         state = get_server_state()
         refresher = state.refresher
         assert refresher is not None, "BackgroundRefresher not initialized"
 
-        # Get leaderboard from cache, or refresh on demand
-        leaderboard = state.cache.get_leaderboard(league=league)
-        if leaderboard is None:
-            leaderboard = await refresher.refresh_leaderboard_on_demand(league=league)
+        use_date_filter = start_date is not None or end_date is not None
 
-        # Apply limit only if specified
-        if limit is not None:
-            leaderboard = leaderboard[:limit]
+        if use_date_filter:
+            # Date-filtered: recompute from spans
+            trial_ids = state.cache.get_trials_list() or []
+            trial_metadata = refresher.get_trial_metadata(trial_ids)
+            leaderboard = _compute_leaderboard_from_spans(
+                refresher.spans_by_trial,
+                state.cache.get_all_agent_info(),
+                trial_ids,
+                limit=limit,
+                start_date=start_date,
+                end_date=end_date,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                trial_metadata=trial_metadata,
+            )
+        else:
+            # Fast path: use cached leaderboard
+            leaderboard = state.cache.get_leaderboard(league=league)
+            if leaderboard is None:
+                leaderboard = await refresher.refresh_leaderboard_on_demand(
+                    league=league
+                )
 
-        response = LeaderboardResponse(leaderboard=leaderboard)
+            # Apply sort if not default
+            if sort_by != "winnings" or sort_order != "desc":
+                sort_key_map = {
+                    "winnings": lambda x: x.winnings,
+                    "win_rate": lambda x: x.win_rate,
+                    "roi": lambda x: x.roi,
+                    "total_bets": lambda x: x.total_bets,
+                }
+                key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])
+                leaderboard = sorted(
+                    leaderboard, key=key_fn, reverse=(sort_order != "asc")
+                )
+                # Re-rank after re-sort
+                leaderboard = [
+                    entry.model_copy(update={"rank": i + 1})
+                    for i, entry in enumerate(leaderboard)
+                ]
+
+            # Apply limit if specified
+            if limit is not None:
+                leaderboard = leaderboard[:limit]
+
+        # Get extra info (is_external, created_at) for extending entries
+        extra_info = _get_agent_extra_info(
+            refresher.spans_by_trial,
+            state.cache.get_trials_list(),
+        )
+
+        # Convert to extended entries
+        extended: list[ExtendedLeaderboardEntry] = []
+        for entry in leaderboard:
+            aid = entry.agent.agent_id
+            is_ext, cat = extra_info.get(aid, (False, None))
+            extended.append(
+                ExtendedLeaderboardEntry.from_leaderboard_entry(
+                    entry, is_external=is_ext, created_at=cat
+                )
+            )
+
+        # Apply agent_type filter
+        if agent_type == "external":
+            extended = [e for e in extended if e.agent.is_external]
+        elif agent_type == "built_in":
+            extended = [e for e in extended if not e.agent.is_external]
+
+        total = len(extended)
+
+        # Paginate
+        start_idx = (page - 1) * page_size
+        page_entries = extended[start_idx : start_idx + page_size]
+
+        # Re-rank within page context (global rank)
+        page_entries = [
+            e.model_copy(update={"rank": start_idx + i + 1})
+            for i, e in enumerate(page_entries)
+        ]
+
+        response = LeaderboardResponse(
+            leaderboard=page_entries,
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
         return JSONResponse(
             content=response.model_dump(by_alias=state.by_alias),
+        )
+
+    @app.get("/api/agent/{agent_id}/profile")
+    async def get_agent_profile(
+        agent_id: str,
+        page: int = Query(
+            default=1,
+            description="Page number for bet history (1-based).",
+            ge=1,
+        ),
+        page_size: int = Query(
+            default=20,
+            description="Number of bet records per page.",
+            ge=1,
+            le=100,
+        ),
+    ) -> JSONResponse:
+        """Get agent profile with stats and paginated bet history.
+
+        Returns agent info, aggregate stats, and a paginated list of
+        individual bets sorted by game_date descending.
+        """
+        state = get_server_state()
+        refresher = state.refresher
+        assert refresher is not None, "BackgroundRefresher not initialized"
+
+        trial_ids = state.cache.get_trials_list() or []
+        trial_metadata = refresher.get_trial_metadata(trial_ids)
+
+        profile = _compute_agent_profile(
+            agent_id=agent_id,
+            spans_by_trial=refresher.spans_by_trial,
+            agent_info_cache=state.cache.get_all_agent_info(),
+            trial_metadata=trial_metadata,
+            trial_ids=trial_ids,
+            page=page,
+            page_size=page_size,
+        )
+
+        return JSONResponse(
+            content=profile.model_dump(by_alias=state.by_alias),
         )
 
     @app.get("/api/agent-actions")
