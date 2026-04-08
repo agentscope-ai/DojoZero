@@ -1639,11 +1639,13 @@ def create_arena_app(
     # Get Redis URL from parameter or environment
     effective_redis_url = redis_url or os.getenv("DOJOZERO_REDIS_URL")
 
-    # Create trace reader using CLI args
+    # Create trace reader using CLI args + SLS config
     trace_reader = create_trace_reader(
         backend=trace_backend,
         trace_query_endpoint=trace_query_endpoint,
         service_name=service_name,
+        sls_page_size=resolved_config.sls.page_size,
+        sls_max_total=resolved_config.sls.max_total,
     )
     broadcaster = SpanBroadcaster()
 

@@ -568,6 +568,8 @@ class SLSTraceReader:
         project: str,
         logstore: str = "traces",
         service_name: str = "dojozero",
+        page_size: int = 100,
+        max_total: int = 1000000,
     ) -> None:
         """Initialize the SLS trace reader.
 
@@ -576,6 +578,11 @@ class SLSTraceReader:
             project: SLS project name
             logstore: Logstore name for traces
             service_name: Service name to filter by
+            page_size: Number of rows per SLS GetLogs request (SLS caps at 100
+                       in search mode).
+            max_total: Safety limit on the total number of rows fetched in a
+                       single paginated query.  Must be high enough to cover the
+                       busiest day of traces.
         """
         from ._credentials import get_credential_provider
 
@@ -583,6 +590,8 @@ class SLSTraceReader:
         self._project = project
         self._logstore = logstore
         self._service_name = service_name
+        self._page_size = page_size
+        self._max_total = max_total
         self._credential_provider = get_credential_provider()
         self._client = httpx.AsyncClient(timeout=30.0)
 
@@ -790,8 +799,8 @@ class SLSTraceReader:
 
         # Pagination: SLS GetLogs API limits to 100 rows per request in search mode
         # We paginate using offset parameter to get all data
-        page_size = 100  # SLS max per request in search mode
-        max_total = 1000000  # Safety limit to prevent infinite loops
+        page_size = self._page_size
+        max_total = self._max_total
         max_incomplete_retries = 3
         all_rows: list[dict[str, Any]] = []
         offset = 0
@@ -985,8 +994,8 @@ class SLSTraceReader:
         """Fetch all spans for a single day with pagination."""
         resource = f"/logstores/{self._logstore}"
         url = f"{self._get_base_url()}{resource}"
-        page_size = 100
-        max_total = 100000
+        page_size = self._page_size
+        max_total = self._max_total
         max_incomplete_retries = 3
         all_rows: list[dict[str, Any]] = []
         offset = 0
@@ -1203,6 +1212,8 @@ def create_trace_reader(
     backend: str,
     trace_query_endpoint: str | None = None,
     service_name: str = "dojozero",
+    sls_page_size: int = 100,
+    sls_max_total: int = 1000000,
 ) -> TraceReader:
     """Factory function to create a TraceReader based on backend type.
 
@@ -1210,6 +1221,8 @@ def create_trace_reader(
         backend: Backend type ("jaeger" or "sls")
         trace_query_endpoint: Jaeger Query API endpoint (only for jaeger backend)
         service_name: Service name for filtering
+        sls_page_size: Page size for SLS queries (only for sls backend)
+        sls_max_total: Safety limit for total rows fetched (only for sls backend)
 
     Returns:
         TraceReader instance (JaegerTraceReader or SLSTraceReader)
@@ -1248,16 +1261,20 @@ def create_trace_reader(
             )
 
         LOGGER.info(
-            "Creating SLS trace reader: endpoint=%s project=%s logstore=%s",
+            "Creating SLS trace reader: endpoint=%s project=%s logstore=%s page_size=%d max_total=%d",
             endpoint,
             project,
             logstore,
+            sls_page_size,
+            sls_max_total,
         )
         return SLSTraceReader(
             endpoint=endpoint,
             project=project,
             logstore=logstore,
             service_name=service_name,
+            page_size=sls_page_size,
+            max_total=sls_max_total,
         )
     else:
         # Jaeger backend
