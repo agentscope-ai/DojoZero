@@ -862,27 +862,35 @@ class BackgroundRefresher:
     ) -> None:
         """Refresh leaderboard cache from pre-fetched spans.
 
+        Also builds and caches the agent_bets_index for agent profile queries.
+
         Args:
             spans_by_trial: Pre-fetched spans grouped by trial_id
             agent_info_cache: Pre-populated agent info cache
             trial_ids: List of trial IDs to process
         """
-        # Refresh global leaderboard
-        leaderboard = _compute_leaderboard_from_spans(
-            spans_by_trial, agent_info_cache, trial_ids
-        )
-        self.cache.set_leaderboard(leaderboard, league=None)
+        trial_metadata = self.get_trial_metadata(trial_ids)
 
-        # Refresh per-league leaderboard
+        # Refresh global leaderboard + build bets index (one pass)
+        result = _compute_leaderboard_from_spans(
+            spans_by_trial,
+            agent_info_cache,
+            trial_ids,
+            collect_bets=True,
+            trial_metadata=trial_metadata,
+        )
+        self.cache.set_leaderboard(result.leaderboard, league=None)
+        self.cache.set_agent_bets_index(result.agent_bets_index)
+
+        # Refresh per-league leaderboard (no bets collection needed)
         for league in CACHEABLE_LEAGUES:
-            # Get trial IDs for this league from cache
             league_ids = [
                 tid for tid in trial_ids if self._trial_matches_league(tid, league)
             ]
-            league_leaderboard = _compute_leaderboard_from_spans(
+            league_result = _compute_leaderboard_from_spans(
                 spans_by_trial, agent_info_cache, league_ids
             )
-            self.cache.set_leaderboard(league_leaderboard, league=league)
+            self.cache.set_leaderboard(league_result.leaderboard, league=league)
 
         LOGGER.info("BackgroundRefresher: Refreshed leaderboard from pre-fetched spans")
 

@@ -17,87 +17,6 @@ from dojozero.core._models import AgentAction, LeaderboardEntry
 from dojozero.data._models import TeamIdentity
 
 
-# ============================================================================
-# Extended Models (API-layer wrappers)
-# ============================================================================
-
-
-class ExtendedAgentInfo(BaseModel):
-    """AgentInfo wrapper with additional API-only fields."""
-
-    model_config = ConfigDict(frozen=True, populate_by_name=True)
-
-    agent_id: str = ""
-    display_name: str = ""
-    persona: str = ""
-    model: str = ""
-    model_display_name: str = ""
-    system_prompt: str = ""
-    cdn_url: str = ""
-    avatar: str = ""
-    color: str = ""
-    is_external: bool = Field(default=False, serialization_alias="isExternal")
-    created_at: str | None = Field(default=None, serialization_alias="createdAt")
-
-    @classmethod
-    def from_agent_info(
-        cls,
-        info: AgentInfo,
-        *,
-        is_external: bool = False,
-        created_at: str | None = None,
-    ) -> ExtendedAgentInfo:
-        """Build from a core AgentInfo plus extra fields."""
-        return cls(
-            agent_id=info.agent_id,
-            display_name=info.display_name,
-            persona=info.persona,
-            model=info.model,
-            model_display_name=info.model_display_name,
-            system_prompt=info.system_prompt,
-            cdn_url=info.cdn_url,
-            avatar=info.avatar,
-            color=info.color,
-            is_external=is_external,
-            created_at=created_at,
-        )
-
-
-class ExtendedLeaderboardEntry(BaseModel):
-    """LeaderboardEntry wrapper with additional API-only fields."""
-
-    model_config = ConfigDict(frozen=True, populate_by_name=True)
-
-    agent: ExtendedAgentInfo
-    winnings: float
-    win_rate: float = Field(alias="winRate", serialization_alias="win_rate")
-    total_bets: int = Field(alias="totalBets", serialization_alias="total_bets")
-    roi: float
-    rank: int = 0
-    created_at: str | None = Field(default=None, serialization_alias="createdAt")
-
-    @classmethod
-    def from_leaderboard_entry(
-        cls,
-        entry: LeaderboardEntry,
-        *,
-        is_external: bool = False,
-        created_at: str | None = None,
-    ) -> ExtendedLeaderboardEntry:
-        """Build from a core LeaderboardEntry plus extra fields."""
-        return cls(
-            agent=ExtendedAgentInfo.from_agent_info(
-                entry.agent, is_external=is_external, created_at=created_at
-            ),
-            winnings=entry.winnings,
-            winRate=entry.win_rate,
-            totalBets=entry.total_bets,
-            roi=entry.roi,
-            rank=entry.rank,
-            created_at=created_at,
-        )
-
-
 class BetRecord(BaseModel):
     """A single bet record for agent profile display."""
 
@@ -130,7 +49,7 @@ class AgentProfileResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    agent: ExtendedAgentInfo
+    agent: AgentInfo
     stats: AgentProfileStats
     created_at: str | None = Field(default=None, serialization_alias="createdAt")
     bets: list[BetRecord] = Field(default_factory=list)
@@ -248,7 +167,7 @@ class LeaderboardResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    leaderboard: list[ExtendedLeaderboardEntry] = Field(default_factory=list)
+    leaderboard: list[LeaderboardEntry] = Field(default_factory=list)
     total: int = 0
     page: int = 1
     page_size: int = Field(default=20, serialization_alias="pageSize")
@@ -391,8 +310,6 @@ __all__ = [
     "AgentProfileStats",
     "BetRecord",
     "BetSummary",
-    "ExtendedAgentInfo",
-    "ExtendedLeaderboardEntry",
     "GameCardData",
     "GamesResponse",
     "LandingResponse",

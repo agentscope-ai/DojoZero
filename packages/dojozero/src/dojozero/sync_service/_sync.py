@@ -343,19 +343,19 @@ class SyncService:
             self._temp_cache.set_games(league_games, league=league)
 
         # Leaderboard (global + per-league)
-        leaderboard = _compute_leaderboard_from_spans(
+        result = _compute_leaderboard_from_spans(
             self._spans_by_trial, agent_info_cache, trial_ids
         )
-        self._temp_cache.set_leaderboard(leaderboard, league=None)
+        self._temp_cache.set_leaderboard(result.leaderboard, league=None)
 
         for league in CACHEABLE_LEAGUES:
             league_ids = [
                 tid for tid in trial_ids if self._trial_matches_league(tid, league)
             ]
-            league_leaderboard = _compute_leaderboard_from_spans(
+            league_result = _compute_leaderboard_from_spans(
                 self._spans_by_trial, agent_info_cache, league_ids
             )
-            self._temp_cache.set_leaderboard(league_leaderboard, league=league)
+            self._temp_cache.set_leaderboard(league_result.leaderboard, league=league)
 
         # Agent actions (global + per-league)
         actions = _extract_agent_actions_from_spans(

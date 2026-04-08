@@ -18,7 +18,6 @@ from fastapi.staticfiles import StaticFiles
 
 from dojozero.arena_server._models import (
     AgentActionsResponse,
-    ExtendedLeaderboardEntry,
     GameCardData,
     LandingResponse,
     LeaderboardResponse,
@@ -44,7 +43,6 @@ from ._server import (
 from ._utils import (
     _compute_agent_profile,
     _compute_leaderboard_from_spans,
-    _get_agent_extra_info,
 )
 from ._utils import _load_replay_data
 
@@ -417,7 +415,7 @@ def register_rest_endpoints(app: FastAPI) -> None:
             # Date-filtered: recompute from spans
             trial_ids = state.cache.get_trials_list() or []
             trial_metadata = refresher.get_trial_metadata(trial_ids)
-            leaderboard = _compute_leaderboard_from_spans(
+            result = _compute_leaderboard_from_spans(
                 refresher.spans_by_trial,
                 state.cache.get_all_agent_info(),
                 trial_ids,
@@ -428,6 +426,7 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 sort_order=sort_order,
                 trial_metadata=trial_metadata,
             )
+            leaderboard = result.leaderboard
         else:
             # Fast path: use cached leaderboard
             leaderboard = state.cache.get_leaderboard(league=league)
@@ -458,34 +457,17 @@ def register_rest_endpoints(app: FastAPI) -> None:
             if limit is not None:
                 leaderboard = leaderboard[:limit]
 
-        # Get extra info (is_external, created_at) for extending entries
-        extra_info = _get_agent_extra_info(
-            refresher.spans_by_trial,
-            state.cache.get_trials_list(),
-        )
-
-        # Convert to extended entries
-        extended: list[ExtendedLeaderboardEntry] = []
-        for entry in leaderboard:
-            aid = entry.agent.agent_id
-            is_ext, cat = extra_info.get(aid, (False, None))
-            extended.append(
-                ExtendedLeaderboardEntry.from_leaderboard_entry(
-                    entry, is_external=is_ext, created_at=cat
-                )
-            )
-
         # Apply agent_type filter
         if agent_type == "external":
-            extended = [e for e in extended if e.agent.is_external]
+            leaderboard = [e for e in leaderboard if e.agent.is_external]
         elif agent_type == "built_in":
-            extended = [e for e in extended if not e.agent.is_external]
+            leaderboard = [e for e in leaderboard if not e.agent.is_external]
 
-        total = len(extended)
+        total = len(leaderboard)
 
         # Paginate
         start_idx = (page - 1) * page_size
-        page_entries = extended[start_idx : start_idx + page_size]
+        page_entries = leaderboard[start_idx : start_idx + page_size]
 
         # Re-rank within page context (global rank)
         page_entries = [
@@ -527,15 +509,15 @@ def register_rest_endpoints(app: FastAPI) -> None:
         refresher = state.refresher
         assert refresher is not None, "BackgroundRefresher not initialized"
 
-        trial_ids = state.cache.get_trials_list() or []
-        trial_metadata = refresher.get_trial_metadata(trial_ids)
+        # Stats from leaderboard cache, bets from bets index — zero recomputation
+        leaderboard = state.cache.get_leaderboard() or []
+        agent_bets_index = state.cache.get_agent_bets_index()
 
         profile = _compute_agent_profile(
             agent_id=agent_id,
-            spans_by_trial=refresher.spans_by_trial,
+            leaderboard=leaderboard,
+            agent_bets_index=agent_bets_index,
             agent_info_cache=state.cache.get_all_agent_info(),
-            trial_metadata=trial_metadata,
-            trial_ids=trial_ids,
             page=page,
             page_size=page_size,
         )

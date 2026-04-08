@@ -21,7 +21,6 @@ from dojozero.arena_server._models import (
     AgentProfileStats,
     BetRecord,
     BetSummary,
-    ExtendedAgentInfo,
     GameCardData,
     GamesResponse,
     ReplayErrorReason,
@@ -836,6 +835,14 @@ async def _compute_total_bet_counts(
     return total_bet_counts
 
 
+@dataclass
+class LeaderboardResult:
+    """Result of leaderboard computation, including side-products."""
+
+    leaderboard: list[LeaderboardEntry]
+    agent_bets_index: dict[str, list[BetRecord]]
+
+
 def _compute_leaderboard_from_spans(
     spans_by_trial: dict[str, list[SpanData]],
     agent_info_cache: dict[str, AgentInfo],
@@ -847,14 +854,15 @@ def _compute_leaderboard_from_spans(
     sort_by: str = "winnings",
     sort_order: str = "desc",
     trial_metadata: dict[str, dict[str, Any]] | None = None,
-) -> list[LeaderboardEntry]:
+    collect_bets: bool = False,
+) -> LeaderboardResult:
     """Compute agent leaderboard from pre-fetched spans.
 
     Uses broker.final_stats spans when available for accurate statistics.
     Falls back to counting agent.response spans if final_stats not found.
 
-    When start_date/end_date are provided, filters trials by game_date and
-    recomputes stats from individual bets within the filtered trials.
+    Fills is_external/created_at directly into AgentInfo (no second pass).
+    Optionally collects per-agent bet records for the agent_bets_index.
 
     Args:
         spans_by_trial: Pre-fetched spans grouped by trial_id
@@ -866,10 +874,11 @@ def _compute_leaderboard_from_spans(
         sort_by: Sort field: winnings, win_rate, roi, total_bets
         sort_order: Sort direction: desc, asc
         trial_metadata: Trial metadata dict (trial_id -> info dict).
-            Required when start_date/end_date are used.
+            Required when start_date/end_date are used or collect_bets is True.
+        collect_bets: If True, also build agent_bets_index (per-agent bet records)
 
     Returns:
-        List of agents sorted by the specified field
+        LeaderboardResult with leaderboard and optional agent_bets_index
     """
     use_date_filter = start_date is not None or end_date is not None
 
@@ -881,10 +890,9 @@ def _compute_leaderboard_from_spans(
         wins: int = 0
         total_bets: int = 0
         total_wagered: float = 0.0
-        is_external: bool = False
-        created_at: str | None = None
 
     agent_stats: dict[str, _AgentStats] = {}
+    agent_bets: dict[str, list[BetRecord]] = {}
 
     # Filter to requested trials or use all
     trials_to_process = (
@@ -909,10 +917,71 @@ def _compute_leaderboard_from_spans(
             filtered_trials.append(tid)
         trials_to_process = filtered_trials
 
+    def _ensure_agent(agent_id: str) -> _AgentStats:
+        """Get or create agent stats entry."""
+        if agent_id in agent_stats:
+            return agent_stats[agent_id]
+        agent_info = agent_info_cache.get(agent_id)
+        if agent_info is None:
+            agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
+        agent_stats[agent_id] = _AgentStats(agent=agent_info)
+        return agent_stats[agent_id]
+
+    def _fill_account_info(typed: BrokerFinalStats) -> None:
+        """Fill is_external/created_at from accounts into AgentInfo (one pass)."""
+        for acct in typed.accounts.values():
+            aid = acct.agent_id
+            agent_info = None
+            if aid in agent_stats:
+                agent_info = agent_stats[aid].agent
+            else:
+                agent_info = agent_info_cache.get(aid)
+            if agent_info is None:
+                continue
+            if acct.is_external and not agent_info.is_external:
+                agent_info.is_external = True
+            if acct.created_at and not agent_info.created_at:
+                agent_info.created_at = acct.created_at.isoformat()
+
+    def _collect_bet_record(bet: Any, trial_id: str, meta: dict[str, Any]) -> None:
+        """Collect a BetRecord into agent_bets index."""
+        if not collect_bets:
+            return
+        aid = bet.agent_id
+        if aid not in agent_bets:
+            agent_bets[aid] = []
+
+        if bet.outcome is None:
+            result_str = "pending"
+        elif bet.outcome == BetOutcome.WIN:
+            result_str = "win"
+        else:
+            result_str = "loss"
+
+        agent_bets[aid].append(
+            BetRecord(
+                trial_id=trial_id,
+                league=meta.get("sport_type", "").upper(),
+                home_team=meta.get("home_team_name", ""),
+                away_team=meta.get("away_team_name", ""),
+                game_date=meta.get("game_date", ""),
+                selection=bet.selection if bet.selection else "",
+                amount=float(bet.amount) if bet.amount else 0.0,
+                result=result_str,
+                payout=float(bet.actual_payout) if bet.actual_payout else 0.0,
+            )
+        )
+
     for trial_id in trials_to_process:
         spans = spans_by_trial.get(trial_id, [])
         if not spans:
             continue
+
+        # Get trial metadata for bet records
+        meta: dict[str, Any] = {}
+        if trial_metadata:
+            info = trial_metadata.get(trial_id, {})
+            meta = info.get("metadata", {})
 
         # Separate spans by operation
         final_stats_spans = [
@@ -921,40 +990,18 @@ def _compute_leaderboard_from_spans(
         response_spans = [s for s in spans if s.operation_name == "agent.response"]
 
         if final_stats_spans:
-            # Use final_stats if available
             for span in final_stats_spans:
                 typed = deserialize_span(span)
                 if not isinstance(typed, BrokerFinalStats):
                     continue
 
-                # Collect is_external / created_at from accounts
-                for acct in typed.accounts.values():
-                    aid = acct.agent_id
-                    if aid in agent_stats:
-                        if acct.is_external:
-                            agent_stats[aid].is_external = True
-                        if acct.created_at and not agent_stats[aid].created_at:
-                            agent_stats[aid].created_at = acct.created_at.isoformat()
+                # Fill is_external/created_at from accounts (one pass)
+                _fill_account_info(typed)
 
                 if use_date_filter:
                     # Date-filtered: recompute from individual bets
                     for bet in typed.bets.values():
-                        agent_id = bet.agent_id
-                        if agent_id not in agent_stats:
-                            agent_info = agent_info_cache.get(agent_id)
-                            if agent_info is None:
-                                agent_info = AgentInfo(
-                                    agent_id=agent_id, persona=agent_id
-                                )
-                            agent_stats[agent_id] = _AgentStats(agent=agent_info)
-                        acc = agent_stats[agent_id]
-                        # Collect is_external from accounts
-                        acct = typed.accounts.get(agent_id)
-                        if acct and acct.is_external:
-                            acc.is_external = True
-                        if acct and acct.created_at and not acc.created_at:
-                            acc.created_at = acct.created_at.isoformat()
-
+                        acc = _ensure_agent(bet.agent_id)
                         if bet.amount:
                             acc.total_bets += 1
                             acc.total_wagered += float(bet.amount)
@@ -967,45 +1014,30 @@ def _compute_leaderboard_from_spans(
                                     )
                             elif bet.outcome == BetOutcome.LOSS:
                                 acc.winnings -= float(bet.amount)
+                        _collect_bet_record(bet, trial_id, meta)
                 else:
                     # Default: use pre-computed statistics
                     for agent_id, stats in typed.statistics.items():
-                        agent_info = agent_info_cache.get(agent_id)
-                        if agent_info is None:
-                            agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
-
-                        if agent_id not in agent_stats:
-                            agent_stats[agent_id] = _AgentStats(agent=agent_info)
-
-                        acc = agent_stats[agent_id]
+                        acc = _ensure_agent(agent_id)
                         acc.winnings += float(stats.net_profit)
                         acc.wins += stats.wins
                         acc.total_bets += stats.total_bets
                         acc.total_wagered += float(stats.total_wagered)
-                        # Collect is_external from accounts
-                        acct = typed.accounts.get(agent_id)
-                        if acct and acct.is_external:
-                            acc.is_external = True
-                        if acct and acct.created_at and not acc.created_at:
-                            acc.created_at = acct.created_at.isoformat()
+
+                    # Collect bets separately when needed
+                    if collect_bets:
+                        for bet in typed.bets.values():
+                            _collect_bet_record(bet, trial_id, meta)
         else:
             # Fallback: count from agent.response spans
             for span in response_spans:
                 typed = deserialize_span(span)
                 if not isinstance(typed, AgentResponseMessage):
                     continue
-
                 agent_id = typed.agent_id
                 if not agent_id:
                     continue
-
-                if agent_id not in agent_stats:
-                    agent_info = agent_info_cache.get(agent_id)
-                    if agent_info is None:
-                        agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
-                    agent_stats[agent_id] = _AgentStats(agent=agent_info)
-
-                acc = agent_stats[agent_id]
+                acc = _ensure_agent(agent_id)
                 if typed.bet_amount:
                     acc.total_bets += 1
                     acc.total_wagered += typed.bet_amount
@@ -1027,6 +1059,7 @@ def _compute_leaderboard_from_spans(
                 winRate=round(win_rate, 1),
                 totalBets=stats.total_bets,
                 roi=round(roi, 1),
+                createdAt=stats.agent.created_at,
             )
         )
 
@@ -1045,174 +1078,66 @@ def _compute_leaderboard_from_spans(
         entry.model_copy(update={"rank": i + 1}) for i, entry in enumerate(entries)
     ]
 
-    return ranked
+    # Sort bets by game_date descending
+    if collect_bets:
+        for bets_list in agent_bets.values():
+            bets_list.sort(key=lambda b: b.game_date, reverse=True)
 
-
-def _get_agent_extra_info(
-    spans_by_trial: dict[str, list[SpanData]],
-    trial_ids: list[str] | None = None,
-) -> dict[str, tuple[bool, str | None]]:
-    """Extract is_external and created_at for each agent from BrokerFinalStats.
-
-    Returns:
-        Dict mapping agent_id -> (is_external, created_at_iso)
-    """
-    result: dict[str, tuple[bool, str | None]] = {}
-    trials = trial_ids if trial_ids is not None else list(spans_by_trial.keys())
-
-    for trial_id in trials:
-        spans = spans_by_trial.get(trial_id, [])
-        for span in spans:
-            if span.operation_name != "broker.final_stats":
-                continue
-            typed = deserialize_span(span)
-            if not isinstance(typed, BrokerFinalStats):
-                continue
-            for acct in typed.accounts.values():
-                aid = acct.agent_id
-                if aid not in result:
-                    result[aid] = (
-                        acct.is_external,
-                        acct.created_at.isoformat() if acct.created_at else None,
-                    )
-                elif acct.is_external and not result[aid][0]:
-                    result[aid] = (True, result[aid][1])
-
-    return result
+    return LeaderboardResult(leaderboard=ranked, agent_bets_index=agent_bets)
 
 
 def _compute_agent_profile(
     agent_id: str,
-    spans_by_trial: dict[str, list[SpanData]],
+    leaderboard: list[LeaderboardEntry],
+    agent_bets_index: dict[str, list[BetRecord]],
     agent_info_cache: dict[str, AgentInfo],
-    trial_metadata: dict[str, dict[str, Any]],
-    trial_ids: list[str] | None = None,
     *,
     page: int = 1,
     page_size: int = 20,
 ) -> AgentProfileResponse:
-    """Compute agent profile with stats and paginated bet history.
+    """Build agent profile from pre-computed leaderboard and bets index.
+
+    Zero computation -- just looks up cached data and paginates.
 
     Args:
         agent_id: The agent to look up
-        spans_by_trial: Pre-fetched spans grouped by trial_id
+        leaderboard: Pre-computed leaderboard (for stats lookup)
+        agent_bets_index: Pre-built bets index (agent_id -> sorted bets)
         agent_info_cache: Agent info cache (agent_id -> AgentInfo)
-        trial_metadata: Trial metadata dict (trial_id -> info dict)
-        trial_ids: Optional list to filter which trials to process
         page: Page number (1-based)
         page_size: Number of bets per page
 
     Returns:
         AgentProfileResponse with stats and paginated bets
     """
+    # Look up agent info
     agent_info = agent_info_cache.get(agent_id)
     if agent_info is None:
         agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
 
-    # Accumulators
-    total_winnings = 0.0
-    total_wins = 0
-    total_bets_count = 0
-    total_wagered = 0.0
-    is_external = False
-    created_at: str | None = None
-    all_bets: list[BetRecord] = []
+    # Look up stats from leaderboard
+    entry = next((e for e in leaderboard if e.agent.agent_id == agent_id), None)
+    if entry is not None:
+        stats = AgentProfileStats(
+            winnings=entry.winnings,
+            win_rate=entry.win_rate,
+            total_bets=entry.total_bets,
+            roi=entry.roi,
+        )
+        # Use the agent from leaderboard (has is_external/created_at filled)
+        agent_info = entry.agent
+    else:
+        stats = AgentProfileStats()
 
-    trials = trial_ids if trial_ids is not None else list(spans_by_trial.keys())
-
-    for trial_id in trials:
-        spans = spans_by_trial.get(trial_id, [])
-        if not spans:
-            continue
-
-        # Get trial metadata for game context
-        info = trial_metadata.get(trial_id, {})
-        meta = info.get("metadata", {})
-        game_date = meta.get("game_date", "")
-        league = meta.get("sport_type", "")
-        home_team = meta.get("home_team_name", "")
-        away_team = meta.get("away_team_name", "")
-
-        final_stats_spans = [
-            s for s in spans if s.operation_name == "broker.final_stats"
-        ]
-        if not final_stats_spans:
-            continue
-
-        for span in final_stats_spans:
-            typed = deserialize_span(span)
-            if not isinstance(typed, BrokerFinalStats):
-                continue
-
-            # Collect is_external / created_at from accounts
-            acct = typed.accounts.get(agent_id)
-            if acct:
-                if acct.is_external:
-                    is_external = True
-                if acct.created_at and not created_at:
-                    created_at = acct.created_at.isoformat()
-
-            # Collect bets for this agent
-            for bet in typed.bets.values():
-                if bet.agent_id != agent_id:
-                    continue
-
-                if bet.amount:
-                    total_bets_count += 1
-                    total_wagered += float(bet.amount)
-
-                if bet.outcome is not None:
-                    if bet.outcome == BetOutcome.WIN:
-                        total_wins += 1
-                        if bet.actual_payout:
-                            total_winnings += float(bet.actual_payout - bet.amount)
-                    elif bet.outcome == BetOutcome.LOSS:
-                        total_winnings -= float(bet.amount)
-
-                # Determine result string
-                if bet.outcome is None:
-                    result_str = "pending"
-                elif bet.outcome == BetOutcome.WIN:
-                    result_str = "win"
-                else:
-                    result_str = "loss"
-
-                all_bets.append(
-                    BetRecord(
-                        trial_id=trial_id,
-                        league=league.upper() if league else "",
-                        home_team=home_team,
-                        away_team=away_team,
-                        game_date=game_date,
-                        selection=bet.selection if bet.selection else "",
-                        amount=float(bet.amount) if bet.amount else 0.0,
-                        result=result_str,
-                        payout=(float(bet.actual_payout) if bet.actual_payout else 0.0),
-                    )
-                )
-
-    # Sort bets by game_date descending
-    all_bets.sort(key=lambda b: b.game_date, reverse=True)
-
-    # Paginate
+    # Look up bets from index and paginate
+    all_bets = agent_bets_index.get(agent_id, [])
     start_idx = (page - 1) * page_size
     page_bets = all_bets[start_idx : start_idx + page_size]
 
-    # Compute stats
-    win_rate = (total_wins / total_bets_count * 100) if total_bets_count > 0 else 0.0
-    roi = (total_winnings / total_wagered * 100) if total_wagered > 0 else 0.0
-
     return AgentProfileResponse(
-        agent=ExtendedAgentInfo.from_agent_info(
-            agent_info, is_external=is_external, created_at=created_at
-        ),
-        stats=AgentProfileStats(
-            winnings=round(total_winnings, 2),
-            win_rate=round(win_rate, 1),
-            total_bets=total_bets_count,
-            roi=round(roi, 1),
-        ),
-        created_at=created_at,
+        agent=agent_info,
+        stats=stats,
+        created_at=agent_info.created_at,
         bets=page_bets,
         total_bets_count=len(all_bets),
         page=page,
@@ -1246,12 +1171,13 @@ async def _compute_leaderboard(
             )
 
     agent_info_cache = cache.get_all_agent_info() if cache else {}
-    return _compute_leaderboard_from_spans(
+    result = _compute_leaderboard_from_spans(
         spans_by_trial,
         agent_info_cache,
         trial_ids,
         limit=limit,
     )
+    return result.leaderboard
 
 
 def _compute_replay_meta(

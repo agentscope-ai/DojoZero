@@ -72,6 +72,7 @@ class LeaderboardEntry(BaseModel):
     total_bets: int = Field(alias="totalBets")
     roi: float
     rank: int = 0
+    created_at: str | None = Field(default=None, alias="createdAt")
 
 
 # ============================================================================

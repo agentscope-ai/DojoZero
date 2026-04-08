@@ -126,6 +126,9 @@ class LandingPageCache:
     _leaderboard_by_league: dict[str, CacheEntry] = field(default_factory=dict)
     _agent_actions_by_league: dict[str, CacheEntry] = field(default_factory=dict)
 
+    # Agent bets index - per-agent bet records (agent_id -> list[BetRecord])
+    _agent_bets_index: dict[str, list] = field(default_factory=dict)
+
     # Agent info cache - single source of truth (agent_id -> AgentInfo)
     _agent_info: dict[str, AgentInfo] = field(default_factory=dict)
 
@@ -246,6 +249,15 @@ class LandingPageCache:
     def get_all_agent_info(self) -> dict[str, AgentInfo]:
         """Get all cached agent info (for batch operations)."""
         return self._agent_info
+
+    def get_agent_bets_index(self) -> dict[str, list]:
+        """Get cached agent bets index (agent_id -> sorted list[BetRecord])."""
+        return self._agent_bets_index
+
+    def set_agent_bets_index(self, data: dict[str, list]) -> None:
+        """Set agent bets index (overwrites previous)."""
+        self._agent_bets_index = data
+        LOGGER.debug("Cache SET: agent_bets_index (%d agents)", len(data))
 
     def get_total_agents(self) -> int:
         """Get total number of cached agents."""
