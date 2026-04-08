@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dojozero"
-version = "0.2.1"
+version = "0.2.2"
 description = "A platform for running AI agents on realtime sport data and make predictions about game outcomes."
 readme = "README.md"
 requires-python = ">=3.11"
