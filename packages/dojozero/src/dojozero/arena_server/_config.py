@@ -81,7 +81,8 @@ class SLSConfig(BaseModel):
 
     page_size: int = Field(default=100, description="Page size for SLS queries")
     max_total: int = Field(
-        default=100000, description="Safety limit for total rows fetched"
+        default=1000000,
+        description="Safety limit for total rows fetched per paginated query",
     )
 
 
