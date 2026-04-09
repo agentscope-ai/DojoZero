@@ -412,14 +412,13 @@ def register_rest_endpoints(app: FastAPI) -> None:
         use_date_filter = start_date is not None or end_date is not None
 
         if use_date_filter:
-            # Date-filtered: recompute from spans
+            # Date-filtered: recompute from spans (no limit here, applied below)
             trial_ids = state.cache.get_trials_list() or []
             trial_metadata = refresher.get_trial_metadata(trial_ids)
             result = _compute_leaderboard_from_spans(
                 refresher.spans_by_trial,
                 state.cache.get_all_agent_info(),
                 trial_ids,
-                limit=limit,
                 start_date=start_date,
                 end_date=end_date,
                 sort_by=sort_by,
@@ -435,44 +434,36 @@ def register_rest_endpoints(app: FastAPI) -> None:
                     league=league
                 )
 
-            # Apply sort if not default
-            if sort_by != "winnings" or sort_order != "desc":
-                sort_key_map = {
-                    "winnings": lambda x: x.winnings,
-                    "win_rate": lambda x: x.win_rate,
-                    "roi": lambda x: x.roi,
-                    "total_bets": lambda x: x.total_bets,
-                }
-                key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])
-                leaderboard = sorted(
-                    leaderboard, key=key_fn, reverse=(sort_order != "asc")
-                )
-                # Re-rank after re-sort
-                leaderboard = [
-                    entry.model_copy(update={"rank": i + 1})
-                    for i, entry in enumerate(leaderboard)
-                ]
+        # --- Unified post-processing: filter → sort → rank → limit → paginate ---
 
-            # Apply limit if specified
-            if limit is not None:
-                leaderboard = leaderboard[:limit]
-
-        # Apply agent_type filter
+        # 1. Filter by agent_type
         if agent_type == "external":
             leaderboard = [e for e in leaderboard if e.agent.is_external]
         elif agent_type == "built_in":
             leaderboard = [e for e in leaderboard if not e.agent.is_external]
 
+        # 2. Sort (cached path is already sorted by winnings desc; re-sort only when needed)
+        if not use_date_filter and (sort_by != "winnings" or sort_order != "desc"):
+            sort_key_map = {
+                "winnings": lambda x: x.winnings,
+                "win_rate": lambda x: x.win_rate,
+                "roi": lambda x: x.roi,
+                "total_bets": lambda x: x.total_bets,
+            }
+            key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])
+            leaderboard = sorted(leaderboard, key=key_fn, reverse=(sort_order != "asc"))
+
+        # 3. Limit
+        if limit is not None:
+            leaderboard = leaderboard[:limit]
+
         total = len(leaderboard)
 
-        # Paginate
+        # 4. Paginate + assign global rank (once)
         start_idx = (page - 1) * page_size
-        page_entries = leaderboard[start_idx : start_idx + page_size]
-
-        # Re-rank within page context (global rank)
         page_entries = [
             e.model_copy(update={"rank": start_idx + i + 1})
-            for i, e in enumerate(page_entries)
+            for i, e in enumerate(leaderboard[start_idx : start_idx + page_size])
         ]
 
         response = LeaderboardResponse(

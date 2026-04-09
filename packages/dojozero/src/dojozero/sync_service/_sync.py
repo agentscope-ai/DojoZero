@@ -242,9 +242,6 @@ class SyncService:
         # 4. Extract agent info
         added = self._temp_cache.update_agent_info_from_spans(all_spans)
 
-        # 4.5 Backfill is_external from broker Account (single source of truth)
-        self._temp_cache.backfill_is_external_from_spans(all_spans)
-
         LOGGER.info(
             "SyncService: [5/8] Agent info updated (%d new, %d total)",
             added,

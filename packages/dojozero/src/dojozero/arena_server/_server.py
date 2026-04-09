@@ -685,9 +685,6 @@ class BackgroundRefresher:
         # 5. Extract agent info from new spans and merge into cache
         added = self.cache.update_agent_info_from_spans(all_spans)
 
-        # 5.5 Backfill is_external from broker Account (single source of truth)
-        self.cache.backfill_is_external_from_spans(all_spans)
-
         LOGGER.info(
             "BackgroundRefresher: [5/9] Agent info updated (%d new, %d total)",
             added,
@@ -796,7 +793,6 @@ class BackgroundRefresher:
         )
 
         added = self.cache.update_agent_info_from_spans(all_spans)
-        self.cache.backfill_is_external_from_spans(all_spans)
         LOGGER.info(
             "BackgroundRefresher: [dev 5/9] Agent info updated (%d new, %d total)",
             added,

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from dojozero.arena_server._models import StatsResponse, GamesResponse
 
-from dojozero.betting import AgentInfo, AgentList, BrokerFinalStats
+from dojozero.betting import AgentInfo, AgentList
 from dojozero.core import deserialize_span, LeaderboardEntry, AgentAction
 from dojozero.core._tracing import SpanData
 
@@ -297,39 +297,6 @@ class LandingPageCache:
         """Clear all cached agent info."""
         self._agent_info.clear()
         LOGGER.debug("Cache CLEAR: agent_info")
-
-    def backfill_is_external_from_spans(self, spans: list[SpanData]) -> int:
-        """Backfill AgentInfo.is_external from broker final_stats Account data.
-
-        Account.is_external (set by the broker at account-creation time) is the
-        single source of truth.  This pass overwrites whatever the
-        agent.agent_initialize span may have recorded.
-
-        Args:
-            spans: List of spans to scan for broker.state_change / final_stats.
-
-        Returns:
-            Number of AgentInfo entries updated.
-        """
-        updated = 0
-        for span in spans:
-            if span.operation_name != "broker.final_stats":
-                continue
-            typed = deserialize_span(span)
-            if not isinstance(typed, BrokerFinalStats):
-                continue
-            for acct in typed.accounts.values():
-                agent_info = self._agent_info.get(acct.agent_id)
-                if agent_info is None:
-                    continue
-                if agent_info.is_external != acct.is_external:
-                    agent_info.is_external = acct.is_external
-                    updated += 1
-        if updated:
-            LOGGER.debug(
-                "Backfilled is_external for %d agents from broker accounts", updated
-            )
-        return updated
 
     # -------------------------------------------------------------------------
     # SET Methods - Update cache (overwrite previous data)
