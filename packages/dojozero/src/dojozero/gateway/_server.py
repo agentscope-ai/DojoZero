@@ -617,8 +617,8 @@ def create_gateway_app(
             # Get statistics for this agent
             stats = await state.broker.get_statistics(agent_id)
 
-            # Check if this is an external agent
-            is_external = agent_id in state.adapter._agents
+            # Check if this is an external agent (Account is single source of truth)
+            is_external = account.is_external
 
             leaderboard.append(
                 {

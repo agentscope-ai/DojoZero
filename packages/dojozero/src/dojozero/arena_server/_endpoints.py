@@ -512,12 +512,25 @@ def register_rest_endpoints(app: FastAPI) -> None:
         # Stats from leaderboard cache, bets from bets index — zero recomputation
         leaderboard = state.cache.get_leaderboard() or []
         agent_bets_index = state.cache.get_agent_bets_index()
+        agent_info_cache = state.cache.get_all_agent_info()
+
+        # Check if agent exists in any cache; return 404 if unknown
+        agent_known = (
+            agent_id in agent_info_cache
+            or agent_id in agent_bets_index
+            or any(e.agent.agent_id == agent_id for e in leaderboard)
+        )
+        if not agent_known:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"Agent '{agent_id}' not found"},
+            )
 
         profile = _compute_agent_profile(
             agent_id=agent_id,
             leaderboard=leaderboard,
             agent_bets_index=agent_bets_index,
-            agent_info_cache=state.cache.get_all_agent_info(),
+            agent_info_cache=agent_info_cache,
             page=page,
             page_size=page_size,
         )

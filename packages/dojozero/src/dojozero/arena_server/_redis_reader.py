@@ -19,7 +19,7 @@ from dojozero.arena_server._cache import (
     CACHEABLE_LEAGUES,
     LandingPageCache,
 )
-from dojozero.arena_server._models import GamesResponse, StatsResponse
+from dojozero.arena_server._models import BetRecord, GamesResponse, StatsResponse
 from dojozero.betting import AgentInfo
 from dojozero.core import AgentAction, LeaderboardEntry
 from dojozero.core._tracing import SpanData
@@ -196,6 +196,14 @@ class RedisReader:
             if g_data:
                 g = GamesResponse.model_validate(g_data)
                 self.cache.set_games(g, league=league)
+
+        # Agent bets index
+        bets_index_data = await self.redis_client.get_agent_bets_index()
+        if bets_index_data:
+            agent_bets_index: dict[str, list[BetRecord]] = {}
+            for aid, bets_list in bets_index_data.items():
+                agent_bets_index[aid] = [BetRecord.model_validate(b) for b in bets_list]
+            self.cache.set_agent_bets_index(agent_bets_index)
 
         # Live trials are derived from trial_info, not stored separately
         # Redis provides them for convenience but cache derives from trial_info

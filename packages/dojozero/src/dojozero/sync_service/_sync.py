@@ -241,6 +241,10 @@ class SyncService:
 
         # 4. Extract agent info
         added = self._temp_cache.update_agent_info_from_spans(all_spans)
+
+        # 4.5 Backfill is_external from broker Account (single source of truth)
+        self._temp_cache.backfill_is_external_from_spans(all_spans)
+
         LOGGER.info(
             "SyncService: [5/8] Agent info updated (%d new, %d total)",
             added,
@@ -312,6 +316,13 @@ class SyncService:
 
         agent_info_cache = self._temp_cache.get_all_agent_info()
 
+        # Build trial_metadata from temp_cache (needed for bets index)
+        trial_metadata: dict[str, dict[str, Any]] = {}
+        for tid in trial_ids:
+            info = self._temp_cache.get_trial_info(tid)
+            if info is not None:
+                trial_metadata[tid] = info
+
         # Stats (global + per-league)
         stats = await _compute_stats(
             self.trace_reader, trial_ids, self._temp_cache, self._spans_by_trial
@@ -342,11 +353,16 @@ class SyncService:
             )
             self._temp_cache.set_games(league_games, league=league)
 
-        # Leaderboard (global + per-league)
+        # Leaderboard (global + per-league) + bets index
         result = _compute_leaderboard_from_spans(
-            self._spans_by_trial, agent_info_cache, trial_ids
+            self._spans_by_trial,
+            agent_info_cache,
+            trial_ids,
+            collect_bets=True,
+            trial_metadata=trial_metadata,
         )
         self._temp_cache.set_leaderboard(result.leaderboard, league=None)
+        self._temp_cache.set_agent_bets_index(result.agent_bets_index)
 
         for league in CACHEABLE_LEAGUES:
             league_ids = [
@@ -472,6 +488,14 @@ class SyncService:
         # Live trials
         live_trials = self._temp_cache.get_live_trial_ids()
 
+        # Agent bets index (convert BetRecord models to dicts)
+        raw_bets_index = self._temp_cache.get_agent_bets_index()
+        agent_bets_index_data: dict[str, list[dict[str, Any]]] = {}
+        for aid, bets in raw_bets_index.items():
+            agent_bets_index_data[aid] = [
+                b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in bets
+            ]
+
         # Write all to Redis
         success = await self.redis_client.sync_all_data(
             trials_list=trial_ids,
@@ -486,6 +510,7 @@ class SyncService:
             stats_by_league=stats_by_league,
             games=games_data,
             games_by_league=games_by_league,
+            agent_bets_index=agent_bets_index_data,
             live_trials=live_trials,
             sync_time=sync_time,
         )

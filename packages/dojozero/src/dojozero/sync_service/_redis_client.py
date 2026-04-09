@@ -692,6 +692,38 @@ class RedisClient:
         except Exception as e:
             LOGGER.error("Failed to set live trials: %s", e)
 
+    async def get_agent_bets_index(self) -> dict[str, list[dict[str, Any]]] | None:
+        """Get agent bets index (agent_id -> list of bet records).
+
+        Returns:
+            Dict mapping agent_id to list of bet record dicts, or None if not cached.
+        """
+        if not self._connected:
+            return None
+        try:
+            data = await self._client.get(f"{self.prefix}hot:agent_bets_index")
+            return json.loads(data) if data else None
+        except Exception as e:
+            LOGGER.warning("Failed to get agent_bets_index: %s", e)
+            return None
+
+    async def set_agent_bets_index(self, data: dict[str, list[dict[str, Any]]]) -> None:
+        """Set agent bets index.
+
+        Args:
+            data: Dict mapping agent_id to list of bet record dicts.
+        """
+        if not self._connected:
+            return
+        try:
+            await self._client.setex(
+                f"{self.prefix}hot:agent_bets_index",
+                self.default_ttl,
+                json.dumps(_make_json_serializable(data)),
+            )
+        except Exception as e:
+            LOGGER.error("Failed to set agent_bets_index: %s", e)
+
     # =========================================================================
     # Batch Operations (for Sync Service)
     # =========================================================================
@@ -712,6 +744,7 @@ class RedisClient:
         games_by_league: dict[str, dict[str, Any]],
         live_trials: list[str],
         sync_time: datetime,
+        agent_bets_index: dict[str, list[dict[str, Any]]] | None = None,
     ) -> bool:
         """Sync all data to Redis atomically using pipeline.
 
@@ -812,6 +845,14 @@ class RedisClient:
                     f"{self.prefix}hot:games:{league}",
                     self.default_ttl,
                     json.dumps(_make_json_serializable(data)),
+                )
+
+            # Agent bets index
+            if agent_bets_index is not None:
+                pipe.setex(
+                    f"{self.prefix}hot:agent_bets_index",
+                    self.default_ttl,
+                    json.dumps(_make_json_serializable(agent_bets_index)),
                 )
 
             # Increment version (this signals Arena Server to refresh)

@@ -928,7 +928,11 @@ def _compute_leaderboard_from_spans(
         return agent_stats[agent_id]
 
     def _fill_account_info(typed: BrokerFinalStats) -> None:
-        """Fill is_external/created_at from accounts into AgentInfo (one pass)."""
+        """Fill is_external/created_at from accounts into AgentInfo (one pass).
+
+        Account.is_external is the single source of truth — always overwrite
+        AgentInfo.is_external with the broker value.
+        """
         for acct in typed.accounts.values():
             aid = acct.agent_id
             agent_info = None
@@ -938,8 +942,7 @@ def _compute_leaderboard_from_spans(
                 agent_info = agent_info_cache.get(aid)
             if agent_info is None:
                 continue
-            if acct.is_external and not agent_info.is_external:
-                agent_info.is_external = True
+            agent_info.is_external = acct.is_external
             if acct.created_at and not agent_info.created_at:
                 agent_info.created_at = acct.created_at.isoformat()
 

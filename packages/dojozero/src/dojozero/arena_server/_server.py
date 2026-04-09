@@ -35,6 +35,8 @@ Filtering:
 Configuration:
     dojo0 arena --trace-backend sls
     dojo0 arena --trace-backend jaeger --trace-query-endpoint http://localhost:16686
+    # Dev: load only listed trials (per-trial SLS/Jaeger queries; Redis cache fill disabled)
+    dojo0 arena --trace-backend sls --trial-ids nba-game-... --span-start 2026-04-08
     # Use --service-name to specify the service name for both Jaeger and SLS backends
 """
 
@@ -383,6 +385,10 @@ class BackgroundRefresher:
     - When redis_reader is provided and connected, refreshes from Redis instead of SLS
     - Checks Redis version every second, refreshes on change
     - Falls back to SLS mode if Redis becomes unavailable
+
+    Dev trial mode (dev_trial_ids set):
+    - Skips Redis and bulk get_all_spans; loads only listed trials via get_spans per trial
+    - Optional dev_span_start narrows the SLS/Jaeger time window (fast local testing)
     """
 
     trace_reader: TraceReader
@@ -392,6 +398,10 @@ class BackgroundRefresher:
 
     # Redis reader for fast startup (optional)
     redis_reader: RedisReader | None = None
+
+    # Dev: trial list and optional lower bound for span queries (SLS/Jaeger)
+    dev_trial_ids: tuple[str, ...] | None = None
+    dev_span_start: datetime | None = None
 
     # Background tasks
     _tasks: list[asyncio.Task[None]] = field(default_factory=list)
@@ -420,8 +430,14 @@ class BackgroundRefresher:
         self._running = True
         LOGGER.info("BackgroundRefresher: Starting...")
 
-        # Try Redis mode first (fast startup)
-        if self.redis_reader is not None:
+        if self.dev_trial_ids:
+            LOGGER.info(
+                "BackgroundRefresher: Dev trial mode (%d ids), per-trial trace fetch (Redis skipped)",
+                len(self.dev_trial_ids),
+            )
+
+        # Try Redis mode first (fast startup); dev trial mode always uses trace store
+        if self.redis_reader is not None and self.dev_trial_ids is None:
             try:
                 if await self.redis_reader.connect():
                     # Load initial data from Redis
@@ -585,6 +601,10 @@ class BackgroundRefresher:
         prefix = "Initial" if is_initial else "Periodic"
         LOGGER.info("BackgroundRefresher: [1/9] %s refresh starting...", prefix)
 
+        if self.dev_trial_ids:
+            await self._refresh_dev_trials(is_initial=is_initial)
+            return
+
         # 1. Get trial list (lightweight list_trials query)
         start_dt = datetime.now(timezone.utc) - timedelta(
             days=self.config.trials_lookback_days
@@ -664,6 +684,10 @@ class BackgroundRefresher:
 
         # 5. Extract agent info from new spans and merge into cache
         added = self.cache.update_agent_info_from_spans(all_spans)
+
+        # 5.5 Backfill is_external from broker Account (single source of truth)
+        self.cache.backfill_is_external_from_spans(all_spans)
+
         LOGGER.info(
             "BackgroundRefresher: [5/9] Agent info updated (%d new, %d total)",
             added,
@@ -702,6 +726,110 @@ class BackgroundRefresher:
             prefix,
             len(all_spans),
             len(self._spans_by_trial),
+        )
+
+    async def _refresh_dev_trials(self, *, is_initial: bool) -> None:
+        """Refresh caches using only dev_trial_ids and per-trial get_spans (no bulk fetch)."""
+        prefix = "Initial" if is_initial else "Periodic"
+        assert self.dev_trial_ids is not None
+        trial_ids = list(self.dev_trial_ids)
+        self.cache.set_trials_list(trial_ids)
+        LOGGER.info(
+            "BackgroundRefresher: [dev 2/9] Trial list set (%d dev trials)",
+            len(trial_ids),
+        )
+
+        now = datetime.now(timezone.utc)
+        sem = asyncio.Semaphore(8)
+
+        async def _fetch_trial(
+            tid: str, span_start: datetime | None
+        ) -> tuple[str, list[SpanData]]:
+            async with sem:
+                spans = await self.trace_reader.get_spans(tid, start_time=span_start)
+                return tid, spans
+
+        if is_initial or self._last_span_fetch_time is None:
+            if self.dev_span_start is not None:
+                span_start: datetime | None = self.dev_span_start
+            else:
+                span_start = now - timedelta(days=self.config.trials_lookback_days + 1)
+            self._spans_by_trial.clear()
+            self.cache.clear_agent_info()
+            results = await asyncio.gather(
+                *[_fetch_trial(tid, span_start) for tid in trial_ids]
+            )
+            all_spans: list[SpanData] = []
+            for tid, spans in results:
+                self._spans_by_trial[tid] = list(spans)
+                all_spans.extend(spans)
+            LOGGER.info(
+                "BackgroundRefresher: [dev 3/9] Full per-trial fetch (%d spans)",
+                len(all_spans),
+            )
+        else:
+            span_start = self._last_span_fetch_time
+            results = await asyncio.gather(
+                *[_fetch_trial(tid, span_start) for tid in trial_ids]
+            )
+            all_spans = []
+            for tid, spans in results:
+                all_spans.extend(spans)
+                if tid not in self._spans_by_trial:
+                    self._spans_by_trial[tid] = []
+                self._spans_by_trial[tid].extend(spans)
+                self._spans_by_trial[tid].sort(key=lambda s: s.start_time)
+            LOGGER.info(
+                "BackgroundRefresher: [dev 3/9] Incremental per-trial fetch (%d spans)",
+                len(all_spans),
+            )
+
+        self._last_span_fetch_time = now
+
+        allowed = set(trial_ids)
+        for stale in [t for t in self._spans_by_trial if t not in allowed]:
+            del self._spans_by_trial[stale]
+
+        LOGGER.info(
+            "BackgroundRefresher: [dev 4/9] %d trials in span cache",
+            len(self._spans_by_trial),
+        )
+
+        added = self.cache.update_agent_info_from_spans(all_spans)
+        self.cache.backfill_is_external_from_spans(all_spans)
+        LOGGER.info(
+            "BackgroundRefresher: [dev 5/9] Agent info updated (%d new, %d total)",
+            added,
+            self.cache.get_total_agents(),
+        )
+
+        await self._refresh_trial_info_from_spans(trial_ids, self._spans_by_trial)
+        LOGGER.info("BackgroundRefresher: [dev 6/9] Trial info refreshed")
+
+        await asyncio.gather(
+            self._refresh_stats(),
+            self._refresh_games(),
+            return_exceptions=True,
+        )
+        LOGGER.info("BackgroundRefresher: [dev 7/9] Stats and games refreshed")
+
+        agent_info_cache = self.cache.get_all_agent_info()
+        self._refresh_leaderboard_from_spans(
+            self._spans_by_trial, agent_info_cache, trial_ids
+        )
+        self._refresh_agent_actions_from_spans(
+            self._spans_by_trial, agent_info_cache, trial_ids
+        )
+        LOGGER.info("BackgroundRefresher: [dev 8/9] Leaderboard and actions refreshed")
+
+        await self._refresh_live_trials_and_replay(
+            self._spans_by_trial, is_initial=is_initial
+        )
+
+        LOGGER.info(
+            "BackgroundRefresher: [dev 9/9] %s dev refresh complete (%d spans)",
+            prefix,
+            len(all_spans),
         )
 
     async def _refresh_all_periodic(self) -> None:
@@ -1636,6 +1764,8 @@ def create_arena_app(
     service_name: str = "dojozero",
     by_alias: bool = False,
     redis_url: str | None = None,
+    dev_trial_ids: list[str] | None = None,
+    dev_span_start: datetime | None = None,
 ) -> FastAPI:
     """Create the Arena Server FastAPI application.
 
@@ -1649,6 +1779,9 @@ def create_arena_app(
         by_alias: Use serialization aliases (camelCase) in REST JSON responses.
         redis_url: Redis connection URL for fast startup. If provided, loads from Redis
                    instead of SLS on startup. Can also be set via DOJOZERO_REDIS_URL env var.
+        dev_trial_ids: If set, only these trials are loaded via per-trial trace queries;
+                       Redis fast path is disabled for predictable dev testing.
+        dev_span_start: Optional UTC lower bound for per-trial span queries (dev mode).
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
@@ -1665,8 +1798,12 @@ def create_arena_app(
     # Use provided config or default for cache/query settings
     resolved_config = config if config is not None else DEFAULT_CONFIG
 
-    # Get Redis URL from parameter or environment
-    effective_redis_url = redis_url or os.getenv("DOJOZERO_REDIS_URL")
+    # Get Redis URL from parameter or environment (dev trial mode skips Redis)
+    effective_redis_url = (
+        None if dev_trial_ids else (redis_url or os.getenv("DOJOZERO_REDIS_URL"))
+    )
+
+    dev_ids_tuple = tuple(dev_trial_ids) if dev_trial_ids else None
 
     # Create trace reader using CLI args + SLS config
     trace_reader = create_trace_reader(
@@ -1689,7 +1826,7 @@ def create_arena_app(
         cache = LandingPageCache(config=cache_config)
         replay_cache = ReplayCache.from_arena_config(resolved_config)
 
-        # Create Redis reader if URL is provided
+        # Create Redis reader if URL is provided (not used in dev trial mode)
         redis_reader: RedisReader | None = None
         if effective_redis_url:
             redis_client = RedisClient(redis_url=effective_redis_url)
@@ -1702,6 +1839,8 @@ def create_arena_app(
             replay_cache=replay_cache,
             config=cache_config,
             redis_reader=redis_reader,
+            dev_trial_ids=dev_ids_tuple,
+            dev_span_start=dev_span_start,
         )
 
         _server_state = ArenaServerState(
@@ -1783,6 +1922,8 @@ async def run_arena_server(
     service_name: str = "dojozero",
     by_alias: bool = False,
     redis_url: str | None = None,
+    dev_trial_ids: list[str] | None = None,
+    dev_span_start: datetime | None = None,
 ) -> None:
     """Run the Arena Server.
 
@@ -1796,6 +1937,8 @@ async def run_arena_server(
         service_name: Service name for Jaeger or SLS trace backend
         by_alias: Use serialization aliases (camelCase) in REST JSON responses.
         redis_url: Redis connection URL for fast startup.
+        dev_trial_ids: Optional fixed list of trials (per-trial fetch, no Redis cache fill).
+        dev_span_start: Optional UTC lower bound for per-trial span queries.
 
     For SLS backend, configuration comes from environment variables:
         DOJOZERO_SLS_PROJECT: SLS project name
@@ -1815,6 +1958,8 @@ async def run_arena_server(
         service_name=service_name,
         by_alias=by_alias,
         redis_url=redis_url,
+        dev_trial_ids=dev_trial_ids,
+        dev_span_start=dev_span_start,
     )
 
     uvicorn_config = uvicorn.Config(
