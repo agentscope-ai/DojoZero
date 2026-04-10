@@ -17,6 +17,7 @@ from datetime import datetime
 
 from dojozero.arena_server._cache import (
     CACHEABLE_LEAGUES,
+    LEADERBOARD_PERIODS,
     LandingPageCache,
 )
 from dojozero.arena_server._models import BetRecord, GamesResponse, StatsResponse
@@ -160,6 +161,21 @@ class RedisReader:
             if lb_data:
                 lb = [LeaderboardEntry.model_validate(e) for e in lb_data]
                 self.cache.set_leaderboard(lb, league=league)
+
+        # Period leaderboards (global + per-league)
+        for period in LEADERBOARD_PERIODS:
+            p_data = await self.redis_client.get_leaderboard(period=period)
+            if p_data:
+                p_lb = [LeaderboardEntry.model_validate(e) for e in p_data]
+                self.cache.set_leaderboard(p_lb, period=period)
+            for league in CACHEABLE_LEAGUES:
+                lp_data = await self.redis_client.get_leaderboard(
+                    league=league,
+                    period=period,
+                )
+                if lp_data:
+                    lp_lb = [LeaderboardEntry.model_validate(e) for e in lp_data]
+                    self.cache.set_leaderboard(lp_lb, league=league, period=period)
 
         # Agent actions (global + per-league)
         actions_data = await self.redis_client.get_agent_actions(league=None)

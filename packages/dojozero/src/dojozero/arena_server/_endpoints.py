@@ -42,7 +42,6 @@ from ._server import (
 )
 from ._utils import (
     _compute_agent_profile,
-    _compute_leaderboard_from_spans,
 )
 from ._utils import _load_replay_data
 
@@ -378,13 +377,9 @@ def register_rest_endpoints(app: FastAPI) -> None:
             ge=1,
             le=100,
         ),
-        start_date: str | None = Query(
-            default=None,
-            description="Start date filter (YYYY-MM-DD). Recomputes stats within range.",
-        ),
-        end_date: str | None = Query(
-            default=None,
-            description="End date filter (YYYY-MM-DD). Recomputes stats within range.",
+        period: str = Query(
+            default="all",
+            description="Time period filter: 'all', '7d', '14d', '30d'.",
         ),
         agent_type: str | None = Query(
             default=None,
@@ -402,37 +397,37 @@ def register_rest_endpoints(app: FastAPI) -> None:
         """Get agent leaderboard ranked by specified field.
 
         Returns agents sorted by the requested field with win rate and ROI.
-        Supports date-range filtering (recomputes stats within range),
+        Supports period-based filtering (pre-computed: all/7d/14d/30d),
         agent type filtering, custom sorting, and pagination.
         """
         state = get_server_state()
         refresher = state.refresher
         assert refresher is not None, "BackgroundRefresher not initialized"
 
-        use_date_filter = start_date is not None or end_date is not None
-
-        if use_date_filter:
-            # Date-filtered: recompute from spans (no limit here, applied below)
-            trial_ids = state.cache.get_trials_list() or []
-            trial_metadata = refresher.get_trial_metadata(trial_ids)
-            result = _compute_leaderboard_from_spans(
-                refresher.spans_by_trial,
-                state.cache.get_all_agent_info(),
-                trial_ids,
-                start_date=start_date,
-                end_date=end_date,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                trial_metadata=trial_metadata,
+        # Validate period
+        valid_periods = {"all", "7d", "14d", "30d"}
+        if period not in valid_periods:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": f"Invalid period '{period}'. Must be one of: {', '.join(sorted(valid_periods))}"
+                },
             )
-            leaderboard = result.leaderboard
-        else:
-            # Fast path: use cached leaderboard
-            leaderboard = state.cache.get_leaderboard(league=league)
-            if leaderboard is None:
+
+        # All paths now read from pre-computed cache
+        effective_period = period if period != "all" else None
+        leaderboard = state.cache.get_leaderboard(
+            league=league,
+            period=effective_period,
+        )
+        if leaderboard is None:
+            # Fallback: try on-demand refresh for the base (all) leaderboard
+            if effective_period is None:
                 leaderboard = await refresher.refresh_leaderboard_on_demand(
                     league=league
                 )
+            else:
+                leaderboard = []
 
         # --- Unified post-processing: filter → sort → rank → limit → paginate ---
 
@@ -443,7 +438,7 @@ def register_rest_endpoints(app: FastAPI) -> None:
             leaderboard = [e for e in leaderboard if not e.agent.is_external]
 
         # 2. Sort (cached path is already sorted by winnings desc; re-sort only when needed)
-        if not use_date_filter and (sort_by != "winnings" or sort_order != "desc"):
+        if sort_by != "winnings" or sort_order != "desc":
             sort_key_map = {
                 "winnings": lambda x: x.winnings,
                 "win_rate": lambda x: x.win_rate,

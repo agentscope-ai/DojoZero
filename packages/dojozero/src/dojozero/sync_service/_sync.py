@@ -21,6 +21,7 @@ from dojozero.arena_server._cache import (
     CACHEABLE_LEAGUES,
     CacheConfig,
     DEFAULT_CACHE_CONFIG,
+    LEADERBOARD_PERIODS,
     LandingPageCache,
 )
 from dojozero.arena_server._utils import (
@@ -129,9 +130,12 @@ class SyncService:
             else:
                 LOGGER.info("SyncService: No last sync time, starting full sync")
             # Always do a full sync on startup
-            await self._sync_once(is_initial=True)
-
-            LOGGER.info("SyncService: Initial sync complete, entering refresh loop")
+            try:
+                await self._sync_once(is_initial=True)
+                LOGGER.info("SyncService: Initial sync complete, entering refresh loop")
+            except Exception as e:
+                LOGGER.error("SyncService: Initial sync failed: %s", e, exc_info=True)
+                LOGGER.info("SyncService: Will retry in refresh loop")
 
             # Enter periodic refresh loop
             while self._running:
@@ -141,7 +145,7 @@ class SyncService:
                 try:
                     await self._sync_once(is_initial=False)
                 except Exception as e:
-                    LOGGER.error("SyncService: Sync failed: %s", e)
+                    LOGGER.error("SyncService: Sync failed: %s", e, exc_info=True)
 
         except asyncio.CancelledError:
             LOGGER.info("SyncService: Cancelled")
@@ -370,6 +374,45 @@ class SyncService:
             )
             self._temp_cache.set_leaderboard(league_result.leaderboard, league=league)
 
+        # Period leaderboards (7d/14d/30d) — global + per-league
+        period_days = {"7d": 7, "14d": 14, "30d": 30}
+        now = datetime.now(timezone.utc)
+        for period, days in period_days.items():
+            cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+            period_trial_ids = self._filter_trials_by_date(
+                trial_ids,
+                trial_metadata,
+                start_date=cutoff,
+            )
+            period_result = _compute_leaderboard_from_spans(
+                self._spans_by_trial,
+                agent_info_cache,
+                period_trial_ids,
+                trial_metadata=trial_metadata,
+            )
+            self._temp_cache.set_leaderboard(
+                period_result.leaderboard,
+                league=None,
+                period=period,
+            )
+            for league in CACHEABLE_LEAGUES:
+                league_period_ids = [
+                    tid
+                    for tid in period_trial_ids
+                    if self._trial_matches_league(tid, league)
+                ]
+                lp_result = _compute_leaderboard_from_spans(
+                    self._spans_by_trial,
+                    agent_info_cache,
+                    league_period_ids,
+                    trial_metadata=trial_metadata,
+                )
+                self._temp_cache.set_leaderboard(
+                    lp_result.leaderboard,
+                    league=league,
+                    period=period,
+                )
+
         # Agent actions (global + per-league)
         actions = _extract_agent_actions_from_spans(
             self._spans_by_trial,
@@ -403,6 +446,40 @@ class SyncService:
         metadata = trial_info.get("metadata", {})
         trial_league = metadata.get("sport_type", "")
         return trial_league.upper() == league.upper()
+
+    @staticmethod
+    def _filter_trials_by_date(
+        trial_ids: list[str],
+        trial_metadata: dict[str, dict[str, Any]],
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[str]:
+        """Filter trial IDs by game_date in trial metadata.
+
+        Args:
+            trial_ids: Trial IDs to filter.
+            trial_metadata: Mapping of trial_id -> trial info dict.
+            start_date: Inclusive lower bound (YYYY-MM-DD).
+            end_date: Inclusive upper bound (YYYY-MM-DD).
+
+        Returns:
+            Filtered list of trial IDs whose game_date falls within range.
+        """
+        filtered: list[str] = []
+        for tid in trial_ids:
+            info = trial_metadata.get(tid)
+            if info is None:
+                continue
+            meta = info.get("metadata", {})
+            gd = meta.get("game_date", "")
+            if not gd:
+                continue
+            if start_date and gd < start_date:
+                continue
+            if end_date and gd > end_date:
+                continue
+            filtered.append(tid)
+        return filtered
 
     async def _write_to_redis(self, trial_ids: list[str], sync_time: datetime) -> None:
         """Write all cached data to Redis."""
@@ -442,6 +519,22 @@ class SyncService:
             leaderboard_by_league[league] = [
                 e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in lb
             ]
+
+        # Period leaderboards (convert to dict)
+        leaderboard_by_period: dict[str, list[dict[str, Any]]] = {}
+        leaderboard_by_league_period: dict[str, list[dict[str, Any]]] = {}
+        for period in LEADERBOARD_PERIODS:
+            lb = self._temp_cache.get_leaderboard(period=period) or []
+            leaderboard_by_period[period] = [
+                e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in lb
+            ]
+            for league in CACHEABLE_LEAGUES:
+                lb = (
+                    self._temp_cache.get_leaderboard(league=league, period=period) or []
+                )
+                leaderboard_by_league_period[f"{league}:{period}"] = [
+                    e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in lb
+                ]
 
         # Agent actions (convert to dict)
         actions = self._temp_cache.get_agent_actions(league=None) or []
@@ -508,6 +601,8 @@ class SyncService:
             games=games_data,
             games_by_league=games_by_league,
             agent_bets_index=agent_bets_index_data,
+            leaderboard_by_period=leaderboard_by_period,
+            leaderboard_by_league_period=leaderboard_by_league_period,
             live_trials=live_trials,
             sync_time=sync_time,
         )

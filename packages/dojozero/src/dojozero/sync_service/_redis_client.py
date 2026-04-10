@@ -502,11 +502,15 @@ class RedisClient:
     # Hot Data (Leaderboard, Agent Actions, Stats, Games)
     # =========================================================================
 
-    async def get_leaderboard(self, league: str | None = None) -> list[dict[str, Any]]:
+    async def get_leaderboard(
+        self, league: str | None = None, period: str | None = None
+    ) -> list[dict[str, Any]]:
         """Get leaderboard data.
 
         Args:
             league: Optional league filter (e.g., "NBA", "NFL").
+            period: Optional period filter ("7d", "14d", "30d").
+                    None or "all" returns the full leaderboard.
 
         Returns:
             List of leaderboard entries.
@@ -517,6 +521,9 @@ class RedisClient:
             key = f"{self.prefix}hot:leaderboard"
             if league:
                 key = f"{key}:{league.upper()}"
+            effective_period = period if period and period != "all" else None
+            if effective_period:
+                key = f"{key}:period:{effective_period}"
             data = await self._client.get(key)
             return json.loads(data) if data else []
         except Exception as e:
@@ -524,13 +531,18 @@ class RedisClient:
             return []
 
     async def set_leaderboard(
-        self, data: list[dict[str, Any]], league: str | None = None
+        self,
+        data: list[dict[str, Any]],
+        league: str | None = None,
+        period: str | None = None,
     ) -> None:
         """Set leaderboard data.
 
         Args:
             data: List of leaderboard entries.
             league: Optional league filter.
+            period: Optional period filter ("7d", "14d", "30d").
+                    None or "all" sets the full leaderboard.
         """
         if not self._connected:
             return
@@ -538,6 +550,9 @@ class RedisClient:
             key = f"{self.prefix}hot:leaderboard"
             if league:
                 key = f"{key}:{league.upper()}"
+            effective_period = period if period and period != "all" else None
+            if effective_period:
+                key = f"{key}:period:{effective_period}"
             await self._client.setex(key, self.default_ttl, json.dumps(data))
         except Exception as e:
             LOGGER.error("Failed to set leaderboard: %s", e)
@@ -745,6 +760,8 @@ class RedisClient:
         live_trials: list[str],
         sync_time: datetime,
         agent_bets_index: dict[str, list[dict[str, Any]]] | None = None,
+        leaderboard_by_period: dict[str, list[dict[str, Any]]] | None = None,
+        leaderboard_by_league_period: dict[str, list[dict[str, Any]]] | None = None,
     ) -> bool:
         """Sync all data to Redis atomically using pipeline.
 
@@ -828,6 +845,22 @@ class RedisClient:
                     self.default_ttl,
                     json.dumps(_make_json_serializable(data)),
                 )
+            # Hot data - period leaderboards (global + per-league)
+            if leaderboard_by_period:
+                for period, data in leaderboard_by_period.items():
+                    pipe.setex(
+                        f"{self.prefix}hot:leaderboard:period:{period}",
+                        self.default_ttl,
+                        json.dumps(_make_json_serializable(data)),
+                    )
+            if leaderboard_by_league_period:
+                for key, data in leaderboard_by_league_period.items():
+                    # key is "{LEAGUE}:{period}", e.g. "NBA:7d"
+                    pipe.setex(
+                        f"{self.prefix}hot:leaderboard:{key.split(':')[0]}:period:{key.split(':')[1]}",
+                        self.default_ttl,
+                        json.dumps(_make_json_serializable(data)),
+                    )
             for league, data in agent_actions_by_league.items():
                 pipe.setex(
                     f"{self.prefix}hot:agent_actions:{league}",

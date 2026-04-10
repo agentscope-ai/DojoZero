@@ -63,6 +63,7 @@ from dojozero.arena_server._config import ArenaServerConfig  # noqa: E402
 
 DEFAULT_CACHE_CONFIG = CacheConfig()
 CACHEABLE_LEAGUES: frozenset[str] = frozenset({"NBA", "NFL"})
+LEADERBOARD_PERIODS: tuple[str, ...] = ("7d", "14d", "30d")
 
 
 @dataclass
@@ -124,6 +125,8 @@ class LandingPageCache:
     _stats_by_league: dict[str, CacheEntry] = field(default_factory=dict)
     _games_by_league: dict[str, CacheEntry] = field(default_factory=dict)
     _leaderboard_by_league: dict[str, CacheEntry] = field(default_factory=dict)
+    _leaderboard_by_period: dict[str, CacheEntry] = field(default_factory=dict)
+    _leaderboard_by_league_period: dict[str, CacheEntry] = field(default_factory=dict)
     _agent_actions_by_league: dict[str, CacheEntry] = field(default_factory=dict)
 
     # Agent bets index - per-agent bet records (agent_id -> list[BetRecord])
@@ -188,9 +191,32 @@ class LandingPageCache:
         return None
 
     def get_leaderboard(
-        self, league: str | None = None
+        self, league: str | None = None, period: str | None = None
     ) -> list[LeaderboardEntry] | None:
-        """Get cached leaderboard. Returns None if not cached."""
+        """Get cached leaderboard. Returns None if not cached.
+
+        Args:
+            league: Optional league filter (e.g. "NBA", "NFL").
+            period: Optional period filter ("7d", "14d", "30d").
+                    None or "all" returns the full leaderboard.
+        """
+        # Normalize period: None and "all" both mean full leaderboard
+        effective_period = period if period and period != "all" else None
+
+        if effective_period:
+            if league:
+                # Per-league + per-period
+                key = f"{league.upper()}:{effective_period}"
+                entry = self._leaderboard_by_league_period.get(key)
+                if entry is not None and entry.is_valid():
+                    return entry.data
+                return None
+            # Global + per-period
+            entry = self._leaderboard_by_period.get(effective_period)
+            if entry is not None and entry.is_valid():
+                return entry.data
+            return None
+
         if league:
             league_key = league.upper()
             if league_key in CACHEABLE_LEAGUES:
@@ -384,13 +410,37 @@ class LandingPageCache:
         LOGGER.debug("Cache SET: games (global)")
 
     def set_leaderboard(
-        self, data: list[LeaderboardEntry], league: str | None = None
+        self,
+        data: list[LeaderboardEntry],
+        league: str | None = None,
+        period: str | None = None,
     ) -> None:
-        """Set leaderboard cache (overwrites previous)."""
+        """Set leaderboard cache (overwrites previous).
+
+        Args:
+            data: Leaderboard entries.
+            league: Optional league filter.
+            period: Optional period filter ("7d", "14d", "30d").
+                    None or "all" sets the full leaderboard.
+        """
         entry = CacheEntry(
             data=data,
             expires_at=time.time() + self.config.max_cache_ttl,
         )
+        effective_period = period if period and period != "all" else None
+
+        if effective_period:
+            if league:
+                key = f"{league.upper()}:{effective_period}"
+                self._leaderboard_by_league_period[key] = entry
+                LOGGER.debug(
+                    "Cache SET: leaderboard[%s][%s]", league.upper(), effective_period
+                )
+                return
+            self._leaderboard_by_period[effective_period] = entry
+            LOGGER.debug("Cache SET: leaderboard[period=%s]", effective_period)
+            return
+
         if league:
             league_key = league.upper()
             if league_key in CACHEABLE_LEAGUES:
@@ -448,6 +498,8 @@ class LandingPageCache:
         self._stats_by_league.clear()
         self._games_by_league.clear()
         self._leaderboard_by_league.clear()
+        self._leaderboard_by_period.clear()
+        self._leaderboard_by_league_period.clear()
         self._agent_actions_by_league.clear()
         # Clear agent info cache
         self._agent_info.clear()
@@ -496,6 +548,12 @@ class LandingPageCache:
                 "games": _league_cache_info(self._games_by_league),
                 "leaderboard": _league_cache_info(self._leaderboard_by_league),
                 "agent_actions": _league_cache_info(self._agent_actions_by_league),
+            },
+            "caches_by_period": {
+                "leaderboard": _league_cache_info(self._leaderboard_by_period),
+                "leaderboard_by_league": _league_cache_info(
+                    self._leaderboard_by_league_period
+                ),
             },
         }
 
