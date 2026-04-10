@@ -34,6 +34,7 @@ from dojozero.arena_server._utils import (
     TRIAL_INFO_OPERATION_NAMES,
 )
 from dojozero.core._tracing import SpanData, TraceReader, create_trace_reader
+from dojozero.betting import AgentInfo
 from dojozero.sync_service._redis_client import RedisClient
 
 LOGGER = logging.getLogger("dojozero.sync_service")
@@ -119,23 +120,47 @@ class SyncService:
             # Check last sync time from Redis
             self._last_sync_time = await self.redis_client.get_last_sync_time()
 
-            # Always do a full sync on startup since _spans_by_trial is empty.
-            # Even if _last_sync_time is valid, we need historical spans to
-            # compute leaderboard correctly (broker.final_stats from completed games).
+            # Try warm start: restore _spans_by_trial from Redis to skip
+            # the expensive full SLS fetch.
+            warm_ok = False
             if self._last_sync_time is not None:
+                warm_ok = await self._warm_start_from_redis()
+
+            if warm_ok:
+                # Warm start succeeded — go straight to incremental sync
                 LOGGER.info(
-                    "SyncService: Found last sync time: %s, but doing full sync (empty cache)",
+                    "SyncService: Warm start OK, running incremental sync from %s",
                     self._last_sync_time,
                 )
+                try:
+                    await self._sync_once(is_initial=False)
+                    LOGGER.info(
+                        "SyncService: Incremental sync complete, entering refresh loop"
+                    )
+                except Exception as e:
+                    LOGGER.error(
+                        "SyncService: Incremental sync failed: %s", e, exc_info=True
+                    )
+                    LOGGER.info("SyncService: Will retry in refresh loop")
             else:
-                LOGGER.info("SyncService: No last sync time, starting full sync")
-            # Always do a full sync on startup
-            try:
-                await self._sync_once(is_initial=True)
-                LOGGER.info("SyncService: Initial sync complete, entering refresh loop")
-            except Exception as e:
-                LOGGER.error("SyncService: Initial sync failed: %s", e, exc_info=True)
-                LOGGER.info("SyncService: Will retry in refresh loop")
+                # Cold start — full SLS fetch
+                if self._last_sync_time is not None:
+                    LOGGER.info(
+                        "SyncService: Warm start failed, falling back to full sync (last_sync=%s)",
+                        self._last_sync_time,
+                    )
+                else:
+                    LOGGER.info("SyncService: No last sync time, starting full sync")
+                try:
+                    await self._sync_once(is_initial=True)
+                    LOGGER.info(
+                        "SyncService: Initial sync complete, entering refresh loop"
+                    )
+                except Exception as e:
+                    LOGGER.error(
+                        "SyncService: Initial sync failed: %s", e, exc_info=True
+                    )
+                    LOGGER.info("SyncService: Will retry in refresh loop")
 
             # Enter periodic refresh loop
             while self._running:
@@ -169,6 +194,74 @@ class SyncService:
             await close_fn()
 
         LOGGER.info("SyncService: Stopped")
+
+    async def _warm_start_from_redis(self) -> bool:
+        """Restore _spans_by_trial and _temp_cache from Redis.
+
+        Reads trials list, spans (batched), trial info, and agent info from
+        Redis to populate in-memory state. This avoids the expensive full
+        SLS fetch on restart.
+
+        Returns:
+            True if warm start succeeded (enough data to run incremental),
+            False if we should fall back to full SLS fetch.
+        """
+        assert self._temp_cache is not None
+
+        LOGGER.info("SyncService: Attempting warm start from Redis...")
+
+        # 1. Read trial list
+        trial_ids = await self.redis_client.get_trials_list()
+        if not trial_ids:
+            LOGGER.warning("SyncService: Warm start failed — no trials in Redis")
+            return False
+
+        LOGGER.info("SyncService: Warm start — %d trials in Redis", len(trial_ids))
+
+        # 2. Read spans in batches to avoid OOM
+        BATCH_SIZE = 20
+        loaded = 0
+        for i in range(0, len(trial_ids), BATCH_SIZE):
+            batch = trial_ids[i : i + BATCH_SIZE]
+            for tid in batch:
+                span_dicts = await self.redis_client.get_spans(tid)
+                if not span_dicts:
+                    continue
+                spans = [SpanData.from_dict(d) for d in span_dicts]
+                self._spans_by_trial[tid] = spans
+                loaded += 1
+
+        if not self._spans_by_trial:
+            LOGGER.warning("SyncService: Warm start failed — no spans in Redis")
+            return False
+
+        LOGGER.info(
+            "SyncService: Warm start — loaded spans for %d/%d trials",
+            loaded,
+            len(trial_ids),
+        )
+
+        # 3. Read trial info
+        trial_info = await self.redis_client.get_all_trial_info()
+        for tid, info in trial_info.items():
+            self._temp_cache.set_trial_info(tid, info)
+        LOGGER.info("SyncService: Warm start — %d trial info entries", len(trial_info))
+
+        # 4. Read agent info and populate cache
+        agent_info_raw = await self.redis_client.get_all_agent_info()
+        for aid, info_dict in agent_info_raw.items():
+            try:
+                agent_info = AgentInfo.model_validate(info_dict)
+                self._temp_cache._agent_info[aid] = agent_info
+            except Exception:
+                pass  # Skip invalid entries
+        LOGGER.info(
+            "SyncService: Warm start — %d agents restored",
+            len(self._temp_cache._agent_info),
+        )
+
+        LOGGER.info("SyncService: Warm start complete ✓")
+        return True
 
     async def _sync_once(self, *, is_initial: bool = False) -> None:
         """Perform a single sync cycle.
@@ -502,10 +595,9 @@ class SyncService:
             else:
                 agent_info[aid] = dict(info) if info else {}
 
-        # Spans by trial (convert SpanData to dict)
-        spans_by_trial: dict[str, list[dict[str, Any]]] = {}
-        for tid, spans in self._spans_by_trial.items():
-            spans_by_trial[tid] = [s.to_dict() for s in spans]
+        # Spans: pass raw SpanData objects — sync_all_data will serialize
+        # and write in batches to avoid OOM.
+        raw_spans_by_trial = self._spans_by_trial
 
         # Leaderboard (convert to dict)
         leaderboard = self._temp_cache.get_leaderboard(league=None) or []
@@ -591,7 +683,7 @@ class SyncService:
             trials_list=trial_ids,
             trial_info=trial_info,
             agent_info=agent_info,
-            spans_by_trial=spans_by_trial,
+            spans_by_trial=raw_spans_by_trial,
             leaderboard=leaderboard_data,
             leaderboard_by_league=leaderboard_by_league,
             agent_actions=actions_data,
@@ -612,7 +704,7 @@ class SyncService:
                 "SyncService: Wrote to Redis: %d trials, %d agents, %d span sets",
                 len(trial_ids),
                 len(agent_info),
-                len(spans_by_trial),
+                len(raw_spans_by_trial),
             )
         else:
             LOGGER.error("SyncService: Failed to write to Redis")

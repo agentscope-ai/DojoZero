@@ -748,7 +748,7 @@ class RedisClient:
         trials_list: list[str],
         trial_info: dict[str, dict[str, Any]],
         agent_info: dict[str, dict[str, Any]],
-        spans_by_trial: dict[str, list[dict[str, Any]]],
+        spans_by_trial: dict[str, list[Any]],
         leaderboard: list[dict[str, Any]],
         leaderboard_by_league: dict[str, list[dict[str, Any]]],
         agent_actions: list[dict[str, Any]],
@@ -763,10 +763,14 @@ class RedisClient:
         leaderboard_by_period: dict[str, list[dict[str, Any]]] | None = None,
         leaderboard_by_league_period: dict[str, list[dict[str, Any]]] | None = None,
     ) -> bool:
-        """Sync all data to Redis atomically using pipeline.
+        """Sync all data to Redis.
 
-        This is the main method used by Sync Service to write all data.
-        Uses Redis pipeline for atomic operation.
+        Writes spans in small batches (serialize + write + discard) to avoid
+        OOM, then writes all other lightweight data atomically via pipeline.
+
+        Args:
+            spans_by_trial: Accepts either raw SpanData objects (with to_dict)
+                or pre-serialized dicts. Serialized per-batch to limit memory.
 
         Returns:
             True if successful, False otherwise.
@@ -775,6 +779,31 @@ class RedisClient:
             return False
 
         try:
+            # ---- Phase 1: Write spans in batches to avoid OOM ----
+            SPAN_BATCH_SIZE = 20
+            span_keys = list(spans_by_trial.keys())
+            for i in range(0, len(span_keys), SPAN_BATCH_SIZE):
+                batch_keys = span_keys[i : i + SPAN_BATCH_SIZE]
+                pipe = self._client.pipeline()
+                for tid in batch_keys:
+                    raw_spans = spans_by_trial[tid]
+                    # Support both raw SpanData and pre-serialized dicts
+                    serialized = [
+                        s.to_dict() if hasattr(s, "to_dict") else s for s in raw_spans
+                    ]
+                    pipe.setex(
+                        f"{self.prefix}spans:{tid}",
+                        self.default_ttl,
+                        json.dumps(_make_json_serializable(serialized)),
+                    )
+                await pipe.execute()
+            LOGGER.info(
+                "Wrote spans to Redis: %d trials in %d batches",
+                len(span_keys),
+                (len(span_keys) + SPAN_BATCH_SIZE - 1) // SPAN_BATCH_SIZE,
+            )
+
+            # ---- Phase 2: Write everything else in one pipeline ----
             pipe = self._client.pipeline()
 
             # Trials list
@@ -802,14 +831,7 @@ class RedisClient:
             if agent_info:
                 pipe.expire(agent_info_key, self.default_ttl)
 
-            # Spans (per trial) - ensure nested objects are serializable
-            for tid, spans in spans_by_trial.items():
-                serializable_spans = _make_json_serializable(spans)
-                pipe.setex(
-                    f"{self.prefix}spans:{tid}",
-                    self.default_ttl,
-                    json.dumps(serializable_spans),
-                )
+            # (Spans already written in Phase 1 above)
 
             # Hot data - global (ensure all nested objects are serializable)
             pipe.setex(
