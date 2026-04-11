@@ -21,6 +21,7 @@ from dojozero.arena_server._cache import (
     CACHEABLE_LEAGUES,
     CacheConfig,
     DEFAULT_CACHE_CONFIG,
+    LEADERBOARD_PERIODS,
     LandingPageCache,
 )
 from dojozero.arena_server._utils import (
@@ -33,6 +34,7 @@ from dojozero.arena_server._utils import (
     TRIAL_INFO_OPERATION_NAMES,
 )
 from dojozero.core._tracing import SpanData, TraceReader, create_trace_reader
+from dojozero.betting import AgentInfo
 from dojozero.sync_service._redis_client import RedisClient
 
 LOGGER = logging.getLogger("dojozero.sync_service")
@@ -118,20 +120,47 @@ class SyncService:
             # Check last sync time from Redis
             self._last_sync_time = await self.redis_client.get_last_sync_time()
 
-            # Always do a full sync on startup since _spans_by_trial is empty.
-            # Even if _last_sync_time is valid, we need historical spans to
-            # compute leaderboard correctly (broker.final_stats from completed games).
+            # Try warm start: restore _spans_by_trial from Redis to skip
+            # the expensive full SLS fetch.
+            warm_ok = False
             if self._last_sync_time is not None:
+                warm_ok = await self._warm_start_from_redis()
+
+            if warm_ok:
+                # Warm start succeeded — go straight to incremental sync
                 LOGGER.info(
-                    "SyncService: Found last sync time: %s, but doing full sync (empty cache)",
+                    "SyncService: Warm start OK, running incremental sync from %s",
                     self._last_sync_time,
                 )
+                try:
+                    await self._sync_once(is_initial=False)
+                    LOGGER.info(
+                        "SyncService: Incremental sync complete, entering refresh loop"
+                    )
+                except Exception as e:
+                    LOGGER.error(
+                        "SyncService: Incremental sync failed: %s", e, exc_info=True
+                    )
+                    LOGGER.info("SyncService: Will retry in refresh loop")
             else:
-                LOGGER.info("SyncService: No last sync time, starting full sync")
-            # Always do a full sync on startup
-            await self._sync_once(is_initial=True)
-
-            LOGGER.info("SyncService: Initial sync complete, entering refresh loop")
+                # Cold start — full SLS fetch
+                if self._last_sync_time is not None:
+                    LOGGER.info(
+                        "SyncService: Warm start failed, falling back to full sync (last_sync=%s)",
+                        self._last_sync_time,
+                    )
+                else:
+                    LOGGER.info("SyncService: No last sync time, starting full sync")
+                try:
+                    await self._sync_once(is_initial=True)
+                    LOGGER.info(
+                        "SyncService: Initial sync complete, entering refresh loop"
+                    )
+                except Exception as e:
+                    LOGGER.error(
+                        "SyncService: Initial sync failed: %s", e, exc_info=True
+                    )
+                    LOGGER.info("SyncService: Will retry in refresh loop")
 
             # Enter periodic refresh loop
             while self._running:
@@ -141,7 +170,7 @@ class SyncService:
                 try:
                     await self._sync_once(is_initial=False)
                 except Exception as e:
-                    LOGGER.error("SyncService: Sync failed: %s", e)
+                    LOGGER.error("SyncService: Sync failed: %s", e, exc_info=True)
 
         except asyncio.CancelledError:
             LOGGER.info("SyncService: Cancelled")
@@ -165,6 +194,74 @@ class SyncService:
             await close_fn()
 
         LOGGER.info("SyncService: Stopped")
+
+    async def _warm_start_from_redis(self) -> bool:
+        """Restore _spans_by_trial and _temp_cache from Redis.
+
+        Reads trials list, spans (batched), trial info, and agent info from
+        Redis to populate in-memory state. This avoids the expensive full
+        SLS fetch on restart.
+
+        Returns:
+            True if warm start succeeded (enough data to run incremental),
+            False if we should fall back to full SLS fetch.
+        """
+        assert self._temp_cache is not None
+
+        LOGGER.info("SyncService: Attempting warm start from Redis...")
+
+        # 1. Read trial list
+        trial_ids = await self.redis_client.get_trials_list()
+        if not trial_ids:
+            LOGGER.warning("SyncService: Warm start failed — no trials in Redis")
+            return False
+
+        LOGGER.info("SyncService: Warm start — %d trials in Redis", len(trial_ids))
+
+        # 2. Read spans in batches to avoid OOM
+        BATCH_SIZE = 20
+        loaded = 0
+        for i in range(0, len(trial_ids), BATCH_SIZE):
+            batch = trial_ids[i : i + BATCH_SIZE]
+            for tid in batch:
+                span_dicts = await self.redis_client.get_spans(tid)
+                if not span_dicts:
+                    continue
+                spans = [SpanData.from_dict(d) for d in span_dicts]
+                self._spans_by_trial[tid] = spans
+                loaded += 1
+
+        if not self._spans_by_trial:
+            LOGGER.warning("SyncService: Warm start failed — no spans in Redis")
+            return False
+
+        LOGGER.info(
+            "SyncService: Warm start — loaded spans for %d/%d trials",
+            loaded,
+            len(trial_ids),
+        )
+
+        # 3. Read trial info
+        trial_info = await self.redis_client.get_all_trial_info()
+        for tid, info in trial_info.items():
+            self._temp_cache.set_trial_info(tid, info)
+        LOGGER.info("SyncService: Warm start — %d trial info entries", len(trial_info))
+
+        # 4. Read agent info and populate cache
+        agent_info_raw = await self.redis_client.get_all_agent_info()
+        for aid, info_dict in agent_info_raw.items():
+            try:
+                agent_info = AgentInfo.model_validate(info_dict)
+                self._temp_cache._agent_info[aid] = agent_info
+            except Exception:
+                pass  # Skip invalid entries
+        LOGGER.info(
+            "SyncService: Warm start — %d agents restored",
+            len(self._temp_cache._agent_info),
+        )
+
+        LOGGER.info("SyncService: Warm start complete ✓")
+        return True
 
     async def _sync_once(self, *, is_initial: bool = False) -> None:
         """Perform a single sync cycle.
@@ -241,6 +338,7 @@ class SyncService:
 
         # 4. Extract agent info
         added = self._temp_cache.update_agent_info_from_spans(all_spans)
+
         LOGGER.info(
             "SyncService: [5/8] Agent info updated (%d new, %d total)",
             added,
@@ -312,6 +410,13 @@ class SyncService:
 
         agent_info_cache = self._temp_cache.get_all_agent_info()
 
+        # Build trial_metadata from temp_cache (needed for bets index)
+        trial_metadata: dict[str, dict[str, Any]] = {}
+        for tid in trial_ids:
+            info = self._temp_cache.get_trial_info(tid)
+            if info is not None:
+                trial_metadata[tid] = info
+
         # Stats (global + per-league)
         stats = await _compute_stats(
             self.trace_reader, trial_ids, self._temp_cache, self._spans_by_trial
@@ -342,20 +447,64 @@ class SyncService:
             )
             self._temp_cache.set_games(league_games, league=league)
 
-        # Leaderboard (global + per-league)
-        leaderboard = _compute_leaderboard_from_spans(
-            self._spans_by_trial, agent_info_cache, trial_ids
+        # Leaderboard (global + per-league) + bets index
+        result = _compute_leaderboard_from_spans(
+            self._spans_by_trial,
+            agent_info_cache,
+            trial_ids,
+            collect_bets=True,
+            trial_metadata=trial_metadata,
         )
-        self._temp_cache.set_leaderboard(leaderboard, league=None)
+        self._temp_cache.set_leaderboard(result.leaderboard, league=None)
+        self._temp_cache.set_agent_bets_index(result.agent_bets_index)
 
         for league in CACHEABLE_LEAGUES:
             league_ids = [
                 tid for tid in trial_ids if self._trial_matches_league(tid, league)
             ]
-            league_leaderboard = _compute_leaderboard_from_spans(
+            league_result = _compute_leaderboard_from_spans(
                 self._spans_by_trial, agent_info_cache, league_ids
             )
-            self._temp_cache.set_leaderboard(league_leaderboard, league=league)
+            self._temp_cache.set_leaderboard(league_result.leaderboard, league=league)
+
+        # Period leaderboards (7d/14d/30d) — global + per-league
+        period_days = {"7d": 7, "14d": 14, "30d": 30}
+        now = datetime.now(timezone.utc)
+        for period, days in period_days.items():
+            cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+            period_trial_ids = self._filter_trials_by_date(
+                trial_ids,
+                trial_metadata,
+                start_date=cutoff,
+            )
+            period_result = _compute_leaderboard_from_spans(
+                self._spans_by_trial,
+                agent_info_cache,
+                period_trial_ids,
+                trial_metadata=trial_metadata,
+            )
+            self._temp_cache.set_leaderboard(
+                period_result.leaderboard,
+                league=None,
+                period=period,
+            )
+            for league in CACHEABLE_LEAGUES:
+                league_period_ids = [
+                    tid
+                    for tid in period_trial_ids
+                    if self._trial_matches_league(tid, league)
+                ]
+                lp_result = _compute_leaderboard_from_spans(
+                    self._spans_by_trial,
+                    agent_info_cache,
+                    league_period_ids,
+                    trial_metadata=trial_metadata,
+                )
+                self._temp_cache.set_leaderboard(
+                    lp_result.leaderboard,
+                    league=league,
+                    period=period,
+                )
 
         # Agent actions (global + per-league)
         actions = _extract_agent_actions_from_spans(
@@ -391,6 +540,40 @@ class SyncService:
         trial_league = metadata.get("sport_type", "")
         return trial_league.upper() == league.upper()
 
+    @staticmethod
+    def _filter_trials_by_date(
+        trial_ids: list[str],
+        trial_metadata: dict[str, dict[str, Any]],
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[str]:
+        """Filter trial IDs by game_date in trial metadata.
+
+        Args:
+            trial_ids: Trial IDs to filter.
+            trial_metadata: Mapping of trial_id -> trial info dict.
+            start_date: Inclusive lower bound (YYYY-MM-DD).
+            end_date: Inclusive upper bound (YYYY-MM-DD).
+
+        Returns:
+            Filtered list of trial IDs whose game_date falls within range.
+        """
+        filtered: list[str] = []
+        for tid in trial_ids:
+            info = trial_metadata.get(tid)
+            if info is None:
+                continue
+            meta = info.get("metadata", {})
+            gd = meta.get("game_date", "")
+            if not gd:
+                continue
+            if start_date and gd < start_date:
+                continue
+            if end_date and gd > end_date:
+                continue
+            filtered.append(tid)
+        return filtered
+
     async def _write_to_redis(self, trial_ids: list[str], sync_time: datetime) -> None:
         """Write all cached data to Redis."""
         if self._temp_cache is None:
@@ -412,10 +595,9 @@ class SyncService:
             else:
                 agent_info[aid] = dict(info) if info else {}
 
-        # Spans by trial (convert SpanData to dict)
-        spans_by_trial: dict[str, list[dict[str, Any]]] = {}
-        for tid, spans in self._spans_by_trial.items():
-            spans_by_trial[tid] = [s.to_dict() for s in spans]
+        # Spans: pass raw SpanData objects — sync_all_data will serialize
+        # and write in batches to avoid OOM.
+        raw_spans_by_trial = self._spans_by_trial
 
         # Leaderboard (convert to dict)
         leaderboard = self._temp_cache.get_leaderboard(league=None) or []
@@ -429,6 +611,22 @@ class SyncService:
             leaderboard_by_league[league] = [
                 e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in lb
             ]
+
+        # Period leaderboards (convert to dict)
+        leaderboard_by_period: dict[str, list[dict[str, Any]]] = {}
+        leaderboard_by_league_period: dict[str, list[dict[str, Any]]] = {}
+        for period in LEADERBOARD_PERIODS:
+            lb = self._temp_cache.get_leaderboard(period=period) or []
+            leaderboard_by_period[period] = [
+                e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in lb
+            ]
+            for league in CACHEABLE_LEAGUES:
+                lb = (
+                    self._temp_cache.get_leaderboard(league=league, period=period) or []
+                )
+                leaderboard_by_league_period[f"{league}:{period}"] = [
+                    e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in lb
+                ]
 
         # Agent actions (convert to dict)
         actions = self._temp_cache.get_agent_actions(league=None) or []
@@ -472,12 +670,20 @@ class SyncService:
         # Live trials
         live_trials = self._temp_cache.get_live_trial_ids()
 
+        # Agent bets index (convert BetRecord models to dicts)
+        raw_bets_index = self._temp_cache.get_agent_bets_index()
+        agent_bets_index_data: dict[str, list[dict[str, Any]]] = {}
+        for aid, bets in raw_bets_index.items():
+            agent_bets_index_data[aid] = [
+                b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in bets
+            ]
+
         # Write all to Redis
         success = await self.redis_client.sync_all_data(
             trials_list=trial_ids,
             trial_info=trial_info,
             agent_info=agent_info,
-            spans_by_trial=spans_by_trial,
+            spans_by_trial=raw_spans_by_trial,
             leaderboard=leaderboard_data,
             leaderboard_by_league=leaderboard_by_league,
             agent_actions=actions_data,
@@ -486,6 +692,9 @@ class SyncService:
             stats_by_league=stats_by_league,
             games=games_data,
             games_by_league=games_by_league,
+            agent_bets_index=agent_bets_index_data,
+            leaderboard_by_period=leaderboard_by_period,
+            leaderboard_by_league_period=leaderboard_by_league_period,
             live_trials=live_trials,
             sync_time=sync_time,
         )
@@ -495,7 +704,7 @@ class SyncService:
                 "SyncService: Wrote to Redis: %d trials, %d agents, %d span sets",
                 len(trial_ids),
                 len(agent_info),
-                len(spans_by_trial),
+                len(raw_spans_by_trial),
             )
         else:
             LOGGER.error("SyncService: Failed to write to Redis")

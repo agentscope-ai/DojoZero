@@ -1,1 +1,1 @@
-media/** filter=lfs diff=lfs merge=lfs -text
+# Intentionally left empty - no LFS tracking needed

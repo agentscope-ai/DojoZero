@@ -448,6 +448,14 @@ class AgentInfo(BaseModel):
     )
     system_prompt: str = Field(default="", description="Agent's system prompt")
     cdn_url: str = Field(default="", description="Avatar image URL")
+    is_external: bool = Field(
+        default=False,
+        description="True if agent was created via gateway (external agent with API key)",
+    )
+    created_at: str | None = Field(
+        default=None,
+        description="Agent account creation time (ISO 8601)",
+    )
 
     @computed_field  # type: ignore[misc]
     @property

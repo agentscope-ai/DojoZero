@@ -16,6 +16,48 @@ from dojozero.betting._models import AgentInfo
 from dojozero.core._models import AgentAction, LeaderboardEntry
 from dojozero.data._models import TeamIdentity
 
+
+class BetRecord(BaseModel):
+    """A single bet record for agent profile display."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    trial_id: str = Field(serialization_alias="trialId")
+    league: str = ""
+    home_team: str = Field(default="", serialization_alias="homeTeam")
+    away_team: str = Field(default="", serialization_alias="awayTeam")
+    game_date: str = Field(default="", serialization_alias="gameDate")
+    selection: str = ""
+    amount: float = 0.0
+    result: str = "pending"  # "win", "loss", "pending"
+    payout: float = 0.0
+
+
+class AgentProfileStats(BaseModel):
+    """Aggregate stats for an agent profile."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    winnings: float = 0.0
+    win_rate: float = Field(default=0.0, serialization_alias="winRate")
+    total_bets: int = Field(default=0, serialization_alias="totalBets")
+    roi: float = 0.0
+
+
+class AgentProfileResponse(BaseModel):
+    """Response for GET /api/agent/{agent_id}/profile."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    agent: AgentInfo
+    stats: AgentProfileStats
+    created_at: str | None = Field(default=None, serialization_alias="createdAt")
+    bets: list[BetRecord] = Field(default_factory=list)
+    total_bets_count: int = Field(default=0, serialization_alias="totalBetsCount")
+    page: int = 1
+    page_size: int = Field(default=20, serialization_alias="pageSize")
+
+
 # ============================================================================
 # Type Aliases
 # ============================================================================
@@ -123,9 +165,12 @@ class LandingResponse(BaseModel):
 class LeaderboardResponse(BaseModel):
     """Response for /api/leaderboard."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     leaderboard: list[LeaderboardEntry] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = Field(default=20, serialization_alias="pageSize")
 
 
 class BetSummary(BaseModel):
@@ -261,6 +306,9 @@ class ReplayResponse(BaseModel):
 __all__ = [
     # API Response Models
     "AgentActionsResponse",
+    "AgentProfileResponse",
+    "AgentProfileStats",
+    "BetRecord",
     "BetSummary",
     "GameCardData",
     "GamesResponse",

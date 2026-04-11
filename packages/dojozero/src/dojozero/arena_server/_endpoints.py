@@ -40,6 +40,9 @@ from ._server import (
     TrialReplayController,
     get_server_state,
 )
+from ._utils import (
+    _compute_agent_profile,
+)
 from ._utils import _load_replay_data
 
 LOGGER = logging.getLogger("dojozero.arena_server.endpoints")
@@ -363,29 +366,163 @@ def register_rest_endpoints(app: FastAPI) -> None:
             ge=1,
             le=1000,
         ),
+        page: int = Query(
+            default=1,
+            description="Page number (1-based).",
+            ge=1,
+        ),
+        page_size: int = Query(
+            default=20,
+            description="Number of entries per page.",
+            ge=1,
+            le=100,
+        ),
+        period: str = Query(
+            default="all",
+            description="Time period filter: 'all', '7d', '14d', '30d'.",
+        ),
+        agent_type: str | None = Query(
+            default=None,
+            description="Agent type filter: 'built_in' or 'external'.",
+        ),
+        sort_by: str = Query(
+            default="winnings",
+            description="Sort field: 'winnings', 'win_rate', 'roi', 'total_bets'.",
+        ),
+        sort_order: str = Query(
+            default="desc",
+            description="Sort direction: 'asc' or 'desc'.",
+        ),
     ) -> JSONResponse:
-        """Get agent leaderboard ranked by winnings.
+        """Get agent leaderboard ranked by specified field.
 
-        Returns agents sorted by total winnings with win rate and ROI.
-        Data is served from cache (background refresh keeps it fresh).
-        On cache miss, triggers on-demand refresh.
+        Returns agents sorted by the requested field with win rate and ROI.
+        Supports period-based filtering (pre-computed: all/7d/14d/30d),
+        agent type filtering, custom sorting, and pagination.
         """
         state = get_server_state()
         refresher = state.refresher
         assert refresher is not None, "BackgroundRefresher not initialized"
 
-        # Get leaderboard from cache, or refresh on demand
-        leaderboard = state.cache.get_leaderboard(league=league)
-        if leaderboard is None:
-            leaderboard = await refresher.refresh_leaderboard_on_demand(league=league)
+        # Validate period
+        valid_periods = {"all", "7d", "14d", "30d"}
+        if period not in valid_periods:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": f"Invalid period '{period}'. Must be one of: {', '.join(sorted(valid_periods))}"
+                },
+            )
 
-        # Apply limit only if specified
+        # All paths now read from pre-computed cache
+        effective_period = period if period != "all" else None
+        leaderboard = state.cache.get_leaderboard(
+            league=league,
+            period=effective_period,
+        )
+        if leaderboard is None:
+            # Fallback: try on-demand refresh for the base (all) leaderboard
+            if effective_period is None:
+                leaderboard = await refresher.refresh_leaderboard_on_demand(
+                    league=league
+                )
+            else:
+                leaderboard = []
+
+        # --- Unified post-processing: filter → sort → rank → limit → paginate ---
+
+        # 1. Filter by agent_type
+        if agent_type == "external":
+            leaderboard = [e for e in leaderboard if e.agent.is_external]
+        elif agent_type == "built_in":
+            leaderboard = [e for e in leaderboard if not e.agent.is_external]
+
+        # 2. Sort (cached path is already sorted by winnings desc; re-sort only when needed)
+        if sort_by != "winnings" or sort_order != "desc":
+            sort_key_map = {
+                "winnings": lambda x: x.winnings,
+                "win_rate": lambda x: x.win_rate,
+                "roi": lambda x: x.roi,
+                "total_bets": lambda x: x.total_bets,
+            }
+            key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])
+            leaderboard = sorted(leaderboard, key=key_fn, reverse=(sort_order != "asc"))
+
+        # 3. Limit
         if limit is not None:
             leaderboard = leaderboard[:limit]
 
-        response = LeaderboardResponse(leaderboard=leaderboard)
+        total = len(leaderboard)
+
+        # 4. Paginate + assign global rank (once)
+        start_idx = (page - 1) * page_size
+        page_entries = [
+            e.model_copy(update={"rank": start_idx + i + 1})
+            for i, e in enumerate(leaderboard[start_idx : start_idx + page_size])
+        ]
+
+        response = LeaderboardResponse(
+            leaderboard=page_entries,
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
         return JSONResponse(
             content=response.model_dump(by_alias=state.by_alias),
+        )
+
+    @app.get("/api/agent/{agent_id}/profile")
+    async def get_agent_profile(
+        agent_id: str,
+        page: int = Query(
+            default=1,
+            description="Page number for bet history (1-based).",
+            ge=1,
+        ),
+        page_size: int = Query(
+            default=20,
+            description="Number of bet records per page.",
+            ge=1,
+            le=100,
+        ),
+    ) -> JSONResponse:
+        """Get agent profile with stats and paginated bet history.
+
+        Returns agent info, aggregate stats, and a paginated list of
+        individual bets sorted by game_date descending.
+        """
+        state = get_server_state()
+        refresher = state.refresher
+        assert refresher is not None, "BackgroundRefresher not initialized"
+
+        # Stats from leaderboard cache, bets from bets index — zero recomputation
+        leaderboard = state.cache.get_leaderboard() or []
+        agent_bets_index = state.cache.get_agent_bets_index()
+        agent_info_cache = state.cache.get_all_agent_info()
+
+        # Check if agent exists in any cache; return 404 if unknown
+        agent_known = (
+            agent_id in agent_info_cache
+            or agent_id in agent_bets_index
+            or any(e.agent.agent_id == agent_id for e in leaderboard)
+        )
+        if not agent_known:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"Agent '{agent_id}' not found"},
+            )
+
+        profile = _compute_agent_profile(
+            agent_id=agent_id,
+            leaderboard=leaderboard,
+            agent_bets_index=agent_bets_index,
+            agent_info_cache=agent_info_cache,
+            page=page,
+            page_size=page_size,
+        )
+
+        return JSONResponse(
+            content=profile.model_dump(by_alias=state.by_alias),
         )
 
     @app.get("/api/agent-actions")
