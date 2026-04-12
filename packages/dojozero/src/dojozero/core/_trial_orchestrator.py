@@ -503,18 +503,32 @@ class TrialOrchestrator:
     async def stop_trial(self, trial_id: str) -> TrialStatus:
         """Gracefully stop all actors belonging to *trial_id*."""
 
-        LOGGER.info("stopping trial '%s'", trial_id)
         runtime = self._require_runtime(trial_id)
+
+        # Snapshot phase before acquiring lock.  The lock serialises stop
+        # calls, and _stop_runtime now short-circuits on STOPPING/STOPPED,
+        # so only the first caller actually does work.
+        phase_before = runtime.phase
+
+        LOGGER.info("stopping trial '%s' (phase=%s)", trial_id, phase_before.value)
         await self._with_trial_lock(runtime, self._stop_runtime)
         status = self._build_trial_status(runtime)
         self._persist_trial_status(runtime, status)
 
-        # Emit trial.stopped span
-        self._emit_trial_lifecycle_span(
-            trial_id=trial_id,
-            phase="stopped",
-            metadata={"final_phase": status.phase.value},
-        )
+        # Emit span only when this call actually transitioned the trial.
+        # _stop_runtime short-circuits when phase is already
+        # STOPPED/STOPPING/INITIALIZED, so check whether we were the caller
+        # that moved it out of RUNNING/FAILED.
+        if phase_before not in {
+            TrialPhase.STOPPED,
+            TrialPhase.STOPPING,
+            TrialPhase.FAILED,
+        }:
+            self._emit_trial_lifecycle_span(
+                trial_id=trial_id,
+                phase="stopped",
+                metadata={"final_phase": status.phase.value},
+            )
 
         LOGGER.info(
             "trial '%s' stopped (phase=%s)",
@@ -1394,7 +1408,11 @@ class TrialOrchestrator:
                 context.set_stop_callback(_delayed_stop_callback)
 
     async def _stop_runtime(self, runtime: TrialRuntime) -> None:
-        if runtime.phase in {TrialPhase.STOPPED, TrialPhase.INITIALIZED}:
+        if runtime.phase in {
+            TrialPhase.STOPPED,
+            TrialPhase.STOPPING,
+            TrialPhase.INITIALIZED,
+        }:
             return
         runtime.phase = TrialPhase.STOPPING
         errors: list[Exception] = []
