@@ -1576,19 +1576,6 @@ class ScheduleManager:
             hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
             trial_id = f"{scheduled.sport_type}-game-{scheduled.game_id}-{hash_suffix}"
 
-            # Build trial spec - uses build_async which handles both sync and async builders
-            try:
-                spec = await definition.build_async(trial_id, scheduled.scenario_config)
-            except ValidationError as e:
-                scheduled.phase = ScheduledTrialPhase.FAILED
-                scheduled.error = f"Invalid config: {e}"
-                self._persist()
-                return
-
-            # Note: spec.metadata is a frozen dataclass (e.g., BettingTrialMetadata)
-            # with sport_type and espn_game_id already populated by the builder.
-            # No need to add schedule_id/game_id - they're tracked in ScheduledTrial.
-
             # Pick target server if peer registry available
             target_peer = None
             if self._peer_registry is not None:
@@ -1600,13 +1587,19 @@ class ScheduleManager:
                 except Exception as e:
                     LOGGER.warning("Failed to query peers for scheduling: %s", e)
 
-            # Submit to target server
-            if (
+            is_remote = (
                 target_peer is not None
                 and self._server_id is not None
                 and target_peer.server_id != self._server_id
-            ):
-                # Remote submission via HTTP
+            )
+
+            # Submit to target server
+            if is_remote:
+                assert target_peer is not None  # narrowing for type checker
+                # Remote submission — send scenario config only; the worker
+                # will call build_async itself.  Skipping the local build
+                # avoids a ~30 s delay that can trigger the HTTP timeout and
+                # cause a duplicate fallback-to-local submission.
                 remote_url = f"{target_peer.server_url.rstrip('/')}/api/trials"
                 payload = {
                     "trial_id": trial_id,
@@ -1623,7 +1616,7 @@ class ScheduleManager:
                             "X-Dojozero-Forwarded": self._server_id or "scheduler"
                         },
                     ) as resp:
-                        if resp.status not in (200, 201):
+                        if resp.status not in (200, 201, 202):
                             body = await resp.text()
                             raise RuntimeError(
                                 f"Remote submission failed ({resp.status}): {body}"
@@ -1634,14 +1627,34 @@ class ScheduleManager:
                         target_peer.server_id,
                     )
                 except Exception as e:
-                    LOGGER.warning(
-                        "Remote submission to '%s' failed, falling back to local: %s",
+                    # Do NOT fall back to local — the remote server may have
+                    # already accepted the trial (e.g. timeout while the
+                    # worker was building the spec).  Falling back would
+                    # create a duplicate trial.
+                    scheduled.phase = ScheduledTrialPhase.FAILED
+                    scheduled.error = (
+                        f"Remote submission to '{target_peer.server_id}' failed: {e}"
+                    )
+                    self._persist()
+                    LOGGER.error(
+                        "Remote submission of '%s' to '%s' failed (will not "
+                        "fall back to local to avoid duplicate): %s",
+                        trial_id,
                         target_peer.server_id,
                         e,
                     )
-                    await self._trial_manager.submit(spec)
+                    return
             else:
-                # Local submission
+                # Local submission — build the spec on this server
+                try:
+                    spec = await definition.build_async(
+                        trial_id, scheduled.scenario_config
+                    )
+                except ValidationError as e:
+                    scheduled.phase = ScheduledTrialPhase.FAILED
+                    scheduled.error = f"Invalid config: {e}"
+                    self._persist()
+                    return
                 await self._trial_manager.submit(spec)
 
             # Register trial ownership in peer registry
