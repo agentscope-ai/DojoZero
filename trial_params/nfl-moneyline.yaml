@@ -1,7 +1,7 @@
 scenario:
   name: nfl
   config:
-    espn_game_id: 'your_espn_game_id'  # ESPN game ID for the NFL game
+    espn_game_id: '401772987'  # ESPN game ID for the NFL game
 
     hub:
       persistence_file: outputs/nfl_betting_events-{espn_game_id}.jsonl
@@ -56,7 +56,7 @@ scenario:
       persona: degen
       class: BettingAgent
       persona_config_path: agents/personas/degen.yaml
-      llm_config_path: agents/llms/default.yaml
+      llm_config_path: agents/llms/all.yaml
       operators:
         - betting_broker
       data_streams:
@@ -65,68 +65,3 @@ scenario:
         - nfl_odds_update_stream
         - game_lifecycle_stream
         - nfl_play_stream
-    - id: mystic_agent
-      persona: mystic
-      class: BettingAgent
-      persona_config_path: agents/personas/mystic.yaml
-      llm_config_path: agents/llms/default.yaml
-      operators:
-        - betting_broker
-      data_streams:
-        - pre_game_insights_stream
-        - nfl_game_update_stream
-        - nfl_odds_update_stream
-        - game_lifecycle_stream
-        - nfl_play_stream
-    - id: pundit_agent
-      persona: pundit
-      class: BettingAgent
-      persona_config_path: agents/personas/pundit.yaml
-      llm_config_path: agents/llms/default.yaml
-      operators:
-        - betting_broker
-      data_streams:
-        - pre_game_insights_stream
-        - nfl_game_update_stream
-        - nfl_odds_update_stream
-        - game_lifecycle_stream
-        - nfl_play_stream
-    - id: shark_agent
-      persona: shark
-      class: BettingAgent
-      persona_config_path: agents/personas/shark.yaml
-      llm_config_path: agents/llms/default.yaml
-      operators:
-      - betting_broker
-      data_streams:
-      - pre_game_insights_stream
-      - nfl_game_update_stream
-      - nfl_odds_update_stream
-      - game_lifecycle_stream
-      - nfl_play_stream
-    - id: sheep_agent
-      persona: sheep
-      class: BettingAgent
-      persona_config_path: agents/personas/sheep.yaml
-      llm_config_path: agents/llms/default.yaml
-      operators:
-      - betting_broker
-      data_streams:
-      - pre_game_insights_stream
-      - nfl_game_update_stream
-      - nfl_odds_update_stream
-      - game_lifecycle_stream
-      - nfl_play_stream
-    - id: whale_agent
-      persona: whale
-      class: BettingAgent
-      persona_config_path: agents/personas/whale.yaml
-      llm_config_path: agents/llms/default.yaml
-      operators:
-      - betting_broker
-      data_streams:
-      - pre_game_insights_stream
-      - nfl_game_update_stream
-      - nfl_odds_update_stream
-      - game_lifecycle_stream
-      - nfl_play_stream

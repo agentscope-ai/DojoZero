@@ -127,7 +127,7 @@ asyncio.run(main())
 
 ## Documentation
 
-For the full API reference, daemon mode, multiple agent profiles, and Agent Skill integration (OpenClaw / CoPaw / AgentScope), see the [full documentation](https://github.com/agentscope-ai/DojoZero/tree/main/docs).
+For the full API reference, daemon mode, multiple agent profiles, and Agent Skill integration (OpenClaw / QwenPaw / AgentScope), see the [full documentation](https://github.com/agentscope-ai/DojoZero/tree/main/docs).
 
 ## License
 
