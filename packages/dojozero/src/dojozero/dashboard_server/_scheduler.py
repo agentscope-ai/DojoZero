@@ -473,15 +473,22 @@ class ScheduleManager:
         """Derive scheduled events from _schedules (single source of truth).
 
         Returns a dict of ``(source_id, game_id) → schedule_id`` for all
-        schedules that are still active (not completed/cancelled/failed).
+        schedules that should block re-scheduling of the same game.  This
+        includes active schedules and failed schedules that attempted a
+        remote submission (the remote peer may still be running the trial
+        even though the HTTP call failed/timed out).
         """
         result: dict[tuple[str, str], str] = {}
         for s in self._schedules.values():
             if s.phase in (
                 ScheduledTrialPhase.COMPLETED,
                 ScheduledTrialPhase.CANCELLED,
-                ScheduledTrialPhase.FAILED,
             ):
+                continue
+            # A FAILED schedule should still block re-scheduling if a remote
+            # submission was attempted (launched_trial_id is set before the
+            # HTTP call).  The remote peer may have accepted the trial.
+            if s.phase == ScheduledTrialPhase.FAILED and not s.launched_trial_id:
                 continue
             source_id = s.metadata.get("source_id")
             if source_id:
@@ -1600,7 +1607,8 @@ class ScheduleManager:
                 # will call build_async itself.  Skipping the local build
                 # avoids a ~30 s delay that can trigger the HTTP timeout and
                 # cause a duplicate fallback-to-local submission.
-                remote_url = f"{target_peer.server_url.rstrip('/')}/api/trials"
+                remote_base = target_peer.server_url.rstrip("/")
+                remote_url = f"{remote_base}/api/trials"
                 payload = {
                     "trial_id": trial_id,
                     "scenario": {
@@ -1608,6 +1616,20 @@ class ScheduleManager:
                         "config": scheduled.scenario_config,
                     },
                 }
+                # Record trial_id before the HTTP call so that even if the
+                # request times out, the schedule remembers a remote attempt
+                # was made.  _scheduled_events uses launched_trial_id to keep
+                # failed-remote schedules in the dedup set.
+                scheduled.launched_trial_id = trial_id
+                self._persist()
+
+                # Phase 1: Fire the submission request.  Use a short timeout
+                # — we only need the remote to accept the request, not finish
+                # building.  If the POST itself succeeds we're done; if it
+                # times out, the remote may still be building, so we poll.
+                import aiohttp as _aiohttp
+
+                submit_ok = False
                 try:
                     async with self._http_session.post(
                         remote_url,
@@ -1615,35 +1637,124 @@ class ScheduleManager:
                         headers={
                             "X-Dojozero-Forwarded": self._server_id or "scheduler"
                         },
+                        timeout=_aiohttp.ClientTimeout(total=30),
                     ) as resp:
-                        if resp.status not in (200, 201, 202):
+                        if resp.status in (200, 201, 202):
+                            submit_ok = True
+                        else:
                             body = await resp.text()
-                            raise RuntimeError(
-                                f"Remote submission failed ({resp.status}): {body}"
+                            LOGGER.error(
+                                "Remote submission of '%s' rejected by '%s' (%s): %s",
+                                trial_id,
+                                target_peer.server_id,
+                                resp.status,
+                                body,
                             )
-                    LOGGER.info(
-                        "Submitted trial '%s' to remote peer '%s'",
-                        trial_id,
-                        target_peer.server_id,
-                    )
+                            scheduled.phase = ScheduledTrialPhase.FAILED
+                            scheduled.error = f"Remote rejected ({resp.status}): {body}"
+                            # Remote explicitly rejected — safe to retry.
+                            scheduled.launched_trial_id = None
+                            self._persist()
+                            return
                 except Exception as e:
-                    # Do NOT fall back to local — the remote server may have
-                    # already accepted the trial (e.g. timeout while the
-                    # worker was building the spec).  Falling back would
-                    # create a duplicate trial.
-                    scheduled.phase = ScheduledTrialPhase.FAILED
-                    scheduled.error = (
-                        f"Remote submission to '{target_peer.server_id}' failed: {e}"
-                    )
-                    self._persist()
-                    LOGGER.error(
-                        "Remote submission of '%s' to '%s' failed (will not "
-                        "fall back to local to avoid duplicate): %s",
+                    LOGGER.warning(
+                        "Remote submission of '%s' to '%s' timed out or failed: %s. "
+                        "Will poll for trial status.",
                         trial_id,
                         target_peer.server_id,
                         e,
                     )
-                    return
+
+                # Phase 2: If the POST timed out, poll the remote's status
+                # endpoint to see if the trial was actually accepted.
+                if not submit_ok:
+                    status_url = f"{remote_base}/api/trials/{trial_id}/status"
+                    poll_ok = False
+                    # confirmed_absent: True when the remote definitively
+                    # does not have the trial (404 or phase=failed).  In
+                    # that case we clear launched_trial_id so the schedule
+                    # drops out of the dedup set and the next sync cycle can
+                    # re-schedule the game.
+                    confirmed_absent = False
+                    for attempt in range(18):  # up to ~3 minutes (18 × 10s)
+                        await asyncio.sleep(10)
+                        if self._shutdown_event.is_set():
+                            break
+                        try:
+                            async with self._http_session.get(
+                                status_url,
+                                timeout=_aiohttp.ClientTimeout(total=10),
+                            ) as resp:
+                                if resp.status == 200:
+                                    data = await resp.json()
+                                    phase = data.get("phase", "")
+                                    LOGGER.info(
+                                        "Poll %d: trial '%s' on '%s' phase=%s",
+                                        attempt + 1,
+                                        trial_id,
+                                        target_peer.server_id,
+                                        phase,
+                                    )
+                                    if phase in (
+                                        "pending",
+                                        "starting",
+                                        "running",
+                                        "stopped",
+                                        "completed",
+                                    ):
+                                        poll_ok = True
+                                        break
+                                    if phase == "failed":
+                                        confirmed_absent = True
+                                        break
+                                elif resp.status == 404:
+                                    # Trial doesn't exist on remote — submission
+                                    # was never received.
+                                    confirmed_absent = True
+                                    LOGGER.info(
+                                        "Poll %d: trial '%s' not found on '%s'",
+                                        attempt + 1,
+                                        trial_id,
+                                        target_peer.server_id,
+                                    )
+                                    break
+                        except Exception as poll_err:
+                            LOGGER.debug(
+                                "Poll %d failed for '%s': %s",
+                                attempt + 1,
+                                trial_id,
+                                poll_err,
+                            )
+
+                    if not poll_ok:
+                        scheduled.phase = ScheduledTrialPhase.FAILED
+                        scheduled.error = (
+                            f"Remote submission to '{target_peer.server_id}' "
+                            f"unconfirmed after polling"
+                        )
+                        if confirmed_absent:
+                            # Remote definitively does not have this trial.
+                            # Clear launched_trial_id so the schedule leaves
+                            # the dedup set, allowing the next sync cycle to
+                            # re-schedule this game.
+                            scheduled.launched_trial_id = None
+                        # else: ambiguous — keep launched_trial_id set so
+                        # the schedule stays in dedup (safe against dups).
+                        self._persist()
+                        LOGGER.error(
+                            "Remote submission of '%s' to '%s' could not be "
+                            "confirmed — marking as failed (retryable=%s)",
+                            trial_id,
+                            target_peer.server_id,
+                            confirmed_absent,
+                        )
+                        return
+
+                LOGGER.info(
+                    "Submitted trial '%s' to remote peer '%s'",
+                    trial_id,
+                    target_peer.server_id,
+                )
             else:
                 # Local submission — build the spec on this server
                 try:
