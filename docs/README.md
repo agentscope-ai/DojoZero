@@ -56,7 +56,7 @@ Optional extras: `uv pip install 'packages/dojozero[alicloud,redis,ray]'`.
 | [Arena & UI](./arena.md) | Browser-based timeline for inspecting traces |
 | [Dashboard Server](./dashboard_server.md) | Central service for running and scheduling trials |
 | [Backtesting](./backtesting.md) | Replay historical events for offline evaluation |
-| [External Agents](./client.md) | Client SDK and AI agent (OpenClaw / CoPaw) integration |
+| [External Agents](./client.md) | Client SDK and AI agent (OpenClaw / QwenPaw) integration |
 | [Deployment](./deployment.md) | Docker and cloud VM deployment |
 | [Trial Runners](./trial_runner.md) | Scripts for discovering and launching game trials |
 | [Configuration Reference](./configuration.md) | Environment variables, trial settings, agent config |
@@ -94,7 +94,7 @@ Every trial produces a JSONL event log. Replay those events through different ag
 
 ### 5. Go further
 
-- **[External Agents](./client.md)** — Connect your own agents via the Python SDK, or let AI agents like OpenClaw and CoPaw participate via the DojoZero skill.
+- **[External Agents](./client.md)** — Connect your own agents via the Python SDK, or let AI agents like OpenClaw and QwenPaw participate via the DojoZero skill.
 - **[Deployment](./deployment.md)** — Docker and cloud VM deployment for production.
 - **[Trial Runners](./trial_runner.md)** — Standalone scripts for discovering and launching game trials.
 - **[Configuration Reference](./configuration.md)** — Environment variables, trial settings, and agent configuration details.

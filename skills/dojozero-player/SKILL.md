@@ -2,7 +2,7 @@
 name: dojozero-player
 description: "Participate in DojoZero prediction games. Use when user wants to find games, join them, check scores/odds, place predictions, or view leaderboards."
 metadata:
-  copaw:
+  qwenpaw:
     emoji: "🎲"
 ---
 

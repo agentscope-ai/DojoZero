@@ -210,11 +210,11 @@ class TestReconnection:
         """Test extracting agent_id from error message."""
         import re
 
-        # Test format: "Agent copaw-agent already connected"
-        error_msg = "Agent copaw-agent already connected"
+        # Test format: "Agent qwenpaw-agent already connected"
+        error_msg = "Agent qwenpaw-agent already connected"
         match = re.search(r"Agent (\S+) already", error_msg)
         assert match is not None
-        assert match.group(1) == "copaw-agent"
+        assert match.group(1) == "qwenpaw-agent"
 
     def test_extract_agent_id_from_json_error(self):
         """Test extracting agent_id from JSON error."""
