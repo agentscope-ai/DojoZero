@@ -450,6 +450,10 @@ async def _extract_games_from_trials(
 
         # Prefer rich team data from GameInitializeEvent (full TeamIdentity)
         game_init = trial_info.get("game_init")
+        if isinstance(game_init, dict) and not isinstance(
+            game_init, GameInitializeEvent
+        ):
+            game_init = GameInitializeEvent.model_validate(game_init)
         if isinstance(game_init, GameInitializeEvent):
             home_team = _resolve_team_identity(
                 game_init.home_team,
