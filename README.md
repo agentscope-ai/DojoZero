@@ -1,4 +1,4 @@
-![Banner](./media/github_banner_1000px.jpg)
+![Banner](https://img.alicdn.com/imgextra/i2/O1CN01HGH7S928Xx5KrxzB7_!!6000000007943-0-tps-1000-545.jpg)
 
 # DojoZero
 

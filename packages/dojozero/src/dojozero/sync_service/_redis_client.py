@@ -502,11 +502,15 @@ class RedisClient:
     # Hot Data (Leaderboard, Agent Actions, Stats, Games)
     # =========================================================================
 
-    async def get_leaderboard(self, league: str | None = None) -> list[dict[str, Any]]:
+    async def get_leaderboard(
+        self, league: str | None = None, period: str | None = None
+    ) -> list[dict[str, Any]]:
         """Get leaderboard data.
 
         Args:
             league: Optional league filter (e.g., "NBA", "NFL").
+            period: Optional period filter ("7d", "14d", "30d").
+                    None or "all" returns the full leaderboard.
 
         Returns:
             List of leaderboard entries.
@@ -517,6 +521,9 @@ class RedisClient:
             key = f"{self.prefix}hot:leaderboard"
             if league:
                 key = f"{key}:{league.upper()}"
+            effective_period = period if period and period != "all" else None
+            if effective_period:
+                key = f"{key}:period:{effective_period}"
             data = await self._client.get(key)
             return json.loads(data) if data else []
         except Exception as e:
@@ -524,13 +531,18 @@ class RedisClient:
             return []
 
     async def set_leaderboard(
-        self, data: list[dict[str, Any]], league: str | None = None
+        self,
+        data: list[dict[str, Any]],
+        league: str | None = None,
+        period: str | None = None,
     ) -> None:
         """Set leaderboard data.
 
         Args:
             data: List of leaderboard entries.
             league: Optional league filter.
+            period: Optional period filter ("7d", "14d", "30d").
+                    None or "all" sets the full leaderboard.
         """
         if not self._connected:
             return
@@ -538,6 +550,9 @@ class RedisClient:
             key = f"{self.prefix}hot:leaderboard"
             if league:
                 key = f"{key}:{league.upper()}"
+            effective_period = period if period and period != "all" else None
+            if effective_period:
+                key = f"{key}:period:{effective_period}"
             await self._client.setex(key, self.default_ttl, json.dumps(data))
         except Exception as e:
             LOGGER.error("Failed to set leaderboard: %s", e)
@@ -692,6 +707,38 @@ class RedisClient:
         except Exception as e:
             LOGGER.error("Failed to set live trials: %s", e)
 
+    async def get_agent_bets_index(self) -> dict[str, list[dict[str, Any]]] | None:
+        """Get agent bets index (agent_id -> list of bet records).
+
+        Returns:
+            Dict mapping agent_id to list of bet record dicts, or None if not cached.
+        """
+        if not self._connected:
+            return None
+        try:
+            data = await self._client.get(f"{self.prefix}hot:agent_bets_index")
+            return json.loads(data) if data else None
+        except Exception as e:
+            LOGGER.warning("Failed to get agent_bets_index: %s", e)
+            return None
+
+    async def set_agent_bets_index(self, data: dict[str, list[dict[str, Any]]]) -> None:
+        """Set agent bets index.
+
+        Args:
+            data: Dict mapping agent_id to list of bet record dicts.
+        """
+        if not self._connected:
+            return
+        try:
+            await self._client.setex(
+                f"{self.prefix}hot:agent_bets_index",
+                self.default_ttl,
+                json.dumps(_make_json_serializable(data)),
+            )
+        except Exception as e:
+            LOGGER.error("Failed to set agent_bets_index: %s", e)
+
     # =========================================================================
     # Batch Operations (for Sync Service)
     # =========================================================================
@@ -701,7 +748,7 @@ class RedisClient:
         trials_list: list[str],
         trial_info: dict[str, dict[str, Any]],
         agent_info: dict[str, dict[str, Any]],
-        spans_by_trial: dict[str, list[dict[str, Any]]],
+        spans_by_trial: dict[str, list[Any]],
         leaderboard: list[dict[str, Any]],
         leaderboard_by_league: dict[str, list[dict[str, Any]]],
         agent_actions: list[dict[str, Any]],
@@ -712,11 +759,18 @@ class RedisClient:
         games_by_league: dict[str, dict[str, Any]],
         live_trials: list[str],
         sync_time: datetime,
+        agent_bets_index: dict[str, list[dict[str, Any]]] | None = None,
+        leaderboard_by_period: dict[str, list[dict[str, Any]]] | None = None,
+        leaderboard_by_league_period: dict[str, list[dict[str, Any]]] | None = None,
     ) -> bool:
-        """Sync all data to Redis atomically using pipeline.
+        """Sync all data to Redis.
 
-        This is the main method used by Sync Service to write all data.
-        Uses Redis pipeline for atomic operation.
+        Writes spans in small batches (serialize + write + discard) to avoid
+        OOM, then writes all other lightweight data atomically via pipeline.
+
+        Args:
+            spans_by_trial: Accepts either raw SpanData objects (with to_dict)
+                or pre-serialized dicts. Serialized per-batch to limit memory.
 
         Returns:
             True if successful, False otherwise.
@@ -725,6 +779,31 @@ class RedisClient:
             return False
 
         try:
+            # ---- Phase 1: Write spans in batches to avoid OOM ----
+            SPAN_BATCH_SIZE = 20
+            span_keys = list(spans_by_trial.keys())
+            for i in range(0, len(span_keys), SPAN_BATCH_SIZE):
+                batch_keys = span_keys[i : i + SPAN_BATCH_SIZE]
+                pipe = self._client.pipeline()
+                for tid in batch_keys:
+                    raw_spans = spans_by_trial[tid]
+                    # Support both raw SpanData and pre-serialized dicts
+                    serialized = [
+                        s.to_dict() if hasattr(s, "to_dict") else s for s in raw_spans
+                    ]
+                    pipe.setex(
+                        f"{self.prefix}spans:{tid}",
+                        self.default_ttl,
+                        json.dumps(_make_json_serializable(serialized)),
+                    )
+                await pipe.execute()
+            LOGGER.info(
+                "Wrote spans to Redis: %d trials in %d batches",
+                len(span_keys),
+                (len(span_keys) + SPAN_BATCH_SIZE - 1) // SPAN_BATCH_SIZE,
+            )
+
+            # ---- Phase 2: Write everything else in one pipeline ----
             pipe = self._client.pipeline()
 
             # Trials list
@@ -752,14 +831,7 @@ class RedisClient:
             if agent_info:
                 pipe.expire(agent_info_key, self.default_ttl)
 
-            # Spans (per trial) - ensure nested objects are serializable
-            for tid, spans in spans_by_trial.items():
-                serializable_spans = _make_json_serializable(spans)
-                pipe.setex(
-                    f"{self.prefix}spans:{tid}",
-                    self.default_ttl,
-                    json.dumps(serializable_spans),
-                )
+            # (Spans already written in Phase 1 above)
 
             # Hot data - global (ensure all nested objects are serializable)
             pipe.setex(
@@ -795,6 +867,22 @@ class RedisClient:
                     self.default_ttl,
                     json.dumps(_make_json_serializable(data)),
                 )
+            # Hot data - period leaderboards (global + per-league)
+            if leaderboard_by_period:
+                for period, data in leaderboard_by_period.items():
+                    pipe.setex(
+                        f"{self.prefix}hot:leaderboard:period:{period}",
+                        self.default_ttl,
+                        json.dumps(_make_json_serializable(data)),
+                    )
+            if leaderboard_by_league_period:
+                for key, data in leaderboard_by_league_period.items():
+                    # key is "{LEAGUE}:{period}", e.g. "NBA:7d"
+                    pipe.setex(
+                        f"{self.prefix}hot:leaderboard:{key.split(':')[0]}:period:{key.split(':')[1]}",
+                        self.default_ttl,
+                        json.dumps(_make_json_serializable(data)),
+                    )
             for league, data in agent_actions_by_league.items():
                 pipe.setex(
                     f"{self.prefix}hot:agent_actions:{league}",
@@ -812,6 +900,14 @@ class RedisClient:
                     f"{self.prefix}hot:games:{league}",
                     self.default_ttl,
                     json.dumps(_make_json_serializable(data)),
+                )
+
+            # Agent bets index
+            if agent_bets_index is not None:
+                pipe.setex(
+                    f"{self.prefix}hot:agent_bets_index",
+                    self.default_ttl,
+                    json.dumps(_make_json_serializable(agent_bets_index)),
                 )
 
             # Increment version (this signals Arena Server to refresh)

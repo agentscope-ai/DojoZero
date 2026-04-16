@@ -70,6 +70,29 @@ class DojoZeroCLIError(RuntimeError):
     """Raised for CLI usage errors that should exit with status 1."""
 
 
+def _parse_dev_span_start(value: str | None):
+    """Parse arena --span-start: UTC calendar date (YYYY-MM-DD) or ISO-8601 datetime."""
+    from datetime import datetime, timezone
+
+    if value is None or not str(value).strip():
+        return None
+    s = str(value).strip()
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    try:
+        iso = s.replace("Z", "+00:00") if s.endswith("Z") else s
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError as e:
+        raise DojoZeroCLIError(
+            f"Invalid --span-start {value!r} (use YYYY-MM-DD or ISO-8601)"
+        ) from e
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dojo0",
@@ -461,6 +484,33 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Path to built static assets to serve (optional).",
+    )
+    arena_parser.add_argument(
+        "--no-redis",
+        action="store_true",
+        default=False,
+        help="Skip Redis, load directly from SLS (dev mode).",
+    )
+    arena_parser.add_argument(
+        "--lookback-days",
+        dest="lookback_days",
+        type=int,
+        default=None,
+        help="Override lookback period in days (e.g., 3 for fast dev startup).",
+    )
+    arena_parser.add_argument(
+        "--trial-ids",
+        dest="trial_ids",
+        nargs="+",
+        default=None,
+        help="Load only specific trial IDs (dev mode: per-trial trace fetch, no Redis cache fill).",
+    )
+    arena_parser.add_argument(
+        "--span-start",
+        dest="span_start",
+        default=None,
+        metavar="DATE",
+        help="With --trial-ids: lower bound for span queries (YYYY-MM-DD or ISO-8601, UTC).",
     )
 
     # Sync Service command
@@ -2628,10 +2678,47 @@ async def _arena_command(args: argparse.Namespace) -> int:
     trace_query_endpoint = args.trace_query_endpoint
     static_dir = getattr(args, "static_dir", None)
     service_name = args.service_name
+    no_redis = getattr(args, "no_redis", False)
+    lookback_days = getattr(args, "lookback_days", None)
+    trial_ids = getattr(args, "trial_ids", None)
+    span_start_raw = getattr(args, "span_start", None)
+    if span_start_raw and not trial_ids:
+        raise DojoZeroCLIError("--span-start requires --trial-ids")
+    dev_span_start = _parse_dev_span_start(span_start_raw) if span_start_raw else None
+
+    # Override config with CLI lookback-days if specified
+    if lookback_days is not None:
+        if config is None:
+            from dojozero.arena_server._config import CacheConfig as _CC
+
+            config = ArenaServerConfig(cache=_CC(trials_lookback_days=lookback_days))
+        else:
+            config.cache.trials_lookback_days = lookback_days
+
+    # Determine redis_url (--trial-ids uses per-trial SLS/Jaeger fetch; Redis disabled in app)
+    # --no-redis without --trial-ids means pure trace-store mode
+    redis_url: str | None = None
+    if no_redis and not trial_ids:
+        os.environ.pop("DOJOZERO_REDIS_URL", None)
+    else:
+        redis_url = os.getenv("DOJOZERO_REDIS_URL")
 
     LOGGER.info("Starting Arena Server at http://%s:%d", host, port)
-    LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_query_endpoint)
+    if trace_backend == "sls":
+        LOGGER.info("Trace backend: SLS (service_name=%s)", service_name)
+    else:
+        LOGGER.info("Trace backend: Jaeger (endpoint: %s)", trace_query_endpoint)
     LOGGER.info("WebSocket: ws://%s:%d/ws/trials/{trial_id}/stream", host, port)
+    if no_redis:
+        LOGGER.info("Redis: DISABLED (--no-redis, direct SLS mode)")
+    elif redis_url:
+        LOGGER.info("Redis: %s", redis_url)
+    if lookback_days is not None:
+        LOGGER.info("Lookback days: %d", lookback_days)
+    if trial_ids:
+        LOGGER.info("Dev trial IDs: %s", trial_ids)
+    if dev_span_start is not None:
+        LOGGER.info("Dev span start (UTC): %s", dev_span_start.isoformat())
     if static_dir:
         LOGGER.info("Static files: %s", static_dir)
 
@@ -2643,6 +2730,9 @@ async def _arena_command(args: argparse.Namespace) -> int:
         trace_query_endpoint=trace_query_endpoint,
         static_dir=static_dir,
         service_name=service_name,
+        redis_url=redis_url,
+        dev_trial_ids=trial_ids,
+        dev_span_start=dev_span_start,
     )
     return 0
 
