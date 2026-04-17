@@ -114,7 +114,26 @@ agent.input ─┐
                                 └─ …
 ```
 
-### 5.5 Configuration
+### 5.5 SLS field-size constraints
+
+The SLS exporter (`SLSLogExporter` in `core/_tracing.py`, ~lines 2033-2334) flattens span tags/logs into one log entry, with all values stringified. There is **no truncation today**. Relevant SLS service limits:
+
+| Limit | Value | Source |
+|---|---|---|
+| `PutLogs` request total | 10 MB | [Aliyun docs — Limits](https://www.alibabacloud.com/help/en/sls/product-overview/limits-1) |
+| Single log-record value (per field) | ~1 MB (service-side; not enforced by SDK) | Aliyun docs (referenced) |
+
+Implications:
+
+- A single LLM call can easily produce >100 KB of message content (long event-history user messages + tool results). One conservative serialized blob per message (`gen_ai.user.message` etc.) is fine well under 1 MB, but a multi-turn agent over a long trial could push a single span past the per-record budget if all messages are repeated on every call.
+- We don't need offloading in phase 1, but we do need:
+  - A per-message truncation cap (default 256 KB chars; cheap to bump if needed).
+  - A per-span hard cap (default 4 MB total content) — if exceeded, drop oldest non-system messages first and set `gen_ai.truncated=true` with `gen_ai.truncated.dropped_messages=N`.
+  - Truncated content events get `gen_ai.truncated=true` and `gen_ai.original_length=<chars>`.
+
+Object-storage offloading (`gen_ai.prompt.ref` pointing at OSS) is deferred to phase 2 and only triggered if real trials exceed the per-span cap regularly.
+
+### 5.6 Configuration
 
 New env vars (standard `DOJOZERO_` prefix, plumbed via existing Pydantic settings):
 
@@ -122,7 +141,8 @@ New env vars (standard `DOJOZERO_` prefix, plumbed via existing Pydantic setting
 |---|---|---|
 | `DOJOZERO_TRACE_GENAI` | `true` | Master switch for `chat` spans |
 | `DOJOZERO_TRACE_GENAI_CONTENT` | `true` | If false, emit span + metadata but **omit** message/tool content |
-| `DOJOZERO_TRACE_GENAI_CONTENT_MAX_CHARS` | `32768` | Per-message content truncation cap; truncated events get a `gen_ai.truncated=true` attribute and original length |
+| `DOJOZERO_TRACE_GENAI_CONTENT_MAX_CHARS` | `262144` (256 KB) | Per-message content truncation cap (chosen against SLS ~1 MB/field limit) |
+| `DOJOZERO_TRACE_GENAI_SPAN_MAX_CHARS` | `4194304` (4 MB) | Per-span total content cap; oldest non-system messages dropped beyond this |
 | `DOJOZERO_TRACE_GENAI_INCLUDE_TOOLS` | `true` | Whether to attach `gen_ai.request.tools` |
 
 Also honor the upstream OTel standard when present: `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (`true`/`false`) overrides `DOJOZERO_TRACE_GENAI_CONTENT` if set.
@@ -131,7 +151,7 @@ Document these in `docs/tracing.md` §4 alongside the existing span taxonomy.
 
 ## 6. Implementation plan
 
-1. **Add `TracingChatModel`** in `core/_tracing.py` (or a new `core/_genai_tracing.py`) — a generic wrapper that conforms to AgentScope's `ChatModelBase` protocol, forwarding all methods and emitting spans. Start with non-streaming; add streaming (`__call__` yielding chunks) in a follow-up, aggregating chunks into the final message for the span.
+1. **Add `TracingChatModel`** in `core/_tracing.py` (or a new `core/_genai_tracing.py`) — a generic wrapper that conforms to AgentScope's `ChatModelBase` protocol, forwarding all methods and emitting spans. Constructed via a `wrap_model_for_tracing(model, trial_id, actor_id)` factory. **Non-streaming only.** Streaming is intentionally out of scope; eliminating any remaining streaming use is tracked as a separate issue.
 2. **Extend `SpanData`** with an optional `events: list[SpanEvent]` field (name, timestamp, attrs). Map to OTLP span events in `OTelSpanExporter` and to `logs` in `SLSLogExporter`.
 3. **Promote `agent.response` to a context-managed span** in `BettingAgent._process_events` (`betting/_agent.py:877`). Keep all existing tags. This only changes lifecycle, not payload.
 4. **Wire the wrapper** in `BettingAgent.__init__` (`betting/_agent.py:321`) — wrap `model` before constructing `ReActAgent`.
@@ -141,17 +161,16 @@ Document these in `docs/tracing.md` §4 alongside the existing span taxonomy.
    - Unit: `TracingChatModel` emits a span with the expected GenAI attributes/events for a mocked model; respects content flag; truncates long content; records exceptions on failure.
    - Integration (marked `@pytest.mark.integration`): run a short trial against a stub model and assert that for each agent turn we see `agent.response` with ≥1 `chat` child carrying `gen_ai.usage.*`.
 
-## 7. Open questions
+## 7. Resolved decisions
 
-1. **Streaming:** AgentScope streaming yields chunks; do we open the span at first chunk and close at end-of-stream, or at call return? Proposal: open at call, record token events as `gen_ai.choice.delta` events (optional), close at end.
-2. **Tool-call fan-out inside one `chat`:** OpenAI returns multiple tool calls in one assistant message. Semconv represents this in the `gen_ai.choice` event; no extra spans per tool call. Matches our §5.4 model.
-3. **Message content size in SLS:** SLS log-field size limits may force per-message chunking or external storage with a pointer. Decide after measuring real trials. For now, rely on the `MAX_CHARS` truncation.
-4. **Redaction of system prompt:** some users may consider the system prompt proprietary. Current proposal: governed by the same `DOJOZERO_TRACE_GENAI_CONTENT` flag. Do we need a separate `_SYSTEM` flag?
-5. **Back-compat for Arena UI:** Arena renders `agent.response` today. Adding `chat` children should be a no-op for Arena, but we should verify the trace view doesn't break with a span that has no Dojozero-specific tags.
-6. **Naming of the wrapped-model factory:** `wrap_model_for_tracing` vs a decorator `@traced_chat_model`. Either works; propose the factory for explicitness.
+- **Streaming**: out of scope. Eliminating remaining streaming use is its own issue.
+- **Tool-call fan-out inside one `chat`**: no extra spans per tool call; modeled via the assistant message's `tool_calls` and `gen_ai.choice` event per semconv.
+- **System-prompt redaction**: not needed — all traced agents are built-in. Single `DOJOZERO_TRACE_GENAI_CONTENT` flag governs all content.
+- **Arena UI**: do **not** add a trace view for `chat` spans in this phase. New spans are background-only; Arena keeps rendering `agent.response` as before.
+- **Factory naming**: use `wrap_model_for_tracing(model, trial_id, actor_id)`.
 
 ## 8. Rollout
 
 - Phase 1 (this issue): `TracingChatModel`, span-event extension, wiring in `BettingAgent`, docs, tests. Flag on by default.
-- Phase 2: streaming support, SLS-side flattening review, optional upload of large prompts to object storage with a `gen_ai.prompt.ref` pointer.
+- Phase 2: object-storage offload (`gen_ai.prompt.ref`) if SLS per-span budget proves tight in real trials.
 - Phase 3: apply to any non-betting agents (sample agents, future `AgentGroup`) once the shape is stable.
