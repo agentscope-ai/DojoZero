@@ -133,7 +133,35 @@ Implications:
 
 Object-storage offloading (`gen_ai.prompt.ref` pointing at OSS) is deferred to phase 2 and only triggered if real trials exceed the per-span cap regularly.
 
-### 5.6 Configuration
+### 5.6 Arena read-path projection
+
+`chat` spans will be substantially larger than today's spans. Arena does not render them (§7) and should not pay to read them.
+
+Both trace readers in `core/_tracing.py` already accept an `operation_names` whitelist (Jaeger reader ~`:294-392` builds `&operation=...`; SLS reader ~`:760-895` ORs `_operation_name:"..."` clauses). Neither backend supports negation (SLS query is key-value, not SQL; Jaeger tag filter is conjunctive equality), so projection must be a **whitelist**, not a blacklist of `chat`.
+
+Today the whitelist path is used only by `arena_server/_utils.py:49` for trial-info extraction. The two hot paths that pull all spans and rely on a post-fetch `CategoryFilter` get changed:
+
+- `arena_server/_endpoints.py:712` — `/ws/trials/{trial_id}/stream`
+- `arena_server/_endpoints.py:955` — `/ws/trials/{trial_id}/replay` → `_load_replay_data()`
+
+Both will pass an `ARENA_RENDERED_OPERATIONS` whitelist into `get_spans()`. Initial set, derived from current `CategoryFilter` consumers and trial-info extraction:
+
+```
+trial.started, trial.stopped, trial.terminated,
+*.registered,                       # actor lifecycle
+agent.input, agent.response, agent.tool_result,
+broker.bet, broker.*,               # all existing broker.<change_type>
+event.*                             # game_start, odds_update, nba_play, nfl_play, game_initialize, game_result, *_game_update, ...
+```
+
+Wildcard semantics: the Jaeger reader takes a list of explicit names — we expand the wildcards in code by enumerating the registered event types (the `@register_event` registry already gives us the `event.*` set) and the broker change-type enum. SLS does the same enumeration, ORed.
+
+Implications:
+
+- New span types are invisible to arena until explicitly whitelisted. This is the desired property for `chat`. It also means future builtin span kinds need a one-line registry update before arena renders them — accepted trade-off.
+- A debug/offline path that wants `chat` spans (e.g., a CLI to dump full LLM context for a trial) calls `get_spans()` directly with a different whitelist or no filter; not exposed via arena.
+
+### 5.7 Configuration
 
 New env vars (standard `DOJOZERO_` prefix, plumbed via existing Pydantic settings):
 
@@ -156,10 +184,12 @@ Document these in `docs/tracing.md` §4 alongside the existing span taxonomy.
 3. **Promote `agent.response` to a context-managed span** in `BettingAgent._process_events` (`betting/_agent.py:877`). Keep all existing tags. This only changes lifecycle, not payload.
 4. **Wire the wrapper** in `BettingAgent.__init__` (`betting/_agent.py:321`) — wrap `model` before constructing `ReActAgent`.
 5. **Settings**: add the env vars to the existing settings model; read them inside `TracingChatModel`.
-6. **Docs**: update `docs/tracing.md` with the new `chat …` span type and the content-capture flags.
-7. **Tests**:
+6. **Arena projection**: add `ARENA_RENDERED_OPERATIONS` constant in `arena_server/` (built from registered event types + broker change-types + the static agent/trial/lifecycle names). Wire it into the `get_spans()` calls behind `/ws/trials/{trial_id}/stream` (`_endpoints.py:712`) and `/ws/trials/{trial_id}/replay` (`_endpoints.py:955`). The existing trial-info path at `arena_server/_utils.py:49` keeps its narrower whitelist.
+7. **Docs**: update `docs/tracing.md` with the new `chat …` span type and the content-capture flags. Note that arena does not render `chat` spans and that they must be queried directly from the backend (Jaeger UI or SLS) for inspection.
+8. **Tests**:
    - Unit: `TracingChatModel` emits a span with the expected GenAI attributes/events for a mocked model; respects content flag; truncates long content; records exceptions on failure.
-   - Integration (marked `@pytest.mark.integration`): run a short trial against a stub model and assert that for each agent turn we see `agent.response` with ≥1 `chat` child carrying `gen_ai.usage.*`.
+   - Unit: `ARENA_RENDERED_OPERATIONS` excludes `chat` and includes every operation name a current arena view consumes (assert against `CategoryFilter`'s known categories).
+   - Integration (marked `@pytest.mark.integration`): run a short trial against a stub model and assert that (a) for each agent turn we see `agent.response` with ≥1 `chat` child carrying `gen_ai.usage.*`, and (b) the arena WS-stream payload for the same trial contains zero `chat` spans.
 
 ## 7. Resolved decisions
 
