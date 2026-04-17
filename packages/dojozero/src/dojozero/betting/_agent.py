@@ -11,7 +11,9 @@ import json
 import logging
 import time
 from collections import deque
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence, TypedDict, cast
+from uuid import uuid4
 
 from agentscope.agent import ReActAgent
 from agentscope.formatter import FormatterBase
@@ -27,7 +29,12 @@ from dojozero.agents import (
     create_toolkit,
 )
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
-from dojozero.core._tracing import create_span_from_event, emit_span
+from dojozero.core._genai_tracing import (
+    reset_parent_span_id,
+    set_parent_span_id,
+    wrap_model_for_tracing,
+)
+from dojozero.core._tracing import SpanData, create_span_from_event, emit_span
 from dojozero.betting._config import MEMORY_SUMMARY_PROMPT
 from dojozero.data._models import (
     BaseGameUpdateEvent,
@@ -318,11 +325,16 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         event_formatter: EventFormatter | None = None,
     ) -> None:
         super().__init__(actor_id, trial_id)
+        # Wrap the model so each LLM call emits an OTel GenAI span (see
+        # core/_genai_tracing.py). No-op if DOJOZERO_TRACE_GENAI=false.
+        traced_model = wrap_model_for_tracing(
+            model, trial_id=trial_id, actor_id=actor_id
+        )
         # Create internal ReActAgent for LLM reasoning
         self._react_agent = ReActAgent(
             name=name,
             sys_prompt=sys_prompt,
-            model=model,
+            model=traced_model,
             formatter=formatter,
             toolkit=toolkit or Toolkit(),
             memory=InMemoryMemory(),
@@ -774,11 +786,21 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         )
         emit_span(span)
 
-    def _emit_response_span(self, message: AgentResponseMessage) -> None:
+    def _emit_response_span(
+        self,
+        message: AgentResponseMessage,
+        *,
+        span_id: str,
+        start_us: int,
+        duration_us: int,
+    ) -> None:
         """Emit a span for agent response to the OTel exporter.
 
         Args:
             message: Structured agent response message (includes bet fields if present)
+            span_id: Pre-allocated span id (shared with chat-span parenting)
+            start_us: Span start time in microseconds since epoch
+            duration_us: Span duration in microseconds
         """
         # Build tags from message, excluding None values (e.g., empty bet fields)
         tags = message.model_dump(exclude_none=True)
@@ -787,11 +809,17 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         if "cot_steps" in tags:
             tags["cot_steps"] = json.dumps(tags["cot_steps"])
 
-        span = create_span_from_event(
-            trial_id=self.trial_id,
-            actor_id=self.actor_id,
+        tags["actor.id"] = self.actor_id
+        tags["dojozero.trial.id"] = self.trial_id
+
+        span = SpanData(
+            trace_id=self.trial_id,
+            span_id=span_id,
             operation_name="agent.response",
-            extra_tags=tags,
+            start_time=start_us,
+            duration=duration_us,
+            parent_span_id=None,
+            tags=tags,
         )
         emit_span(span)
 
@@ -939,8 +967,22 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         memory_before = await self.memory.get_memory()
         memory_before_dicts = [m.to_dict() for m in memory_before]
 
-        # Call agent
-        response = await self._react_agent(msg)
+        # Pre-allocate the agent.response span_id so chat spans emitted by the
+        # ReActAgent's LLM calls can link to it as parent. See
+        # core/_genai_tracing.py.
+        agent_response_span_id = uuid4().hex[:16]
+        response_start = datetime.now(timezone.utc)
+        response_start_us = int(response_start.timestamp() * 1_000_000)
+        response_start_mono = time.monotonic()
+        parent_token = set_parent_span_id(agent_response_span_id)
+
+        try:
+            # Call agent
+            response = await self._react_agent(msg)
+        finally:
+            reset_parent_span_id(parent_token)
+
+        response_duration_us = int((time.monotonic() - response_start_mono) * 1_000_000)
 
         # Capture memory state AFTER agent call
         memory_after = await self.memory.get_memory()
@@ -980,7 +1022,12 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
                 # Bet fields - None if no bet, otherwise populated from bet dict
                 **(bet or {}),
             )
-            self._emit_response_span(response_message)
+            self._emit_response_span(
+                response_message,
+                span_id=agent_response_span_id,
+                start_us=response_start_us,
+                duration_us=response_duration_us,
+            )
         # Compact memory for next iteration when context becomes too large
         if (
             self._estimate_memory_tokens(memory_after_dicts)

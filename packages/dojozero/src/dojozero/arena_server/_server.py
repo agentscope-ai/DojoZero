@@ -90,6 +90,7 @@ from dojozero.arena_server._utils import (
     _compute_leaderboard,
     _compute_leaderboard_from_spans,
     _load_replay_data,
+    ARENA_RENDERED_OPERATIONS,
     TRIAL_INFO_OPERATION_NAMES,
     trial_id_for_span_grouping,
 )
@@ -743,7 +744,11 @@ class BackgroundRefresher:
             tid: str, span_start: datetime | None
         ) -> tuple[str, list[SpanData]]:
             async with sem:
-                spans = await self.trace_reader.get_spans(tid, start_time=span_start)
+                spans = await self.trace_reader.get_spans(
+                    tid,
+                    start_time=span_start,
+                    operation_names=ARENA_RENDERED_OPERATIONS,
+                )
                 return tid, spans
 
         if is_initial or self._last_span_fetch_time is None:
@@ -1371,7 +1376,9 @@ class BackgroundRefresher:
 
         # Fallback to SLS (slow path)
         if not spans:
-            spans = await self.trace_reader.get_spans(trial_id)
+            spans = await self.trace_reader.get_spans(
+                trial_id, operation_names=ARENA_RENDERED_OPERATIONS
+            )
 
         existing = self.cache.get_trial_details(trial_id)
 

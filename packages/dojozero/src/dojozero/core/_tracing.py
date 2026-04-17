@@ -1955,6 +1955,42 @@ class OTelSpanExporter:
                             span.set_attribute(key, value)
                         else:
                             span.set_attribute(key, str(value))
+                # Export span events (Jaeger-style log entries). Each entry has
+                # a "fields" list with a "event" field naming the event plus
+                # arbitrary attribute fields.
+                for log in span_data.logs:
+                    if not isinstance(log, dict):
+                        continue
+                    fields = log.get("fields", [])
+                    ts = log.get("timestamp")
+                    event_name = ""
+                    attrs: dict[str, Any] = {}
+                    for field_entry in fields:
+                        if not isinstance(field_entry, dict):
+                            continue
+                        k = field_entry.get("key", "")
+                        v = field_entry.get("value")
+                        if k == "event":
+                            event_name = str(v) if v is not None else ""
+                        elif k:
+                            if isinstance(v, (str, int, float, bool)):
+                                attrs[k] = v
+                            elif v is None:
+                                continue
+                            else:
+                                attrs[k] = json.dumps(
+                                    v, default=str, ensure_ascii=False
+                                )
+                    if not event_name:
+                        continue
+                    try:
+                        span.add_event(
+                            name=event_name,
+                            attributes=attrs,
+                            timestamp=int(ts) * 1000 if ts else None,
+                        )
+                    except (ValueError, TypeError):
+                        pass
                 span.set_status(
                     OTelSpanExporter._Status(OTelSpanExporter._StatusCode.OK)
                 )
@@ -2300,6 +2336,17 @@ class SLSLogExporter:
             ):
                 flat_key = f"_{flat_key}"
             log_entry[flat_key] = value
+
+        # Serialize span events (logs) as a single JSON field. SLS query syntax
+        # doesn't index nested structures well, but this keeps the data
+        # recoverable for offline analysis.
+        if span_data.logs:
+            try:
+                log_entry["_events"] = json.dumps(
+                    span_data.logs, default=str, ensure_ascii=False
+                )
+            except (TypeError, ValueError):
+                log_entry["_events"] = str(span_data.logs)
 
         # Non-blocking put on queue
         try:

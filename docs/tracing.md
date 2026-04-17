@@ -62,3 +62,27 @@ DojoZero exports tracing data as a unified stream of spans. In Jaeger (and in Ar
 - **Agent message spans (`agent.*`)**: one span per agent conversation/message for the agent’s streams. Operation names include `agent.input` (user/system input), `agent.response` (assistant output), and `agent.tool_result` (system/tool results). These spans include tags such as `event.stream_id`, `event.role`, `event.name`, `event.content`, and (when present) `event.tool_calls` / `event.tool_call_id`.
 
 You’ll also see **trial lifecycle spans** like `trial.started` / `trial.stopped`, and (for the built-in betting broker) **broker spans** such as `broker.bet` or `broker.<change_type>` with `broker.*` tags describing what happened (amount, selection, probabilities, etc.).
+
+### LLM chat spans (`chat`)
+
+Each LLM call made by a built-in agent emits one additional span following the OpenTelemetry [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
+
+- **Operation name:** `chat`
+- **Parent:** the `agent.response` span for the turn that triggered the call (one `agent.response` may have several `chat` children when the ReAct loop takes multiple steps).
+- **Attributes:** `gen_ai.system` (e.g. `dashscope`, `openai`), `gen_ai.request.model`, `gen_ai.request.temperature`/`.top_p`/`.max_tokens`/..., `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reasons`, `gen_ai.request.tools` (JSON).
+- **Events (OTLP) / `_events` field (SLS):** one event per message — `gen_ai.system.message`, `gen_ai.user.message`, `gen_ai.assistant.message`, `gen_ai.tool.message` — plus a final `gen_ai.choice` event for the response. Each event carries a `content` attribute; on truncation it also carries `gen_ai.truncated=true` and `gen_ai.original_length`.
+
+**Arena does not render `chat` spans.** They are background-only and must be inspected directly in the Jaeger UI (search for `operation=chat` under `dojozero.trial.id=<trial>`) or in SLS (`_operation_name:chat AND _trace_id:<trial>`). To keep arena read cost low, its span queries pass an explicit whitelist of rendered operation names, so `chat` spans are filtered out server-side.
+
+### Configuration (LLM chat spans)
+
+Message content can be verbose; these env vars control capture and size:
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `DOJOZERO_TRACE_GENAI` | `true` | Master switch for `chat` spans |
+| `DOJOZERO_TRACE_GENAI_CONTENT` | `true` | If `false`, emit span shell + metadata but omit message/tool content |
+| `DOJOZERO_TRACE_GENAI_CONTENT_MAX_CHARS` | `262144` | Per-message content truncation cap (chosen against the ~1 MB SLS per-field limit) |
+| `DOJOZERO_TRACE_GENAI_SPAN_MAX_CHARS` | `4194304` | Per-span total content cap; oldest non-system messages dropped above this |
+| `DOJOZERO_TRACE_GENAI_INCLUDE_TOOLS` | `true` | Whether to attach `gen_ai.request.tools` |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | unset | OTel-standard override for `DOJOZERO_TRACE_GENAI_CONTENT` |

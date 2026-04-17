@@ -1,7 +1,7 @@
 # Include LLM Chat Context in OTel Output
 
 **Issue:** [#53](https://github.com/agentscope-ai/DojoZero/issues/53) — `[agent] include model context (e.g., chat messages for user and assistants) in OTel output`
-**Status:** Draft
+**Status:** Implemented (phase 1)
 **Date:** 2026-04-17
 
 ## 1. Problem
@@ -204,3 +204,37 @@ Document these in `docs/tracing.md` §4 alongside the existing span taxonomy.
 - Phase 1 (this issue): `TracingChatModel`, span-event extension, wiring in `BettingAgent`, docs, tests. Flag on by default.
 - Phase 2: object-storage offload (`gen_ai.prompt.ref`) if SLS per-span budget proves tight in real trials.
 - Phase 3: apply to any non-betting agents (sample agents, future `AgentGroup`) once the shape is stable.
+
+## 9. Implementation notes (phase 1, landed)
+
+Delta from the above design and the key file:line anchors.
+
+### What landed
+
+- `packages/dojozero/src/dojozero/core/_genai_tracing.py` — new module: env-driven settings (`genai_*_enabled`, `genai_max_chars_per_*`), `_current_parent_span_id` contextvar, `make_span_event`, `TracingChatModel` wrapper, `wrap_model_for_tracing` factory.
+- `packages/dojozero/src/dojozero/core/_tracing.py`:
+  - `OTelSpanExporter.export_span` now translates `SpanData.logs` → OTel `span.add_event(name, attributes, timestamp)`.
+  - `SLSLogExporter.export_span` serializes `span_data.logs` as a single JSON field `_events`.
+- `packages/dojozero/src/dojozero/betting/_agent.py`:
+  - `BettingAgent.__init__` wraps the model via `wrap_model_for_tracing(...)` before handing it to `ReActAgent`.
+  - `_process_events` pre-allocates the `agent.response` `span_id`, sets the contextvar around `await self._react_agent(msg)`, and passes `span_id`/`start_us`/`duration_us` into `_emit_response_span`.
+  - `_emit_response_span` now builds `SpanData` directly (instead of `create_span_from_event` which generates its own id), accepting the pre-allocated span id/timing.
+- `packages/dojozero/src/dojozero/arena_server/_utils.py` — new `ARENA_RENDERED_OPERATIONS`, enumerated from the `deserialize_span` dispatch table plus `EventTypes`. Applied to the replay fallback `get_spans(trial_id)` call.
+- `packages/dojozero/src/dojozero/arena_server/_server.py` — the whitelist is passed into the dev-mode background refresher (`_fetch_trial`) and the on-demand trial-details refresher (`refresh_trial_details_on_demand`). Redis cache path is left untouched because `deserialize_span` already drops unknown operations on read.
+- `docs/tracing.md` — new `chat` span section + configuration table.
+- `packages/dojozero/tests/test_genai_tracing.py` — 11 tests covering success/error/parent/content-flag/truncation/SLS serialization/arena projection.
+
+### Deviations from design
+
+- **SLS events field:** Shipped as `_events` (a JSON-encoded string of the whole `logs` list) rather than per-event fields. Keeps the per-log-record footprint bounded and preserves event ordering. Upgrading to a structured nested format is easy later.
+- **Span-event shape on `SpanData`:** Reused the existing `SpanData.logs: list[dict]` (Jaeger-style `{"timestamp", "fields": [...]}`) rather than adding a new `events` field. Both readers (Jaeger, SLS) already round-trip this shape; adding a new field would require migrating both readers and any callers that inspect `logs`.
+- **Settings:** The repo has no central Pydantic `Settings` class; env vars are read directly in `core/_genai_tracing.py` with typed getters (`_env_bool`, `_env_int`). Matches the pattern used by `core/_credentials.py`.
+- **Stream fallback:** The wrapper handles the `AsyncGenerator[ChatResponse, None]` return type by emitting a degraded span with `gen_ai.streaming=true` and `finish_reasons=["streaming_unsupported"]` and forwarding the generator. This keeps us safe while the separate "remove streaming" issue lands.
+- **Mock-friendly attribute access:** `TracingChatModel.__init__` reads `model_name`/`stream` via `getattr` with fallbacks. `ChatModelBase` declares them as type annotations (not class attributes), so pre-existing tests that used `MagicMock(spec=ChatModelBase)` would otherwise break.
+
+### Verified invariants
+
+- `uv run pytest -q` → 889 passed, 28 skipped, no regressions.
+- `uv run pyright` → clean on all changed files.
+- `uv run ruff check packages/` → clean.
+- `test_arena_projection.test_whitelist_*` — asserts the whitelist covers every operation in `deserialize_span`'s dispatch plus every `EventTypes` value, and excludes `chat`.
