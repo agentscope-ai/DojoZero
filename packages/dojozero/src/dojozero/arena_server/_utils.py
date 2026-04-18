@@ -57,6 +57,42 @@ TRIAL_INFO_OPERATION_NAMES = [
     "event.ncaa_game_update",
 ]
 
+
+def _build_arena_rendered_operations() -> list[str]:
+    """Enumerate every operation name that arena actually renders.
+
+    Used as a server-side whitelist when calling trace readers so that large
+    span types the arena does not render (notably GenAI ``chat`` spans) never
+    reach the UI's read path.
+
+    Derived from the dispatch table in ``core/_models.py::deserialize_span``
+    plus the registered ``EventTypes`` enum and ``BrokerStateChangeType``
+    literals. Must be kept in sync with ``deserialize_span``; the unit test
+    ``test_arena_projection`` asserts the invariant.
+    """
+    from dojozero.data import EventTypes
+
+    ops: list[str] = [
+        "trial.started",
+        "trial.stopped",
+        "trial.terminated",
+        "agent.response",
+        "agent.agent_initialize",
+        "broker.bet",
+        "broker.state_update",
+        "broker.bet_executed",
+        "broker.final_stats",
+    ]
+    # All registered event types (event.*).
+    for item in EventTypes:
+        ops.append(str(item.value))
+    return ops
+
+
+# Arena renders only these operation names. Any span type not listed here (in
+# particular GenAI ``chat`` spans) is filtered out server-side.
+ARENA_RENDERED_OPERATIONS: list[str] = _build_arena_rendered_operations()
+
 # Tag used by DojoZero to correlate all spans for a trial (see TrialOrchestrator, create_span_from_event).
 _TRIAL_ID_TAG = "dojozero.trial.id"
 
@@ -1342,7 +1378,9 @@ async def _load_replay_data(
 
     if not spans:
         try:
-            spans = await trace_reader.get_spans(trial_id)
+            spans = await trace_reader.get_spans(
+                trial_id, operation_names=ARENA_RENDERED_OPERATIONS
+            )
         except Exception as e:
             LOGGER.error("Failed to fetch spans for replay: %s", e)
             return None, "trial_not_found"

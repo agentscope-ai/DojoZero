@@ -1955,6 +1955,42 @@ class OTelSpanExporter:
                             span.set_attribute(key, value)
                         else:
                             span.set_attribute(key, str(value))
+                # Export span events (Jaeger-style log entries). Each entry has
+                # a "fields" list with a "event" field naming the event plus
+                # arbitrary attribute fields.
+                for log in span_data.logs:
+                    if not isinstance(log, dict):
+                        continue
+                    fields = log.get("fields", [])
+                    ts = log.get("timestamp")
+                    event_name = ""
+                    attrs: dict[str, Any] = {}
+                    for field_entry in fields:
+                        if not isinstance(field_entry, dict):
+                            continue
+                        k = field_entry.get("key", "")
+                        v = field_entry.get("value")
+                        if k == "event":
+                            event_name = str(v) if v is not None else ""
+                        elif k:
+                            if isinstance(v, (str, int, float, bool)):
+                                attrs[k] = v
+                            elif v is None:
+                                continue
+                            else:
+                                attrs[k] = json.dumps(
+                                    v, default=str, ensure_ascii=False
+                                )
+                    if not event_name:
+                        continue
+                    try:
+                        span.add_event(
+                            name=event_name,
+                            attributes=attrs,
+                            timestamp=int(ts) * 1000 if ts else None,
+                        )
+                    except (ValueError, TypeError):
+                        pass
                 span.set_status(
                     OTelSpanExporter._Status(OTelSpanExporter._StatusCode.OK)
                 )
@@ -2301,6 +2337,17 @@ class SLSLogExporter:
                 flat_key = f"_{flat_key}"
             log_entry[flat_key] = value
 
+        # Serialize span events (logs) as a single JSON field. SLS query syntax
+        # doesn't index nested structures well, but this keeps the data
+        # recoverable for offline analysis.
+        if span_data.logs:
+            try:
+                log_entry["_events"] = json.dumps(
+                    span_data.logs, default=str, ensure_ascii=False
+                )
+            except (TypeError, ValueError):
+                log_entry["_events"] = str(span_data.logs)
+
         # Non-blocking put on queue
         try:
             self._queue.put_nowait(log_entry)
@@ -2376,6 +2423,54 @@ def emit_span(span_data: SpanData) -> None:
         _global_sls_log_exporter.export_span(span_data)
 
 
+def emit_span_sls_only(span_data: SpanData) -> None:
+    """Emit a span only to the SLS Log exporter (bypassing OTLP).
+
+    Used when the caller has already created a real OTel span via
+    ``tracer.start_as_current_span`` (so OTLP already has it) but still
+    wants a flat SLS log row.
+    """
+    if _global_sls_log_exporter is not None:
+        _global_sls_log_exporter.export_span(span_data)
+
+
+def enable_agentscope_tracing(run_id: str | None = None) -> bool:
+    """Tell AgentScope to emit its built-in OTel GenAI spans.
+
+    Our ``OTelSpanExporter`` already installed a ``TracerProvider`` with a
+    ``BatchSpanProcessor`` / OTLP exporter. AgentScope's ``@trace_llm`` etc.
+    decorators use ``opentelemetry.trace.get_tracer("agentscope", ...)``,
+    which picks up that same provider. All we need to do is flip the flag
+    AgentScope checks (``agentscope._config.trace_enabled``) and optionally
+    align ``run_id`` so ``gen_ai.conversation.id`` correlates with our trial.
+
+    Safe to call when AgentScope is not installed — returns ``False`` silently.
+
+    Args:
+        run_id: Optional value for ``agentscope._config.run_id``. The
+            ``@trace_llm`` decorator stamps this onto every LLM span as
+            ``gen_ai.conversation.id``.
+
+    Returns:
+        ``True`` if AgentScope was found and configured; ``False`` otherwise.
+    """
+    try:
+        from agentscope import _config as _as_config
+    except ImportError:
+        return False
+    try:
+        _as_config.trace_enabled = True
+        if run_id is not None:
+            _as_config.run_id = run_id
+    except Exception:
+        LOGGER.warning(
+            "Failed to enable AgentScope tracing",
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 __all__ = [
     "JaegerTraceReader",
     "SLSTraceReader",
@@ -2387,6 +2482,8 @@ __all__ = [
     "convert_agent_message_to_span",
     "convert_checkpoint_event_to_span",
     "create_span_from_event",
+    "emit_span_sls_only",
+    "enable_agentscope_tracing",
     "create_trace_reader",
     "emit_span",
     "get_otel_exporter",

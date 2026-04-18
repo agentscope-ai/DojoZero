@@ -141,7 +141,3 @@ Pre-commit runs automatically on commit:
 - `pytest` - All tests must pass
 
 Run manually: `uv run pre-commit run --all-files`
-
-## Design Docs
-
-Architecture decisions documented in `design/` with format `YYYY-MM-DD-title.md`
