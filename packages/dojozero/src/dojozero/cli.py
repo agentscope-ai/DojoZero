@@ -1491,7 +1491,9 @@ def _resolve_event_files(
             raw = pattern[6:]
             trial_id, _, run_id = raw.partition("@")
             if not trial_id:
-                raise DojoZeroCLIError(f"Invalid sls:// URL (empty trial id): {pattern}")
+                raise DojoZeroCLIError(
+                    f"Invalid sls:// URL (empty trial id): {pattern}"
+                )
             suffix = f"-{run_id[:8]}" if run_id else ""
             cache_path = sls_cache / f"{trial_id}{suffix}.jsonl"
             if not cache_path.exists():

@@ -118,9 +118,7 @@ def _make_init(
     )
 
 
-def _make_result(
-    game_id: str = "g1", ts: datetime | None = None
-) -> GameResultEvent:
+def _make_result(game_id: str = "g1", ts: datetime | None = None) -> GameResultEvent:
     return GameResultEvent(
         game_id=game_id,
         sport="nba",
@@ -138,9 +136,7 @@ def _make_odds(
     return OddsUpdateEvent(
         game_id=game_id,
         sport="nba",
-        odds=OddsInfo(
-            moneyline=MoneylineOdds(home_odds=home_odds, away_odds=2.1)
-        ),
+        odds=OddsInfo(moneyline=MoneylineOdds(home_odds=home_odds, away_odds=2.1)),
         timestamp=ts or datetime(2026, 4, 1, 13, 0, 0, tzinfo=timezone.utc),
     )
 
@@ -201,8 +197,12 @@ def test_non_event_spans_filtered(tmp_path: Path) -> None:
     root = _root_span("trial-A")
     spans = [
         root,
-        _non_event_span(trace_id="trial-A", parent_span_id=root.span_id, op="games.registered"),
-        _non_event_span(trace_id="trial-A", parent_span_id=root.span_id, op="state.registered"),
+        _non_event_span(
+            trace_id="trial-A", parent_span_id=root.span_id, op="games.registered"
+        ),
+        _non_event_span(
+            trace_id="trial-A", parent_span_id=root.span_id, op="state.registered"
+        ),
         _event_span(event, trace_id="trial-A", parent_span_id=root.span_id),
     ]
     source = SLSEventSource(reader=_FakeReader(spans))
@@ -230,11 +230,15 @@ def test_events_sorted_by_game_timestamp(tmp_path: Path) -> None:
     spans = [
         root,
         _event_span(
-            late, trace_id="trial-A", parent_span_id=root.span_id,
+            late,
+            trace_id="trial-A",
+            parent_span_id=root.span_id,
             start_time_us=1_700_000_100_000_000,
         ),
         _event_span(
-            early, trace_id="trial-A", parent_span_id=root.span_id,
+            early,
+            trace_id="trial-A",
+            parent_span_id=root.span_id,
             start_time_us=1_700_000_200_000_000,
         ),
     ]
@@ -553,6 +557,7 @@ def test_atomic_write_no_partial_file_on_error(
 def test_overwrite_false_reuses_cache(tmp_path: Path) -> None:
     dest = tmp_path / "trial-A.jsonl"
     dest.write_text('{"hello": "cached"}\n')
+
     # Reader that would fail if called.
     class _BoomReader(_FakeReader):
         async def get_spans(self, *args, **kwargs):  # type: ignore[override]
@@ -582,7 +587,11 @@ def test_injected_reader_not_closed(tmp_path: Path) -> None:
 
 
 def test_missing_env_vars_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("DOJOZERO_SLS_PROJECT", "DOJOZERO_SLS_ENDPOINT", "DOJOZERO_SLS_LOGSTORE"):
+    for var in (
+        "DOJOZERO_SLS_PROJECT",
+        "DOJOZERO_SLS_ENDPOINT",
+        "DOJOZERO_SLS_LOGSTORE",
+    ):
         monkeypatch.delenv(var, raising=False)
     source = SLSEventSource()  # No injected reader → tries env.
 
