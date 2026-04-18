@@ -950,21 +950,15 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         response_tags: dict[str, Any] | None = None
         otel_span_id: int = 0
         with tracer.start_as_current_span("agent.response") as otel_span:
+            # Identifiers useful for an error span (before response_tags
+            # overwrites / adds to them on the success path).
             otel_span.set_attribute("actor.id", self.actor_id)
             otel_span.set_attribute("dojozero.trial.id", self.trial_id)
             otel_span.set_attribute("sequence", self._event_count)
-            otel_span.set_attribute("event.stream_id", primary_stream_id)
-            if game_id:
-                otel_span.set_attribute("game.id", game_id)
 
-            try:
-                response = await self._react_agent(msg)
-            except Exception as exc:
-                otel_span.record_exception(exc)
-                otel_span.set_status(
-                    _otel_trace.Status(_otel_trace.StatusCode.ERROR, str(exc))
-                )
-                raise
+            # Let the context manager's __exit__ record exceptions / set
+            # ERROR status automatically if the model call raises.
+            response = await self._react_agent(msg)
 
             # Capture memory state AFTER agent call
             memory_after = await self.memory.get_memory()

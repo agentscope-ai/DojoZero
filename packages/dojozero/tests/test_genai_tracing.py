@@ -36,15 +36,25 @@ class TestEnableAgentScopeTracing:
     def test_flips_trace_enabled(self) -> None:
         from agentscope import _config as as_config
 
+        original = as_config.trace_enabled
         as_config.trace_enabled = False
-        assert enable_agentscope_tracing() is True
-        assert as_config.trace_enabled is True
+        try:
+            assert enable_agentscope_tracing() is True
+            assert as_config.trace_enabled is True
+        finally:
+            as_config.trace_enabled = original
 
     def test_sets_run_id_when_given(self) -> None:
         from agentscope import _config as as_config
 
-        enable_agentscope_tracing(run_id="trial-xyz")
-        assert as_config.run_id == "trial-xyz"
+        original_run_id = as_config.run_id
+        original_trace_enabled = as_config.trace_enabled
+        try:
+            enable_agentscope_tracing(run_id="trial-xyz")
+            assert as_config.run_id == "trial-xyz"
+        finally:
+            as_config.run_id = original_run_id
+            as_config.trace_enabled = original_trace_enabled
 
 
 # ---------------------------------------------------------------------------
