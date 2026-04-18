@@ -1004,9 +1004,7 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
 
             otel_span_id = otel_span.get_span_context().span_id
 
-        response_duration_us = int(
-            (time.monotonic() - response_start_mono) * 1_000_000
-        )
+        response_duration_us = int((time.monotonic() - response_start_mono) * 1_000_000)
 
         if response_tags is not None:
             sls_span = SpanData(
