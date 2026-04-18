@@ -1,8 +1,18 @@
 # Include LLM Chat Context in OTel Output
 
 **Issue:** [#53](https://github.com/agentscope-ai/DojoZero/issues/53) — `[agent] include model context (e.g., chat messages for user and assistants) in OTel output`
-**Status:** Implemented (phase 1)
+**Status:** Implemented — refactored to delegate to AgentScope's built-in tracing
 **Date:** 2026-04-17
+
+> **Refactor note (2026-04-18):** the first implementation built a custom
+> `TracingChatModel` wrapper and a custom GenAI settings layer. During code
+> review it surfaced that [AgentScope already ships
+> `@trace_llm`](https://doc.agentscope.io/tutorial/task_tracing.html) on every
+> concrete `ChatModelBase` subclass, using the *official*
+> `opentelemetry.semconv._incubating.attributes.gen_ai_attributes` constants,
+> capturing messages/tools/usage/finish-reason, and handling streaming —
+> everything we had reimplemented. The custom wrapper was removed. See §10
+> for what we kept, what we deleted, and why.
 
 ## 1. Problem
 
@@ -238,3 +248,64 @@ Delta from the above design and the key file:line anchors.
 - `uv run pyright` → clean on all changed files.
 - `uv run ruff check packages/` → clean.
 - `test_arena_projection.test_whitelist_*` — asserts the whitelist covers every operation in `deserialize_span`'s dispatch plus every `EventTypes` value, and excludes `chat`.
+
+## 10. Refactor (2026-04-18): delegate to AgentScope's built-in tracing
+
+Phase 1 shipped a custom `TracingChatModel` wrapper in
+`core/_genai_tracing.py` (~450 lines). Review revealed AgentScope already
+provides the same capability via
+[`@trace_llm`](https://github.com/agentscope-ai/agentscope/blob/main/src/agentscope/tracing/_trace.py),
+already applied to every concrete `ChatModelBase.__call__` (DashScope,
+OpenAI, Anthropic, Gemini, …). It uses the official OTel GenAI semconv
+module (`opentelemetry.semconv._incubating.attributes.gen_ai_attributes`),
+captures input/output messages + tool definitions + usage + finish reason,
+and handles streaming via `_trace_async_generator_wrapper`.
+
+### What changed
+
+- **Deleted** `packages/dojozero/src/dojozero/core/_genai_tracing.py` and the
+  matching test file wholesale.
+- **Deleted** all `DOJOZERO_TRACE_GENAI*` env vars. Capture semantics now
+  track AgentScope's upstream behavior.
+- **Added** `enable_agentscope_tracing(run_id=None)` in `core/_tracing.py`
+  that flips `agentscope._config.trace_enabled = True` and (optionally) sets
+  `agentscope._config.run_id`. It is called once per `OTelSpanExporter.start()`
+  in both the CLI (`cli.py::_configure_otel_exporter`) and the dashboard
+  server (`dashboard_server/_server.py`). AgentScope's `_get_tracer()` calls
+  `trace.get_tracer("agentscope", ...)` which picks up the exact same
+  `TracerProvider` our exporter already installed, so spans flow through a
+  single BatchSpanProcessor — no duplicate export.
+- **Added** `emit_span_sls_only(span_data)` in `core/_tracing.py`: forwards
+  to the SLS Log exporter only (bypassing OTLP, to avoid double-exporting
+  when the caller already has a real OTel span).
+- **Rewrote** `BettingAgent._process_events` to open `agent.response` as a
+  real context-managed OTel span via `tracer.start_as_current_span(...)`.
+  That makes AgentScope's `chat {model}` spans automatic children through
+  OTel context propagation — no pre-allocated span-id / contextvar dance.
+  After the span closes we mirror it to SLS via `emit_span_sls_only`, using
+  the OTel span's id so the flat log row carries a stable `_span_id`.
+
+### What we kept
+
+- Arena read-path whitelist (`ARENA_RENDERED_OPERATIONS`) is unchanged and
+  still needed — AgentScope's `chat {model}` spans are *not* in it, so the
+  arena WS-stream / replay paths never pay to fetch them.
+- The SLS Log exporter's `_events` JSON-field serialization of
+  `SpanData.logs` stays. It's independent of LLM spans and useful whenever
+  any emitted span carries structured events.
+- The OTLP exporter's `logs → add_event` translation stays for the same
+  reason.
+
+### Trade-offs accepted
+
+- **Message representation:** AgentScope uses JSON-serialized *attributes*
+  (`gen_ai.input.messages`, `gen_ai.output.messages`). Our first pass used
+  per-message *events*. Both are valid under the GenAI semconv; the
+  attribute-based form is what most LLM observability tools expect today.
+- **Size caps / content opt-out:** AgentScope has no content-capture flag.
+  If we need per-message truncation or an opt-out we'll file upstream
+  rather than re-wrap.
+- **SLS flat logstore:** AgentScope's `chat` spans go only through OTLP
+  (which lands in SLS when `--trace-backend sls`), not through our
+  `SLSLogExporter` flat-field logstore. A future span processor could
+  bridge; not needed for phase 1.

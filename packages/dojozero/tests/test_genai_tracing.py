@@ -1,271 +1,112 @@
-"""Tests for GenAI OTel tracing (``core/_genai_tracing.py``).
+"""Tests for LLM/GenAI tracing integration.
 
-Covers the ``TracingChatModel`` wrapper, message/content truncation, content
-capture flag, error paths, span-events export, and the arena projection
-whitelist.
+LLM-level span emission is delegated to AgentScope's built-in ``@trace_llm``
+decorator (see ``agentscope.tracing``). These tests cover the dojozero-side
+integration points:
+
+- ``enable_agentscope_tracing`` flips AgentScope's trace flag and optionally
+  sets ``run_id``.
+- ``emit_span_sls_only`` forwards to the SLS Log exporter without going
+  through the OTLP path again (used by ``BettingAgent.agent.response``).
+- The SLS Log exporter serializes ``SpanData.logs`` as a JSON ``_events``
+  field.
+- The arena read-path whitelist (``ARENA_RENDERED_OPERATIONS``) covers every
+  operation in the ``deserialize_span`` dispatch + every ``EventTypes`` value
+  and excludes the AgentScope-emitted ``chat`` spans.
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import patch
 
-import pytest
-from agentscope.message import TextBlock, ToolUseBlock
-from agentscope.model import ChatModelBase
-from agentscope.model._model_response import ChatResponse
-from agentscope.model._model_usage import ChatUsage
-
-from dojozero.core._genai_tracing import (
-    TracingChatModel,
-    genai_capture_content,
-    genai_max_chars_per_message,
-    reset_parent_span_id,
-    set_parent_span_id,
-    wrap_model_for_tracing,
+from dojozero.core._tracing import (
+    SpanData,
+    emit_span_sls_only,
+    enable_agentscope_tracing,
 )
-from dojozero.core._tracing import SpanData
 
 
 # ---------------------------------------------------------------------------
-# Test helpers
+# AgentScope integration
 # ---------------------------------------------------------------------------
 
 
-class _FakeModel(ChatModelBase):
-    """Minimal ChatModelBase stand-in; returns whatever response is preloaded."""
+class TestEnableAgentScopeTracing:
+    def test_flips_trace_enabled(self) -> None:
+        from agentscope import _config as as_config
 
-    def __init__(
-        self,
-        response: ChatResponse | None = None,
-        error: Exception | None = None,
-        *,
-        model_name: str = "fake-model",
-        stream: bool = False,
-    ) -> None:
-        self.model_name = model_name
-        self.stream = stream
-        self._response = response
-        self._error = error
-        self.last_call: dict[str, Any] | None = None
+        as_config.trace_enabled = False
+        assert enable_agentscope_tracing() is True
+        assert as_config.trace_enabled is True
 
-    async def __call__(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict] | None = None,
-        tool_choice: Any = None,
-        structured_model: Any = None,
-        **kwargs: Any,
-    ) -> ChatResponse:
-        self.last_call = {
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": tool_choice,
-            "kwargs": kwargs,
-        }
-        if self._error is not None:
-            raise self._error
-        assert self._response is not None
-        return self._response
+    def test_sets_run_id_when_given(self) -> None:
+        from agentscope import _config as as_config
+
+        enable_agentscope_tracing(run_id="trial-xyz")
+        assert as_config.run_id == "trial-xyz"
 
 
-def _make_response(
-    *,
-    text: str = "hello",
-    input_tokens: int = 10,
-    output_tokens: int = 5,
-    tool_calls: list[dict[str, Any]] | None = None,
-) -> ChatResponse:
-    content: list[TextBlock | ToolUseBlock] = [TextBlock(type="text", text=text)]
-    if tool_calls:
-        for tc in tool_calls:
-            content.append(
-                ToolUseBlock(
-                    type="tool_use",
-                    id=tc.get("id", ""),
-                    name=tc.get("name", ""),
-                    input=tc.get("input", {}),
-                )
+# ---------------------------------------------------------------------------
+# emit_span_sls_only — bypasses OTLP; forwards to SLS only when configured
+# ---------------------------------------------------------------------------
+
+
+class TestEmitSpanSlsOnly:
+    def test_no_op_when_no_exporter_configured(self, monkeypatch) -> None:
+        from dojozero.core import _tracing as t
+
+        monkeypatch.setattr(t, "_global_sls_log_exporter", None)
+        # Should simply not raise.
+        emit_span_sls_only(
+            SpanData(
+                trace_id="t",
+                span_id="s",
+                operation_name="agent.response",
+                start_time=0,
+                duration=0,
             )
-    return ChatResponse(
-        content=content,
-        usage=ChatUsage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            time=0.01,
-        ),
-        metadata={"finish_reason": "stop"},
-    )
-
-
-# ---------------------------------------------------------------------------
-# Core wrapper tests
-# ---------------------------------------------------------------------------
-
-
-class TestTracingChatModel:
-    @pytest.mark.asyncio
-    async def test_emits_chat_span_on_success(self) -> None:
-        inner = _FakeModel(response=_make_response(text="hi there"))
-        wrapped = TracingChatModel(inner, trial_id="trial-1", actor_id="actor-A")
-
-        captured: list[SpanData] = []
-        with patch(
-            "dojozero.core._genai_tracing.emit_span",
-            side_effect=captured.append,
-        ):
-            await wrapped(
-                messages=[
-                    {"role": "system", "content": "you are a bot"},
-                    {"role": "user", "content": "hello"},
-                ],
-                temperature=0.7,
-                max_tokens=128,
-            )
-
-        assert len(captured) == 1
-        span = captured[0]
-        assert span.operation_name == "chat"
-        assert span.trace_id == "trial-1"
-        assert span.tags["actor.id"] == "actor-A"
-        assert span.tags["dojozero.trial.id"] == "trial-1"
-        assert span.tags["gen_ai.operation.name"] == "chat"
-        assert span.tags["gen_ai.request.model"] == "fake-model"
-        assert span.tags["gen_ai.usage.input_tokens"] == 10
-        assert span.tags["gen_ai.usage.output_tokens"] == 5
-        assert span.tags["gen_ai.request.temperature"] == 0.7
-        assert span.tags["gen_ai.request.max_tokens"] == 128
-        assert span.tags["gen_ai.response.finish_reasons"] == "stop"
-
-        event_names = [
-            f["value"]
-            for log in span.logs
-            for f in log.get("fields", [])
-            if f.get("key") == "event"
-        ]
-        assert "gen_ai.system.message" in event_names
-        assert "gen_ai.user.message" in event_names
-        assert "gen_ai.choice" in event_names
-
-    @pytest.mark.asyncio
-    async def test_parent_span_id_propagates_from_contextvar(self) -> None:
-        inner = _FakeModel(response=_make_response())
-        wrapped = TracingChatModel(inner, trial_id="trial-1", actor_id="actor-A")
-
-        captured: list[SpanData] = []
-        token = set_parent_span_id("parent-abc")
-        try:
-            with patch(
-                "dojozero.core._genai_tracing.emit_span",
-                side_effect=captured.append,
-            ):
-                await wrapped(messages=[{"role": "user", "content": "hi"}])
-        finally:
-            reset_parent_span_id(token)
-
-        assert captured[0].parent_span_id == "parent-abc"
-
-    @pytest.mark.asyncio
-    async def test_error_path_emits_span_and_reraises(self) -> None:
-        inner = _FakeModel(error=RuntimeError("boom"))
-        wrapped = TracingChatModel(inner, trial_id="trial-1", actor_id="actor-A")
-
-        captured: list[SpanData] = []
-        with patch(
-            "dojozero.core._genai_tracing.emit_span",
-            side_effect=captured.append,
-        ):
-            with pytest.raises(RuntimeError, match="boom"):
-                await wrapped(messages=[{"role": "user", "content": "hi"}])
-
-        assert len(captured) == 1
-        span = captured[0]
-        assert span.tags.get("error") is True
-        assert span.tags.get("error.type") == "RuntimeError"
-        assert "boom" in span.tags.get("error.message", "")
-
-    @pytest.mark.asyncio
-    async def test_content_flag_drops_content(self, monkeypatch) -> None:
-        monkeypatch.setenv("DOJOZERO_TRACE_GENAI_CONTENT", "false")
-        monkeypatch.delenv(
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
-            raising=False,
         )
-        assert genai_capture_content() is False
 
-        inner = _FakeModel(response=_make_response(text="secret-reply"))
-        wrapped = TracingChatModel(inner, trial_id="trial-1", actor_id="actor-A")
-
-        captured: list[SpanData] = []
-        with patch(
-            "dojozero.core._genai_tracing.emit_span",
-            side_effect=captured.append,
-        ):
-            await wrapped(
-                messages=[{"role": "user", "content": "sensitive prompt"}],
-                tools=[{"type": "function", "function": {"name": "x"}}],
-            )
-
-        span = captured[0]
-        # Tools attribute omitted when content capture is off.
-        assert "gen_ai.request.tools" not in span.tags
-        # Message events still present as shells (role/name/id only) but no content.
-        for log in span.logs:
-            for field in log.get("fields", []):
-                if field.get("key") == "content":
-                    pytest.fail("content should not be emitted when flag is off")
-
-    @pytest.mark.asyncio
-    async def test_truncation_marks_original_length(self, monkeypatch) -> None:
-        monkeypatch.setenv("DOJOZERO_TRACE_GENAI_CONTENT_MAX_CHARS", "50")
-        assert genai_max_chars_per_message() == 50
-
-        big = "x" * 5000
-        inner = _FakeModel(response=_make_response(text=big))
-        wrapped = TracingChatModel(inner, trial_id="trial-1", actor_id="actor-A")
+    def test_forwards_to_sls_when_configured(self, monkeypatch) -> None:
+        from dojozero.core import _tracing as t
 
         captured: list[SpanData] = []
-        with patch(
-            "dojozero.core._genai_tracing.emit_span",
-            side_effect=captured.append,
-        ):
-            await wrapped(messages=[{"role": "user", "content": big}])
 
-        span = captured[0]
-        truncated_markers = 0
-        for log in span.logs:
-            fields = {f["key"]: f.get("value") for f in log.get("fields", [])}
-            if fields.get("gen_ai.truncated") is True:
-                truncated_markers += 1
-                assert isinstance(fields.get("gen_ai.original_length"), int)
-                assert fields["gen_ai.original_length"] >= 5000
-        assert truncated_markers >= 1
+        class _FakeSlsExporter:
+            def export_span(self, span: SpanData) -> None:
+                captured.append(span)
 
-    @pytest.mark.asyncio
-    async def test_tracing_disabled_is_passthrough(self, monkeypatch) -> None:
-        monkeypatch.setenv("DOJOZERO_TRACE_GENAI", "false")
-        inner = _FakeModel(response=_make_response())
-        wrapped = wrap_model_for_tracing(inner, trial_id="trial-1", actor_id="actor-A")
-        # Master switch off → factory returns the bare inner model.
-        assert wrapped is inner
+        monkeypatch.setattr(t, "_global_sls_log_exporter", _FakeSlsExporter())
+        # Also ensure the OTLP exporter would not be called.
+        otlp_calls: list[Any] = []
 
-    def test_factory_idempotent(self) -> None:
-        inner = _FakeModel(response=_make_response())
-        once = wrap_model_for_tracing(inner, trial_id="t", actor_id="a")
-        twice = wrap_model_for_tracing(once, trial_id="t", actor_id="a")
-        assert once is twice
+        class _FakeOtel:
+            def export_span(self, span: SpanData) -> None:
+                otlp_calls.append(span)
+
+        monkeypatch.setattr(t, "_global_exporter", _FakeOtel())
+
+        span = SpanData(
+            trace_id="t",
+            span_id="s",
+            operation_name="agent.response",
+            start_time=0,
+            duration=0,
+        )
+        emit_span_sls_only(span)
+
+        assert captured == [span]
+        assert otlp_calls == []  # OTLP path must not be called
 
 
 # ---------------------------------------------------------------------------
-# Span-events export path
+# Span-events serialization (SLS _events field)
 # ---------------------------------------------------------------------------
 
 
 class TestSpanEventsExport:
     def test_sls_exporter_serializes_events_to_field(self) -> None:
-        # Avoid importing SLS SDK; patch the class and its queue
-        from dojozero.core._genai_tracing import make_span_event
         from dojozero.core._tracing import SLSLogExporter
 
         exporter = SLSLogExporter.__new__(SLSLogExporter)  # skip SDK init
@@ -281,21 +122,26 @@ class TestSpanEventsExport:
         span = SpanData(
             trace_id="trial-1",
             span_id="s1",
-            operation_name="chat",
+            operation_name="agent.response",
             start_time=1_700_000_000_000_000,
             duration=1000,
-            tags={"gen_ai.system": "openai"},
-            logs=[make_span_event("gen_ai.user.message", {"content": "hi"})],
+            tags={"actor.id": "a"},
+            logs=[
+                {
+                    "timestamp": 1_700_000_000_000_000,
+                    "fields": [
+                        {"key": "event", "value": "example"},
+                        {"key": "note", "value": "hi"},
+                    ],
+                }
+            ],
         )
         exporter.export_span(span)
         assert len(captured) == 1
         entry = captured[0]
         assert "_events" in entry
         decoded = json.loads(entry["_events"])
-        assert decoded[0]["fields"][0] == {
-            "key": "event",
-            "value": "gen_ai.user.message",
-        }
+        assert decoded[0]["fields"][0] == {"key": "event", "value": "example"}
 
 
 # ---------------------------------------------------------------------------
@@ -332,4 +178,9 @@ class TestArenaProjection:
     def test_whitelist_excludes_chat(self) -> None:
         from dojozero.arena_server._utils import ARENA_RENDERED_OPERATIONS
 
+        # AgentScope's @trace_llm emits spans named ``chat {model}``; none of
+        # those should be in our whitelist (they'd never be a literal match
+        # anyway, but we also don't include the prefix on its own).
         assert "chat" not in ARENA_RENDERED_OPERATIONS
+        for op in ARENA_RENDERED_OPERATIONS:
+            assert not op.startswith("chat "), f"unexpected: {op}"

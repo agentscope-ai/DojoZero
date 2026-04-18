@@ -907,6 +907,7 @@ def _setup_otel_exporter(
     from dojozero.core._tracing import (
         OTelSpanExporter,
         SLSLogExporter,
+        enable_agentscope_tracing,
         get_sls_exporter_headers,
         set_otel_exporter,
         set_sls_log_exporter,
@@ -935,6 +936,9 @@ def _setup_otel_exporter(
         )
         otel_exporter.start()
         set_otel_exporter(otel_exporter)
+        # Flip AgentScope's tracing flag so @trace_llm etc. emit GenAI spans
+        # onto our existing TracerProvider.
+        enable_agentscope_tracing()
         LOGGER.info(
             "OTel exporter configured: %s (backend: sls, service_name: %s)",
             otlp_endpoint,
@@ -971,6 +975,7 @@ def _setup_otel_exporter(
         )
         otel_exporter.start()
         set_otel_exporter(otel_exporter)
+        enable_agentscope_tracing()
         LOGGER.info(
             "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
             otlp_endpoint,

@@ -44,6 +44,7 @@ from dojozero.core._tracing import (
     SLSLogExporter,
     get_sls_exporter_headers,
     get_sls_log_exporter,
+    enable_agentscope_tracing,
     set_otel_exporter,
     set_sls_log_exporter,
 )
@@ -553,6 +554,7 @@ def create_dashboard_app(
             )
             otel_exporter.start()
             set_otel_exporter(otel_exporter)
+            enable_agentscope_tracing()
             LOGGER.info("OTel exporter configured: %s (backend: sls)", otlp_endpoint)
 
             sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
@@ -580,6 +582,7 @@ def create_dashboard_app(
             )
             otel_exporter.start()
             set_otel_exporter(otel_exporter)
+            enable_agentscope_tracing()
             LOGGER.info(
                 "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
                 otlp_endpoint,
