@@ -100,6 +100,16 @@ class BacktestBettingTrialMetadata(BettingTrialMetadata):
     backtest_speed: float = 1.0
     backtest_max_sleep: float = 20.0
 
+    # Lineage for trials replayed from a source trace (Arena displays this).
+    # source_trial_id is the trial we replayed; backtest_source is how we
+    # sourced the events ("local" = on-disk persistence file, "sls" =
+    # materialized from Alibaba SLS via trace id); source_run_id is the
+    # chosen ``trial.started`` span_id when the SLS trace contained
+    # multiple runs (empty otherwise).
+    source_trial_id: str = ""
+    source_run_id: str = ""
+    backtest_source: str = ""
+
 
 __all__ = [
     "BettingTrialMetadata",

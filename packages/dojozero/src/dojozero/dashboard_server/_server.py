@@ -85,6 +85,10 @@ class BacktestConfig(BaseModel):
     emit_traces: bool = (
         False  # Emit data events to trace backend with rebased timestamps
     )
+    # Optional override for double-submitted traces in SLS: the span_id of
+    # the trial.started root of the run to replay. If unset, the most
+    # complete run (by event-span count, tie-break on latest end time) wins.
+    run_id: str | None = None
 
 
 # Backward compatibility alias (deprecated)
@@ -905,35 +909,59 @@ def create_dashboard_app(
         # Handle backtest configuration
         launch_coro_factory = None
         if request.backtest:
-            # Look up the source trial's persistence file
             source_trial_id = request.backtest.trial_id
             source_record = state.orchestrator.store.get_trial_record(source_trial_id)
-            if source_record is None:
-                return JSONResponse(
-                    content={"error": f"Source trial not found: {source_trial_id}"},
-                    status_code=404,
-                )
 
-            # Get persistence_file from source trial's metadata
-            source_persistence_file = source_record.spec.metadata.get(
-                "persistence_file"
-            )
-            if not source_persistence_file:
-                return JSONResponse(
-                    content={
-                        "error": f"Source trial '{source_trial_id}' has no persistence_file"
-                    },
-                    status_code=400,
+            # Try the local persistence file first; fall back to SLS when
+            # the record or the file is missing (e.g., trial ran on a
+            # different machine — see issue #223).
+            event_file: Path | None = None
+            backtest_source = "local"
+            if source_record is not None:
+                source_persistence_file = source_record.spec.metadata.get(
+                    "persistence_file"
                 )
+                if source_persistence_file:
+                    candidate = Path(source_persistence_file)
+                    if candidate.exists():
+                        event_file = candidate
 
-            event_file = Path(source_persistence_file)
-            if not event_file.exists():
-                return JSONResponse(
-                    content={
-                        "error": f"Event file not found for trial '{source_trial_id}': {event_file}"
-                    },
-                    status_code=400,
-                )
+            if event_file is None:
+                if state.data_dir is None:
+                    return JSONResponse(
+                        content={
+                            "error": (
+                                "Server data_dir is not configured; cannot "
+                                "cache SLS-sourced backtest events."
+                            )
+                        },
+                        status_code=500,
+                    )
+                cache_dir = Path(state.data_dir) / "backtest_cache"
+                event_file = cache_dir / f"{source_trial_id}.jsonl"
+                if not event_file.exists() or request.backtest.run_id:
+                    try:
+                        from dojozero.data import SLSEventSource
+
+                        await SLSEventSource().materialize_jsonl(
+                            source_trial_id,
+                            event_file,
+                            run_id=request.backtest.run_id,
+                        )
+                        backtest_source = "sls"
+                    except Exception as e:
+                        return JSONResponse(
+                            content={
+                                "error": (
+                                    f"Event file for trial '{source_trial_id}' "
+                                    f"is not available locally and SLS fallback "
+                                    f"failed: {e}"
+                                )
+                            },
+                            status_code=424,
+                        )
+                else:
+                    backtest_source = "sls"
             # Capture backtest settings (for closure below)
             backtest_speed = request.backtest.speed
             backtest_max_sleep = request.backtest.max_sleep
@@ -951,6 +979,9 @@ def create_dashboard_app(
                 backtest_file=str(event_file),
                 backtest_speed=backtest_speed,
                 backtest_max_sleep=backtest_max_sleep,
+                source_trial_id=source_trial_id,
+                source_run_id=request.backtest.run_id or "",
+                backtest_source=backtest_source,
             )
             spec.builder_name = scenario.name
 

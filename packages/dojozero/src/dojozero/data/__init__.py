@@ -42,6 +42,7 @@ from dojozero.data._stores import (
     extract_dedup_ids_from_jsonl,
     extract_dedup_keys_from_jsonl,
 )
+from dojozero.data._sls_source import SLSEventSource
 from dojozero.data._hub import DataHub
 from dojozero.data._subscriptions import (
     EventPriority,
@@ -188,6 +189,7 @@ __all__ = [
     "ExternalAPI",
     "extract_dedup_ids_from_jsonl",
     "extract_dedup_keys_from_jsonl",
+    "SLSEventSource",
     "DataProcessor",
     "CompositeProcessor",
     "DataHub",

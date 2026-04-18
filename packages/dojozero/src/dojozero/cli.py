@@ -219,9 +219,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run backtesting from historical event files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Run backtesting from JSONL event files.\n\n"
-        "Supports multiple files via glob patterns and OSS URLs:\n"
+        "Supports multiple files via glob patterns, OSS URLs, and SLS trace ids:\n"
         "  Local files:  outputs/2025-01-*/*.jsonl\n"
-        "  OSS files:    oss://bucket/prefix/*.jsonl\n\n"
+        "  OSS files:    oss://bucket/prefix/*.jsonl\n"
+        "  SLS by trace: sls://<trial_id>[@<run_id>]\n\n"
         "Files are processed sequentially in sorted order.",
     )
     backtest_parser.add_argument(
@@ -230,8 +231,10 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="+",
         required=True,
         dest="event_files",
-        help="Path(s) to JSONL event file(s). Supports glob patterns (e.g., 'outputs/*/*.jsonl') "
-        "and OSS URLs (e.g., 'oss://bucket/prefix/*.jsonl'). Multiple patterns can be specified.",
+        help="Path(s) to JSONL event file(s). Supports glob patterns (e.g., 'outputs/*/*.jsonl'), "
+        "OSS URLs (e.g., 'oss://bucket/prefix/*.jsonl'), and SLS trace ids "
+        "(e.g., 'sls://<trial_id>' — optionally 'sls://<trial_id>@<run_id>' to "
+        "pick one run of a double-submitted trial). Multiple patterns can be specified.",
     )
     backtest_parser.add_argument(
         "--params",
@@ -1426,7 +1429,10 @@ async def _run_command(args: argparse.Namespace) -> int:
 
 
 def _resolve_event_files(
-    patterns: list[str], temp_dir: Path | None = None
+    patterns: list[str],
+    temp_dir: Path | None = None,
+    *,
+    sls_cache_dir: Path | None = None,
 ) -> list[Path]:
     """Resolve event file patterns to actual file paths.
 
@@ -1435,10 +1441,14 @@ def _resolve_event_files(
     - Local glob patterns: outputs/*/*.jsonl, outputs/2025-01-*/*.jsonl
     - OSS URLs: oss://bucket/prefix/file.jsonl
     - OSS glob patterns: oss://bucket/prefix/*.jsonl
+    - SLS trace ids: sls://<trial_id>[@<run_id>]
 
     Args:
-        patterns: List of file patterns or OSS URLs
+        patterns: List of file patterns, OSS URLs, or sls:// trace ids
         temp_dir: Temporary directory for downloading OSS files (created if None)
+        sls_cache_dir: Where materialized SLS files land (default: ./outputs).
+            Finished SLS traces are immutable, so cached materializations are
+            reused; to refetch, delete the cached JSONL.
 
     Returns:
         List of resolved local file paths (sorted)
@@ -1451,6 +1461,7 @@ def _resolve_event_files(
 
     resolved_files: list[Path] = []
     oss_temp_dir = temp_dir
+    sls_cache = sls_cache_dir or Path("outputs")
 
     # Check if any OSS patterns exist and initialize client once before the loop
     oss_patterns = [p for p in patterns if p.startswith("oss://")]
@@ -1476,6 +1487,37 @@ def _resolve_event_files(
             raise DojoZeroCLIError(f"OSS configuration error: {e}")
 
     for pattern in patterns:
+        if pattern.startswith("sls://"):
+            raw = pattern[6:]
+            trial_id, _, run_id = raw.partition("@")
+            if not trial_id:
+                raise DojoZeroCLIError(
+                    f"Invalid sls:// URL (empty trial id): {pattern}"
+                )
+            suffix = f"-{run_id[:8]}" if run_id else ""
+            cache_path = sls_cache / f"{trial_id}{suffix}.jsonl"
+            if not cache_path.exists():
+                import asyncio
+
+                from dojozero.data import SLSEventSource
+
+                LOGGER.info("Fetching events from SLS for trial_id=%s", trial_id)
+                try:
+                    asyncio.run(
+                        SLSEventSource().materialize_jsonl(
+                            trial_id,
+                            cache_path,
+                            run_id=run_id or None,
+                        )
+                    )
+                except Exception as e:
+                    raise DojoZeroCLIError(
+                        f"Failed to materialize SLS events for {pattern}: {e}"
+                    )
+            else:
+                LOGGER.info("Using cached SLS events at %s", cache_path)
+            resolved_files.append(cache_path)
+            continue
         if pattern.startswith("oss://"):
             # Parse OSS URL: oss://bucket/prefix/path/*.jsonl
             # Format: oss://bucket/key or oss://bucket/prefix/*.jsonl
@@ -1745,7 +1787,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     if max_sleep <= 0:
         raise DojoZeroCLIError(f"Backtest max-sleep must be positive, got: {max_sleep}")
 
-    # Resolve event files (supports glob patterns and OSS URLs)
+    # Resolve event files (supports glob patterns, OSS URLs, and sls:// trace ids)
     event_files = _resolve_event_files(args.event_files)
     LOGGER.info("Resolved %d event file(s) to process", len(event_files))
 
