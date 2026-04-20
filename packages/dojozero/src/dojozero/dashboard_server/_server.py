@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine
 
-from fastapi import Depends, FastAPI, Header, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request, Response
 
 if TYPE_CHECKING:
     from dojozero.gateway import AgentAuthenticator
@@ -85,6 +85,10 @@ class BacktestConfig(BaseModel):
     emit_traces: bool = (
         False  # Emit data events to trace backend with rebased timestamps
     )
+    # Optional override for double-submitted traces in SLS: the span_id of
+    # the trial.started root of the run to replay. If unset, the most
+    # complete run (by event-span count, tie-break on latest end time) wins.
+    run_id: str | None = None
 
 
 # Backward compatibility alias (deprecated)
@@ -905,35 +909,86 @@ def create_dashboard_app(
         # Handle backtest configuration
         launch_coro_factory = None
         if request.backtest:
-            # Look up the source trial's persistence file
             source_trial_id = request.backtest.trial_id
             source_record = state.orchestrator.store.get_trial_record(source_trial_id)
-            if source_record is None:
-                return JSONResponse(
-                    content={"error": f"Source trial not found: {source_trial_id}"},
-                    status_code=404,
-                )
 
-            # Get persistence_file from source trial's metadata
-            source_persistence_file = source_record.spec.metadata.get(
-                "persistence_file"
-            )
-            if not source_persistence_file:
-                return JSONResponse(
-                    content={
-                        "error": f"Source trial '{source_trial_id}' has no persistence_file"
-                    },
-                    status_code=400,
+            # Try the local persistence file first; fall back to SLS when
+            # the record exists but the file is missing (e.g., trial ran on
+            # a different machine — see issue #223).
+            event_file: Path | None = None
+            backtest_source = "local"
+            if source_record is not None:
+                source_persistence_file = source_record.spec.metadata.get(
+                    "persistence_file"
                 )
+                if source_persistence_file:
+                    candidate = Path(source_persistence_file)
+                    if candidate.exists():
+                        event_file = candidate
 
-            event_file = Path(source_persistence_file)
-            if not event_file.exists():
-                return JSONResponse(
-                    content={
-                        "error": f"Event file not found for trial '{source_trial_id}': {event_file}"
-                    },
-                    status_code=400,
-                )
+            if event_file is None:
+                # No local file — only fall through to SLS if the record
+                # is missing (ran elsewhere) or its file is gone.  When
+                # the record itself is absent we still attempt SLS so that
+                # cross-server backtests work.
+                if state.data_dir is None:
+                    if source_record is None:
+                        return JSONResponse(
+                            content={
+                                "error": (
+                                    f"Trial '{source_trial_id}' not found on "
+                                    f"this server and data_dir is not "
+                                    f"configured for SLS fallback."
+                                )
+                            },
+                            status_code=404,
+                        )
+                    return JSONResponse(
+                        content={
+                            "error": (
+                                "Server data_dir is not configured; cannot "
+                                "cache SLS-sourced backtest events."
+                            )
+                        },
+                        status_code=500,
+                    )
+                cache_dir = Path(state.data_dir) / "backtest_cache"
+                # Cache naming: {trial_id}-{run_id[:8]}.jsonl
+                # 8-char prefix of the 16-hex span_id is sufficient to
+                # avoid collisions while keeping filenames readable.
+                run_id = request.backtest.run_id
+                suffix = f"-{run_id[:8]}" if run_id else ""
+                event_file = cache_dir / f"{source_trial_id}{suffix}.jsonl"
+                materialize_result = None
+                if not event_file.exists():
+                    try:
+                        from dojozero.data import SLSEventSource
+
+                        materialize_result = await SLSEventSource().materialize_jsonl(
+                            source_trial_id,
+                            event_file,
+                            run_id=run_id or None,
+                        )
+                        backtest_source = "sls"
+                    except Exception as e:
+                        LOGGER.error(
+                            "SLS materialization failed for trial '%s': %s",
+                            source_trial_id,
+                            e,
+                            exc_info=True,
+                        )
+                        return JSONResponse(
+                            content={
+                                "error": (
+                                    f"Event file for trial '{source_trial_id}' "
+                                    f"is not available locally and SLS fallback "
+                                    f"failed."
+                                )
+                            },
+                            status_code=424,
+                        )
+                else:
+                    backtest_source = "sls"
             # Capture backtest settings (for closure below)
             backtest_speed = request.backtest.speed
             backtest_max_sleep = request.backtest.max_sleep
@@ -945,12 +1000,24 @@ def create_dashboard_app(
             from dojozero.betting import BacktestBettingTrialMetadata
 
             metadata_dict = asdict(spec.metadata)
+            # Determine the actual run_id used (may differ from request when
+            # auto-picked) and materialization timestamp for lineage.
+            if materialize_result is not None:
+                effective_run_id = materialize_result.chosen_run_id or ""
+                materialized_at = materialize_result.materialized_at.isoformat()
+            else:
+                effective_run_id = request.backtest.run_id or ""
+                materialized_at = ""
             spec.metadata = BacktestBettingTrialMetadata(
                 **metadata_dict,
                 backtest_mode=True,
                 backtest_file=str(event_file),
                 backtest_speed=backtest_speed,
                 backtest_max_sleep=backtest_max_sleep,
+                source_trial_id=source_trial_id,
+                source_run_id=effective_run_id,
+                backtest_source=backtest_source,
+                materialized_at=materialized_at,
             )
             spec.builder_name = scenario.name
 
@@ -1202,6 +1269,126 @@ def create_dashboard_app(
                 "hint": "Trial may not exist or has not concluded yet.",
             },
             status_code=404,
+        )
+
+    @app.get("/api/trials/{trial_id}/events.jsonl")
+    async def download_trial_events(
+        trial_id: str,
+        run_id: str | None = Query(default=None),
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> Response:
+        """Download the JSONL event file for a trial.
+
+        Resolution order:
+        1. Local persistence_file from trial record metadata
+        2. SLS materialization (cached to data_dir/backtest_cache/)
+
+        Returns the JSONL file as a streaming download.
+        """
+        from fastapi.responses import FileResponse
+
+        # 1. Try local file from trial record metadata
+        # Check backtest_file first (for backtest trials), then persistence_file
+        event_file: Path | None = None
+        record = state.orchestrator.store.get_trial_record(trial_id)
+        if record is not None:
+            for field in ("backtest_file", "persistence_file"):
+                path_str = record.spec.metadata.get(field)
+                if path_str:
+                    candidate = Path(path_str)
+                    if candidate.exists():
+                        event_file = candidate
+                        break
+                    # Try resolving relative to data_dir if configured
+                    if state.data_dir and not candidate.is_absolute():
+                        alt = Path(state.data_dir) / candidate
+                        if alt.exists():
+                            event_file = alt
+                            break
+
+        # 2. Try proxying to the owning peer in cluster mode
+        if event_file is None and state.peer_registry is not None:
+            try:
+                owner = await state.peer_registry.get_peer_for_trial(trial_id)
+                if (
+                    owner is not None
+                    and owner.server_url
+                    and owner.server_id != state.server_id
+                ):
+                    remote_url = (
+                        f"{owner.server_url.rstrip('/')}"
+                        f"/api/trials/{trial_id}/events.jsonl"
+                    )
+                    if run_id:
+                        remote_url += f"?run_id={run_id}"
+                    async with state.http_session.get(
+                        remote_url,
+                        headers={"X-Dojozero-Forwarded": state.server_id or ""},
+                    ) as resp:
+                        if resp.status == 200:
+                            from fastapi.responses import StreamingResponse
+
+                            return StreamingResponse(
+                                content=resp.content.iter_any(),
+                                media_type="application/x-ndjson",
+                                headers={
+                                    "Content-Disposition": (
+                                        f'attachment; filename="{trial_id}.jsonl"'
+                                    )
+                                },
+                            )
+                        # Peer didn't have it either — fall through to SLS
+            except Exception:
+                pass  # fall through to SLS fallback
+
+        # 3. Fallback: materialize from SLS
+        if event_file is None:
+            if state.data_dir is None:
+                return JSONResponse(
+                    content={
+                        "error": (
+                            f"Event file for trial '{trial_id}' not found locally "
+                            f"and data_dir is not configured for SLS fallback."
+                        )
+                    },
+                    status_code=404,
+                )
+            cache_dir = Path(state.data_dir) / "backtest_cache"
+            suffix = f"-{run_id[:8]}" if run_id else ""
+            cached_path = cache_dir / f"{trial_id}{suffix}.jsonl"
+            if cached_path.exists():
+                event_file = cached_path
+            else:
+                try:
+                    from dojozero.data import SLSEventSource
+
+                    await SLSEventSource().materialize_jsonl(
+                        trial_id,
+                        cached_path,
+                        run_id=run_id or None,
+                    )
+                    event_file = cached_path
+                except Exception as e:
+                    LOGGER.error(
+                        "SLS materialization failed for trial '%s': %s",
+                        trial_id,
+                        e,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content={
+                            "error": (
+                                f"Event file for trial '{trial_id}' not available "
+                                f"locally and SLS fallback failed: {e}"
+                            )
+                        },
+                        status_code=424,
+                    )
+
+        return FileResponse(
+            path=event_file,
+            media_type="application/x-ndjson",
+            filename=f"{trial_id}.jsonl",
         )
 
     @app.post("/api/trials/{trial_id}/stop")

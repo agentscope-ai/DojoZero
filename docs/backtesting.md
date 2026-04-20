@@ -37,7 +37,46 @@ dojo0 backtest \
 
 Files are processed in sorted order.
 
-## 3. Submit Backtest to Dashboard Server
+## 3. Replay from SLS (Alibaba Cloud Log Service)
+
+Replay a trial directly from its trace stored in SLS, without needing a local JSONL file:
+
+```bash
+dojo0 backtest \
+  --events sls://nba-game-401869194-25bc3d74 \
+  --params trial_params/nba-moneyline.yaml \
+  --speed 10 \
+  --max-sleep 5
+```
+
+The `sls://` prefix triggers fetching the trial's event spans from SLS by trace ID. Events are materialized to a local cache (`outputs/` by default) and reused on subsequent runs.
+
+If a trace contains multiple runs (e.g., a double-submitted trial), pick a specific run with `@run_id`:
+
+```bash
+dojo0 backtest \
+  --events "sls://<trace_id>@<run_id>" \
+  --params trial_params/nba-moneyline.yaml
+```
+
+Required env vars for SLS: `DOJOZERO_SLS_PROJECT`, `DOJOZERO_SLS_ENDPOINT`, `DOJOZERO_SLS_LOGSTORE`, plus Alibaba Cloud credentials.
+
+The `espn_game_id` is auto-detected from the first event in the materialized file, so you can use a generic params YAML without specifying the game ID.
+
+## 4. Replay from Dashboard Server (HTTP Download)
+
+If a dashboard server is running, download the event file directly without needing SLS credentials:
+
+```bash
+dojo0 backtest \
+  --events http://your-server:8000/api/trials/<trial_id>/events.jsonl \
+  --params trial_params/nba-moneyline.yaml \
+  --speed 10
+```
+
+The file is downloaded once and cached locally in `outputs/`. The server resolves the file from its local storage or falls back to SLS if the file isn't present on disk.
+
+## 5. Submit Backtest to Dashboard Server
 
 ```bash
 dojo0 backtest \
@@ -48,19 +87,34 @@ dojo0 backtest \
 
 Use `--server` when you want orchestration and visibility through the dashboard service.
 
-## 4. CLI Options
+## 6. CLI Options
 
 | Option | Description |
 |---|---|
-| `--events` | JSONL file(s), supports glob patterns |
+| `--events` | JSONL file(s), glob patterns, HTTP(S) URLs, OSS URLs (`oss://`), or SLS trace IDs (`sls://`) |
 | `--params` | Trial params YAML used to build agent/operator graph |
-| `--speed` | Playback multiplier (`1.0` = real-time) |
-| `--max-sleep` | Maximum delay between events during replay |
-| `--trial-id` | Custom trial ID |
+| `--speed` | Playback multiplier (`1.0` = real-time, default `1.0`) |
+| `--max-sleep` | Maximum delay between events during replay (default `30.0`) |
+| `--emit-traces` | Emit data events to trace backend with rebased timestamps |
+| `--trial-id` | Custom trial ID (auto-generated from file name if omitted) |
 | `--server` | Submit to dashboard instead of local process |
-| `--store-directory` | Store/checkpoint root |
+| `--store-directory` | Store/checkpoint root (default `./dojozero-store`) |
 | `--runtime-provider` | `local` or `ray` |
 | `--ray-config` | Ray runtime config file |
+
+## 7. Output
+
+After a backtest completes, results are written to:
+
+```
+dojozero-store/trials/{trial_id}/
+├── spec.json              # Trial specification
+├── status.json            # Final trial status (all actors stopped)
+├── checkpoint_index.json  # Checkpoints (populated on Ctrl+C graceful shutdown)
+└── result.json            # Broker statistics per agent (balance, bets, ROI)
+```
+
+The cached event file (from SLS or OSS) is stored in `outputs/` and reused on re-runs.
 
 ## What's Next
 

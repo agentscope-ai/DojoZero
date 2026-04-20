@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import importlib
+import json
 import logging
 import os
 import signal
@@ -219,9 +220,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run backtesting from historical event files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Run backtesting from JSONL event files.\n\n"
-        "Supports multiple files via glob patterns and OSS URLs:\n"
+        "Supports multiple files via glob patterns, OSS URLs, and SLS trace ids:\n"
         "  Local files:  outputs/2025-01-*/*.jsonl\n"
-        "  OSS files:    oss://bucket/prefix/*.jsonl\n\n"
+        "  OSS files:    oss://bucket/prefix/*.jsonl\n"
+        "  SLS by trace: sls://<trial_id>[@<run_id>]\n\n"
         "Files are processed sequentially in sorted order.",
     )
     backtest_parser.add_argument(
@@ -230,8 +232,10 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="+",
         required=True,
         dest="event_files",
-        help="Path(s) to JSONL event file(s). Supports glob patterns (e.g., 'outputs/*/*.jsonl') "
-        "and OSS URLs (e.g., 'oss://bucket/prefix/*.jsonl'). Multiple patterns can be specified.",
+        help="Path(s) to JSONL event file(s). Supports glob patterns (e.g., 'outputs/*/*.jsonl'), "
+        "OSS URLs (e.g., 'oss://bucket/prefix/*.jsonl'), and SLS trace ids "
+        "(e.g., 'sls://<trial_id>' — optionally 'sls://<trial_id>@<run_id>' to "
+        "pick one run of a double-submitted trial). Multiple patterns can be specified.",
     )
     backtest_parser.add_argument(
         "--params",
@@ -1425,20 +1429,29 @@ async def _run_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _resolve_event_files(
-    patterns: list[str], temp_dir: Path | None = None
+async def _resolve_event_files(
+    patterns: list[str],
+    temp_dir: Path | None = None,
+    *,
+    sls_cache_dir: Path | None = None,
 ) -> list[Path]:
     """Resolve event file patterns to actual file paths.
 
     Supports:
     - Local file paths: outputs/game.jsonl
     - Local glob patterns: outputs/*/*.jsonl, outputs/2025-01-*/*.jsonl
+    - HTTP(S) URLs: http://server/api/trials/{id}/events.jsonl
     - OSS URLs: oss://bucket/prefix/file.jsonl
     - OSS glob patterns: oss://bucket/prefix/*.jsonl
+    - SLS trace ids: sls://<trial_id>[@<run_id>]
 
     Args:
-        patterns: List of file patterns or OSS URLs
+        patterns: List of file patterns, OSS URLs, or sls:// trace ids
         temp_dir: Temporary directory for downloading OSS files (created if None)
+        sls_cache_dir: Where materialized SLS files land (default: ./outputs).
+            Cached materializations are reused without re-checking SLS.
+            Note: a double-submitted trial may accumulate a new run after
+            caching; delete the cached JSONL to force a refetch.
 
     Returns:
         List of resolved local file paths (sorted)
@@ -1451,6 +1464,7 @@ def _resolve_event_files(
 
     resolved_files: list[Path] = []
     oss_temp_dir = temp_dir
+    sls_cache = sls_cache_dir or Path("outputs")
 
     # Check if any OSS patterns exist and initialize client once before the loop
     oss_patterns = [p for p in patterns if p.startswith("oss://")]
@@ -1476,6 +1490,72 @@ def _resolve_event_files(
             raise DojoZeroCLIError(f"OSS configuration error: {e}")
 
     for pattern in patterns:
+        if pattern.startswith("sls://"):
+            raw = pattern[6:]
+            trial_id, _, run_id = raw.partition("@")
+            if not trial_id:
+                raise DojoZeroCLIError(
+                    f"Invalid sls:// URL (empty trial id): {pattern}"
+                )
+            suffix = f"-{run_id[:8]}" if run_id else ""
+            cache_path = sls_cache / f"{trial_id}{suffix}.jsonl"
+            if not cache_path.exists():
+                from dojozero.data import SLSEventSource
+
+                LOGGER.info("Fetching events from SLS for trial_id=%s", trial_id)
+                try:
+                    await SLSEventSource().materialize_jsonl(
+                        trial_id,
+                        cache_path,
+                        run_id=run_id or None,
+                    )
+                except Exception as e:
+                    raise DojoZeroCLIError(
+                        f"Failed to materialize SLS events for {pattern}: {e}"
+                    ) from e
+            else:
+                LOGGER.info("Using cached SLS events at %s", cache_path)
+            resolved_files.append(cache_path)
+            continue
+        if pattern.startswith("http://") or pattern.startswith("https://"):
+            # HTTP(S) URL — download to local cache
+            import httpx
+
+            url = pattern
+            # Derive a cache filename from the URL path.
+            # For /api/trials/{trial_id}/events.jsonl, use trial_id as the name.
+            import re as _re
+
+            url_path = url.split("?")[0].rstrip("/")
+            trial_match = _re.search(r"/api/trials/([^/]+)/events", url_path)
+            if trial_match:
+                url_filename = f"{trial_match.group(1)}.jsonl"
+            else:
+                url_filename = Path(url_path).name
+                if not url_filename.endswith(".jsonl"):
+                    url_filename += ".jsonl"
+            cache_path = sls_cache / url_filename
+            if not cache_path.exists():
+                LOGGER.info("Downloading events from %s", url)
+                try:
+                    async with httpx.AsyncClient(timeout=120.0) as client:
+                        resp = await client.get(url)
+                        resp.raise_for_status()
+                        cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        cache_path.write_bytes(resp.content)
+                except httpx.HTTPStatusError as e:
+                    raise DojoZeroCLIError(
+                        f"Failed to download events from {url}: "
+                        f"HTTP {e.response.status_code}"
+                    ) from e
+                except Exception as e:
+                    raise DojoZeroCLIError(
+                        f"Failed to download events from {url}: {e}"
+                    ) from e
+            else:
+                LOGGER.info("Using cached download at %s", cache_path)
+            resolved_files.append(cache_path)
+            continue
         if pattern.startswith("oss://"):
             # Parse OSS URL: oss://bucket/prefix/path/*.jsonl
             # Format: oss://bucket/key or oss://bucket/prefix/*.jsonl
@@ -1558,6 +1638,97 @@ def _resolve_event_files(
 
     # Sort for deterministic order
     return sorted(resolved_files)
+
+
+def _maybe_inject_game_id(
+    params_payload: MutableMapping[str, Any], event_file: Path
+) -> None:
+    """Extract game_id from first event and inject into params if missing.
+
+    When backtesting from SLS, the YAML params may have a placeholder
+    espn_game_id. This reads the first event's game_id and overrides it.
+    """
+    scenario = params_payload.get("scenario")
+    if not isinstance(scenario, MutableMapping):
+        return
+    config = scenario.get("config")
+    if not isinstance(config, MutableMapping):
+        return
+
+    current_id = config.get("espn_game_id", "")
+    # Skip if already set to a real value (not a placeholder)
+    if current_id and current_id != "your_espn_game_id_here":
+        return
+
+    # Read the first line to extract game_id
+    try:
+        with open(event_file) as f:
+            first_line = f.readline()
+        if first_line:
+            import json
+
+            event = json.loads(first_line)
+            game_id = event.get("game_id", "")
+            if game_id:
+                config["espn_game_id"] = game_id
+                LOGGER.info(
+                    "Auto-detected espn_game_id=%s from %s", game_id, event_file.name
+                )
+    except (OSError, json.JSONDecodeError, KeyError):
+        pass
+
+
+async def _write_backtest_result(
+    orchestrator: "TrialOrchestrator",
+    trial_id: str,
+) -> None:
+    """Write result.json with broker statistics to the trial store directory."""
+    from dojozero.betting import BrokerOperator
+
+    runtime = orchestrator._trials.get(trial_id)
+    if runtime is None:
+        LOGGER.warning("Cannot write result.json: trial '%s' not found", trial_id)
+        return
+
+    # Find broker
+    broker: BrokerOperator | None = None
+    for actor_runtime in runtime.actors.values():
+        actor = actor_runtime.instance
+        if isinstance(actor, BrokerOperator):
+            broker = actor
+            break
+
+    if broker is None:
+        LOGGER.info("No BrokerOperator found, skipping result.json")
+        return
+
+    # Gather statistics for all agents
+    result: dict[str, Any] = {
+        "trial_id": trial_id,
+        "initial_balance": broker.initial_balance,
+        "agents": {},
+    }
+
+    for agent_id, account in broker._accounts.items():
+        stats = await broker.get_statistics(agent_id)
+        result["agents"][agent_id] = {
+            "balance": str(account.balance),
+            "statistics": json.loads(stats.model_dump_json()),
+        }
+
+    # Write to trial store directory
+    from dojozero.core._filesystem_orchestrator_store import FileSystemOrchestratorStore
+
+    store = orchestrator._store
+    if isinstance(store, FileSystemOrchestratorStore):
+        trial_dir = store._trials_dir / trial_id
+    else:
+        # Fallback: write next to the working directory
+        trial_dir = Path("dojozero-store") / "trials" / trial_id
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    result_path = trial_dir / "result.json"
+    result_path.write_text(json.dumps(result, indent=2))
+    LOGGER.info("Wrote backtest result to %s", result_path)
 
 
 async def _backtest_single_file(
@@ -1673,6 +1844,9 @@ async def _backtest_single_file(
         )
         await coordinator.run_all()
 
+        # Write result.json with broker statistics before stopping
+        await _write_backtest_result(orchestrator, trial_id)
+
         LOGGER.info("Stopping trial '%s'", trial_id)
         await orchestrator.stop_trial(trial_id)
         coordinator.stop()
@@ -1745,8 +1919,8 @@ async def _backtest_command(args: argparse.Namespace) -> int:
     if max_sleep <= 0:
         raise DojoZeroCLIError(f"Backtest max-sleep must be positive, got: {max_sleep}")
 
-    # Resolve event files (supports glob patterns and OSS URLs)
-    event_files = _resolve_event_files(args.event_files)
+    # Resolve event files (supports glob patterns, OSS URLs, and sls:// trace ids)
+    event_files = await _resolve_event_files(args.event_files)
     LOGGER.info("Resolved %d event file(s) to process", len(event_files))
 
     # Check if submitting to a remote server
@@ -1813,6 +1987,9 @@ async def _backtest_command(args: argparse.Namespace) -> int:
                 event_file.name,
                 trial_id,
             )
+
+            # Auto-detect espn_game_id from event file if not set in params
+            _maybe_inject_game_id(params_payload, event_file)
 
             try:
                 await _backtest_single_file(

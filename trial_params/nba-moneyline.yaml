@@ -2,7 +2,6 @@ scenario:
   name: nba
   config:
     espn_game_id: 'your_espn_game_id_here'  # ESPN game ID for the NBA game
-
     hub:
       persistence_file: outputs/nba_betting_events-{espn_game_id}.jsonl
 
