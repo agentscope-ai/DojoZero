@@ -443,6 +443,7 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 "winnings": lambda x: x.winnings,
                 "win_rate": lambda x: x.win_rate,
                 "roi": lambda x: x.roi,
+                "sharpe": lambda x: x.sharpe,
                 "total_bets": lambda x: x.total_bets,
             }
             key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])

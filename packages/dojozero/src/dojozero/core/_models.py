@@ -71,6 +71,7 @@ class LeaderboardEntry(BaseModel):
     win_rate: float = Field(alias="winRate")
     total_bets: int = Field(alias="totalBets")
     roi: float
+    sharpe: float = 0.0
     rank: int = 0
     created_at: str | None = Field(default=None, alias="createdAt")
 
