@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine
 
-from fastapi import Depends, FastAPI, Header, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request, Response
 
 if TYPE_CHECKING:
     from dojozero.gateway import AgentAuthenticator
@@ -1269,6 +1269,126 @@ def create_dashboard_app(
                 "hint": "Trial may not exist or has not concluded yet.",
             },
             status_code=404,
+        )
+
+    @app.get("/api/trials/{trial_id}/events.jsonl")
+    async def download_trial_events(
+        trial_id: str,
+        run_id: str | None = Query(default=None),
+        state: DashboardServerState = Depends(get_server_state),
+    ) -> Response:
+        """Download the JSONL event file for a trial.
+
+        Resolution order:
+        1. Local persistence_file from trial record metadata
+        2. SLS materialization (cached to data_dir/backtest_cache/)
+
+        Returns the JSONL file as a streaming download.
+        """
+        from fastapi.responses import FileResponse
+
+        # 1. Try local file from trial record metadata
+        # Check backtest_file first (for backtest trials), then persistence_file
+        event_file: Path | None = None
+        record = state.orchestrator.store.get_trial_record(trial_id)
+        if record is not None:
+            for field in ("backtest_file", "persistence_file"):
+                path_str = record.spec.metadata.get(field)
+                if path_str:
+                    candidate = Path(path_str)
+                    if candidate.exists():
+                        event_file = candidate
+                        break
+                    # Try resolving relative to data_dir if configured
+                    if state.data_dir and not candidate.is_absolute():
+                        alt = Path(state.data_dir) / candidate
+                        if alt.exists():
+                            event_file = alt
+                            break
+
+        # 2. Try proxying to the owning peer in cluster mode
+        if event_file is None and state.peer_registry is not None:
+            try:
+                owner = await state.peer_registry.get_peer_for_trial(trial_id)
+                if (
+                    owner is not None
+                    and owner.server_url
+                    and owner.server_id != state.server_id
+                ):
+                    remote_url = (
+                        f"{owner.server_url.rstrip('/')}"
+                        f"/api/trials/{trial_id}/events.jsonl"
+                    )
+                    if run_id:
+                        remote_url += f"?run_id={run_id}"
+                    async with state.http_session.get(
+                        remote_url,
+                        headers={"X-Dojozero-Forwarded": state.server_id or ""},
+                    ) as resp:
+                        if resp.status == 200:
+                            from fastapi.responses import StreamingResponse
+
+                            return StreamingResponse(
+                                content=resp.content.iter_any(),
+                                media_type="application/x-ndjson",
+                                headers={
+                                    "Content-Disposition": (
+                                        f'attachment; filename="{trial_id}.jsonl"'
+                                    )
+                                },
+                            )
+                        # Peer didn't have it either — fall through to SLS
+            except Exception:
+                pass  # fall through to SLS fallback
+
+        # 3. Fallback: materialize from SLS
+        if event_file is None:
+            if state.data_dir is None:
+                return JSONResponse(
+                    content={
+                        "error": (
+                            f"Event file for trial '{trial_id}' not found locally "
+                            f"and data_dir is not configured for SLS fallback."
+                        )
+                    },
+                    status_code=404,
+                )
+            cache_dir = Path(state.data_dir) / "backtest_cache"
+            suffix = f"-{run_id[:8]}" if run_id else ""
+            cached_path = cache_dir / f"{trial_id}{suffix}.jsonl"
+            if cached_path.exists():
+                event_file = cached_path
+            else:
+                try:
+                    from dojozero.data import SLSEventSource
+
+                    await SLSEventSource().materialize_jsonl(
+                        trial_id,
+                        cached_path,
+                        run_id=run_id or None,
+                    )
+                    event_file = cached_path
+                except Exception as e:
+                    LOGGER.error(
+                        "SLS materialization failed for trial '%s': %s",
+                        trial_id,
+                        e,
+                        exc_info=True,
+                    )
+                    return JSONResponse(
+                        content={
+                            "error": (
+                                f"Event file for trial '{trial_id}' not available "
+                                f"locally and SLS fallback failed: {e}"
+                            )
+                        },
+                        status_code=424,
+                    )
+
+        return FileResponse(
+            path=event_file,
+            media_type="application/x-ndjson",
+            filename=f"{trial_id}.jsonl",
         )
 
     @app.post("/api/trials/{trial_id}/stop")

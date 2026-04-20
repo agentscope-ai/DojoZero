@@ -63,7 +63,20 @@ Required env vars for SLS: `DOJOZERO_SLS_PROJECT`, `DOJOZERO_SLS_ENDPOINT`, `DOJ
 
 The `espn_game_id` is auto-detected from the first event in the materialized file, so you can use a generic params YAML without specifying the game ID.
 
-## 4. Submit Backtest to Dashboard Server
+## 4. Replay from Dashboard Server (HTTP Download)
+
+If a dashboard server is running, download the event file directly without needing SLS credentials:
+
+```bash
+dojo0 backtest \
+  --events http://your-server:8000/api/trials/<trial_id>/events.jsonl \
+  --params trial_params/nba-moneyline.yaml \
+  --speed 10
+```
+
+The file is downloaded once and cached locally in `outputs/`. The server resolves the file from its local storage or falls back to SLS if the file isn't present on disk.
+
+## 5. Submit Backtest to Dashboard Server
 
 ```bash
 dojo0 backtest \
@@ -74,11 +87,11 @@ dojo0 backtest \
 
 Use `--server` when you want orchestration and visibility through the dashboard service.
 
-## 5. CLI Options
+## 6. CLI Options
 
 | Option | Description |
 |---|---|
-| `--events` | JSONL file(s), glob patterns, OSS URLs (`oss://`), or SLS trace IDs (`sls://`) |
+| `--events` | JSONL file(s), glob patterns, HTTP(S) URLs, OSS URLs (`oss://`), or SLS trace IDs (`sls://`) |
 | `--params` | Trial params YAML used to build agent/operator graph |
 | `--speed` | Playback multiplier (`1.0` = real-time, default `1.0`) |
 | `--max-sleep` | Maximum delay between events during replay (default `30.0`) |
@@ -89,7 +102,7 @@ Use `--server` when you want orchestration and visibility through the dashboard 
 | `--runtime-provider` | `local` or `ray` |
 | `--ray-config` | Ray runtime config file |
 
-## 6. Output
+## 7. Output
 
 After a backtest completes, results are written to:
 

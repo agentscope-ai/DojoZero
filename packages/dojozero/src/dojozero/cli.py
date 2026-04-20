@@ -1440,6 +1440,7 @@ async def _resolve_event_files(
     Supports:
     - Local file paths: outputs/game.jsonl
     - Local glob patterns: outputs/*/*.jsonl, outputs/2025-01-*/*.jsonl
+    - HTTP(S) URLs: http://server/api/trials/{id}/events.jsonl
     - OSS URLs: oss://bucket/prefix/file.jsonl
     - OSS glob patterns: oss://bucket/prefix/*.jsonl
     - SLS trace ids: sls://<trial_id>[@<run_id>]
@@ -1514,6 +1515,45 @@ async def _resolve_event_files(
                     ) from e
             else:
                 LOGGER.info("Using cached SLS events at %s", cache_path)
+            resolved_files.append(cache_path)
+            continue
+        if pattern.startswith("http://") or pattern.startswith("https://"):
+            # HTTP(S) URL — download to local cache
+            import httpx
+
+            url = pattern
+            # Derive a cache filename from the URL path.
+            # For /api/trials/{trial_id}/events.jsonl, use trial_id as the name.
+            import re as _re
+
+            url_path = url.split("?")[0].rstrip("/")
+            trial_match = _re.search(r"/api/trials/([^/]+)/events", url_path)
+            if trial_match:
+                url_filename = f"{trial_match.group(1)}.jsonl"
+            else:
+                url_filename = Path(url_path).name
+                if not url_filename.endswith(".jsonl"):
+                    url_filename += ".jsonl"
+            cache_path = sls_cache / url_filename
+            if not cache_path.exists():
+                LOGGER.info("Downloading events from %s", url)
+                try:
+                    async with httpx.AsyncClient(timeout=120.0) as client:
+                        resp = await client.get(url)
+                        resp.raise_for_status()
+                        cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        cache_path.write_bytes(resp.content)
+                except httpx.HTTPStatusError as e:
+                    raise DojoZeroCLIError(
+                        f"Failed to download events from {url}: "
+                        f"HTTP {e.response.status_code}"
+                    ) from e
+                except Exception as e:
+                    raise DojoZeroCLIError(
+                        f"Failed to download events from {url}: {e}"
+                    ) from e
+            else:
+                LOGGER.info("Using cached download at %s", cache_path)
             resolved_files.append(cache_path)
             continue
         if pattern.startswith("oss://"):
