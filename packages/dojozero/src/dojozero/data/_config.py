@@ -21,7 +21,7 @@ class HubConfig(BaseModel):
 
     Note: Persistence is always enabled. The persistence_file is optional here
     because for auto-scheduled trials, it gets populated dynamically by the
-    scheduler based on data_dir. Trial builders should validate that it's set
+    scheduler based on output_dir. Trial builders should validate that it's set
     before building the trial spec.
     """
 

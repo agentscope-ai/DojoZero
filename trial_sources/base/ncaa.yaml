@@ -62,5 +62,4 @@ schedule:
   pre_start_hours: 0.1
   check_interval_seconds: 60.0
   auto_stop_on_completion: true
-  data_dir: outputs
   sync_interval_seconds: 3600.0

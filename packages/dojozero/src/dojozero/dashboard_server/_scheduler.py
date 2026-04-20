@@ -57,8 +57,9 @@ class TrialSourceConfig(BaseModel):
         pre_start_hours: Hours before game start to launch the trial
         check_interval_seconds: Interval for checking game status
         auto_stop_on_completion: Whether to stop trial when game finishes
-        data_dir: Base directory for persistence files. If set, files are
-            created at {data_dir}/{game_date}/{game_id}.jsonl
+        output_dir: Per-source override for output directory. If set, persistence
+            files are created at {output_dir}/{game_date}/{game_id}.jsonl.
+            Overrides the server-level --output-dir.
         sync_interval_seconds: How often to sync with ESPN API for new games
         max_daily_games: Maximum number of games to schedule per day
             for this source. 0 means unlimited (default).
@@ -69,7 +70,7 @@ class TrialSourceConfig(BaseModel):
     pre_start_hours: float = 2.0
     check_interval_seconds: float = 60.0
     auto_stop_on_completion: bool = True
-    data_dir: str | None = None
+    output_dir: str | None = None
     sync_interval_seconds: float = (
         300.0  # How often to sync with external APIs (5 min default)
     )
@@ -409,6 +410,7 @@ class ScheduleManager:
         grace_period_seconds: float = 60.0,  # Safety net (self-stop is primary at 10s)
         peer_registry: "PeerRegistry | None" = None,
         server_id: str | None = None,
+        output_dir: Path | None = None,
     ):
         """Initialize the ScheduleManager.
 
@@ -424,6 +426,8 @@ class ScheduleManager:
                 collection before stopping the trial. Default: 300 (5 minutes)
             peer_registry: Optional peer registry for multi-server trial assignment.
             server_id: This server's identifier (for cluster mode).
+            output_dir: Default output directory for persistence files. Per-source
+                output_dir overrides this if set.
         """
         self._trial_manager = trial_manager
         self._store = store
@@ -432,6 +436,7 @@ class ScheduleManager:
         self._grace_period_seconds = grace_period_seconds
         self._peer_registry: PeerRegistry | None = peer_registry
         self._server_id = server_id
+        self._output_dir = output_dir
 
         # All scheduled trials by ID
         self._schedules: dict[str, ScheduledTrial] = {}
@@ -653,7 +658,7 @@ class ScheduleManager:
         pre_start_hours: float = 2.0,
         check_interval_seconds: float = 60.0,
         auto_stop_on_completion: bool = True,
-        data_dir: str | None = None,
+        output_dir: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> list[ScheduledTrial]:
         """Schedule trials for all games on a date or week.
@@ -667,7 +672,7 @@ class ScheduleManager:
             pre_start_hours: Hours before game to start trial
             check_interval_seconds: Interval to check game status
             auto_stop_on_completion: Whether to stop trial when game finishes
-            data_dir: Optional data directory for output files
+            output_dir: Optional output directory override for persistence files
             metadata: Optional metadata
 
         Returns:
@@ -714,8 +719,14 @@ class ScheduleManager:
             schedule_id = self._generate_schedule_id(sport_type, game.game_id)
 
             # Set persistence_file with unique schedule_id to avoid conflicts
-            if data_dir:
-                persistence_file = f"{data_dir}/{game_date}/{schedule_id}.jsonl"
+            # Explicit output_dir param overrides server-level output_dir
+            effective_output_dir = output_dir or (
+                str(self._output_dir) if self._output_dir else None
+            )
+            if effective_output_dir:
+                persistence_file = (
+                    f"{effective_output_dir}/{game_date}/{schedule_id}.jsonl"
+                )
                 config["hub"]["persistence_file"] = persistence_file
 
             # Add game info to metadata using typed structure
@@ -1109,8 +1120,14 @@ class ScheduleManager:
             schedule_id = self._generate_schedule_id(source.sport_type, game.game_id)
 
             # Set persistence_file with unique schedule_id to avoid conflicts
-            if config.data_dir:
-                persistence_file = f"{config.data_dir}/{game_date}/{schedule_id}.jsonl"
+            # Per-source output_dir overrides server-level output_dir
+            effective_output_dir = config.output_dir or (
+                str(self._output_dir) if self._output_dir else None
+            )
+            if effective_output_dir:
+                persistence_file = (
+                    f"{effective_output_dir}/{game_date}/{schedule_id}.jsonl"
+                )
                 game_config["hub"]["persistence_file"] = persistence_file
 
             # Metadata for the trial using typed structure

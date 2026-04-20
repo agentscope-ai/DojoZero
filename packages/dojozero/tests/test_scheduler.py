@@ -452,7 +452,7 @@ class TestTrialSource:
             pre_start_hours=2.0,
             check_interval_seconds=60.0,
             auto_stop_on_completion=True,
-            data_dir="outputs",
+            output_dir="outputs",
         )
 
         source = TrialSource(
@@ -484,7 +484,7 @@ class TestTrialSource:
                 "pre_start_hours": 1.0,
                 "check_interval_seconds": 30.0,
                 "auto_stop_on_completion": True,
-                "data_dir": "outputs",
+                "output_dir": "outputs",
             },
             "enabled": True,
             "created_at": now.isoformat(),
