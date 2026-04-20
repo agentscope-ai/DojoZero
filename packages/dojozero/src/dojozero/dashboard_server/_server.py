@@ -913,8 +913,8 @@ def create_dashboard_app(
             source_record = state.orchestrator.store.get_trial_record(source_trial_id)
 
             # Try the local persistence file first; fall back to SLS when
-            # the record or the file is missing (e.g., trial ran on a
-            # different machine — see issue #223).
+            # the record exists but the file is missing (e.g., trial ran on
+            # a different machine — see issue #223).
             event_file: Path | None = None
             backtest_source = "local"
             if source_record is not None:
@@ -927,7 +927,22 @@ def create_dashboard_app(
                         event_file = candidate
 
             if event_file is None:
+                # No local file — only fall through to SLS if the record
+                # is missing (ran elsewhere) or its file is gone.  When
+                # the record itself is absent we still attempt SLS so that
+                # cross-server backtests work.
                 if state.data_dir is None:
+                    if source_record is None:
+                        return JSONResponse(
+                            content={
+                                "error": (
+                                    f"Trial '{source_trial_id}' not found on "
+                                    f"this server and data_dir is not "
+                                    f"configured for SLS fallback."
+                                )
+                            },
+                            status_code=404,
+                        )
                     return JSONResponse(
                         content={
                             "error": (
@@ -955,12 +970,18 @@ def create_dashboard_app(
                         )
                         backtest_source = "sls"
                     except Exception as e:
+                        LOGGER.error(
+                            "SLS materialization failed for trial '%s': %s",
+                            source_trial_id,
+                            e,
+                            exc_info=True,
+                        )
                         return JSONResponse(
                             content={
                                 "error": (
                                     f"Event file for trial '{source_trial_id}' "
                                     f"is not available locally and SLS fallback "
-                                    f"failed: {e}"
+                                    f"failed."
                                 )
                             },
                             status_code=424,
