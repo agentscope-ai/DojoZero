@@ -97,11 +97,13 @@ class SpanData:
                 k = tag.get("key", "")
                 if k:
                     tags[k] = _jaeger_tag_value(tag)
+        # startTime is microseconds since epoch (written by SpanData.to_dict).
+        raw_st = data.get("startTime", 0)
         return cls(
             trace_id=data.get("traceID", ""),
             span_id=data.get("spanID", ""),
             operation_name=_jaeger_span_operation_name(data),
-            start_time=data.get("startTime", 0),
+            start_time=raw_st,
             duration=data.get("duration", 0),
             parent_span_id=data.get("parentSpanID"),
             tags=tags,
@@ -1092,7 +1094,9 @@ class SLSTraceReader:
                     dt = datetime.fromisoformat(start_time_raw.replace("Z", "+00:00"))
                     start_time = int(dt.timestamp() * 1_000_000)
                 except ValueError:
-                    start_time = int(start_time_raw) if start_time_raw.isdigit() else 0
+                    # __time__ from SLS is always Unix seconds (string); convert to microseconds
+                    numeric = int(start_time_raw) if start_time_raw.isdigit() else 0
+                    start_time = numeric * 1_000_000
             else:
                 # __time__ is in seconds, convert to microseconds
                 start_time = int(start_time_raw) * 1_000_000
