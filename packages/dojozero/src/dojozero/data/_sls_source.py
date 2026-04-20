@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -143,7 +144,7 @@ class SLSEventSource:
         )
 
         dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        tmp = dest.with_suffix(f"{dest.suffix}.{uuid.uuid4().hex}.tmp")
         try:
             with open(tmp, "w") as f:
                 for event in events:
