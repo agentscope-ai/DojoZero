@@ -1428,7 +1428,7 @@ async def _run_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _resolve_event_files(
+async def _resolve_event_files(
     patterns: list[str],
     temp_dir: Path | None = None,
     *,
@@ -1498,18 +1498,14 @@ def _resolve_event_files(
             suffix = f"-{run_id[:8]}" if run_id else ""
             cache_path = sls_cache / f"{trial_id}{suffix}.jsonl"
             if not cache_path.exists():
-                import asyncio
-
                 from dojozero.data import SLSEventSource
 
                 LOGGER.info("Fetching events from SLS for trial_id=%s", trial_id)
                 try:
-                    asyncio.run(
-                        SLSEventSource().materialize_jsonl(
-                            trial_id,
-                            cache_path,
-                            run_id=run_id or None,
-                        )
+                    await SLSEventSource().materialize_jsonl(
+                        trial_id,
+                        cache_path,
+                        run_id=run_id or None,
                     )
                 except Exception as e:
                     raise DojoZeroCLIError(
@@ -1601,6 +1597,44 @@ def _resolve_event_files(
 
     # Sort for deterministic order
     return sorted(resolved_files)
+
+
+def _maybe_inject_game_id(
+    params_payload: MutableMapping[str, Any], event_file: Path
+) -> None:
+    """Extract game_id from first event and inject into params if missing.
+
+    When backtesting from SLS, the YAML params may have a placeholder
+    espn_game_id. This reads the first event's game_id and overrides it.
+    """
+    scenario = params_payload.get("scenario")
+    if not isinstance(scenario, MutableMapping):
+        return
+    config = scenario.get("config")
+    if not isinstance(config, MutableMapping):
+        return
+
+    current_id = config.get("espn_game_id", "")
+    # Skip if already set to a real value (not a placeholder)
+    if current_id and current_id != "your_espn_game_id_here":
+        return
+
+    # Read the first line to extract game_id
+    try:
+        with open(event_file) as f:
+            first_line = f.readline()
+        if first_line:
+            import json
+
+            event = json.loads(first_line)
+            game_id = event.get("game_id", "")
+            if game_id:
+                config["espn_game_id"] = game_id
+                LOGGER.info(
+                    "Auto-detected espn_game_id=%s from %s", game_id, event_file.name
+                )
+    except (OSError, json.JSONDecodeError, KeyError):
+        pass
 
 
 async def _backtest_single_file(
@@ -1789,7 +1823,7 @@ async def _backtest_command(args: argparse.Namespace) -> int:
         raise DojoZeroCLIError(f"Backtest max-sleep must be positive, got: {max_sleep}")
 
     # Resolve event files (supports glob patterns, OSS URLs, and sls:// trace ids)
-    event_files = _resolve_event_files(args.event_files)
+    event_files = await _resolve_event_files(args.event_files)
     LOGGER.info("Resolved %d event file(s) to process", len(event_files))
 
     # Check if submitting to a remote server
@@ -1856,6 +1890,9 @@ async def _backtest_command(args: argparse.Namespace) -> int:
                 event_file.name,
                 trial_id,
             )
+
+            # Auto-detect espn_game_id from event file if not set in params
+            _maybe_inject_game_id(params_payload, event_file)
 
             try:
                 await _backtest_single_file(

@@ -71,7 +71,7 @@ def _event_span(
     event: Any,
     *,
     trace_id: str,
-    parent_span_id: str,
+    parent_span_id: str | None = None,
     span_id: str | None = None,
     start_time_us: int | None = None,
 ) -> SpanData:
@@ -312,22 +312,27 @@ def test_event_timestamp_restored_from_span_start_time(tmp_path: Path) -> None:
 
 def test_multi_run_auto_picks_most_complete(tmp_path: Path, caplog) -> None:
     trace_id = "trial-A"
+    # Two runs separated in time: small run first, big run later.
     root_small = _root_span(trace_id, span_id="rootSmall", start_time_us=1_000_000)
-    root_big = _root_span(trace_id, span_id="rootBig", start_time_us=2_000_000)
+    root_big = _root_span(trace_id, span_id="rootBig", start_time_us=5_000_000)
 
+    # Small run events: between root_small and root_big start times
     small_events = [
         _event_span(
             _make_init(game_id=f"g{i}"),
             trace_id=trace_id,
-            parent_span_id=root_small.span_id,
+            parent_span_id=None,
+            start_time_us=2_000_000 + i * 100_000,
         )
         for i in range(2)
     ]
+    # Big run events: after root_big start time
     big_events = [
         _event_span(
             _make_init(game_id=f"h{i}"),
             trace_id=trace_id,
-            parent_span_id=root_big.span_id,
+            parent_span_id=None,
+            start_time_us=6_000_000 + i * 100_000,
         )
         for i in range(5)
     ]
@@ -356,22 +361,24 @@ def test_multi_run_tiebreak_by_latest_end_time(tmp_path: Path) -> None:
     root_late = _root_span(
         trace_id,
         span_id="rootLate",
-        start_time_us=2_000_000,
+        start_time_us=5_000_000,
         duration_us=1_000_000,
     )
-    # Equal event counts.
+    # Equal event counts — one event per run, separated by time.
     spans = [
         root_early,
         root_late,
         _event_span(
             _make_init(game_id="a"),
             trace_id=trace_id,
-            parent_span_id=root_early.span_id,
+            parent_span_id=None,
+            start_time_us=2_000_000,  # After rootEarly, before rootLate
         ),
         _event_span(
             _make_init(game_id="b"),
             trace_id=trace_id,
-            parent_span_id=root_late.span_id,
+            parent_span_id=None,
+            start_time_us=6_000_000,  # After rootLate
         ),
     ]
     source = SLSEventSource(reader=_FakeReader(spans))
@@ -380,31 +387,31 @@ def test_multi_run_tiebreak_by_latest_end_time(tmp_path: Path) -> None:
 
     entries = [json.loads(ln) for ln in dest.read_text().splitlines()]
     assert len(entries) == 1
-    # rootLate ends at 3_000_000, rootEarly ends at 1_500_000 → late wins.
+    # rootLate ends at 6_000_000, rootEarly ends at 1_500_000 → late wins.
     assert entries[0]["game_id"] == "b"
 
 
 def test_explicit_run_id_overrides_autopick(tmp_path: Path) -> None:
     trace_id = "trial-A"
-    root_small = _root_span(trace_id, span_id="rootSmall")
-    root_big = _root_span(trace_id, span_id="rootBig")
+    root_small = _root_span(trace_id, span_id="rootSmall", start_time_us=1_000_000)
+    root_big = _root_span(trace_id, span_id="rootBig", start_time_us=5_000_000)
     spans = [
         root_small,
         root_big,
         _event_span(
             _make_init(game_id="small"),
             trace_id=trace_id,
-            parent_span_id=root_small.span_id,
+            start_time_us=2_000_000,  # After rootSmall, before rootBig
         ),
         _event_span(
             _make_init(game_id="big1"),
             trace_id=trace_id,
-            parent_span_id=root_big.span_id,
+            start_time_us=6_000_000,  # After rootBig
         ),
         _event_span(
             _make_init(game_id="big2"),
             trace_id=trace_id,
-            parent_span_id=root_big.span_id,
+            start_time_us=7_000_000,  # After rootBig
         ),
     ]
     source = SLSEventSource(reader=_FakeReader(spans))
@@ -476,29 +483,28 @@ def test_run_id_ambiguous_prefix_raises(tmp_path: Path) -> None:
         )
 
 
-def test_orphan_spans_dropped(tmp_path: Path, caplog) -> None:
+def test_all_spans_assigned_to_single_root(tmp_path: Path) -> None:
+    """With a single root, all event spans are assigned regardless of parent_span_id."""
     trace_id = "trial-A"
     root = _root_span(trace_id, span_id="rootA")
-    orphan_event = _event_span(
-        _make_init(game_id="orphan"),
+    # Spans with or without parent_span_id all belong to the single root.
+    span_with_bogus_parent = _event_span(
+        _make_init(game_id="a"),
         trace_id=trace_id,
         parent_span_id="does-not-exist",
     )
-    good_event = _event_span(
-        _make_init(game_id="good"),
+    span_no_parent = _event_span(
+        _make_init(game_id="b"),
         trace_id=trace_id,
-        parent_span_id=root.span_id,
     )
-    spans = [root, orphan_event, good_event]
+    spans = [root, span_with_bogus_parent, span_no_parent]
     source = SLSEventSource(reader=_FakeReader(spans))
 
     dest = tmp_path / "out.jsonl"
-    with caplog.at_level("WARNING"):
-        _run(source.materialize_jsonl(trace_id, dest))
+    _run(source.materialize_jsonl(trace_id, dest))
 
     entries = [json.loads(ln) for ln in dest.read_text().splitlines()]
-    assert [e["game_id"] for e in entries] == ["good"]
-    assert any("orphan" in r.message for r in caplog.records)
+    assert {e["game_id"] for e in entries} == {"a", "b"}
 
 
 def test_deep_parent_chain_resolves_to_root(tmp_path: Path) -> None:

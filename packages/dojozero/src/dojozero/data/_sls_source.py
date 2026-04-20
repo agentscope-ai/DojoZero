@@ -27,7 +27,6 @@ import json
 import logging
 import os
 import uuid
-from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -333,36 +332,34 @@ def _select_run(
 def _group_spans_by_root(
     spans: list[SpanData], roots: list[SpanData]
 ) -> dict[str, list[SpanData]]:
-    """BFS from each root through parent_span_id to assign a root_id per span.
+    """Assign non-root spans to their run's root (trial.started).
 
-    Spans that don't chain up to any root are logged and dropped.
+    Event spans share trace_id with the trial but have no parent_span_id set
+    (DataHub emits them as top-level spans). We assign them to roots by time
+    proximity: each span belongs to the latest root that started before it.
+
+    For the common single-root case this is trivial — all spans go to the
+    one root.
     """
-    children: dict[str | None, list[SpanData]] = defaultdict(list)
-    for s in spans:
-        children[s.parent_span_id].append(s)
+    root_ids = {r.span_id for r in roots}
+    non_root = [s for s in spans if s.span_id not in root_ids]
 
-    result: dict[str, list[SpanData]] = {}
-    assigned: set[str] = set()
-    for root in roots:
-        collected: list[SpanData] = [root]
-        assigned.add(root.span_id)
-        queue: deque[str] = deque([root.span_id])
-        while queue:
-            parent_id = queue.popleft()
-            for child in children.get(parent_id, []):
-                if child.span_id in assigned:
-                    continue
-                assigned.add(child.span_id)
-                collected.append(child)
-                queue.append(child.span_id)
-        result[root.span_id] = collected
+    result: dict[str, list[SpanData]] = {r.span_id: [r] for r in roots}
 
-    orphans = [s for s in spans if s.span_id not in assigned]
-    if orphans:
-        logger.warning(
-            "SLS: dropped %d orphan span(s) with no ancestor trial.started "
-            "(first span_ids=%s)",
-            len(orphans),
-            [s.span_id for s in orphans[:5]],
-        )
+    if len(roots) == 1:
+        # Fast path: single root, all spans belong to it.
+        result[roots[0].span_id].extend(non_root)
+    else:
+        # Multi-root: assign each span to the latest root that started
+        # before it (i.e., the run that was active when the event fired).
+        sorted_roots = sorted(roots, key=lambda r: r.start_time)
+        for s in non_root:
+            best_root = sorted_roots[0].span_id
+            for r in sorted_roots:
+                if r.start_time <= s.start_time:
+                    best_root = r.span_id
+                else:
+                    break
+            result[best_root].append(s)
+
     return result

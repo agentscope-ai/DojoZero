@@ -855,6 +855,12 @@ class SLSTraceReader:
                     break  # Last page (less than full page means no more data)
 
                 offset += page_size
+                if offset % (page_size * 20) == 0:
+                    LOGGER.info(
+                        "SLS get_spans progress: trial_id=%s, fetched %d rows so far",
+                        trial_id,
+                        len(all_rows),
+                    )
 
             LOGGER.info(
                 "SLS get_spans: trial_id=%s, total_rows=%d (pages=%d)",
@@ -1092,7 +1098,12 @@ class SLSTraceReader:
                     dt = datetime.fromisoformat(start_time_raw.replace("Z", "+00:00"))
                     start_time = int(dt.timestamp() * 1_000_000)
                 except ValueError:
-                    start_time = int(start_time_raw) if start_time_raw.isdigit() else 0
+                    # __time__ comes as a string of Unix seconds from SLS
+                    start_time = (
+                        int(start_time_raw) * 1_000_000
+                        if start_time_raw.isdigit()
+                        else 0
+                    )
             else:
                 # __time__ is in seconds, convert to microseconds
                 start_time = int(start_time_raw) * 1_000_000
