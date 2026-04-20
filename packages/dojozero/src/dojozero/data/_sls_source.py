@@ -23,6 +23,7 @@ import json
 import logging
 import os
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -36,6 +37,19 @@ from dojozero.core._tracing import (
 if TYPE_CHECKING:
     from dojozero.core._tracing import TraceReader
     from dojozero.data._models import DataEvent
+
+
+@dataclass(slots=True, frozen=True)
+class MaterializeResult:
+    """Result of materializing a trial's events from SLS."""
+
+    path: Path
+    """The JSONL file path."""
+    chosen_run_id: str | None
+    """The run that was selected (auto-picked or explicit). None if no roots found."""
+    materialized_at: datetime
+    """When the file was written (UTC). For cache hits this is the file mtime."""
+
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +104,7 @@ class SLSEventSource:
         *,
         run_id: str | None = None,
         overwrite: bool = True,
-    ) -> Path:
+    ) -> MaterializeResult:
         """Write events for ``trial_id`` to ``dest`` as JSONL.
 
         The file is written atomically (tempfile + rename). Format is
@@ -105,14 +119,28 @@ class SLSEventSource:
                 refetching. Default True (always refetch).
 
         Returns:
-            The resolved ``dest`` path.
+            A :class:`MaterializeResult` with path, chosen run_id, and
+            materialization timestamp.
         """
         dest = Path(dest)
         if not overwrite and dest.exists():
             logger.info("SLS materialize: using cached %s", dest)
-            return dest
+            mtime = datetime.fromtimestamp(dest.stat().st_mtime, tz=timezone.utc)
+            return MaterializeResult(
+                path=dest, chosen_run_id=run_id, materialized_at=mtime
+            )
 
-        events = await self.fetch_events(trial_id, run_id=run_id)
+        reader = self._reader or _make_reader()
+        owns_reader = self._reader is None
+        try:
+            spans = await reader.get_spans(trial_id)
+        finally:
+            if owns_reader:
+                await reader.close()
+
+        chosen_run_id, events = _spans_to_events_with_run_id(
+            spans, trial_id=trial_id, run_id=run_id
+        )
 
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".tmp")
@@ -129,13 +157,17 @@ class SLSEventSource:
                     pass
             raise
 
+        now = datetime.now(timezone.utc)
         logger.info(
-            "SLS materialize: trial=%s wrote %d events to %s",
+            "SLS materialize: trial=%s run=%s wrote %d events to %s",
             trial_id,
+            chosen_run_id,
             len(events),
             dest,
         )
-        return dest
+        return MaterializeResult(
+            path=dest, chosen_run_id=chosen_run_id, materialized_at=now
+        )
 
 
 def _make_reader() -> SLSTraceReader:
@@ -171,9 +203,24 @@ def _spans_to_events(
     run_id: str | None,
 ) -> list["DataEvent"]:
     """Partition by run, pick one, deserialize, sort."""
+    _, events = _spans_to_events_with_run_id(spans, trial_id=trial_id, run_id=run_id)
+    return events
+
+
+def _spans_to_events_with_run_id(
+    spans: list[SpanData],
+    *,
+    trial_id: str,
+    run_id: str | None,
+) -> tuple[str | None, list["DataEvent"]]:
+    """Partition by run, pick one, deserialize, sort.
+
+    Returns:
+        Tuple of (chosen_root_id, sorted_events).
+    """
     if not spans:
         logger.warning("SLS returned zero spans for trial=%s", trial_id)
-        return []
+        return None, []
 
     roots = [s for s in spans if s.operation_name == _TRIAL_STARTED_OP]
     if not roots:
@@ -213,7 +260,7 @@ def _spans_to_events(
         len(events),
         len(chosen_spans),
     )
-    return events
+    return chosen_root_id, events
 
 
 def _select_run(

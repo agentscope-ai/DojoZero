@@ -109,6 +109,9 @@ class BacktestBettingTrialMetadata(BettingTrialMetadata):
     source_trial_id: str = ""
     source_run_id: str = ""
     backtest_source: str = ""
+    # ISO timestamp (UTC) of when the SLS events were materialized to local
+    # cache.  Empty for local-source backtests or when unknown.
+    materialized_at: str = ""
 
 
 __all__ = [

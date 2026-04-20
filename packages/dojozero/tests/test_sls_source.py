@@ -570,6 +570,106 @@ def test_overwrite_false_reuses_cache(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# MaterializeResult: chosen_run_id and materialized_at
+# ---------------------------------------------------------------------------
+
+
+def test_materialize_result_returns_chosen_run_id(tmp_path: Path) -> None:
+    """Auto-pick surfaces the chosen root span_id in the result."""
+    trace_id = "trial-multi"
+    root_small = _root_span(trace_id, span_id="rootSmall")
+    root_big = _root_span(trace_id, span_id="rootBig")
+    spans = [
+        root_small,
+        root_big,
+        _event_span(
+            _make_init(game_id="small"),
+            trace_id=trace_id,
+            parent_span_id=root_small.span_id,
+        ),
+        _event_span(
+            _make_init(game_id="big1"),
+            trace_id=trace_id,
+            parent_span_id=root_big.span_id,
+        ),
+        _event_span(
+            _make_init(game_id="big2"),
+            trace_id=trace_id,
+            parent_span_id=root_big.span_id,
+        ),
+    ]
+    source = SLSEventSource(reader=_FakeReader(spans))
+    dest = tmp_path / "out.jsonl"
+    result = _run(source.materialize_jsonl(trace_id, dest))
+
+    # Auto-pick selects rootBig (2 events > 1 event)
+    assert result.chosen_run_id == "rootBig"
+    assert result.path == dest
+
+
+def test_materialize_result_explicit_run_id(tmp_path: Path) -> None:
+    """Explicit run_id is reflected in the result."""
+    trace_id = "trial-multi"
+    root_a = _root_span(trace_id, span_id="rootA")
+    root_b = _root_span(trace_id, span_id="rootB")
+    spans = [
+        root_a,
+        root_b,
+        _event_span(
+            _make_init(game_id="a1"),
+            trace_id=trace_id,
+            parent_span_id=root_a.span_id,
+        ),
+        _event_span(
+            _make_init(game_id="b1"),
+            trace_id=trace_id,
+            parent_span_id=root_b.span_id,
+        ),
+    ]
+    source = SLSEventSource(reader=_FakeReader(spans))
+    dest = tmp_path / "out.jsonl"
+    result = _run(source.materialize_jsonl(trace_id, dest, run_id="rootA"))
+
+    assert result.chosen_run_id == "rootA"
+
+
+def test_materialize_result_has_timestamp(tmp_path: Path) -> None:
+    """Fresh materialization stamps a recent UTC timestamp."""
+    root = _root_span("trial-A")
+    spans = [
+        root,
+        _event_span(_make_init(), trace_id="trial-A", parent_span_id=root.span_id),
+    ]
+    source = SLSEventSource(reader=_FakeReader(spans))
+    dest = tmp_path / "out.jsonl"
+
+    before = datetime.now(timezone.utc)
+    result = _run(source.materialize_jsonl("trial-A", dest))
+    after = datetime.now(timezone.utc)
+
+    assert before <= result.materialized_at <= after
+    assert result.materialized_at.tzinfo is not None
+
+
+def test_materialize_result_cache_hit_uses_mtime(tmp_path: Path) -> None:
+    """Cache hit (overwrite=False) returns file mtime as materialized_at."""
+    dest = tmp_path / "trial-A.jsonl"
+    dest.write_text('{"cached": true}\n')
+
+    class _BoomReader(_FakeReader):
+        async def get_spans(self, *args, **kwargs):  # type: ignore[override]
+            raise AssertionError("should not be called")
+
+    source = SLSEventSource(reader=_BoomReader([]))
+    result = _run(source.materialize_jsonl("trial-A", dest, overwrite=False))
+
+    # materialized_at should be close to the file mtime
+    file_mtime = datetime.fromtimestamp(dest.stat().st_mtime, tz=timezone.utc)
+    assert result.materialized_at == file_mtime
+    assert result.path == dest
+
+
+# ---------------------------------------------------------------------------
 # Reader-lifecycle: close() is invoked when we own the reader
 # ---------------------------------------------------------------------------
 

@@ -959,11 +959,12 @@ def create_dashboard_app(
                 run_id = request.backtest.run_id
                 suffix = f"-{run_id[:8]}" if run_id else ""
                 event_file = cache_dir / f"{source_trial_id}{suffix}.jsonl"
+                materialize_result = None
                 if not event_file.exists():
                     try:
                         from dojozero.data import SLSEventSource
 
-                        await SLSEventSource().materialize_jsonl(
+                        materialize_result = await SLSEventSource().materialize_jsonl(
                             source_trial_id,
                             event_file,
                             run_id=run_id or None,
@@ -999,6 +1000,14 @@ def create_dashboard_app(
             from dojozero.betting import BacktestBettingTrialMetadata
 
             metadata_dict = asdict(spec.metadata)
+            # Determine the actual run_id used (may differ from request when
+            # auto-picked) and materialization timestamp for lineage.
+            if materialize_result is not None:
+                effective_run_id = materialize_result.chosen_run_id or ""
+                materialized_at = materialize_result.materialized_at.isoformat()
+            else:
+                effective_run_id = request.backtest.run_id or ""
+                materialized_at = ""
             spec.metadata = BacktestBettingTrialMetadata(
                 **metadata_dict,
                 backtest_mode=True,
@@ -1006,8 +1015,9 @@ def create_dashboard_app(
                 backtest_speed=backtest_speed,
                 backtest_max_sleep=backtest_max_sleep,
                 source_trial_id=source_trial_id,
-                source_run_id=request.backtest.run_id or "",
+                source_run_id=effective_run_id,
                 backtest_source=backtest_source,
+                materialized_at=materialized_at,
             )
             spec.builder_name = scenario.name
 
