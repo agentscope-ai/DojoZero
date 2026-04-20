@@ -97,11 +97,13 @@ class SpanData:
                 k = tag.get("key", "")
                 if k:
                     tags[k] = _jaeger_tag_value(tag)
+        # startTime is microseconds since epoch (written by SpanData.to_dict).
+        raw_st = data.get("startTime", 0)
         return cls(
             trace_id=data.get("traceID", ""),
             span_id=data.get("spanID", ""),
             operation_name=_jaeger_span_operation_name(data),
-            start_time=data.get("startTime", 0),
+            start_time=raw_st,
             duration=data.get("duration", 0),
             parent_span_id=data.get("parentSpanID"),
             tags=tags,

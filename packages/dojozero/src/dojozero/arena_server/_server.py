@@ -546,12 +546,58 @@ class BackgroundRefresher:
                 if await self.redis_reader.has_updates():
                     # Version changed, refresh hot data
                     await self.redis_reader.load_hot_data()
+                    # Keep live stream cache in sync for WebSocket incremental updates.
+                    await self._refresh_live_trial_details_from_redis()
                     LOGGER.debug("BackgroundRefresher: Refreshed hot data from Redis")
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 LOGGER.warning("BackgroundRefresher: Redis refresh error: %s", e)
+
+    async def _refresh_live_trial_details_from_redis(self) -> None:
+        """Refresh live trial_details cache from Redis spans.
+
+        In Redis mode, websocket stream updates depend on trial_details cache growth.
+        We refresh live trial_details on each Redis version change so
+        /ws/trials/{trial_id}/stream can emit incremental items continuously.
+        """
+        if self.redis_reader is None or not self.redis_reader.is_connected:
+            return
+
+        try:
+            # Source of truth for currently live trials comes from sync service.
+            live_trial_ids = await self.redis_reader.redis_client.get_live_trials()
+            current_live = set(live_trial_ids)
+
+            # Handle live -> completed transitions for replay preload and cache cleanup.
+            completed_trials = self._known_live_trials - current_live
+            for trial_id in completed_trials:
+                self.cache.remove_trial_details(trial_id)
+                await self._load_replay_for_trial(trial_id)
+
+            self._known_live_trials = current_live
+
+            # Refresh/append trial_details for all currently live trials.
+            for trial_id in live_trial_ids:
+                spans = await self.redis_reader.load_spans_for_trial(trial_id)
+                if not spans:
+                    continue
+
+                existing = self.cache.get_trial_details(trial_id)
+                if existing is not None:
+                    existing_items = existing.get("items", [])
+                    max_ts = existing.get("max_timestamp", 0)
+                else:
+                    existing_items = []
+                    max_ts = 0
+
+                self._process_trial_details(trial_id, spans, existing_items, max_ts)
+        except Exception as e:
+            LOGGER.warning(
+                "BackgroundRefresher: Failed to refresh live trial_details from Redis: %s",
+                e,
+            )
 
     async def wait_for_ready(self, timeout: float | None = None) -> None:
         """Wait for initial refresh to complete.
