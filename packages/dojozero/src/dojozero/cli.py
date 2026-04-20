@@ -1447,8 +1447,9 @@ def _resolve_event_files(
         patterns: List of file patterns, OSS URLs, or sls:// trace ids
         temp_dir: Temporary directory for downloading OSS files (created if None)
         sls_cache_dir: Where materialized SLS files land (default: ./outputs).
-            Finished SLS traces are immutable, so cached materializations are
-            reused; to refetch, delete the cached JSONL.
+            Cached materializations are reused without re-checking SLS.
+            Note: a double-submitted trial may accumulate a new run after
+            caching; delete the cached JSONL to force a refetch.
 
     Returns:
         List of resolved local file paths (sorted)
@@ -1513,7 +1514,7 @@ def _resolve_event_files(
                 except Exception as e:
                     raise DojoZeroCLIError(
                         f"Failed to materialize SLS events for {pattern}: {e}"
-                    )
+                    ) from e
             else:
                 LOGGER.info("Using cached SLS events at %s", cache_path)
             resolved_files.append(cache_path)

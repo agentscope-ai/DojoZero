@@ -2,8 +2,10 @@
 
 SLS stores every event emitted by a trial as an OTel span, keyed by
 ``_trace_id == trial_id``. This module walks those spans and writes a JSONL
-file byte-compatible with ``DataHub._persist_event`` output, so the existing
-backtest playback and dedup-on-resume paths work unchanged.
+file format-compatible with ``DataHub._persist_event`` output, so the existing
+backtest playback and dedup-on-resume paths work unchanged.  Note: event
+timestamps are reconstructed from span start_time (microsecond int → float →
+datetime), so sub-microsecond precision from the original is not preserved.
 
 Key behaviors:
 
@@ -13,8 +15,10 @@ Key behaviors:
   This module partitions spans by run and picks one run — merging two runs
   would interleave two independent histories because most recurring events
   (plays, game updates, odds) do not override ``get_dedup_key()``.
-- Auto-selects the "most complete" run (most ``event.*`` spans; tie-break by
-  latest ``trial.started`` end time). Callers can override with ``run_id``.
+- Auto-selects the run with the most ``event.*`` spans (tie-break by latest
+  ``trial.started`` end time). This is a "most events" heuristic — it is not
+  success-aware since spans don't carry a status tag today. Callers can
+  override with ``run_id``.
 """
 
 from __future__ import annotations
@@ -276,18 +280,31 @@ def _select_run(
 
     root_ids = [r.span_id for r in roots]
     if run_id is not None:
-        if run_id not in by_root:
+        # Exact match first, then prefix match (users may pass truncated
+        # IDs, e.g. 8-char prefixes from cache filenames).
+        if run_id in by_root:
+            return run_id, by_root[run_id]
+        prefix_matches = [rid for rid in by_root if rid.startswith(run_id)]
+        if len(prefix_matches) == 1:
+            matched = prefix_matches[0]
+            return matched, by_root[matched]
+        if len(prefix_matches) > 1:
             raise ValueError(
-                f"run_id={run_id!r} not found in trace {trial_id!r}; "
-                f"available roots: {root_ids}"
+                f"run_id={run_id!r} is ambiguous in trace {trial_id!r}; "
+                f"matches: {prefix_matches}"
             )
-        return run_id, by_root[run_id]
+        raise ValueError(
+            f"run_id={run_id!r} not found in trace {trial_id!r}; "
+            f"available roots: {root_ids}"
+        )
 
     if len(roots) == 1:
         only = roots[0].span_id
         return only, by_root[only]
 
-    # Multi-run: auto-pick by (event-span count desc, end_time desc).
+    # Multi-run: auto-pick the run with the most event spans, tie-break by
+    # latest end_time.  This is a "most events" heuristic, not success-aware
+    # (trial.started spans don't carry a status tag today).
     root_by_id = {r.span_id: r for r in roots}
 
     def _score(rid: str) -> tuple[int, int]:

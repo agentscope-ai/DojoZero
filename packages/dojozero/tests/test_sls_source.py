@@ -432,6 +432,50 @@ def test_unknown_run_id_raises(tmp_path: Path) -> None:
         )
 
 
+def test_run_id_prefix_match(tmp_path: Path) -> None:
+    """A truncated run_id prefix should match a unique full span_id."""
+    trace_id = "trial-A"
+    full_id = "abcdef1234567890"
+    root = _root_span(trace_id, span_id=full_id)
+    spans = [
+        root,
+        _event_span(
+            _make_init(game_id="g1"),
+            trace_id=trace_id,
+            parent_span_id=root.span_id,
+        ),
+    ]
+    source = SLSEventSource(reader=_FakeReader(spans))
+    dest = tmp_path / "out.jsonl"
+    # Pass only 8-char prefix — should still resolve
+    result = _run(source.materialize_jsonl(trace_id, dest, run_id="abcdef12"))
+
+    assert result.chosen_run_id == full_id
+    entries = [json.loads(ln) for ln in dest.read_text().splitlines()]
+    assert entries[0]["game_id"] == "g1"
+
+
+def test_run_id_ambiguous_prefix_raises(tmp_path: Path) -> None:
+    """A prefix matching multiple roots should raise."""
+    trace_id = "trial-A"
+    root_a = _root_span(trace_id, span_id="abcd0000aaaaaaaa")
+    root_b = _root_span(trace_id, span_id="abcd0000bbbbbbbb")
+    spans = [
+        root_a,
+        root_b,
+        _event_span(_make_init(), trace_id=trace_id, parent_span_id=root_a.span_id),
+        _event_span(_make_init(), trace_id=trace_id, parent_span_id=root_b.span_id),
+    ]
+    source = SLSEventSource(reader=_FakeReader(spans))
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        _run(
+            source.materialize_jsonl(
+                trace_id, tmp_path / "out.jsonl", run_id="abcd0000"
+            )
+        )
+
+
 def test_orphan_spans_dropped(tmp_path: Path, caplog) -> None:
     trace_id = "trial-A"
     root = _root_span(trace_id, span_id="rootA")

@@ -1,10 +1,12 @@
 """Tests for SLS backtest cache filename scheme.
 
 The server and CLI must use the same naming convention:
-  {trial_id}.jsonl           (no run_id)
-  {trial_id}-{run_id[:8]}.jsonl  (with run_id)
+  {trial_id}.jsonl              (no run_id)
+  {trial_id}-{run_id[:8]}.jsonl (with run_id)
 
-This prevents cache collisions when the same trial has multiple runs.
+8-char prefix of the 16-hex span_id keeps filenames readable while
+avoiding collisions.  _select_run accepts both full and prefix matches
+so users can pass either form.
 """
 
 from pathlib import Path
@@ -51,7 +53,7 @@ class TestCacheHitMiss:
     def test_cache_hit_skips_materialization(self, tmp_path: Path) -> None:
         """When cache file exists, no SLS fetch should be needed."""
         trial_id = "trial-xyz"
-        run_id = "run12345678"
+        run_id = "run12345678abcdef"
         cache_dir = tmp_path / "backtest_cache"
         cache_dir.mkdir()
 
