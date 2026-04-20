@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import importlib
+import json
 import logging
 import os
 import signal
@@ -1637,6 +1638,59 @@ def _maybe_inject_game_id(
         pass
 
 
+async def _write_backtest_result(
+    orchestrator: "TrialOrchestrator",
+    trial_id: str,
+) -> None:
+    """Write result.json with broker statistics to the trial store directory."""
+    from dojozero.betting import BrokerOperator
+
+    runtime = orchestrator._trials.get(trial_id)
+    if runtime is None:
+        LOGGER.warning("Cannot write result.json: trial '%s' not found", trial_id)
+        return
+
+    # Find broker
+    broker: BrokerOperator | None = None
+    for actor_runtime in runtime.actors.values():
+        actor = actor_runtime.instance
+        if isinstance(actor, BrokerOperator):
+            broker = actor
+            break
+
+    if broker is None:
+        LOGGER.info("No BrokerOperator found, skipping result.json")
+        return
+
+    # Gather statistics for all agents
+    result: dict[str, Any] = {
+        "trial_id": trial_id,
+        "initial_balance": broker.initial_balance,
+        "agents": {},
+    }
+
+    for agent_id, account in broker._accounts.items():
+        stats = await broker.get_statistics(agent_id)
+        result["agents"][agent_id] = {
+            "balance": str(account.balance),
+            "statistics": json.loads(stats.model_dump_json()),
+        }
+
+    # Write to trial store directory
+    from dojozero.core._filesystem_orchestrator_store import FileSystemOrchestratorStore
+
+    store = orchestrator._store
+    if isinstance(store, FileSystemOrchestratorStore):
+        trial_dir = store._trials_dir / trial_id
+    else:
+        # Fallback: write next to the working directory
+        trial_dir = Path("dojozero-store") / "trials" / trial_id
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    result_path = trial_dir / "result.json"
+    result_path.write_text(json.dumps(result, indent=2))
+    LOGGER.info("Wrote backtest result to %s", result_path)
+
+
 async def _backtest_single_file(
     event_file: Path,
     trial_id: str,
@@ -1749,6 +1803,9 @@ async def _backtest_single_file(
             "Starting backtest at %.1fx speed (max sleep: %.1fs)", speed, max_sleep
         )
         await coordinator.run_all()
+
+        # Write result.json with broker statistics before stopping
+        await _write_backtest_result(orchestrator, trial_id)
 
         LOGGER.info("Stopping trial '%s'", trial_id)
         await orchestrator.stop_trial(trial_id)

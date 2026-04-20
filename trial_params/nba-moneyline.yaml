@@ -2,7 +2,6 @@ scenario:
   name: nba
   config:
     espn_game_id: 'your_espn_game_id_here'  # ESPN game ID for the NBA game
-
     hub:
       persistence_file: outputs/nba_betting_events-{espn_game_id}.jsonl
 
@@ -52,6 +51,32 @@ scenario:
       - game_update_stream
 
     agents:
+    - id: degen_agent
+      persona: degen
+      class: BettingAgent
+      persona_config_path: agents/personas/degen.yaml
+      llm_config_path: agents/llms/default.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_lifecycle_stream
+      - play_by_play_stream
+    - id: mystic_agent
+      persona: mystic
+      class: BettingAgent
+      persona_config_path: agents/personas/mystic.yaml
+      llm_config_path: agents/llms/default.yaml
+      operators:
+        - betting_broker
+      data_streams:
+        - pre_game_insights_stream
+        - game_update_stream
+        - odds_update_stream
+        - game_lifecycle_stream
+        - play_by_play_stream
     - id: pundit_agent
       persona: pundit
       class: BettingAgent
@@ -65,3 +90,42 @@ scenario:
         - odds_update_stream
         - game_lifecycle_stream
         - play_by_play_stream
+    - id: shark_agent
+      persona: shark
+      class: BettingAgent
+      persona_config_path: agents/personas/shark.yaml
+      llm_config_path: agents/llms/default.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_lifecycle_stream
+      - play_by_play_stream
+    - id: sheep_agent
+      persona: sheep
+      class: BettingAgent
+      persona_config_path: agents/personas/sheep.yaml
+      llm_config_path: agents/llms/default.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_lifecycle_stream
+      - play_by_play_stream
+    - id: whale_agent
+      persona: whale
+      class: BettingAgent
+      persona_config_path: agents/personas/whale.yaml
+      llm_config_path: agents/llms/default.yaml
+      operators:
+      - betting_broker
+      data_streams:
+      - pre_game_insights_stream
+      - game_update_stream
+      - odds_update_stream
+      - game_lifecycle_stream
+      - play_by_play_stream
