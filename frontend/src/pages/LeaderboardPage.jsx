@@ -156,6 +156,7 @@ function RankingTable({ selectedAgent, setSelectedAgent, leaderboardData }) {
             <th style={{ textAlign: "right" }}>Win Rate</th>
             <th style={{ textAlign: "right" }}>Predictions</th>
             <th style={{ textAlign: "right" }}>ROI</th>
+            <th style={{ textAlign: "right" }}>Sharpe</th>
           </tr>
         </thead>
         <tbody>
@@ -210,6 +211,14 @@ function RankingTable({ selectedAgent, setSelectedAgent, leaderboardData }) {
                   color: entry.roi >= 0 ? "var(--success)" : "var(--danger)",
                 }}>
                   {entry.roi >= 0 ? "+" : ""}{entry.roi}%
+                </span>
+              </td>
+              <td style={{ textAlign: "right" }}>
+                <span style={{
+                  ...styles.roi,
+                  color: entry.sharpe >= 0 ? "var(--success)" : "var(--danger)",
+                }}>
+                  {entry.sharpe >= 0 ? "+" : ""}{entry.sharpe}
                 </span>
               </td>
             </motion.tr>

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -847,6 +848,30 @@ class LeaderboardResult:
     agent_bets_index: dict[str, list[BetRecord]]
 
 
+# ---------------------------------------------------------------------------
+# Sharpe ratio for cross-trial performance
+# ---------------------------------------------------------------------------
+
+
+def _compute_sharpe(per_trial_rois: list[float]) -> float:
+    """Compute Sharpe-like ratio from per-trial ROIs.
+
+    sharpe = mean(returns) / std(returns)
+
+    Skips trials with r == 0 (agent did not participate).
+    Returns 0 if fewer than 2 valid trials or std == 0.
+    """
+    valid = [r for r in per_trial_rois if r != 0.0]
+    if len(valid) < 2:
+        return 0.0
+    mean_r = sum(valid) / len(valid)
+    variance = sum((r - mean_r) ** 2 for r in valid) / (len(valid) - 1)
+    std_r = math.sqrt(variance)
+    if std_r == 0.0:
+        return 0.0
+    return mean_r / std_r
+
+
 def _compute_leaderboard_from_spans(
     spans_by_trial: dict[str, list[SpanData]],
     agent_info_cache: dict[str, AgentInfo],
@@ -894,6 +919,7 @@ def _compute_leaderboard_from_spans(
         wins: int = 0
         total_bets: int = 0
         total_wagered: float = 0.0
+        per_trial_rois: list[float] = field(default_factory=list)
 
     agent_stats: dict[str, _AgentStats] = {}
     agent_bets: dict[str, list[BetRecord]] = {}
@@ -1007,21 +1033,37 @@ def _compute_leaderboard_from_spans(
 
                 if use_date_filter:
                     # Date-filtered: recompute from individual bets
+                    # Track per-agent wagered/profit within this trial
+                    trial_wagered: dict[str, float] = {}
+                    trial_profit: dict[str, float] = {}
                     for bet in typed.bets.values():
                         acc = _ensure_agent(bet.agent_id)
                         if bet.amount:
                             acc.total_bets += 1
                             acc.total_wagered += float(bet.amount)
+                            trial_wagered[bet.agent_id] = trial_wagered.get(
+                                bet.agent_id, 0.0
+                            ) + float(bet.amount)
                         if bet.outcome is not None:
                             if bet.outcome == BetOutcome.WIN:
                                 acc.wins += 1
                                 if bet.actual_payout:
-                                    acc.winnings += float(
-                                        bet.actual_payout - bet.amount
+                                    profit = float(bet.actual_payout - bet.amount)
+                                    acc.winnings += profit
+                                    trial_profit[bet.agent_id] = (
+                                        trial_profit.get(bet.agent_id, 0.0) + profit
                                     )
                             elif bet.outcome == BetOutcome.LOSS:
                                 acc.winnings -= float(bet.amount)
+                                trial_profit[bet.agent_id] = trial_profit.get(
+                                    bet.agent_id, 0.0
+                                ) - float(bet.amount)
                         _collect_bet_record(bet, trial_id, meta)
+                    # Record per-trial ROI for each agent in this trial
+                    for aid, tw in trial_wagered.items():
+                        if tw > 0:
+                            tr = trial_profit.get(aid, 0.0) / tw
+                            agent_stats[aid].per_trial_rois.append(tr)
                 else:
                     # Default: use pre-computed statistics
                     for agent_id, stats in typed.statistics.items():
@@ -1030,6 +1072,11 @@ def _compute_leaderboard_from_spans(
                         acc.wins += stats.wins
                         acc.total_bets += stats.total_bets
                         acc.total_wagered += float(stats.total_wagered)
+                        # Record per-trial ROI for log-return aggregation
+                        tw = float(stats.total_wagered)
+                        if tw > 0:
+                            trial_roi = float(stats.net_profit) / tw
+                            acc.per_trial_rois.append(trial_roi)
 
                     # Collect bets separately when needed
                     if collect_bets:
@@ -1058,6 +1105,7 @@ def _compute_leaderboard_from_spans(
             if stats.total_wagered > 0
             else 0
         )
+        sharpe = _compute_sharpe(stats.per_trial_rois)
 
         leaderboard.append(
             LeaderboardEntry(
@@ -1066,6 +1114,7 @@ def _compute_leaderboard_from_spans(
                 winRate=round(win_rate, 1),
                 totalBets=stats.total_bets,
                 roi=round(roi, 1),
+                sharpe=round(sharpe, 2),
                 createdAt=stats.agent.created_at,
             )
         )
@@ -1075,6 +1124,7 @@ def _compute_leaderboard_from_spans(
         "winnings": lambda x: x.winnings,
         "win_rate": lambda x: x.win_rate,
         "roi": lambda x: x.roi,
+        "sharpe": lambda x: x.sharpe,
         "total_bets": lambda x: x.total_bets,
     }
     key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])
