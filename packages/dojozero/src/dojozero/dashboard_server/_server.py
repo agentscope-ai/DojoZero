@@ -938,15 +938,20 @@ def create_dashboard_app(
                         status_code=500,
                     )
                 cache_dir = Path(state.data_dir) / "backtest_cache"
-                event_file = cache_dir / f"{source_trial_id}.jsonl"
-                if not event_file.exists() or request.backtest.run_id:
+                # Use same cache naming as CLI: {trial_id}-{run_id[:8]}.jsonl
+                # This prevents cache collisions between different run_ids
+                # for the same trial.
+                run_id = request.backtest.run_id
+                suffix = f"-{run_id[:8]}" if run_id else ""
+                event_file = cache_dir / f"{source_trial_id}{suffix}.jsonl"
+                if not event_file.exists():
                     try:
                         from dojozero.data import SLSEventSource
 
                         await SLSEventSource().materialize_jsonl(
                             source_trial_id,
                             event_file,
-                            run_id=request.backtest.run_id,
+                            run_id=run_id or None,
                         )
                         backtest_source = "sls"
                     except Exception as e:
