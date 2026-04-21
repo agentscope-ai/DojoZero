@@ -167,6 +167,54 @@ def get_server_state(request: Request) -> DashboardServerState:
     return state
 
 
+def _try_oss_download(trial_id: str, cache_path: Path) -> bool:
+    """Try to download a trial's event file from OSS.
+
+    Returns True if the file was downloaded, False otherwise.
+    Gracefully handles missing deps, config, or network errors.
+    """
+    try:
+        from dojozero.utils.oss import OSSClient
+
+        client = OSSClient.from_env()
+        oss_key = f"trials/{trial_id}/events.jsonl"
+        if client.file_exists(oss_key):
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            client.download_file(oss_key, cache_path)
+            LOGGER.info(
+                "Downloaded trial '%s' events from OSS to %s", trial_id, cache_path
+            )
+            return True
+        return False
+    except ImportError:
+        return False
+    except ValueError:
+        return False
+    except Exception as e:
+        LOGGER.debug("OSS download failed for trial '%s': %s", trial_id, e)
+        return False
+
+
+def _try_oss_upload(trial_id: str, local_path: Path) -> None:
+    """Upload a materialized event file to OSS for cross-host caching.
+
+    Fire-and-forget: logs errors but never raises.
+    """
+    try:
+        from dojozero.utils.oss import OSSClient
+
+        client = OSSClient.from_env()
+        oss_key = f"trials/{trial_id}/events.jsonl"
+        client.upload_file(local_path, oss_key)
+        LOGGER.info("Uploaded materialized events for trial '%s' to OSS", trial_id)
+    except ImportError:
+        pass
+    except ValueError:
+        pass
+    except Exception as e:
+        LOGGER.warning("OSS upload failed for trial '%s': %s", trial_id, e)
+
+
 async def _launch_backtest_trial(
     orchestrator: TrialOrchestrator,
     spec: TrialSpec,
@@ -930,8 +978,7 @@ def create_dashboard_app(
                         event_file = candidate
 
             if event_file is None:
-                # No local file — fall through to SLS materialization so that
-                # cross-server backtests work.
+                # No local file — try OSS, then SLS materialization.
                 output_base = state.output_dir
                 cache_dir = output_base / "backtest_cache"
                 # Cache naming: {trial_id}-{run_id[:8]}.jsonl
@@ -942,32 +989,41 @@ def create_dashboard_app(
                 event_file = cache_dir / f"{source_trial_id}{suffix}.jsonl"
                 materialize_result = None
                 if not event_file.exists():
-                    try:
-                        from dojozero.data import SLSEventSource
+                    # Try OSS first
+                    if _try_oss_download(source_trial_id, event_file):
+                        backtest_source = "oss"
+                    else:
+                        # Fall back to SLS materialization
+                        try:
+                            from dojozero.data import SLSEventSource
 
-                        materialize_result = await SLSEventSource().materialize_jsonl(
-                            source_trial_id,
-                            event_file,
-                            run_id=run_id or None,
-                        )
-                        backtest_source = "sls"
-                    except Exception as e:
-                        LOGGER.error(
-                            "SLS materialization failed for trial '%s': %s",
-                            source_trial_id,
-                            e,
-                            exc_info=True,
-                        )
-                        return JSONResponse(
-                            content={
-                                "error": (
-                                    f"Event file for trial '{source_trial_id}' "
-                                    f"is not available locally and SLS fallback "
-                                    f"failed."
+                            materialize_result = (
+                                await SLSEventSource().materialize_jsonl(
+                                    source_trial_id,
+                                    event_file,
+                                    run_id=run_id or None,
                                 )
-                            },
-                            status_code=424,
-                        )
+                            )
+                            backtest_source = "sls"
+                            # Upload to OSS for cross-host caching
+                            _try_oss_upload(source_trial_id, event_file)
+                        except Exception as e:
+                            LOGGER.error(
+                                "SLS materialization failed for trial '%s': %s",
+                                source_trial_id,
+                                e,
+                                exc_info=True,
+                            )
+                            return JSONResponse(
+                                content={
+                                    "error": (
+                                        f"Event file for trial '{source_trial_id}' "
+                                        f"is not available locally and SLS fallback "
+                                        f"failed."
+                                    )
+                                },
+                                status_code=424,
+                            )
                 else:
                     backtest_source = "sls"
             # Capture backtest settings (for closure below)
@@ -1262,7 +1318,9 @@ def create_dashboard_app(
 
         Resolution order:
         1. Local persistence_file from trial record metadata
-        2. SLS materialization (cached to output_dir/backtest_cache/)
+        2. Peer proxy (cluster mode)
+        3. OSS download (cached to output_dir/backtest_cache/)
+        4. SLS materialization (cached to output_dir/backtest_cache/, then uploaded to OSS)
 
         Returns the JSONL file as a streaming download.
         """
@@ -1322,13 +1380,15 @@ def create_dashboard_app(
             except Exception:
                 pass  # fall through to SLS fallback
 
-        # 3. Fallback: materialize from SLS
+        # 3. Try OSS, then SLS materialization
         if event_file is None:
             output_base = state.output_dir
             cache_dir = output_base / "backtest_cache"
             suffix = f"-{run_id[:8]}" if run_id else ""
             cached_path = cache_dir / f"{trial_id}{suffix}.jsonl"
             if cached_path.exists():
+                event_file = cached_path
+            elif _try_oss_download(trial_id, cached_path):
                 event_file = cached_path
             else:
                 try:
@@ -1340,6 +1400,8 @@ def create_dashboard_app(
                         run_id=run_id or None,
                     )
                     event_file = cached_path
+                    # Upload to OSS for cross-host caching
+                    _try_oss_upload(trial_id, cached_path)
                 except Exception as e:
                     LOGGER.error(
                         "SLS materialization failed for trial '%s': %s",
