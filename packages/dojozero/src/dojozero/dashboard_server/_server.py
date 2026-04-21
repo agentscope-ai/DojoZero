@@ -48,6 +48,10 @@ from dojozero.core._tracing import (
     set_sls_log_exporter,
 )
 from dojozero.core._types import RuntimeContext
+from dojozero.dashboard_server._trial_manager import (
+    download_trial_from_oss,
+    upload_trial_to_oss,
+)
 
 from ._cluster import ClusterConfig, LeaderElector, PeerRegistry, create_cluster
 from ._scheduler import SchedulerStore
@@ -165,54 +169,6 @@ def get_server_state(request: Request) -> DashboardServerState:
     if state is None:
         raise RuntimeError("Server not initialized")
     return state
-
-
-def _try_oss_download(trial_id: str, cache_path: Path) -> bool:
-    """Try to download a trial's event file from OSS.
-
-    Returns True if the file was downloaded, False otherwise.
-    Gracefully handles missing deps, config, or network errors.
-    """
-    try:
-        from dojozero.utils.oss import OSSClient
-
-        client = OSSClient.from_env()
-        oss_key = f"trials/{trial_id}/events.jsonl"
-        if client.file_exists(oss_key):
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            client.download_file(oss_key, cache_path)
-            LOGGER.info(
-                "Downloaded trial '%s' events from OSS to %s", trial_id, cache_path
-            )
-            return True
-        return False
-    except ImportError:
-        return False
-    except ValueError:
-        return False
-    except Exception as e:
-        LOGGER.debug("OSS download failed for trial '%s': %s", trial_id, e)
-        return False
-
-
-def _try_oss_upload(trial_id: str, local_path: Path) -> None:
-    """Upload a materialized event file to OSS for cross-host caching.
-
-    Fire-and-forget: logs errors but never raises.
-    """
-    try:
-        from dojozero.utils.oss import OSSClient
-
-        client = OSSClient.from_env()
-        oss_key = f"trials/{trial_id}/events.jsonl"
-        client.upload_file(local_path, oss_key)
-        LOGGER.info("Uploaded materialized events for trial '%s' to OSS", trial_id)
-    except ImportError:
-        pass
-    except ValueError:
-        pass
-    except Exception as e:
-        LOGGER.warning("OSS upload failed for trial '%s': %s", trial_id, e)
 
 
 async def _launch_backtest_trial(
@@ -990,7 +946,7 @@ def create_dashboard_app(
                 materialize_result = None
                 if not event_file.exists():
                     # Try OSS first
-                    if _try_oss_download(source_trial_id, event_file):
+                    if download_trial_from_oss(source_trial_id, event_file):
                         backtest_source = "oss"
                     else:
                         # Fall back to SLS materialization
@@ -1006,7 +962,7 @@ def create_dashboard_app(
                             )
                             backtest_source = "sls"
                             # Upload to OSS for cross-host caching
-                            _try_oss_upload(source_trial_id, event_file)
+                            upload_trial_to_oss(source_trial_id, event_file)
                         except Exception as e:
                             LOGGER.error(
                                 "SLS materialization failed for trial '%s': %s",
@@ -1025,7 +981,7 @@ def create_dashboard_app(
                                 status_code=424,
                             )
                 else:
-                    backtest_source = "sls"
+                    backtest_source = "cache"
             # Capture backtest settings (for closure below)
             backtest_speed = request.backtest.speed
             backtest_max_sleep = request.backtest.max_sleep
@@ -1318,9 +1274,10 @@ def create_dashboard_app(
 
         Resolution order:
         1. Local persistence_file from trial record metadata
-        2. Peer proxy (cluster mode)
-        3. OSS download (cached to output_dir/backtest_cache/)
-        4. SLS materialization (cached to output_dir/backtest_cache/, then uploaded to OSS)
+        2. Local backtest cache file
+        3. OSS download (cached locally)
+        4. Peer proxy (cluster mode — catches in-progress trials)
+        5. SLS materialization (cached locally, then uploaded to OSS)
 
         Returns the JSONL file as a streaming download.
         """
@@ -1345,7 +1302,18 @@ def create_dashboard_app(
                             event_file = alt
                             break
 
-        # 2. Try proxying to the owning peer in cluster mode
+        # 2. Try local backtest cache
+        cache_dir = state.output_dir / "backtest_cache"
+        suffix = f"-{run_id[:8]}" if run_id else ""
+        cached_path = cache_dir / f"{trial_id}{suffix}.jsonl"
+        if event_file is None and cached_path.exists():
+            event_file = cached_path
+
+        # 3. Try OSS
+        if event_file is None and download_trial_from_oss(trial_id, cached_path):
+            event_file = cached_path
+
+        # 4. Try proxying to the owning peer in cluster mode
         if event_file is None and state.peer_registry is not None:
             try:
                 owner = await state.peer_registry.get_peer_for_trial(trial_id)
@@ -1376,48 +1344,38 @@ def create_dashboard_app(
                                     )
                                 },
                             )
-                        # Peer didn't have it either — fall through to SLS
             except Exception:
                 pass  # fall through to SLS fallback
 
-        # 3. Try OSS, then SLS materialization
+        # 5. SLS materialization (last resort)
         if event_file is None:
-            output_base = state.output_dir
-            cache_dir = output_base / "backtest_cache"
-            suffix = f"-{run_id[:8]}" if run_id else ""
-            cached_path = cache_dir / f"{trial_id}{suffix}.jsonl"
-            if cached_path.exists():
-                event_file = cached_path
-            elif _try_oss_download(trial_id, cached_path):
-                event_file = cached_path
-            else:
-                try:
-                    from dojozero.data import SLSEventSource
+            try:
+                from dojozero.data import SLSEventSource
 
-                    await SLSEventSource().materialize_jsonl(
-                        trial_id,
-                        cached_path,
-                        run_id=run_id or None,
-                    )
-                    event_file = cached_path
-                    # Upload to OSS for cross-host caching
-                    _try_oss_upload(trial_id, cached_path)
-                except Exception as e:
-                    LOGGER.error(
-                        "SLS materialization failed for trial '%s': %s",
-                        trial_id,
-                        e,
-                        exc_info=True,
-                    )
-                    return JSONResponse(
-                        content={
-                            "error": (
-                                f"Event file for trial '{trial_id}' not available "
-                                f"locally and SLS fallback failed: {e}"
-                            )
-                        },
-                        status_code=424,
-                    )
+                await SLSEventSource().materialize_jsonl(
+                    trial_id,
+                    cached_path,
+                    run_id=run_id or None,
+                )
+                event_file = cached_path
+                # Upload to OSS for cross-host caching
+                upload_trial_to_oss(trial_id, cached_path)
+            except Exception as e:
+                LOGGER.error(
+                    "SLS materialization failed for trial '%s': %s",
+                    trial_id,
+                    e,
+                    exc_info=True,
+                )
+                return JSONResponse(
+                    content={
+                        "error": (
+                            f"Event file for trial '{trial_id}' not available "
+                            f"locally and SLS fallback failed: {e}"
+                        )
+                    },
+                    status_code=424,
+                )
 
         return FileResponse(
             path=event_file,
