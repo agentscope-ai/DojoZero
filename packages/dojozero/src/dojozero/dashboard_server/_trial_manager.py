@@ -1054,10 +1054,6 @@ class TrialManager:
             except Exception as e:
                 self._logger.error("Error stopping trial %s: %s", trial_id, e)
 
-            # Upload to OSS after stopping (before returning)
-            if self._oss_backup and final_phase == QueuedTrialPhase.COMPLETED:
-                self._upload_to_oss(trial_id, queued.spec)
-
             return True
 
         return False
@@ -1218,9 +1214,6 @@ class TrialManager:
             except TrialNotFoundError:
                 queued.phase = QueuedTrialPhase.COMPLETED
 
-            if self._oss_backup and queued.phase == QueuedTrialPhase.COMPLETED:
-                self._upload_to_oss(trial_id, queued.spec)
-
             self._logger.info(
                 "Resumed trial '%s' finished with phase: %s",
                 trial_id,
@@ -1269,6 +1262,10 @@ class TrialManager:
             # (cancelled trials that are still running won't have phase updated)
             if queued.phase != QueuedTrialPhase.RUNNING:
                 await self._save_trial_results(trial_id, queued.phase)
+
+            # Upload to OSS after saving results but before gateway teardown
+            if self._oss_backup and queued.phase == QueuedTrialPhase.COMPLETED:
+                self._upload_to_oss(trial_id, queued.spec)
 
             # Clean up gateway if registered
             if self._gateway_router is not None:
@@ -1392,9 +1389,6 @@ class TrialManager:
             except TrialNotFoundError:
                 queued.phase = QueuedTrialPhase.COMPLETED
 
-            if self._oss_backup and queued.phase == QueuedTrialPhase.COMPLETED:
-                self._upload_to_oss(trial_id, queued.spec)
-
             self._logger.info(
                 "Trial '%s' finished with phase: %s", trial_id, queued.phase.value
             )
@@ -1441,6 +1435,11 @@ class TrialManager:
                 # Save trial results (for ALL trials, not just gateway)
                 # Must happen BEFORE gateway cleanup since we need access to broker
                 await self._save_trial_results(trial_id, queued.phase)
+
+            # Upload to OSS after saving results but before gateway teardown
+            # so that results.json is durable before agents lose access
+            if self._oss_backup and queued.phase == QueuedTrialPhase.COMPLETED:
+                self._upload_to_oss(trial_id, queued.spec)
 
             # Signal trial ended and unregister gateway (gateway-specific cleanup)
             if gateway_registered:
