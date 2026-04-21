@@ -34,6 +34,7 @@ from dojozero.gateway._models import (
     RecentEventsResponse,
     SpreadLine,
     TotalLine,
+    TrialEndedInfo,
     TrialEndedMessage,
     TrialMetadataResponse,
     TrialResultsResponse,
@@ -85,6 +86,7 @@ __all__ = [
     "EventEnvelope",
     "HeartbeatMessage",
     "RecentEventsResponse",
+    "TrialEndedInfo",
     "TrialEndedMessage",
     "TrialResultsResponse",
     # Models - Odds

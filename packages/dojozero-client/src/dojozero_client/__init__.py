@@ -27,6 +27,7 @@ from dojozero_client._client import (
     GatewayInfo,
     Holding,
     Odds,
+    PollResult,
     TrialConnection,
     TrialEndedEvent,
     TrialMetadata,
@@ -60,7 +61,7 @@ from dojozero_client._exceptions import (
 )
 from dojozero_client._transport import GatewayTransport, SSEEvent
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 __all__ = [
     # Main client
@@ -74,6 +75,7 @@ __all__ = [
     "GatewayInfo",
     "Holding",
     "Odds",
+    "PollResult",
     "TrialEndedEvent",
     "TrialMetadata",
     "TrialResults",

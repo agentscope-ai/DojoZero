@@ -31,6 +31,7 @@ from dojozero.gateway._models import (
     ErrorResponse,
     EventEnvelope,
     RecentEventsResponse,
+    TrialEndedInfo,
     TrialMetadataResponse,
     TrialResultsResponse,
 )
@@ -480,9 +481,19 @@ def create_gateway_app(
                 )
             )
 
+        # Check if trial has ended
+        trial_ended_info = None
+        ended_msg = state.adapter.get_trial_ended_message()
+        if ended_msg is not None:
+            trial_ended_info = TrialEndedInfo(
+                reason=ended_msg.reason,
+                message=ended_msg.message,
+            )
+
         return RecentEventsResponse(
             events=envelopes,
             current_sequence=current_sequence,
+            trial_ended=trial_ended_info,
         )
 
     # =========================================================================

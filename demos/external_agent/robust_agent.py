@@ -228,13 +228,23 @@ class RobustBettingAgent:
 
         while self._running:
             try:
-                events = await trial.poll_events(
+                result = await trial.poll_events(
                     since=self.state.last_sequence,
                     limit=50,
                 )
 
-                for event in events:
+                for event in result.events:
                     await self._handle_event(trial, event)
+
+                if result.is_trial_ended:
+                    reason = (
+                        result.trial_ended.get("reason", "completed")
+                        if result.trial_ended
+                        else "completed"
+                    )
+                    logger.info("Trial ended (reason=%s)", reason)
+                    self._running = False
+                    return
 
                 await asyncio.sleep(self.poll_interval)
 
