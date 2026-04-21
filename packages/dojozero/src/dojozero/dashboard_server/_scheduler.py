@@ -1811,6 +1811,15 @@ class ScheduleManager:
             ):
                 self._register_game_result_callback(scheduled)
 
+                # Create symlink in outputs/trials/ for trial-id-indexed lookup
+                pf = scheduled.scenario_config.get("hub", {}).get("persistence_file")
+                if pf and self._output_dir:
+                    from dojozero.dashboard_server._trial_manager import (
+                        ensure_trial_symlink,
+                    )
+
+                    ensure_trial_symlink(self._output_dir, trial_id, Path(pf))
+
             LOGGER.info(
                 "Launched trial '%s' for schedule '%s'",
                 trial_id,

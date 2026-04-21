@@ -50,6 +50,8 @@ from dojozero.core._tracing import (
 from dojozero.core._types import RuntimeContext
 from dojozero.dashboard_server._trial_manager import (
     download_trial_from_oss,
+    ensure_trial_symlink,
+    trials_cache_path,
     upload_trial_to_oss,
 )
 
@@ -887,6 +889,7 @@ def create_dashboard_app(
         if "hub" not in builder_config:
             builder_config["hub"] = {}
         builder_config["hub"]["persistence_file"] = str(safe_persistence_file)
+        ensure_trial_symlink(state.output_dir, trial_id, safe_persistence_file)
         LOGGER.debug(
             "Generated persistence_file for trial %s: %s",
             trial_id,
@@ -934,16 +937,15 @@ def create_dashboard_app(
                         event_file = candidate
 
             if event_file is None:
-                # No local file — try OSS, then SLS materialization.
-                output_base = state.output_dir
-                cache_dir = output_base / "backtest_cache"
-                # Cache naming: {trial_id}-{run_id[:8]}.jsonl
-                # 8-char prefix of the 16-hex span_id is sufficient to
-                # avoid collisions while keeping filenames readable.
+                # No local file — try trials cache, OSS, then SLS.
                 run_id = request.backtest.run_id
-                suffix = f"-{run_id[:8]}" if run_id else ""
-                event_file = cache_dir / f"{source_trial_id}{suffix}.jsonl"
+                event_file = trials_cache_path(
+                    state.output_dir, source_trial_id, run_id
+                )
                 materialize_result = None
+                if event_file.is_symlink() and not event_file.exists():
+                    # Dangling symlink — remove so we can write a real file
+                    event_file.unlink()
                 if not event_file.exists():
                     # Try OSS first
                     if download_trial_from_oss(source_trial_id, event_file):
@@ -1273,43 +1275,27 @@ def create_dashboard_app(
         """Download the JSONL event file for a trial.
 
         Resolution order:
-        1. Local persistence_file from trial record metadata
-        2. Local backtest cache file
-        3. OSS download (cached locally)
-        4. Peer proxy (cluster mode — catches in-progress trials)
-        5. SLS materialization (cached locally, then uploaded to OSS)
+        1. Canonical trials cache (includes symlinks to live persistence files)
+        2. OSS download (cached locally)
+        3. Peer proxy (cluster mode — catches in-progress trials)
+        4. SLS materialization (cached locally, then uploaded to OSS)
 
         Returns the JSONL file as a streaming download.
         """
         from fastapi.responses import FileResponse
 
-        # 1. Try local file from trial record metadata
-        # Check backtest_file first (for backtest trials), then persistence_file
+        # 1. Try canonical trials cache (symlinks for live, real files for
+        #    OSS/SLS cached).  Path.exists() follows symlinks transparently.
+        cached_path = trials_cache_path(state.output_dir, trial_id, run_id)
         event_file: Path | None = None
-        record = state.orchestrator.store.get_trial_record(trial_id)
-        if record is not None:
-            for field in ("backtest_file", "persistence_file"):
-                path_str = record.spec.metadata.get(field)
-                if path_str:
-                    candidate = Path(path_str)
-                    if candidate.exists():
-                        event_file = candidate
-                        break
-                    # Try resolving relative to output_dir
-                    if not candidate.is_absolute():
-                        alt = Path(state.output_dir) / candidate
-                        if alt.exists():
-                            event_file = alt
-                            break
-
-        # 2. Try local backtest cache
-        cache_dir = state.output_dir / "backtest_cache"
-        suffix = f"-{run_id[:8]}" if run_id else ""
-        cached_path = cache_dir / f"{trial_id}{suffix}.jsonl"
-        if event_file is None and cached_path.exists():
+        if cached_path.exists():
             event_file = cached_path
+        elif cached_path.is_symlink():
+            # Dangling symlink (target deleted) — remove so later steps
+            # can write a real file at this path.
+            cached_path.unlink()
 
-        # 3. Try OSS
+        # 2. Try OSS
         if event_file is None and download_trial_from_oss(trial_id, cached_path):
             event_file = cached_path
 

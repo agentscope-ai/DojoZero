@@ -1454,8 +1454,48 @@ class TrialManager:
 
 
 # ---------------------------------------------------------------------------
-# Shared OSS helpers (singleton client, upload/download for trial event files)
+# Shared trial-cache and OSS helpers
 # ---------------------------------------------------------------------------
+
+
+def trials_cache_path(
+    output_dir: Path, trial_id: str, run_id: str | None = None
+) -> Path:
+    """Canonical local cache path for a trial's event file.
+
+    Returns ``output_dir / "trials" / "{trial_id}[-{run_id[:8]}].jsonl"``.
+    """
+    suffix = f"-{run_id[:8]}" if run_id else ""
+    return output_dir / "trials" / f"{trial_id}{suffix}.jsonl"
+
+
+def ensure_trial_symlink(
+    output_dir: Path, trial_id: str, persistence_file: Path
+) -> None:
+    """Create symlink ``outputs/trials/{trial_id}.jsonl`` → *persistence_file*.
+
+    Uses a relative path so the tree is relocatable.  No-op if the symlink
+    already exists and points to the same target, or if a real file already
+    occupies the path (e.g. from an OSS download).  Best-effort — logs and
+    swallows errors.
+    """
+    import os
+
+    link_path = trials_cache_path(output_dir, trial_id)
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target = os.path.relpath(persistence_file, link_path.parent)
+        if link_path.is_symlink():
+            if os.readlink(str(link_path)) == target:
+                return
+            link_path.unlink()
+        elif link_path.exists():
+            return  # real file (e.g. from OSS download) — don't clobber
+        os.symlink(target, link_path)
+        LOGGER.debug("Created trial symlink %s → %s", link_path, target)
+    except OSError:
+        LOGGER.debug("Could not create trial symlink %s", link_path, exc_info=True)
+
 
 # Lazy import for OSS to avoid import errors if oss2 not installed
 _oss_client = None
@@ -1545,5 +1585,7 @@ __all__ = [
     "QueuedTrialPhase",
     "TrialManager",
     "download_trial_from_oss",
+    "ensure_trial_symlink",
+    "trials_cache_path",
     "upload_trial_to_oss",
 ]
