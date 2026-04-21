@@ -1053,6 +1053,10 @@ class TrialManager:
             except Exception as e:
                 self._logger.error("Error stopping trial %s: %s", trial_id, e)
 
+            # Upload to OSS after stopping (before returning)
+            if self._oss_backup and final_phase == QueuedTrialPhase.COMPLETED:
+                self._upload_to_oss(trial_id, queued.spec)
+
             return True
 
         return False
@@ -1212,6 +1216,9 @@ class TrialManager:
                     queued.phase = QueuedTrialPhase.COMPLETED
             except TrialNotFoundError:
                 queued.phase = QueuedTrialPhase.COMPLETED
+
+            if self._oss_backup and queued.phase == QueuedTrialPhase.COMPLETED:
+                self._upload_to_oss(trial_id, queued.spec)
 
             self._logger.info(
                 "Resumed trial '%s' finished with phase: %s",
@@ -1446,8 +1453,71 @@ class TrialManager:
             upload_trial_to_oss(trial_id, persistence_file)
 
 
+# ---------------------------------------------------------------------------
+# Shared trial-cache and OSS helpers
+# ---------------------------------------------------------------------------
+
+
+def trials_cache_path(
+    output_dir: Path, trial_id: str, run_id: str | None = None
+) -> Path:
+    """Canonical local cache path for a trial's event file.
+
+    Returns ``output_dir / "trials" / "{trial_id}[-{run_id[:8]}].jsonl"``.
+    """
+    suffix = f"-{run_id[:8]}" if run_id else ""
+    return output_dir / "trials" / f"{trial_id}{suffix}.jsonl"
+
+
+def ensure_trial_symlink(
+    output_dir: Path, trial_id: str, persistence_file: Path
+) -> None:
+    """Create symlink ``outputs/trials/{trial_id}.jsonl`` → *persistence_file*.
+
+    Uses a relative path so the tree is relocatable.  No-op if the symlink
+    already exists and points to the same target, or if a real file already
+    occupies the path (e.g. from an OSS download).  Best-effort — logs and
+    swallows errors.
+    """
+    import os
+
+    link_path = trials_cache_path(output_dir, trial_id)
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target = os.path.relpath(persistence_file, link_path.parent)
+        if link_path.is_symlink():
+            if os.readlink(str(link_path)) == target:
+                return
+            link_path.unlink()
+        elif link_path.exists():
+            return  # real file (e.g. from OSS download) — don't clobber
+        os.symlink(target, link_path)
+        LOGGER.debug("Created trial symlink %s → %s", link_path, target)
+    except OSError:
+        LOGGER.debug("Could not create trial symlink %s", link_path, exc_info=True)
+
+
 # Lazy import for OSS to avoid import errors if oss2 not installed
 _oss_client = None
+
+
+def _oss_trial_key(trial_id: str) -> str:
+    """OSS object key for a trial's event file."""
+    return f"trials/{trial_id}/events.jsonl"
+
+
+def _get_oss_client():  # noqa: ANN202
+    """Return the singleton OSSClient, creating it on first call.
+
+    Raises ImportError if oss2 is not installed, ValueError if env is
+    not configured.
+    """
+    global _oss_client
+    if _oss_client is None:
+        from dojozero.utils.oss import OSSClient
+
+        _oss_client = OSSClient.from_env()
+    return _oss_client
 
 
 def upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
@@ -1460,21 +1530,14 @@ def upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
     Returns:
         True if upload succeeded, False otherwise
     """
-    global _oss_client
-
     if not persistence_file or not persistence_file.exists():
         LOGGER.warning("No persistence file to upload for trial %s", trial_id)
         return False
 
     try:
-        from dojozero.utils.oss import OSSClient
-
-        if _oss_client is None:
-            _oss_client = OSSClient.from_env()
-
-        # Upload with key: trials/{trial_id}/events.jsonl
-        oss_key = f"trials/{trial_id}/events.jsonl"
-        full_key = _oss_client.upload_file(persistence_file, oss_key)
+        client = _get_oss_client()
+        oss_key = _oss_trial_key(trial_id)
+        full_key = client.upload_file(persistence_file, oss_key)
         LOGGER.info("Uploaded trial data to OSS: %s", full_key)
         return True
 
@@ -1492,9 +1555,37 @@ def upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
         return False
 
 
+def download_trial_from_oss(trial_id: str, cache_path: Path) -> bool:
+    """Download a trial's event file from OSS to a local cache path.
+
+    Returns True if downloaded, False otherwise.  Never raises.
+    """
+    try:
+        client = _get_oss_client()
+        oss_key = _oss_trial_key(trial_id)
+        if client.file_exists(oss_key):
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            client.download_file(oss_key, cache_path)
+            LOGGER.info(
+                "Downloaded trial '%s' events from OSS to %s", trial_id, cache_path
+            )
+            return True
+        return False
+    except ImportError:
+        return False
+    except ValueError:
+        return False
+    except Exception as e:
+        LOGGER.debug("OSS download failed for trial '%s': %s", trial_id, e)
+        return False
+
+
 __all__ = [
     "QueuedTrial",
     "QueuedTrialPhase",
     "TrialManager",
+    "download_trial_from_oss",
+    "ensure_trial_symlink",
+    "trials_cache_path",
     "upload_trial_to_oss",
 ]

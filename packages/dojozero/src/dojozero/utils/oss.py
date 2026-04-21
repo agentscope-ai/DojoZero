@@ -79,6 +79,20 @@ def _credentials_provider_type() -> type:
     return AlibabaCloudCredentialsProvider
 
 
+def _extract_region(endpoint: str) -> str:
+    """Extract region from OSS endpoint.
+
+    e.g., "oss-cn-wulanchabu.aliyuncs.com" → "cn-wulanchabu"
+         "oss-cn-hangzhou-internal.aliyuncs.com" → "cn-hangzhou"
+    """
+    host = endpoint.split("//")[-1].split(":")[0]  # strip scheme and port
+    # Remove "oss-" prefix and ".aliyuncs.com" suffix
+    region = host.removeprefix("oss-").split(".")[0]
+    # Strip "-internal" suffix if present
+    region = region.removesuffix("-internal")
+    return region
+
+
 class OSSClient:
     """Client for interacting with Alibaba Cloud OSS."""
 
@@ -92,11 +106,16 @@ class OSSClient:
         access_key_id: str | None = None,
         access_key_secret: str | None = None,
         security_token: str | None = None,
+        region: str | None = None,
     ):
         oss = _require_oss2()
         self.bucket_name = bucket_name
         self.endpoint = endpoint
         self.prefix = prefix.rstrip("/") + "/" if prefix else ""
+
+        # Extract region from endpoint (e.g., "oss-cn-wulanchabu.aliyuncs.com" → "cn-wulanchabu")
+        if region is None:
+            region = _extract_region(endpoint)
 
         if credentials_provider is not None:
             self._auth = oss.ProviderAuthV4(credentials_provider)
@@ -112,7 +131,7 @@ class OSSClient:
                 "Either credentials_provider or (access_key_id + access_key_secret) must be provided"
             )
 
-        self._bucket = oss.Bucket(self._auth, endpoint, bucket_name)
+        self._bucket = oss.Bucket(self._auth, endpoint, bucket_name, region=region)
 
     @classmethod
     def from_env(

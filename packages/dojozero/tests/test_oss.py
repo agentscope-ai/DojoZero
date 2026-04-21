@@ -1,11 +1,12 @@
 """Unit tests for OSS utilities."""
 
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dojozero.utils.oss import OSSClient, upload_directory, upload_file
+from dojozero.utils.oss import OSSClient, _extract_region, upload_directory, upload_file
 
 
 def _patch_require_oss2():
@@ -487,3 +488,174 @@ class TestConvenienceFunctions:
 
         assert len(result) == 1
         mock_bucket.put_object_from_file.assert_called_once()
+
+
+class TestExtractRegion:
+    """Tests for _extract_region helper."""
+
+    def test_standard_endpoint(self):
+        assert _extract_region("oss-cn-hangzhou.aliyuncs.com") == "cn-hangzhou"
+
+    def test_internal_endpoint(self):
+        assert _extract_region("oss-cn-hangzhou-internal.aliyuncs.com") == "cn-hangzhou"
+
+    def test_with_scheme(self):
+        assert (
+            _extract_region("https://oss-cn-wulanchabu.aliyuncs.com") == "cn-wulanchabu"
+        )
+
+    def test_with_port(self):
+        assert _extract_region("oss-cn-beijing.aliyuncs.com:443") == "cn-beijing"
+
+    def test_internal_with_scheme(self):
+        assert (
+            _extract_region("https://oss-cn-wulanchabu-internal.aliyuncs.com")
+            == "cn-wulanchabu"
+        )
+
+
+@pytest.fixture(autouse=False)
+def _reset_oss_singleton():
+    """Reset the singleton OSS client between tests."""
+    import dojozero.dashboard_server._trial_manager as tm
+
+    old = tm._oss_client
+    tm._oss_client = None
+    yield
+    tm._oss_client = old
+
+
+class TestDownloadTrialFromOss:
+    """Tests for download_trial_from_oss helper."""
+
+    def test_returns_true_on_success(self, tmp_path: Path, _reset_oss_singleton):
+        mock_client = MagicMock()
+        mock_client.file_exists.return_value = True
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            return_value=mock_client,
+        ):
+            from dojozero.dashboard_server._trial_manager import download_trial_from_oss
+
+            cache_path = tmp_path / "cache" / "events.jsonl"
+            result = download_trial_from_oss("trial-123", cache_path)
+
+        assert result is True
+        mock_client.file_exists.assert_called_once_with("trials/trial-123/events.jsonl")
+        mock_client.download_file.assert_called_once_with(
+            "trials/trial-123/events.jsonl", cache_path
+        )
+
+    def test_returns_false_when_not_found(self, tmp_path: Path, _reset_oss_singleton):
+        mock_client = MagicMock()
+        mock_client.file_exists.return_value = False
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            return_value=mock_client,
+        ):
+            from dojozero.dashboard_server._trial_manager import download_trial_from_oss
+
+            result = download_trial_from_oss("trial-123", tmp_path / "events.jsonl")
+
+        assert result is False
+        mock_client.download_file.assert_not_called()
+
+    def test_returns_false_on_import_error(self, tmp_path: Path, _reset_oss_singleton):
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            side_effect=ImportError("no oss2"),
+        ):
+            from dojozero.dashboard_server._trial_manager import download_trial_from_oss
+
+            result = download_trial_from_oss("trial-123", tmp_path / "events.jsonl")
+
+        assert result is False
+
+    def test_returns_false_on_value_error(self, tmp_path: Path, _reset_oss_singleton):
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            side_effect=ValueError("missing env"),
+        ):
+            from dojozero.dashboard_server._trial_manager import download_trial_from_oss
+
+            result = download_trial_from_oss("trial-123", tmp_path / "events.jsonl")
+
+        assert result is False
+
+    def test_creates_parent_dirs(self, tmp_path: Path, _reset_oss_singleton):
+        mock_client = MagicMock()
+        mock_client.file_exists.return_value = True
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            return_value=mock_client,
+        ):
+            from dojozero.dashboard_server._trial_manager import download_trial_from_oss
+
+            cache_path = tmp_path / "deep" / "nested" / "events.jsonl"
+            download_trial_from_oss("trial-123", cache_path)
+
+        assert cache_path.parent.exists()
+
+
+class TestUploadTrialToOss:
+    """Tests for upload_trial_to_oss helper."""
+
+    def test_uploads_file(self, tmp_path: Path, _reset_oss_singleton):
+        local_file = tmp_path / "events.jsonl"
+        local_file.write_text('{"event": "test"}\n')
+
+        mock_client = MagicMock()
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            return_value=mock_client,
+        ):
+            from dojozero.dashboard_server._trial_manager import upload_trial_to_oss
+
+            result = upload_trial_to_oss("trial-123", local_file)
+
+        assert result is True
+        mock_client.upload_file.assert_called_once_with(
+            local_file, "trials/trial-123/events.jsonl"
+        )
+
+    def test_returns_false_for_missing_file(self, tmp_path: Path):
+        from dojozero.dashboard_server._trial_manager import upload_trial_to_oss
+
+        result = upload_trial_to_oss("trial-123", tmp_path / "nonexistent.jsonl")
+        assert result is False
+
+    def test_returns_false_for_none(self):
+        from dojozero.dashboard_server._trial_manager import upload_trial_to_oss
+
+        result = upload_trial_to_oss("trial-123", None)
+        assert result is False
+
+    def test_silently_handles_import_error(self, tmp_path: Path, _reset_oss_singleton):
+        local_file = tmp_path / "events.jsonl"
+        local_file.write_text('{"event": "test"}\n')
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            side_effect=ImportError("no oss2"),
+        ):
+            from dojozero.dashboard_server._trial_manager import upload_trial_to_oss
+
+            result = upload_trial_to_oss("trial-123", local_file)
+
+        assert result is False
+
+    def test_silently_handles_value_error(self, tmp_path: Path, _reset_oss_singleton):
+        local_file = tmp_path / "events.jsonl"
+        local_file.write_text('{"event": "test"}\n')
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            side_effect=ValueError("missing env"),
+        ):
+            from dojozero.dashboard_server._trial_manager import upload_trial_to_oss
+
+            assert upload_trial_to_oss("trial-123", local_file) is False

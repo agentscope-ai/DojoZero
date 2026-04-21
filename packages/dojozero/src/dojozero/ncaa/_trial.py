@@ -136,7 +136,7 @@ async def _build_trial_spec(
     if not params.hub.persistence_file:
         raise ValueError(
             "hub.persistence_file is required. For auto-scheduled trials, ensure "
-            "data_dir is set in the trial source config so the scheduler can "
+            "output_dir is set in the trial source config so the scheduler can "
             "populate this field."
         )
     persistence_file = params.hub.persistence_file

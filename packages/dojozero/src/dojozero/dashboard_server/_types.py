@@ -154,7 +154,7 @@ class TrialSourceConfigDict(TypedDict, total=False):
     pre_start_hours: float
     check_interval_seconds: float
     auto_stop_on_completion: bool
-    data_dir: str | None
+    output_dir: str | None
     sync_interval_seconds: float
     max_daily_games: int
 

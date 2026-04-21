@@ -399,6 +399,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Directory for filesystem store (default: {DEFAULT_STORE_DIRECTORY}).",
     )
     serve_parser.add_argument(
+        "--output-dir",
+        dest="output_dir",
+        type=Path,
+        default=Path("outputs"),
+        help="Directory for trial output/event files (default: outputs).",
+    )
+    serve_parser.add_argument(
         "--runtime-provider",
         dest="runtime_provider",
         choices=["local", "ray"],
@@ -2414,6 +2421,7 @@ async def _serve_command(args: argparse.Namespace) -> int:
         auto_resume=auto_resume,
         stale_threshold_hours=stale_threshold_hours,
         enable_gateway=enable_gateway,
+        output_dir=args.output_dir,
         authenticator=authenticator,
         no_scheduler=no_scheduler,
         cluster_config=cluster_config,

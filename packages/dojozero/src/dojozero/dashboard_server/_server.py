@@ -48,6 +48,12 @@ from dojozero.core._tracing import (
     set_sls_log_exporter,
 )
 from dojozero.core._types import RuntimeContext
+from dojozero.dashboard_server._trial_manager import (
+    download_trial_from_oss,
+    ensure_trial_symlink,
+    trials_cache_path,
+    upload_trial_to_oss,
+)
 
 from ._cluster import ClusterConfig, LeaderElector, PeerRegistry, create_cluster
 from ._scheduler import SchedulerStore
@@ -120,7 +126,7 @@ class TrialSourceConfigRequest(BaseModel):
     pre_start_hours: float = 2.0
     check_interval_seconds: float = 60.0
     auto_stop_on_completion: bool = True
-    data_dir: str | None = None
+    output_dir: str | None = None
     max_daily_games: int = 0
 
 
@@ -146,7 +152,9 @@ class DashboardServerState:
     schedule_manager: Any | None = None  # ScheduleManager, lazy import
     trace_backend: str | None = None
     oss_backup: bool = False
-    data_dir: Path | None = None  # Base directory for trial data files
+    output_dir: Path = field(
+        default_factory=lambda: Path("outputs")
+    )  # Base directory for trial output/event files
     imported_modules: set[str] = field(default_factory=set)
     import_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     server_id: str | None = None
@@ -317,7 +325,7 @@ def _register_initial_sources(
             pre_start_hours=config_data.get("pre_start_hours", 2.0),
             check_interval_seconds=config_data.get("check_interval_seconds", 60.0),
             auto_stop_on_completion=config_data.get("auto_stop_on_completion", True),
-            data_dir=config_data.get("data_dir"),
+            output_dir=config_data.get("output_dir"),
             sync_interval_seconds=config_data.get("sync_interval_seconds", 300.0),
             max_daily_games=config_data.get("max_daily_games", 0),
         )
@@ -358,7 +366,7 @@ def create_dashboard_app(
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
     enable_gateway: bool = True,
-    data_dir: str | Path | None = None,
+    output_dir: str | Path = "outputs",
     authenticator: "AgentAuthenticator | None" = None,
     no_scheduler: bool = False,
     cluster_config: ClusterConfig | None = None,
@@ -377,8 +385,7 @@ def create_dashboard_app(
         auto_resume: Automatically resume interrupted trials on startup (default True)
         stale_threshold_hours: Skip resuming trials older than this many hours (default 24)
         enable_gateway: Enable HTTP gateway routing for external agents (default True)
-        data_dir: Base directory for trial data files (persistence_file will be generated
-            under this directory). If None, trials must provide their own persistence_file.
+        output_dir: Base directory for trial output/event files (default: "outputs").
         authenticator: AgentAuthenticator for validating agent API keys. If None and
             agent_keys.yaml exists, uses LocalAgentAuthenticator. Otherwise NoOpAuthenticator.
         no_scheduler: Disable the ScheduleManager entirely (no auto-scheduling, no
@@ -443,6 +450,7 @@ def create_dashboard_app(
                 store=scheduler_store,
                 peer_registry=peer_registry_instance,
                 server_id=server_id,
+                output_dir=Path(output_dir).resolve(),
             )
 
         # Create schedule manager — gated on leadership in cluster mode
@@ -468,7 +476,7 @@ def create_dashboard_app(
             schedule_manager=schedule_manager,
             trace_backend=trace_backend,
             oss_backup=oss_backup,
-            data_dir=Path(data_dir).resolve() if data_dir else None,
+            output_dir=Path(output_dir).resolve(),
             server_id=server_id,
             leader_elector=leader_elector_instance,
             peer_registry=peer_registry_instance,
@@ -866,25 +874,27 @@ def create_dashboard_app(
         # Prepare config with server-generated persistence_file for security
         # User-provided persistence_file paths are NOT trusted (path traversal risk)
         builder_config = dict(scenario.config or scenario_config)
-        if state.data_dir:
-            # Generate safe persistence_file path based on trial_id
-            from datetime import date
+        output_base = state.output_dir
 
-            date_str = date.today().isoformat()
-            safe_persistence_file = (
-                state.data_dir / scenario.name / date_str / f"{trial_id}.jsonl"
-            )
-            safe_persistence_file.parent.mkdir(parents=True, exist_ok=True)
+        # Generate safe persistence_file path based on trial_id
+        from datetime import date
 
-            # Inject into hub config (override any user-provided value)
-            if "hub" not in builder_config:
-                builder_config["hub"] = {}
-            builder_config["hub"]["persistence_file"] = str(safe_persistence_file)
-            LOGGER.debug(
-                "Generated persistence_file for trial %s: %s",
-                trial_id,
-                safe_persistence_file,
-            )
+        date_str = date.today().isoformat()
+        safe_persistence_file = (
+            output_base / scenario.name / date_str / f"{trial_id}.jsonl"
+        )
+        safe_persistence_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Inject into hub config (override any user-provided value)
+        if "hub" not in builder_config:
+            builder_config["hub"] = {}
+        builder_config["hub"]["persistence_file"] = str(safe_persistence_file)
+        ensure_trial_symlink(state.output_dir, trial_id, safe_persistence_file)
+        LOGGER.debug(
+            "Generated persistence_file for trial %s: %s",
+            trial_id,
+            safe_persistence_file,
+        )
 
         # Build the trial spec - uses build_async which handles both sync and async builders
         try:
@@ -927,68 +937,53 @@ def create_dashboard_app(
                         event_file = candidate
 
             if event_file is None:
-                # No local file — only fall through to SLS if the record
-                # is missing (ran elsewhere) or its file is gone.  When
-                # the record itself is absent we still attempt SLS so that
-                # cross-server backtests work.
-                if state.data_dir is None:
-                    if source_record is None:
-                        return JSONResponse(
-                            content={
-                                "error": (
-                                    f"Trial '{source_trial_id}' not found on "
-                                    f"this server and data_dir is not "
-                                    f"configured for SLS fallback."
-                                )
-                            },
-                            status_code=404,
-                        )
-                    return JSONResponse(
-                        content={
-                            "error": (
-                                "Server data_dir is not configured; cannot "
-                                "cache SLS-sourced backtest events."
-                            )
-                        },
-                        status_code=500,
-                    )
-                cache_dir = Path(state.data_dir) / "backtest_cache"
-                # Cache naming: {trial_id}-{run_id[:8]}.jsonl
-                # 8-char prefix of the 16-hex span_id is sufficient to
-                # avoid collisions while keeping filenames readable.
+                # No local file — try trials cache, OSS, then SLS.
                 run_id = request.backtest.run_id
-                suffix = f"-{run_id[:8]}" if run_id else ""
-                event_file = cache_dir / f"{source_trial_id}{suffix}.jsonl"
+                event_file = trials_cache_path(
+                    state.output_dir, source_trial_id, run_id
+                )
                 materialize_result = None
+                if event_file.is_symlink() and not event_file.exists():
+                    # Dangling symlink — remove so we can write a real file
+                    event_file.unlink()
                 if not event_file.exists():
-                    try:
-                        from dojozero.data import SLSEventSource
+                    # Try OSS first
+                    if download_trial_from_oss(source_trial_id, event_file):
+                        backtest_source = "oss"
+                    else:
+                        # Fall back to SLS materialization
+                        try:
+                            from dojozero.data import SLSEventSource
 
-                        materialize_result = await SLSEventSource().materialize_jsonl(
-                            source_trial_id,
-                            event_file,
-                            run_id=run_id or None,
-                        )
-                        backtest_source = "sls"
-                    except Exception as e:
-                        LOGGER.error(
-                            "SLS materialization failed for trial '%s': %s",
-                            source_trial_id,
-                            e,
-                            exc_info=True,
-                        )
-                        return JSONResponse(
-                            content={
-                                "error": (
-                                    f"Event file for trial '{source_trial_id}' "
-                                    f"is not available locally and SLS fallback "
-                                    f"failed."
+                            materialize_result = (
+                                await SLSEventSource().materialize_jsonl(
+                                    source_trial_id,
+                                    event_file,
+                                    run_id=run_id or None,
                                 )
-                            },
-                            status_code=424,
-                        )
+                            )
+                            backtest_source = "sls"
+                            # Upload to OSS for cross-host caching
+                            upload_trial_to_oss(source_trial_id, event_file)
+                        except Exception as e:
+                            LOGGER.error(
+                                "SLS materialization failed for trial '%s': %s",
+                                source_trial_id,
+                                e,
+                                exc_info=True,
+                            )
+                            return JSONResponse(
+                                content={
+                                    "error": (
+                                        f"Event file for trial '{source_trial_id}' "
+                                        f"is not available locally and SLS fallback "
+                                        f"failed."
+                                    )
+                                },
+                                status_code=424,
+                            )
                 else:
-                    backtest_source = "sls"
+                    backtest_source = "cache"
             # Capture backtest settings (for closure below)
             backtest_speed = request.backtest.speed
             backtest_max_sleep = request.backtest.max_sleep
@@ -1280,33 +1275,31 @@ def create_dashboard_app(
         """Download the JSONL event file for a trial.
 
         Resolution order:
-        1. Local persistence_file from trial record metadata
-        2. SLS materialization (cached to data_dir/backtest_cache/)
+        1. Canonical trials cache (includes symlinks to live persistence files)
+        2. OSS download (cached locally)
+        3. Peer proxy (cluster mode — catches in-progress trials)
+        4. SLS materialization (cached locally, then uploaded to OSS)
 
         Returns the JSONL file as a streaming download.
         """
         from fastapi.responses import FileResponse
 
-        # 1. Try local file from trial record metadata
-        # Check backtest_file first (for backtest trials), then persistence_file
+        # 1. Try canonical trials cache (symlinks for live, real files for
+        #    OSS/SLS cached).  Path.exists() follows symlinks transparently.
+        cached_path = trials_cache_path(state.output_dir, trial_id, run_id)
         event_file: Path | None = None
-        record = state.orchestrator.store.get_trial_record(trial_id)
-        if record is not None:
-            for field in ("backtest_file", "persistence_file"):
-                path_str = record.spec.metadata.get(field)
-                if path_str:
-                    candidate = Path(path_str)
-                    if candidate.exists():
-                        event_file = candidate
-                        break
-                    # Try resolving relative to data_dir if configured
-                    if state.data_dir and not candidate.is_absolute():
-                        alt = Path(state.data_dir) / candidate
-                        if alt.exists():
-                            event_file = alt
-                            break
+        if cached_path.exists():
+            event_file = cached_path
+        elif cached_path.is_symlink():
+            # Dangling symlink (target deleted) — remove so later steps
+            # can write a real file at this path.
+            cached_path.unlink()
 
-        # 2. Try proxying to the owning peer in cluster mode
+        # 2. Try OSS
+        if event_file is None and download_trial_from_oss(trial_id, cached_path):
+            event_file = cached_path
+
+        # 4. Try proxying to the owning peer in cluster mode
         if event_file is None and state.peer_registry is not None:
             try:
                 owner = await state.peer_registry.get_peer_for_trial(trial_id)
@@ -1337,53 +1330,38 @@ def create_dashboard_app(
                                     )
                                 },
                             )
-                        # Peer didn't have it either — fall through to SLS
             except Exception:
                 pass  # fall through to SLS fallback
 
-        # 3. Fallback: materialize from SLS
+        # 5. SLS materialization (last resort)
         if event_file is None:
-            if state.data_dir is None:
+            try:
+                from dojozero.data import SLSEventSource
+
+                await SLSEventSource().materialize_jsonl(
+                    trial_id,
+                    cached_path,
+                    run_id=run_id or None,
+                )
+                event_file = cached_path
+                # Upload to OSS for cross-host caching
+                upload_trial_to_oss(trial_id, cached_path)
+            except Exception as e:
+                LOGGER.error(
+                    "SLS materialization failed for trial '%s': %s",
+                    trial_id,
+                    e,
+                    exc_info=True,
+                )
                 return JSONResponse(
                     content={
                         "error": (
-                            f"Event file for trial '{trial_id}' not found locally "
-                            f"and data_dir is not configured for SLS fallback."
+                            f"Event file for trial '{trial_id}' not available "
+                            f"locally and SLS fallback failed: {e}"
                         )
                     },
-                    status_code=404,
+                    status_code=424,
                 )
-            cache_dir = Path(state.data_dir) / "backtest_cache"
-            suffix = f"-{run_id[:8]}" if run_id else ""
-            cached_path = cache_dir / f"{trial_id}{suffix}.jsonl"
-            if cached_path.exists():
-                event_file = cached_path
-            else:
-                try:
-                    from dojozero.data import SLSEventSource
-
-                    await SLSEventSource().materialize_jsonl(
-                        trial_id,
-                        cached_path,
-                        run_id=run_id or None,
-                    )
-                    event_file = cached_path
-                except Exception as e:
-                    LOGGER.error(
-                        "SLS materialization failed for trial '%s': %s",
-                        trial_id,
-                        e,
-                        exc_info=True,
-                    )
-                    return JSONResponse(
-                        content={
-                            "error": (
-                                f"Event file for trial '{trial_id}' not available "
-                                f"locally and SLS fallback failed: {e}"
-                            )
-                        },
-                        status_code=424,
-                    )
 
         return FileResponse(
             path=event_file,
@@ -1633,7 +1611,7 @@ def create_dashboard_app(
                 pre_start_hours=request.config.pre_start_hours,
                 check_interval_seconds=request.config.check_interval_seconds,
                 auto_stop_on_completion=request.config.auto_stop_on_completion,
-                data_dir=request.config.data_dir,
+                output_dir=request.config.output_dir,
                 max_daily_games=request.config.max_daily_games,
             )
 
@@ -2004,7 +1982,7 @@ async def run_dashboard_server(
     auto_resume: bool = True,
     stale_threshold_hours: float = 24.0,
     enable_gateway: bool = True,
-    data_dir: str | Path | None = None,
+    output_dir: str | Path = "outputs",
     authenticator: "AgentAuthenticator | None" = None,
     no_scheduler: bool = False,
     cluster_config: ClusterConfig | None = None,
@@ -2025,8 +2003,7 @@ async def run_dashboard_server(
         auto_resume: Automatically resume interrupted trials on startup (default True)
         stale_threshold_hours: Skip resuming trials older than this many hours (default 24)
         enable_gateway: Enable HTTP gateway routing for external agents
-        data_dir: Base directory for trial data files (persistence_file will be generated
-            under this directory). If None, trials must provide their own persistence_file.
+        output_dir: Base directory for trial output/event files (default: "outputs").
         authenticator: AgentAuthenticator for validating agent API keys
         no_scheduler: Disable the ScheduleManager entirely
     """
@@ -2044,7 +2021,7 @@ async def run_dashboard_server(
         auto_resume=auto_resume,
         stale_threshold_hours=stale_threshold_hours,
         enable_gateway=enable_gateway,
-        data_dir=data_dir,
+        output_dir=output_dir,
         authenticator=authenticator,
         no_scheduler=no_scheduler,
         cluster_config=cluster_config,
