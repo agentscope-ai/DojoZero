@@ -1236,6 +1236,15 @@ def create_dashboard_app(
         if results is not None:
             return JSONResponse(content=results)
 
+        # Try OSS fallback
+        from dojozero.dashboard_server._trial_manager import (
+            download_trial_file_from_oss,
+        )
+
+        oss_results = download_trial_file_from_oss(trial_id, "results.json")
+        if oss_results is not None:
+            return JSONResponse(content=oss_results)
+
         # Try to proxy to the owning peer in cluster mode
         if state.peer_registry is not None:
             try:

@@ -23,6 +23,7 @@ from dojozero.core import (
     TrialSpec,
     TrialStatus,
 )
+from dojozero.core._filesystem_orchestrator_store import FileSystemOrchestratorStore
 from dojozero.dashboard_server._jsonl_utils import (
     extract_game_result_from_jsonl,
     get_jsonl_last_modified,
@@ -1446,11 +1447,24 @@ class TrialManager:
                 await self._signal_trial_ended_and_cleanup(trial_id, queued.phase)
 
     def _upload_to_oss(self, trial_id: str, spec: TrialSpec) -> None:
-        """Upload trial data to OSS if configured."""
+        """Upload trial data to OSS if configured.
+
+        Uploads events.jsonl (from persistence file), results.json, and
+        spec.json (from orchestrator store).
+        """
         persistence_file_path = spec.metadata.get("persistence_file")
         if persistence_file_path and isinstance(persistence_file_path, str):
             persistence_file = Path(persistence_file_path)
             upload_trial_to_oss(trial_id, persistence_file)
+
+        # Upload results.json and spec.json from the orchestrator store
+        store = self._orchestrator.store
+        if isinstance(store, FileSystemOrchestratorStore):
+            trial_dir = store._trial_dir(trial_id)
+            for filename in ("results.json", "spec.json"):
+                filepath = trial_dir / filename
+                if filepath.exists():
+                    _upload_file_to_oss(trial_id, filepath, filename)
 
 
 # ---------------------------------------------------------------------------
@@ -1501,9 +1515,15 @@ def ensure_trial_symlink(
 _oss_client = None
 
 
-def _oss_trial_key(trial_id: str) -> str:
-    """OSS object key for a trial's event file."""
-    return f"trials/{trial_id}/events.jsonl"
+def _oss_trial_key(trial_id: str, filename: str = "events.jsonl") -> str:
+    """OSS object key for a trial file.
+
+    Args:
+        trial_id: Trial identifier
+        filename: File name within the trial directory (e.g. "events.jsonl",
+                  "results.json", "spec.json")
+    """
+    return f"trials/{trial_id}/{filename}"
 
 
 def _get_oss_client():  # noqa: ANN202
@@ -1555,6 +1575,36 @@ def upload_trial_to_oss(trial_id: str, persistence_file: Path | None) -> bool:
         return False
 
 
+def _upload_file_to_oss(trial_id: str, filepath: Path, filename: str) -> bool:
+    """Upload a single file to OSS under the trial's directory.
+
+    Args:
+        trial_id: Trial identifier
+        filepath: Local path to the file
+        filename: Target filename in OSS (e.g. "results.json")
+
+    Returns:
+        True if upload succeeded, False otherwise
+    """
+    if not filepath.exists():
+        return False
+    try:
+        client = _get_oss_client()
+        oss_key = _oss_trial_key(trial_id, filename)
+        full_key = client.upload_file(filepath, oss_key)
+        LOGGER.info("Uploaded %s to OSS: %s", filename, full_key)
+        return True
+    except ImportError:
+        return False
+    except ValueError:
+        return False
+    except Exception as e:
+        LOGGER.debug(
+            "OSS upload of %s failed for trial '%s': %s", filename, trial_id, e
+        )
+        return False
+
+
 def download_trial_from_oss(trial_id: str, cache_path: Path) -> bool:
     """Download a trial's event file from OSS to a local cache path.
 
@@ -1580,10 +1630,47 @@ def download_trial_from_oss(trial_id: str, cache_path: Path) -> bool:
         return False
 
 
+def download_trial_file_from_oss(
+    trial_id: str, filename: str = "results.json"
+) -> dict[str, Any] | None:
+    """Download a trial JSON file from OSS and return parsed contents.
+
+    Args:
+        trial_id: Trial identifier
+        filename: File to download (e.g. "results.json", "spec.json")
+
+    Returns:
+        Parsed JSON dict, or None if not found / download failed.
+    """
+    import json
+    import tempfile
+
+    try:
+        client = _get_oss_client()
+        oss_key = _oss_trial_key(trial_id, filename)
+        if not client.file_exists(oss_key):
+            return None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir) / filename
+            client.download_file(oss_key, tmp_path)
+            with open(tmp_path, encoding="utf-8") as f:
+                return json.load(f)
+    except ImportError:
+        return None
+    except ValueError:
+        return None
+    except Exception as e:
+        LOGGER.debug(
+            "OSS download of %s failed for trial '%s': %s", filename, trial_id, e
+        )
+        return None
+
+
 __all__ = [
     "QueuedTrial",
     "QueuedTrialPhase",
     "TrialManager",
+    "download_trial_file_from_oss",
     "download_trial_from_oss",
     "ensure_trial_symlink",
     "trials_cache_path",
