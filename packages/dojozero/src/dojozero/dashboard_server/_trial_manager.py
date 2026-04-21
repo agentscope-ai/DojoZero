@@ -1053,6 +1053,10 @@ class TrialManager:
             except Exception as e:
                 self._logger.error("Error stopping trial %s: %s", trial_id, e)
 
+            # Upload to OSS after stopping (before returning)
+            if self._oss_backup and final_phase == QueuedTrialPhase.COMPLETED:
+                self._upload_to_oss(trial_id, queued.spec)
+
             return True
 
         return False
@@ -1212,6 +1216,9 @@ class TrialManager:
                     queued.phase = QueuedTrialPhase.COMPLETED
             except TrialNotFoundError:
                 queued.phase = QueuedTrialPhase.COMPLETED
+
+            if self._oss_backup and queued.phase == QueuedTrialPhase.COMPLETED:
+                self._upload_to_oss(trial_id, queued.spec)
 
             self._logger.info(
                 "Resumed trial '%s' finished with phase: %s",
