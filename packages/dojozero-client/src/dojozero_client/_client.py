@@ -463,15 +463,13 @@ class TrialConnection:
     async def poll_events(
         self,
         since: int | None = None,
-        limit: int = 50,
-        event_types: list[str] | None = None,
+        limit: int = 100,
     ) -> "PollResult":
         """Poll for recent events.
 
         Args:
             since: Get events after this sequence number
-            limit: Maximum events to return
-            event_types: Optional event type filter
+            limit: Maximum events to return (max 100)
 
         Returns:
             PollResult with events and trial_ended info
@@ -479,8 +477,6 @@ class TrialConnection:
         params: dict[str, Any] = {"limit": limit}
         if since is not None:
             params["since"] = since
-        if event_types:
-            params["event_types"] = ",".join(event_types)
 
         response = await self._transport.request(
             "GET",

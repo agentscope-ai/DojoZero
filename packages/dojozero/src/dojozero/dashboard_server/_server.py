@@ -2036,6 +2036,14 @@ async def run_dashboard_server(
         cluster_config=cluster_config,
     )
 
+    # Suppress noisy polling endpoint from access logs
+    class _PollFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            msg = record.getMessage()
+            return "/events/recent" not in msg
+
+    logging.getLogger("uvicorn.access").addFilter(_PollFilter())
+
     config = uvicorn.Config(
         app,
         host=host,

@@ -554,14 +554,13 @@ class TrialHandler:
         if not self._trial:
             return
 
-        poll_interval = float(os.environ.get("DOJOZERO_POLL_INTERVAL", "2.0"))
+        poll_interval = float(os.environ.get("DOJOZERO_POLL_INTERVAL", "5.0"))
 
         try:
             while self._running:
                 try:
                     result: PollResult = await self._trial.poll_events(
                         since=self._state.last_event_sequence,
-                        event_types=self.filters,
                     )
                 except Exception as e:
                     # 404 or connection error means gateway is gone
@@ -604,7 +603,10 @@ class TrialHandler:
                     await self._handle_trial_ended(reason, final_results)
                     return
 
-                await asyncio.sleep(poll_interval)
+                # If we got a full page, there may be more — poll again
+                # immediately to catch up. Otherwise wait before next poll.
+                if len(result.events) < 100:
+                    await asyncio.sleep(poll_interval)
 
         except asyncio.CancelledError:
             pass

@@ -105,7 +105,7 @@ class RobustBettingAgent:
         bet_threshold: float = 0.55,
         max_reconnect_attempts: int = 10,
         reconnect_delay: float = 5.0,
-        poll_interval: float = 2.0,
+        poll_interval: float = 5.0,
     ):
         """Initialize the agent.
 

@@ -231,7 +231,7 @@ class SubscriptionManager:
 
     def __init__(
         self,
-        max_recent_events_per_type: int = 100,
+        max_recent_events_per_type: int = 10_000,
     ):
         """Initialize SubscriptionManager.
 
@@ -245,6 +245,10 @@ class SubscriptionManager:
         # Recent events cache for late-joining subscribers
         self._recent_events: dict[str, list["DataEvent"]] = defaultdict(list)
         self._max_recent_events_per_type = max_recent_events_per_type
+
+        # Sequential cache: ordered list of (sequence, event) for polling pagination
+        self._sequential_cache: list[tuple[int, "DataEvent"]] = []
+        self._max_sequential_cache = max_recent_events_per_type
 
         # Legacy callback support (for backward compatibility with DataHub.subscribe_agent)
         self._event_handlers: dict[str, list[Callable[["DataEvent"], None]]] = (
@@ -423,11 +427,11 @@ class SubscriptionManager:
         Returns:
             Number of subscriptions that received the event
         """
-        # Cache for late joiners
-        self._cache_event(event)
-
-        # Increment global sequence
+        # Increment global sequence first so cache stores the real sequence
         self._global_sequence += 1
+
+        # Cache for late joiners (with real sequence number)
+        self._cache_event(event, self._global_sequence)
 
         delivered = 0
         event_type = event.event_type
@@ -449,7 +453,7 @@ class SubscriptionManager:
 
         return delivered
 
-    def _cache_event(self, event: "DataEvent") -> None:
+    def _cache_event(self, event: "DataEvent", sequence: int = 0) -> None:
         """Cache event for late-joining subscribers."""
         event_type = event.event_type
         events_list = self._recent_events[event_type]
@@ -459,6 +463,14 @@ class SubscriptionManager:
             self._recent_events[event_type] = events_list[
                 : self._max_recent_events_per_type
             ]
+
+        # Also store in sequential cache with real sequence number
+        if sequence > 0:
+            self._sequential_cache.append((sequence, event))
+            if len(self._sequential_cache) > self._max_sequential_cache:
+                self._sequential_cache = self._sequential_cache[
+                    -self._max_sequential_cache :
+                ]
 
     def get_recent_events(
         self,
@@ -487,6 +499,30 @@ class SubscriptionManager:
                     result.extend(self._recent_events[event_type])
             result.sort(key=lambda e: e.timestamp, reverse=True)
             return result[:limit]
+
+    def get_events_since(
+        self, since: int, limit: int = 100
+    ) -> list[tuple[int, "DataEvent"]]:
+        """Get events with sequence > since, ordered by sequence ascending.
+
+        Uses the sequential cache for accurate sequence-based pagination.
+
+        Args:
+            since: Return events after this sequence number (0 = from start)
+            limit: Maximum number of events to return
+
+        Returns:
+            List of (sequence, event) tuples, oldest first
+        """
+        # Binary search for the starting position
+        lo, hi = 0, len(self._sequential_cache)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self._sequential_cache[mid][0] <= since:
+                lo = mid + 1
+            else:
+                hi = mid
+        return self._sequential_cache[lo : lo + limit]
 
     @property
     def global_sequence(self) -> int:
@@ -551,11 +587,11 @@ class SubscriptionManager:
         Returns:
             Number of subscriptions that received the event
         """
-        # Cache for late joiners
-        self._cache_event(event)
-
-        # Increment global sequence
+        # Increment global sequence first so cache stores the real sequence
         self._global_sequence += 1
+
+        # Cache for late joiners (with real sequence number)
+        self._cache_event(event, self._global_sequence)
 
         delivered = 0
         event_type = event.event_type
