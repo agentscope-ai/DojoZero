@@ -627,6 +627,11 @@ class TrialHandler:
                 reason,
                 final_results,
             )
+            # Update balance from our own settled result
+            for r in final_results:
+                if r.agent_id == self.agent_id:
+                    self._state.balance = r.final_balance
+                    break
         self._save_state()
 
     async def _handle_event(self, event: EventEnvelope) -> None:
