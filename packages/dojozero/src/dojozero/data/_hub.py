@@ -99,7 +99,7 @@ class DataHub:
 
         # Subscription manager handles all subscription logic
         self._subscription_manager = SubscriptionManager(
-            max_recent_events_per_type=100,
+            max_recent_events_per_type=10_000,
         )
 
         # Backward compatibility: maintain the original _agent_subscriptions structure
@@ -575,6 +575,20 @@ class DataHub:
             List of recent events (newest first)
         """
         return self._subscription_manager.get_recent_events(event_types, limit)
+
+    def get_events_since(
+        self, since: int, limit: int = 100
+    ) -> list[tuple[int, "DataEvent"]]:
+        """Get events with sequence > since, ordered by sequence ascending.
+
+        Args:
+            since: Return events after this sequence number (0 = from start)
+            limit: Maximum number of events to return
+
+        Returns:
+            List of (sequence, event) tuples, oldest first
+        """
+        return self._subscription_manager.get_events_since(since, limit)
 
     async def _persist_event(self, event: DataEvent) -> None:
         """Persist event to file.

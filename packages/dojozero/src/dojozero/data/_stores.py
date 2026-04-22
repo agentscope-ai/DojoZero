@@ -456,13 +456,20 @@ class DataStore(ABC):
             except Exception as e:
                 logger.error("Error in poll loop for store %s: %s", self.store_id, e)
 
-            # Wait before next poll - read interval dynamically to support runtime updates
-            # Recalculate minimum interval on each iteration (in case it was updated)
-            if self.poll_intervals:
-                loop_interval = min(self.poll_intervals.values())
-            else:
-                loop_interval = self.poll_interval_seconds
-            await asyncio.sleep(loop_interval)
+            # Wait before next poll — sleep in short ticks so we react
+            # quickly when the interval is reduced at runtime (e.g. pre-game
+            # 300s → in-game 5s after a game_start event).
+            elapsed = 0.0
+            tick = 1.0  # check every second
+            while self._running:
+                if self.poll_intervals:
+                    target = min(self.poll_intervals.values())
+                else:
+                    target = self.poll_interval_seconds
+                if elapsed >= target:
+                    break
+                await asyncio.sleep(min(tick, target - elapsed))
+                elapsed += tick
 
     async def _poll_api(
         self,

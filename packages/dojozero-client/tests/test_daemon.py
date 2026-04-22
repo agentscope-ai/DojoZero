@@ -9,7 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dojozero_client._client import AgentResult, EventEnvelope, TrialEndedEvent
+from dojozero_client._client import (
+    AgentResult,
+    EventEnvelope,
+    PollResult,
+    TrialResults,
+)
 from dojozero_client._daemon import (
     DaemonState,
     TrialHandler,
@@ -273,24 +278,8 @@ def _make_agent_result(**overrides: object) -> AgentResult:
     return AgentResult(**defaults)  # type: ignore[arg-type]
 
 
-def _make_trial_ended(
-    reason: str = "completed",
-    results: list[AgentResult] | None = None,
-) -> TrialEndedEvent:
-    """Create a TrialEndedEvent with sensible defaults."""
-    if results is None:
-        results = [_make_agent_result()]
-    return TrialEndedEvent(
-        trial_id="test-trial",
-        reason=reason,
-        timestamp=datetime.now(timezone.utc),
-        final_results=results,
-        message=f"Trial has {reason}",
-    )
-
-
 class TestTrialHandlerTrialEnd:
-    """Tests for TrialHandler handling trial_ended events."""
+    """Tests for TrialHandler handling trial_ended via polling."""
 
     @pytest.mark.asyncio
     async def test_event_loop_handles_completed_trial(self):
@@ -306,21 +295,40 @@ class TestTrialHandlerTrialEnd:
                 handler._state.status = "connected"
                 handler.state_dir.mkdir(parents=True, exist_ok=True)
 
-                # Mock trial that yields one event then ends
                 mock_trial = AsyncMock()
-                ended = _make_trial_ended("completed")
+                call_count = 0
 
-                async def mock_events(**kwargs):
-                    event = EventEnvelope(
-                        trial_id="test-trial",
-                        sequence=1,
-                        timestamp=datetime.now(timezone.utc),
-                        payload={"event_type": "event.odds_update"},
+                async def mock_poll(**kwargs):
+                    nonlocal call_count
+                    call_count += 1
+                    if call_count == 1:
+                        # First poll: return an event
+                        return PollResult(
+                            events=[
+                                EventEnvelope(
+                                    trial_id="test-trial",
+                                    sequence=1,
+                                    timestamp=datetime.now(timezone.utc),
+                                    payload={"event_type": "event.odds_update"},
+                                )
+                            ],
+                        )
+                    # Second poll: trial ended
+                    return PollResult(
+                        events=[],
+                        trial_ended={"reason": "completed", "message": ""},
                     )
-                    yield event
 
-                mock_trial.events = mock_events
-                mock_trial.trial_ended = ended
+                agent_result = _make_agent_result()
+                mock_trial.poll_events = mock_poll
+                mock_trial.get_results = AsyncMock(
+                    return_value=TrialResults(
+                        trial_id="test-trial",
+                        status="completed",
+                        results=[agent_result],
+                        ended_at=datetime.now(timezone.utc),
+                    )
+                )
                 handler._trial = mock_trial
                 handler._running = True
 
@@ -353,14 +361,20 @@ class TestTrialHandlerTrialEnd:
                 handler.state_dir.mkdir(parents=True, exist_ok=True)
 
                 mock_trial = AsyncMock()
-                ended = _make_trial_ended("cancelled")
-
-                async def mock_events(**kwargs):
-                    return
-                    yield  # make it an async generator
-
-                mock_trial.events = mock_events
-                mock_trial.trial_ended = ended
+                mock_trial.poll_events = AsyncMock(
+                    return_value=PollResult(
+                        events=[],
+                        trial_ended={"reason": "cancelled", "message": ""},
+                    )
+                )
+                mock_trial.get_results = AsyncMock(
+                    return_value=TrialResults(
+                        trial_id="test-trial",
+                        status="cancelled",
+                        results=[],
+                        ended_at=None,
+                    )
+                )
                 handler._trial = mock_trial
                 handler._running = True
 
@@ -383,14 +397,20 @@ class TestTrialHandlerTrialEnd:
                 handler.state_dir.mkdir(parents=True, exist_ok=True)
 
                 mock_trial = AsyncMock()
-                ended = _make_trial_ended("failed", results=[])
-
-                async def mock_events(**kwargs):
-                    return
-                    yield
-
-                mock_trial.events = mock_events
-                mock_trial.trial_ended = ended
+                mock_trial.poll_events = AsyncMock(
+                    return_value=PollResult(
+                        events=[],
+                        trial_ended={"reason": "failed", "message": ""},
+                    )
+                )
+                mock_trial.get_results = AsyncMock(
+                    return_value=TrialResults(
+                        trial_id="test-trial",
+                        status="failed",
+                        results=[],
+                        ended_at=None,
+                    )
+                )
                 handler._trial = mock_trial
                 handler._running = True
 
@@ -401,8 +421,8 @@ class TestTrialHandlerTrialEnd:
                 assert not (handler.state_dir / "results.json").exists()
 
     @pytest.mark.asyncio
-    async def test_event_loop_no_trial_ended(self):
-        """Test event loop does not change status when stream ends without trial_ended."""
+    async def test_event_loop_gateway_404_treats_as_ended(self):
+        """Test poll failure (e.g. gateway 404) is treated as trial ended."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("dojozero_client._daemon.TRIALS_DIR", Path(tmpdir)):
                 client = MagicMock()
@@ -415,25 +435,19 @@ class TestTrialHandlerTrialEnd:
                 handler.state_dir.mkdir(parents=True, exist_ok=True)
 
                 mock_trial = AsyncMock()
-
-                async def mock_events(**kwargs):
-                    return
-                    yield
-
-                mock_trial.events = mock_events
-                mock_trial.trial_ended = None  # No trial_ended event
+                mock_trial.poll_events = AsyncMock(
+                    side_effect=Exception("404 Not Found")
+                )
                 handler._trial = mock_trial
                 handler._running = True
 
                 await handler._event_loop()
 
-                # Status should not be changed by event loop
-                assert handler._state.status == "connected"
-                assert not (handler.state_dir / "results.json").exists()
+                assert handler._state.status == "completed"
 
     @pytest.mark.asyncio
     async def test_event_loop_real_error_sets_error_status(self):
-        """Test real exceptions still set status=error."""
+        """Test unhandled exceptions in event processing set status=error."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("dojozero_client._daemon.TRIALS_DIR", Path(tmpdir)):
                 client = MagicMock()
@@ -446,15 +460,25 @@ class TestTrialHandlerTrialEnd:
                 handler.state_dir.mkdir(parents=True, exist_ok=True)
 
                 mock_trial = AsyncMock()
-
-                async def mock_events(**kwargs):
-                    raise ConnectionError("Network failed")
-                    yield  # make it an async generator
-
-                mock_trial.events = mock_events
-                mock_trial.trial_ended = None
+                mock_trial.poll_events = AsyncMock(
+                    return_value=PollResult(
+                        events=[
+                            EventEnvelope(
+                                trial_id="test-trial",
+                                sequence=1,
+                                timestamp=datetime.now(timezone.utc),
+                                payload={"event_type": "event.test"},
+                            )
+                        ],
+                    )
+                )
                 handler._trial = mock_trial
                 handler._running = True
+
+                # Make _handle_event raise to trigger error path
+                handler._handle_event = AsyncMock(
+                    side_effect=RuntimeError("Unexpected crash")
+                )
 
                 await handler._event_loop()
 
@@ -483,16 +507,22 @@ class TestTrialHandlerTrialEnd:
                         roi=-0.2,
                     ),
                 ]
-                ended = _make_trial_ended("completed", results=results)
 
                 mock_trial = AsyncMock()
-
-                async def mock_events(**kwargs):
-                    return
-                    yield
-
-                mock_trial.events = mock_events
-                mock_trial.trial_ended = ended
+                mock_trial.poll_events = AsyncMock(
+                    return_value=PollResult(
+                        events=[],
+                        trial_ended={"reason": "completed", "message": ""},
+                    )
+                )
+                mock_trial.get_results = AsyncMock(
+                    return_value=TrialResults(
+                        trial_id="test-trial",
+                        status="completed",
+                        results=results,
+                        ended_at=datetime.now(timezone.utc),
+                    )
+                )
                 handler._trial = mock_trial
                 handler._running = True
 

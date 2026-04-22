@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from dojozero_client._client import AgentResult, DojoClient, EventEnvelope
+from dojozero_client._client import AgentResult, DojoClient, EventEnvelope, PollResult
 from dojozero_client._config import (
     CONFIG_DIR,
     PID_FILE,
@@ -550,43 +550,89 @@ class TrialHandler:
         return events
 
     async def _event_loop(self) -> None:
-        """Main event processing loop."""
+        """Main event processing loop using polling."""
         if not self._trial:
             return
 
-        try:
-            async for event in self._trial.events(
-                event_types=self.filters,
-                raise_on_trial_end=False,
-            ):
-                if not self._running:
-                    break
-                await self._handle_event(event)
+        poll_interval = float(os.environ.get("DOJOZERO_POLL_INTERVAL", "5.0"))
 
-            # Check if trial ended naturally
-            if self._trial.trial_ended is not None:
-                ended = self._trial.trial_ended
-                logger.info(
-                    "Trial %s ended (reason=%s, agents=%d)",
-                    self.trial_id,
-                    ended.reason,
-                    len(ended.final_results),
-                )
-                self._state.status = ended.reason
-                if ended.final_results:
-                    _write_results(
-                        self.state_dir / "results.json",
-                        self.trial_id,
-                        ended.reason,
-                        ended.final_results,
+        try:
+            while self._running:
+                try:
+                    result: PollResult = await self._trial.poll_events(
+                        since=self._state.last_event_sequence,
                     )
-                self._save_state()
+                except Exception as e:
+                    # 404 or connection error means gateway is gone
+                    logger.info(
+                        "Trial %s: Poll failed (%s), treating as trial ended",
+                        self.trial_id,
+                        e,
+                    )
+                    await self._handle_trial_ended("completed", [])
+                    return
+
+                for event in result.events:
+                    if not self._running:
+                        return
+                    await self._handle_event(event)
+
+                if result.is_trial_ended:
+                    reason = (
+                        result.trial_ended.get("reason", "completed")
+                        if result.trial_ended
+                        else "completed"
+                    )
+                    logger.info("Trial %s ended (reason=%s)", self.trial_id, reason)
+                    # Fetch final results from server
+                    try:
+                        results_resp = await self._trial.get_results()
+                        final_results = [
+                            AgentResult(
+                                agent_id=r.agent_id,
+                                final_balance=r.final_balance,
+                                net_profit=r.net_profit,
+                                total_bets=r.total_bets,
+                                win_rate=r.win_rate,
+                                roi=r.roi,
+                            )
+                            for r in results_resp.results
+                        ]
+                    except Exception:
+                        final_results = []
+                    await self._handle_trial_ended(reason, final_results)
+                    return
+
+                # If we got a full page, there may be more — poll again
+                # immediately to catch up. Otherwise wait before next poll.
+                if len(result.events) < 100:
+                    await asyncio.sleep(poll_interval)
+
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.exception("Trial %s: Event loop error: %s", self.trial_id, e)
             self._state.status = "error"
             self._save_state()
+
+    async def _handle_trial_ended(
+        self, reason: str, final_results: list[AgentResult]
+    ) -> None:
+        """Handle trial ended — write results and update state."""
+        self._state.status = reason
+        if final_results:
+            _write_results(
+                self.state_dir / "results.json",
+                self.trial_id,
+                reason,
+                final_results,
+            )
+            # Update balance from our own settled result
+            for r in final_results:
+                if r.agent_id == self.agent_id:
+                    self._state.balance = r.final_balance
+                    break
+        self._save_state()
 
     async def _handle_event(self, event: EventEnvelope) -> None:
         """Process an incoming event."""

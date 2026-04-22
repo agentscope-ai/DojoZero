@@ -659,3 +659,148 @@ class TestUploadTrialToOss:
             from dojozero.dashboard_server._trial_manager import upload_trial_to_oss
 
             assert upload_trial_to_oss("trial-123", local_file) is False
+
+
+class TestUploadFileToOss:
+    """Tests for _upload_file_to_oss helper."""
+
+    def test_uploads_file_with_custom_filename(
+        self, tmp_path: Path, _reset_oss_singleton
+    ):
+        local_file = tmp_path / "results.json"
+        local_file.write_text('{"agents": []}')
+
+        mock_client = MagicMock()
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            return_value=mock_client,
+        ):
+            from dojozero.dashboard_server._trial_manager import _upload_file_to_oss
+
+            result = _upload_file_to_oss("trial-abc", local_file, "results.json")
+
+        assert result is True
+        mock_client.upload_file.assert_called_once_with(
+            local_file, "trials/trial-abc/results.json"
+        )
+
+    def test_returns_false_for_missing_file(self, tmp_path: Path):
+        from dojozero.dashboard_server._trial_manager import _upload_file_to_oss
+
+        result = _upload_file_to_oss(
+            "trial-abc", tmp_path / "nonexistent.json", "results.json"
+        )
+        assert result is False
+
+    def test_returns_false_on_import_error(self, tmp_path: Path, _reset_oss_singleton):
+        local_file = tmp_path / "results.json"
+        local_file.write_text("{}")
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            side_effect=ImportError("no oss2"),
+        ):
+            from dojozero.dashboard_server._trial_manager import _upload_file_to_oss
+
+            assert _upload_file_to_oss("trial-abc", local_file, "results.json") is False
+
+    def test_returns_false_on_exception(self, tmp_path: Path, _reset_oss_singleton):
+        local_file = tmp_path / "results.json"
+        local_file.write_text("{}")
+
+        mock_client = MagicMock()
+        mock_client.upload_file.side_effect = RuntimeError("network error")
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            return_value=mock_client,
+        ):
+            from dojozero.dashboard_server._trial_manager import _upload_file_to_oss
+
+            assert _upload_file_to_oss("trial-abc", local_file, "results.json") is False
+
+
+class TestDownloadTrialFileFromOss:
+    """Tests for download_trial_file_from_oss helper."""
+
+    def test_returns_parsed_json(self, tmp_path: Path, _reset_oss_singleton):
+        import json
+
+        expected = {"trial_id": "t1", "agents": [{"name": "a1", "balance": 100}]}
+        mock_client = MagicMock()
+        mock_client.file_exists.return_value = True
+
+        def fake_download(oss_key, local_path):
+            local_path.write_text(json.dumps(expected))
+
+        mock_client.download_file.side_effect = fake_download
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            return_value=mock_client,
+        ):
+            from dojozero.dashboard_server._trial_manager import (
+                download_trial_file_from_oss,
+            )
+
+            result = download_trial_file_from_oss("trial-abc", "results.json")
+
+        assert result == expected
+        mock_client.file_exists.assert_called_once_with("trials/trial-abc/results.json")
+
+    def test_returns_none_when_not_found(self, _reset_oss_singleton):
+        mock_client = MagicMock()
+        mock_client.file_exists.return_value = False
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            return_value=mock_client,
+        ):
+            from dojozero.dashboard_server._trial_manager import (
+                download_trial_file_from_oss,
+            )
+
+            result = download_trial_file_from_oss("trial-abc", "results.json")
+
+        assert result is None
+
+    def test_returns_none_on_import_error(self, _reset_oss_singleton):
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            side_effect=ImportError("no oss2"),
+        ):
+            from dojozero.dashboard_server._trial_manager import (
+                download_trial_file_from_oss,
+            )
+
+            assert download_trial_file_from_oss("trial-abc") is None
+
+    def test_returns_none_on_exception(self, _reset_oss_singleton):
+        mock_client = MagicMock()
+        mock_client.file_exists.side_effect = RuntimeError("boom")
+
+        with patch(
+            "dojozero.utils.oss.OSSClient.from_env",
+            return_value=mock_client,
+        ):
+            from dojozero.dashboard_server._trial_manager import (
+                download_trial_file_from_oss,
+            )
+
+            assert download_trial_file_from_oss("trial-abc") is None
+
+
+class TestOssTrialKey:
+    """Tests for _oss_trial_key helper."""
+
+    def test_default_filename(self):
+        from dojozero.dashboard_server._trial_manager import _oss_trial_key
+
+        assert _oss_trial_key("t1") == "trials/t1/events.jsonl"
+
+    def test_custom_filename(self):
+        from dojozero.dashboard_server._trial_manager import _oss_trial_key
+
+        assert _oss_trial_key("t1", "results.json") == "trials/t1/results.json"
+        assert _oss_trial_key("t1", "spec.json") == "trials/t1/spec.json"
