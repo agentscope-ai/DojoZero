@@ -660,8 +660,9 @@ def test_materialize_result_returns_chosen_run_id(tmp_path: Path) -> None:
 def test_materialize_result_explicit_run_id(tmp_path: Path) -> None:
     """Explicit run_id is reflected in the result."""
     trace_id = "trial-multi"
-    root_a = _root_span(trace_id, span_id="rootA")
-    root_b = _root_span(trace_id, span_id="rootB")
+    # Give roots different start times so events group correctly by time proximity
+    root_a = _root_span(trace_id, span_id="rootA", start_time_us=1_000_000)
+    root_b = _root_span(trace_id, span_id="rootB", start_time_us=5_000_000)
     spans = [
         root_a,
         root_b,
@@ -669,11 +670,13 @@ def test_materialize_result_explicit_run_id(tmp_path: Path) -> None:
             _make_init(game_id="a1"),
             trace_id=trace_id,
             parent_span_id=root_a.span_id,
+            start_time_us=2_000_000,
         ),
         _event_span(
             _make_init(game_id="b1"),
             trace_id=trace_id,
             parent_span_id=root_b.span_id,
+            start_time_us=6_000_000,
         ),
     ]
     source = SLSEventSource(reader=_FakeReader(spans))

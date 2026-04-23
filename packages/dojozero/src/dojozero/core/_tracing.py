@@ -550,6 +550,10 @@ class SLSTraceReader:
     SLS provides OpenTelemetry trace storage with a REST API for querying.
     Authentication is handled by alibabacloud-credentials SDK.
 
+    DEFAULT_LOOKBACK_DAYS (7) is used for broad queries (list_trials,
+    get_all_spans).  TRIAL_LOOKBACK_DAYS (365) is used for get_spans
+    which filters by an exact trace_id — wider window, minimal cost.
+
     Credentials (automatic via SDK):
         - Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID, etc.)
         - Credentials file (~/.alibabacloud/credentials)
@@ -563,6 +567,7 @@ class SLSTraceReader:
     """
 
     DEFAULT_LOOKBACK_DAYS = 7
+    TRIAL_LOOKBACK_DAYS = 365
 
     def __init__(
         self,
@@ -778,9 +783,10 @@ class SLSTraceReader:
         """
         now = datetime.now(timezone.utc)
 
-        # Default time range: 7 days ago to now
+        # Default time range: use TRIAL_LOOKBACK_DAYS (365) for by-trial-id
+        # queries — exact _trace_id match keeps the query efficient.
         if start_time is None:
-            from_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
+            from_time = now - timedelta(days=self.TRIAL_LOOKBACK_DAYS)
         else:
             from_time = start_time
 

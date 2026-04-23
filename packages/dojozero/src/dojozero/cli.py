@@ -1445,12 +1445,14 @@ async def _resolve_event_files(
     """Resolve event file patterns to actual file paths.
 
     Supports:
-    - Local file paths: outputs/game.jsonl
-    - Local glob patterns: outputs/*/*.jsonl, outputs/2025-01-*/*.jsonl
+    - Local file paths: outputs/{trial_id}.jsonl
+    - Local glob patterns: outputs/*.jsonl
     - HTTP(S) URLs: http://server/api/trials/{id}/events.jsonl
     - OSS URLs: oss://bucket/prefix/file.jsonl
     - OSS glob patterns: oss://bucket/prefix/*.jsonl
     - SLS trace ids: sls://<trial_id>[@<run_id>]
+
+    Downloaded/materialized files are cached under outputs/{trial_id}.jsonl.
 
     Args:
         patterns: List of file patterns, OSS URLs, or sls:// trace ids
@@ -1529,19 +1531,19 @@ async def _resolve_event_files(
             import httpx
 
             url = pattern
-            # Derive a cache filename from the URL path.
-            # For /api/trials/{trial_id}/events.jsonl, use trial_id as the name.
+            # Derive cache path from URL.
+            # For /api/trials/{trial_id}/events.jsonl → outputs/{trial_id}/events.jsonl
             import re as _re
 
             url_path = url.split("?")[0].rstrip("/")
             trial_match = _re.search(r"/api/trials/([^/]+)/events", url_path)
             if trial_match:
-                url_filename = f"{trial_match.group(1)}.jsonl"
+                cache_path = sls_cache / f"{trial_match.group(1)}.jsonl"
             else:
                 url_filename = Path(url_path).name
                 if not url_filename.endswith(".jsonl"):
                     url_filename += ".jsonl"
-            cache_path = sls_cache / url_filename
+                cache_path = sls_cache / url_filename
             if not cache_path.exists():
                 LOGGER.info("Downloading events from %s", url)
                 try:
@@ -1983,9 +1985,10 @@ async def _backtest_command(args: argparse.Namespace) -> int:
             if args.trial_id and total_files == 1:
                 trial_id = args.trial_id
             else:
-                # Use file stem as part of trial_id for traceability
-                file_stem = event_file.stem
-                trial_id = f"{file_stem}-{uuid4().hex[:8]}"
+                # Derive source trial ID from file name:
+                #   outputs/{source_trial_id}.jsonl → use file stem
+                source_id = event_file.stem
+                trial_id = f"{source_id}-bt-{uuid4().hex[:8]}"
 
             LOGGER.info(
                 "=" * 60 + "\nProcessing file %d/%d: %s (trial_id: %s)\n" + "=" * 60,

@@ -1,6 +1,6 @@
 """Tests for trial cache filename scheme and symlink helpers.
 
-The server and CLI use a canonical ``outputs/trials/`` directory:
+The server and CLI use a canonical ``outputs/`` directory:
   {trial_id}.jsonl              (no run_id)
   {trial_id}-{run_id[:8]}.jsonl (with run_id)
 
@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 from dojozero.dashboard_server._trial_manager import (
+    _legacy_trials_cache_path,
     ensure_trial_symlink,
     trials_cache_path,
 )
@@ -22,24 +23,36 @@ class TestTrialsCachePath:
 
     def test_no_run_id(self, tmp_path: Path) -> None:
         result = trials_cache_path(tmp_path, "abc123")
-        assert result == tmp_path / "trials" / "abc123.jsonl"
+        assert result == tmp_path / "abc123.jsonl"
 
     def test_empty_run_id(self, tmp_path: Path) -> None:
         result = trials_cache_path(tmp_path, "abc123", "")
-        assert result == tmp_path / "trials" / "abc123.jsonl"
+        assert result == tmp_path / "abc123.jsonl"
 
     def test_with_run_id(self, tmp_path: Path) -> None:
         result = trials_cache_path(tmp_path, "trial-1", "abcdef1234567890")
-        assert result == tmp_path / "trials" / "trial-1-abcdef12.jsonl"
+        assert result == tmp_path / "trial-1-abcdef12.jsonl"
 
     def test_short_run_id(self, tmp_path: Path) -> None:
         result = trials_cache_path(tmp_path, "trial-1", "abc")
-        assert result == tmp_path / "trials" / "trial-1-abc.jsonl"
+        assert result == tmp_path / "trial-1-abc.jsonl"
 
     def test_different_run_ids(self, tmp_path: Path) -> None:
         p1 = trials_cache_path(tmp_path, "trial-1", "run_aaa_1234")
         p2 = trials_cache_path(tmp_path, "trial-1", "run_bbb_5678")
         assert p1 != p2
+
+
+class TestLegacyTrialsCachePath:
+    """Verify _legacy_trials_cache_path still produces old-style paths."""
+
+    def test_no_run_id(self, tmp_path: Path) -> None:
+        result = _legacy_trials_cache_path(tmp_path, "abc123")
+        assert result == tmp_path / "trials" / "abc123.jsonl"
+
+    def test_with_run_id(self, tmp_path: Path) -> None:
+        result = _legacy_trials_cache_path(tmp_path, "trial-1", "abcdef1234567890")
+        assert result == tmp_path / "trials" / "trial-1-abcdef12.jsonl"
 
 
 class TestCacheHitMiss:
@@ -48,14 +61,14 @@ class TestCacheHitMiss:
     def test_cache_hit_skips_materialization(self, tmp_path: Path) -> None:
         """When cache file exists, no SLS fetch should be needed."""
         p = trials_cache_path(tmp_path, "trial-xyz", "run12345678abcdef")
-        p.parent.mkdir(parents=True)
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text('{"event": "test"}\n')
         assert p.exists()
 
     def test_cache_miss_for_different_run_id(self, tmp_path: Path) -> None:
         """A cached file for run_A should NOT satisfy a request for run_B."""
         p_a = trials_cache_path(tmp_path, "trial-xyz", "run_aaaa_xxx")
-        p_a.parent.mkdir(parents=True)
+        p_a.parent.mkdir(parents=True, exist_ok=True)
         p_a.write_text('{"event": "test"}\n')
 
         p_b = trials_cache_path(tmp_path, "trial-xyz", "run_bbbb_xxx")
@@ -64,7 +77,7 @@ class TestCacheHitMiss:
     def test_no_run_id_does_not_match_run_id_file(self, tmp_path: Path) -> None:
         """A request with no run_id should not reuse a run_id-specific cache."""
         specific = trials_cache_path(tmp_path, "trial-xyz", "run_aaaa_xxx")
-        specific.parent.mkdir(parents=True)
+        specific.parent.mkdir(parents=True, exist_ok=True)
         specific.write_text('{"event": "test"}\n')
 
         plain = trials_cache_path(tmp_path, "trial-xyz")
@@ -72,7 +85,7 @@ class TestCacheHitMiss:
 
 
 class TestEnsureTrialSymlink:
-    """Tests for ensure_trial_symlink helper."""
+    """Tests for ensure_trial_symlink helper (legacy, kept for compatibility)."""
 
     def test_creates_symlink(self, tmp_path: Path) -> None:
         persistence = tmp_path / "2026-04-21" / "sched-nba-123.jsonl"
