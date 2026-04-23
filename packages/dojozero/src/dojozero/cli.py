@@ -1547,16 +1547,58 @@ async def _resolve_event_files(
             if not cache_path.exists():
                 LOGGER.info("Downloading events from %s", url)
                 try:
-                    async with httpx.AsyncClient(timeout=120.0) as client:
-                        resp = await client.get(url)
-                        resp.raise_for_status()
-                        cache_path.parent.mkdir(parents=True, exist_ok=True)
-                        cache_path.write_bytes(resp.content)
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        delay = 3.0
+                        last_spans = -1
+                        stall_count = 0
+                        max_stalls = 20  # give up after ~5 min of no progress
+                        attempt = 0
+                        while True:
+                            resp = await client.get(url)
+                            if resp.status_code == 200:
+                                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                                cache_path.write_bytes(resp.content)
+                                break
+                            elif resp.status_code == 202:
+                                attempt += 1
+                                body = resp.json()
+                                spans = body.get("spans_fetched", 0)
+                                total = body.get("spans_total", 0)
+                                elapsed = body.get("elapsed_seconds", "?")
+                                pct = f" {100 * spans // total}%" if total > 0 else ""
+                                LOGGER.info(
+                                    "Server is materializing events "
+                                    "(%s/%s spans%s, %ss elapsed). "
+                                    "Retrying in %.0fs... [attempt %d]",
+                                    spans,
+                                    total or "?",
+                                    pct,
+                                    elapsed,
+                                    delay,
+                                    attempt,
+                                )
+                                if spans > last_spans:
+                                    last_spans = spans
+                                    stall_count = 0
+                                else:
+                                    stall_count += 1
+                                if stall_count >= max_stalls:
+                                    raise DojoZeroCLIError(
+                                        f"Server materialization stalled for "
+                                        f"{url} (no progress after "
+                                        f"{max_stalls} retries)"
+                                    )
+                                await asyncio.sleep(delay)
+                                delay = min(delay * 1.5, 15.0)
+                            else:
+                                resp.raise_for_status()
                 except httpx.HTTPStatusError as e:
                     raise DojoZeroCLIError(
                         f"Failed to download events from {url}: "
                         f"HTTP {e.response.status_code}"
                     ) from e
+                except DojoZeroCLIError:
+                    raise
                 except Exception as e:
                     raise DojoZeroCLIError(
                         f"Failed to download events from {url}: {e}"

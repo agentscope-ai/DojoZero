@@ -39,6 +39,8 @@ from dojozero.core._tracing import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from dojozero.core._tracing import TraceReader
     from dojozero.data._models import DataEvent
 
@@ -108,6 +110,7 @@ class SLSEventSource:
         *,
         run_id: str | None = None,
         overwrite: bool = True,
+        progress_callback: "Callable[[int, int], None] | None" = None,
     ) -> MaterializeResult:
         """Write events for ``trial_id`` to ``dest`` as JSONL.
 
@@ -137,7 +140,14 @@ class SLSEventSource:
         reader = self._reader or _make_reader()
         owns_reader = self._reader is None
         try:
-            spans = await reader.get_spans(trial_id)
+            if isinstance(reader, SLSTraceReader) and progress_callback is not None:
+                # SLSTraceReader extends the protocol with progress_callback
+                sls_reader: SLSTraceReader = reader
+                spans = await sls_reader.get_spans(
+                    trial_id, progress_callback=progress_callback
+                )
+            else:
+                spans = await reader.get_spans(trial_id)
         finally:
             if owns_reader:
                 await reader.close()

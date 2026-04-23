@@ -16,6 +16,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
 from typing import Any, Protocol
 from uuid import uuid4
 import asyncio
@@ -764,11 +765,45 @@ class SLSTraceReader:
             LOGGER.error("Failed to parse SLS response for trials: %s", e)
             return []
 
+    async def _get_count(
+        self,
+        resource: str,
+        url: str,
+        query: str,
+        from_time: datetime,
+        to_time: datetime,
+    ) -> int:
+        """Get total log count via SLS SQL count query.
+
+        Returns 0 if the query fails (non-fatal).
+        """
+        count_query = f"{query} | select count(1) as cnt"
+        params = {
+            "type": "log",
+            "from": str(int(from_time.timestamp())),
+            "to": str(int(to_time.timestamp())),
+            "query": count_query,
+            "line": "1",
+            "offset": "0",
+        }
+        headers = self._sign_request("GET", resource, params)
+        try:
+            response = await self._client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            rows = data if isinstance(data, list) else data.get("data", [])
+            if rows and isinstance(rows[0], dict):
+                return int(rows[0].get("cnt", 0))
+        except Exception as e:
+            LOGGER.debug("SLS count query failed (non-fatal): %s", e)
+        return 0
+
     async def get_spans(
         self,
         trial_id: str,
         start_time: datetime | None = None,
         operation_names: list[str] | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> list[SpanData]:
         """Get spans for a trial from SLS.
 
@@ -777,6 +812,9 @@ class SLSTraceReader:
             start_time: If provided, only return spans after this time.
             operation_names: If provided, only return spans with operation_name in this list.
                              Exact match with OR logic. None means no filtering.
+            progress_callback: If provided, called with ``(fetched, total)``
+                after each page.  ``total`` is obtained via a count query
+                before pagination begins.
 
         Returns:
             List of SpanData sorted by start time.
@@ -804,6 +842,11 @@ class SLSTraceReader:
 
         resource = f"/logstores/{self._logstore}"
         url = f"{self._get_base_url()}{resource}"
+
+        # If a progress callback is provided, get total count first via SQL
+        total_count = 0
+        if progress_callback is not None:
+            total_count = await self._get_count(resource, url, query, from_time, now)
 
         # Pagination: SLS GetLogs API limits to 100 rows per request in search mode
         # We paginate using offset parameter to get all data
@@ -858,6 +901,8 @@ class SLSTraceReader:
                     break  # No more data
 
                 all_rows.extend(rows)
+                if progress_callback is not None:
+                    progress_callback(len(all_rows), total_count)
 
                 if len(rows) < page_size:
                     break  # Last page (less than full page means no more data)
