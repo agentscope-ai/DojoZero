@@ -715,19 +715,12 @@ class ScheduleManager:
             if "hub" not in config:
                 config["hub"] = {}
 
-            # Generate schedule_id early so we can use it in persistence_file
+            # Generate schedule_id early for dedup
             schedule_id = self._generate_schedule_id(sport_type, game.game_id)
 
-            # Set persistence_file with unique schedule_id to avoid conflicts
-            # Explicit output_dir param overrides server-level output_dir
-            effective_output_dir = output_dir or (
-                str(self._output_dir) if self._output_dir else None
-            )
-            if effective_output_dir:
-                persistence_file = (
-                    f"{effective_output_dir}/{game_date}/{schedule_id}.jsonl"
-                )
-                config["hub"]["persistence_file"] = persistence_file
+            # NOTE: persistence_file is set at launch time (in _launch_trial)
+            # when the trial_id is known, using the canonical path:
+            #   outputs/{trial_id}/events.jsonl
 
             # Add game info to metadata using typed structure
             game_metadata: dict[str, Any] = dict(metadata) if metadata else {}
@@ -1116,19 +1109,12 @@ class ScheduleManager:
             if "hub" not in game_config:
                 game_config["hub"] = {}
 
-            # Generate schedule_id early so we can use it in persistence_file
+            # Generate schedule_id early for dedup
             schedule_id = self._generate_schedule_id(source.sport_type, game.game_id)
 
-            # Set persistence_file with unique schedule_id to avoid conflicts
-            # Per-source output_dir overrides server-level output_dir
-            effective_output_dir = config.output_dir or (
-                str(self._output_dir) if self._output_dir else None
-            )
-            if effective_output_dir:
-                persistence_file = (
-                    f"{effective_output_dir}/{game_date}/{schedule_id}.jsonl"
-                )
-                game_config["hub"]["persistence_file"] = persistence_file
+            # NOTE: persistence_file is set at launch time (in _launch_trial)
+            # when the trial_id is known, using the canonical path:
+            #   outputs/{trial_id}/events.jsonl
 
             # Metadata for the trial using typed structure
             trial_metadata: ScheduledGameMetadata = {
@@ -1600,6 +1586,14 @@ class ScheduleManager:
             hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
             trial_id = f"{scheduled.sport_type}-game-{scheduled.game_id}-{hash_suffix}"
 
+            # Set persistence_file now that trial_id is known:
+            #   outputs/{trial_id}.jsonl
+            if self._output_dir:
+                pf = str(self._output_dir / f"{trial_id}.jsonl")
+                if "hub" not in scheduled.scenario_config:
+                    scheduled.scenario_config["hub"] = {}
+                scheduled.scenario_config["hub"]["persistence_file"] = pf
+
             # Pick target server if peer registry available
             target_peer = None
             if self._peer_registry is not None:
@@ -1810,15 +1804,6 @@ class ScheduleManager:
                 or target_peer.server_id == self._server_id
             ):
                 self._register_game_result_callback(scheduled)
-
-                # Create symlink in outputs/trials/ for trial-id-indexed lookup
-                pf = scheduled.scenario_config.get("hub", {}).get("persistence_file")
-                if pf and self._output_dir:
-                    from dojozero.dashboard_server._trial_manager import (
-                        ensure_trial_symlink,
-                    )
-
-                    ensure_trial_symlink(self._output_dir, trial_id, Path(pf))
 
             LOGGER.info(
                 "Launched trial '%s' for schedule '%s'",

@@ -1476,6 +1476,17 @@ def trials_cache_path(
 ) -> Path:
     """Canonical local cache path for a trial's event file.
 
+    Returns ``output_dir / "{trial_id}[-{run_id[:8]}].jsonl"``.
+    """
+    suffix = f"-{run_id[:8]}" if run_id else ""
+    return output_dir / f"{trial_id}{suffix}.jsonl"
+
+
+def _legacy_trials_cache_path(
+    output_dir: Path, trial_id: str, run_id: str | None = None
+) -> Path:
+    """Legacy path for backwards compatibility.
+
     Returns ``output_dir / "trials" / "{trial_id}[-{run_id[:8]}].jsonl"``.
     """
     suffix = f"-{run_id[:8]}" if run_id else ""
@@ -1494,7 +1505,7 @@ def ensure_trial_symlink(
     """
     import os
 
-    link_path = trials_cache_path(output_dir, trial_id)
+    link_path = _legacy_trials_cache_path(output_dir, trial_id)
     link_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         target = os.path.relpath(persistence_file, link_path.parent)
@@ -1670,6 +1681,7 @@ __all__ = [
     "QueuedTrialPhase",
     "TrialManager",
     "download_trial_file_from_oss",
+    "_legacy_trials_cache_path",
     "download_trial_from_oss",
     "ensure_trial_symlink",
     "trials_cache_path",

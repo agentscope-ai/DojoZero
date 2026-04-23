@@ -146,6 +146,13 @@ class SLSEventSource:
             spans, trial_id=trial_id, run_id=run_id
         )
 
+        if not events:
+            raise RuntimeError(
+                f"SLS materialization produced 0 events for trial '{trial_id}'. "
+                "The trial may not exist in SLS, may still be running, "
+                "or spans may have expired."
+            )
+
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(f"{dest.suffix}.{uuid.uuid4().hex}.tmp")
         try:

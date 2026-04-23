@@ -49,8 +49,8 @@ from dojozero.core._tracing import (
 )
 from dojozero.core._types import RuntimeContext
 from dojozero.dashboard_server._trial_manager import (
+    _legacy_trials_cache_path,
     download_trial_from_oss,
-    ensure_trial_symlink,
     trials_cache_path,
     upload_trial_to_oss,
 )
@@ -876,20 +876,14 @@ def create_dashboard_app(
         builder_config = dict(scenario.config or scenario_config)
         output_base = state.output_dir
 
-        # Generate safe persistence_file path based on trial_id
-        from datetime import date
-
-        date_str = date.today().isoformat()
-        safe_persistence_file = (
-            output_base / scenario.name / date_str / f"{trial_id}.jsonl"
-        )
+        # Generate safe persistence_file: outputs/{trial_id}.jsonl
+        safe_persistence_file = output_base / f"{trial_id}.jsonl"
         safe_persistence_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Inject into hub config (override any user-provided value)
         if "hub" not in builder_config:
             builder_config["hub"] = {}
         builder_config["hub"]["persistence_file"] = str(safe_persistence_file)
-        ensure_trial_symlink(state.output_dir, trial_id, safe_persistence_file)
         LOGGER.debug(
             "Generated persistence_file for trial %s: %s",
             trial_id,
@@ -1293,8 +1287,7 @@ def create_dashboard_app(
         """
         from fastapi.responses import FileResponse
 
-        # 1. Try canonical trials cache (symlinks for live, real files for
-        #    OSS/SLS cached).  Path.exists() follows symlinks transparently.
+        # 1. Try canonical path: outputs/{trial_id}/events.jsonl
         cached_path = trials_cache_path(state.output_dir, trial_id, run_id)
         event_file: Path | None = None
         if cached_path.exists():
@@ -1304,7 +1297,15 @@ def create_dashboard_app(
             # can write a real file at this path.
             cached_path.unlink()
 
-        # 2. Try OSS
+        # 1b. Legacy fallback: outputs/trials/{trial_id}.jsonl
+        if event_file is None:
+            legacy = _legacy_trials_cache_path(state.output_dir, trial_id, run_id)
+            if legacy.exists():
+                event_file = legacy
+            elif legacy.is_symlink():
+                legacy.unlink()
+
+        # 2. Try OSS (downloads to the new canonical path)
         if event_file is None and download_trial_from_oss(trial_id, cached_path):
             event_file = cached_path
 
@@ -1371,6 +1372,20 @@ def create_dashboard_app(
                     },
                     status_code=424,
                 )
+
+        # Guard against serving empty files (e.g. from a previous failed
+        # materialization).  Remove the empty file so future requests retry.
+        if event_file.stat().st_size == 0:
+            event_file.unlink(missing_ok=True)
+            return JSONResponse(
+                content={
+                    "error": (
+                        f"Event file for trial '{trial_id}' is empty (0 events). "
+                        "Deleted cached file — retry to re-fetch from SLS."
+                    )
+                },
+                status_code=404,
+            )
 
         return FileResponse(
             path=event_file,
