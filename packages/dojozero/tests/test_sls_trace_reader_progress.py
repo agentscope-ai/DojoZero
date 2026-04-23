@@ -13,7 +13,9 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import httpx
+import pytest
 
+from dojozero.core._credentials import Credentials
 from dojozero.core._tracing import SLSTraceReader
 
 
@@ -21,12 +23,40 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _make_reader(page_size: int = 100) -> SLSTraceReader:
-    """Construct a reader without needing real SLS credentials.
+class _DummyCredentialProvider:
+    """Returns fixed, non-empty credentials without any network lookup.
 
-    SLSTraceReader.__init__ only *warns* on missing credentials; actual
-    request-signing works even with empty strings (just produces an invalid
-    signature we never send because ``_client.get`` is mocked).
+    The real CredentialProvider delegates to the alibabacloud SDK, which
+    probes ECS metadata at 100.100.100.200 when no local credentials are
+    configured — fine locally, but in CI this hangs for ~60s then fails.
+    """
+
+    def get_credentials(self) -> Credentials:
+        return Credentials(access_key_id="test-ak", access_key_secret="test-secret")
+
+
+@pytest.fixture(autouse=True)
+def _stub_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub credential lookup for every test in this module.
+
+    SLSTraceReader.__init__ calls ``get_credential_provider().get_credentials()``.
+    Without this fixture, that triggers the alibabacloud SDK's full credential
+    chain — including an ECS metadata probe that times out in CI.
+    """
+    from dojozero.core import _credentials as cred_mod
+
+    monkeypatch.setattr(cred_mod, "_provider", None)
+    monkeypatch.setattr(
+        cred_mod, "get_credential_provider", lambda: _DummyCredentialProvider()
+    )
+
+
+def _make_reader(page_size: int = 100) -> SLSTraceReader:
+    """Construct a reader with a stubbed credential provider.
+
+    The ``_stub_credentials`` autouse fixture must be active — otherwise
+    SLSTraceReader.__init__ will probe ECS metadata on hosts without local
+    Alibaba Cloud credentials configured.
     """
     return SLSTraceReader(
         endpoint="fake.log.aliyuncs.com",
