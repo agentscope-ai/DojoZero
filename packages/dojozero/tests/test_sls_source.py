@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from dojozero.core._tracing import SpanData
+from dojozero.core._tracing import SLSTraceReader, SpanData
 from dojozero.data import (
     GameInitializeEvent,
     GameResultEvent,
@@ -732,6 +732,96 @@ def test_injected_reader_not_closed(tmp_path: Path) -> None:
     source = SLSEventSource(reader=reader)
     _run(source.fetch_events("trial-A"))
     assert reader.close_calls == 0  # Caller owns the reader.
+
+
+# ---------------------------------------------------------------------------
+# progress_callback passthrough
+# ---------------------------------------------------------------------------
+
+
+class _FakeSLSReader(SLSTraceReader):
+    """SLSTraceReader subclass that bypasses network setup for isinstance tests.
+
+    materialize_jsonl checks ``isinstance(reader, SLSTraceReader)`` before
+    forwarding progress_callback, so a bare _FakeReader won't exercise that
+    branch.
+    """
+
+    def __init__(self, spans: list[SpanData]) -> None:
+        # Skip super().__init__ — it would spin up httpx/credentials which
+        # we neither have nor need for this test.
+        self._spans = spans
+        self.received_progress_callback: Any = None
+
+    async def get_spans(  # type: ignore[override]
+        self,
+        trial_id: str,
+        start_time: datetime | None = None,
+        operation_names: list[str] | None = None,
+        progress_callback: Any = None,
+    ) -> list[SpanData]:
+        self.received_progress_callback = progress_callback
+        return list(self._spans)
+
+    async def close(self) -> None:  # pragma: no cover - not called (not owned)
+        pass
+
+
+def test_progress_callback_forwarded_to_sls_reader(tmp_path: Path) -> None:
+    """When reader is an SLSTraceReader, progress_callback is passed through."""
+    event = _make_init()
+    root = _root_span("trial-A")
+    reader = _FakeSLSReader(
+        [root, _event_span(event, trace_id="trial-A", parent_span_id=root.span_id)]
+    )
+    source = SLSEventSource(reader=reader)
+
+    calls: list[tuple[int, int]] = []
+
+    def _on_progress(fetched: int, total: int) -> None:
+        calls.append((fetched, total))
+
+    _run(
+        source.materialize_jsonl(
+            "trial-A",
+            tmp_path / "trial-A.jsonl",
+            progress_callback=_on_progress,
+        )
+    )
+
+    # The fake reader records the callback it received — identity check.
+    assert reader.received_progress_callback is _on_progress
+
+
+def test_progress_callback_dropped_for_non_sls_reader(tmp_path: Path) -> None:
+    """A bare TraceReader stand-in shouldn't crash on unexpected progress_callback.
+
+    The isinstance guard skips the progress branch and calls
+    ``reader.get_spans(trial_id)`` without kwargs — so a reader whose
+    get_spans signature doesn't accept progress_callback still works.
+    """
+    event = _make_init()
+    root = _root_span("trial-A")
+    # _FakeReader.get_spans has NO progress_callback parameter — this would
+    # raise TypeError if the guard were missing.
+    reader = _FakeReader(
+        [root, _event_span(event, trace_id="trial-A", parent_span_id=root.span_id)]
+    )
+    source = SLSEventSource(reader=reader)
+
+    dest = tmp_path / "trial-A.jsonl"
+    _run(
+        source.materialize_jsonl(
+            "trial-A",
+            dest,
+            progress_callback=lambda fetched, total: None,
+        )
+    )
+
+    # Materialization still produced output — progress_callback was silently
+    # ignored, not raised.
+    assert dest.exists()
+    assert len(dest.read_text().splitlines()) == 1
 
 
 # ---------------------------------------------------------------------------
