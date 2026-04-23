@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from collections import deque
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence, TypedDict, cast
 
 from agentscope.agent import ReActAgent
@@ -27,7 +28,12 @@ from dojozero.agents import (
     create_toolkit,
 )
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
-from dojozero.core._tracing import create_span_from_event, emit_span
+from dojozero.core._tracing import (
+    SpanData,
+    create_span_from_event,
+    emit_span,
+    emit_span_sls_only,
+)
 from dojozero.betting._config import MEMORY_SUMMARY_PROMPT
 from dojozero.data._models import (
     BaseGameUpdateEvent,
@@ -318,7 +324,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         event_formatter: EventFormatter | None = None,
     ) -> None:
         super().__init__(actor_id, trial_id)
-        # Create internal ReActAgent for LLM reasoning
+        # Create internal ReActAgent for LLM reasoning. LLM-level OTel GenAI
+        # spans are emitted by AgentScope's built-in ``@trace_llm`` decorator,
+        # wired via ``enable_agentscope_tracing()`` at server startup.
         self._react_agent = ReActAgent(
             name=name,
             sys_prompt=sys_prompt,
@@ -774,26 +782,14 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         )
         emit_span(span)
 
-    def _emit_response_span(self, message: AgentResponseMessage) -> None:
-        """Emit a span for agent response to the OTel exporter.
-
-        Args:
-            message: Structured agent response message (includes bet fields if present)
-        """
-        # Build tags from message, excluding None values (e.g., empty bet fields)
+    def _response_tags(self, message: AgentResponseMessage) -> dict[str, Any]:
+        """Build the tag dict for an ``agent.response`` span."""
         tags = message.model_dump(exclude_none=True)
-
-        # Serialize cot_steps to JSON string for proper display in tracing UI
         if "cot_steps" in tags:
             tags["cot_steps"] = json.dumps(tags["cot_steps"])
-
-        span = create_span_from_event(
-            trial_id=self.trial_id,
-            actor_id=self.actor_id,
-            operation_name="agent.response",
-            extra_tags=tags,
-        )
-        emit_span(span)
+        tags["actor.id"] = self.actor_id
+        tags["dojozero.trial.id"] = self.trial_id
+        return tags
 
     def _format_events_for_llm(self, events: list[StreamEvent[Any]]) -> str:
         """Format multiple events into a consolidated LLM-friendly message.
@@ -939,48 +935,88 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         memory_before = await self.memory.get_memory()
         memory_before_dicts = [m.to_dict() for m in memory_before]
 
-        # Call agent
-        response = await self._react_agent(msg)
+        # Open a real OTel context-managed span for agent.response so that the
+        # ``chat`` spans AgentScope's ``@trace_llm`` emits from inside
+        # ``_react_agent`` become children via OTel context propagation. After
+        # the span closes we also mirror it to SLS (flat-log logstore).
+        from opentelemetry import trace as _otel_trace
 
-        # Capture memory state AFTER agent call
-        memory_after = await self.memory.get_memory()
-        memory_after_dicts = [m.to_dict() for m in memory_after]
-        self._state = memory_after_dicts
+        tracer = _otel_trace.get_tracer("dojozero.agent")
+        response_start = datetime.now(timezone.utc)
+        response_start_us = int(response_start.timestamp() * 1_000_000)
+        response_start_mono = time.monotonic()
 
-        # Get only this turn's new messages
-        turn_messages = _extract_memory_diff(memory_before_dicts, memory_after_dicts)
+        response: Any = None
+        response_tags: dict[str, Any] | None = None
+        otel_span_id: int = 0
+        with tracer.start_as_current_span("agent.response") as otel_span:
+            # Identifiers useful for an error span (before response_tags
+            # overwrites / adds to them on the success path).
+            otel_span.set_attribute("actor.id", self.actor_id)
+            otel_span.set_attribute("dojozero.trial.id", self.trial_id)
+            otel_span.set_attribute("sequence", self._event_count)
 
-        # Emit span for agent response
-        if response is not None:
-            response_content = getattr(response, "content", None)
-            text_content, _ = _parse_response_content(response_content)
+            # Let the context manager's __exit__ record exceptions / set
+            # ERROR status automatically if the model call raises.
+            response = await self._react_agent(msg)
 
-            # Parse CoT steps and bet info from this turn's messages
-            cot_steps = _parse_cot_steps(turn_messages)
-            bet = _extract_bet_from_tool_calls(turn_messages)
+            # Capture memory state AFTER agent call
+            memory_after = await self.memory.get_memory()
+            memory_after_dicts = [m.to_dict() for m in memory_after]
+            self._state = memory_after_dicts
 
-            # Build trigger safely (empty string if no events)
-            trigger = ""
-            if events:
-                last_payload = events[-1].payload
-                if isinstance(last_payload, HotTopicsEvent):
-                    trigger = format_hot_topics_for_llm(last_payload)
-                elif _is_formattable_payload(last_payload):
-                    trigger = self._event_formatter(last_payload)
-
-            # Emit agent response span with structured message (includes bet fields if present)
-            response_message = AgentResponseMessage(
-                sequence=self._event_count,
-                stream_id=primary_stream_id,
-                agent_id=self.actor_id,
-                content=text_content,
-                cot_steps=cot_steps,
-                trigger=trigger,
-                game_id=game_id,
-                # Bet fields - None if no bet, otherwise populated from bet dict
-                **(bet or {}),
+            # Get only this turn's new messages
+            turn_messages = _extract_memory_diff(
+                memory_before_dicts, memory_after_dicts
             )
-            self._emit_response_span(response_message)
+
+            if response is not None:
+                response_content = getattr(response, "content", None)
+                text_content, _ = _parse_response_content(response_content)
+
+                cot_steps = _parse_cot_steps(turn_messages)
+                bet = _extract_bet_from_tool_calls(turn_messages)
+
+                trigger = ""
+                if events:
+                    last_payload = events[-1].payload
+                    if isinstance(last_payload, HotTopicsEvent):
+                        trigger = format_hot_topics_for_llm(last_payload)
+                    elif _is_formattable_payload(last_payload):
+                        trigger = self._event_formatter(last_payload)
+
+                response_message = AgentResponseMessage(
+                    sequence=self._event_count,
+                    stream_id=primary_stream_id,
+                    agent_id=self.actor_id,
+                    content=text_content,
+                    cot_steps=cot_steps,
+                    trigger=trigger,
+                    game_id=game_id,
+                    **(bet or {}),
+                )
+                response_tags = self._response_tags(response_message)
+                for key, value in response_tags.items():
+                    if isinstance(value, (str, int, float, bool)):
+                        otel_span.set_attribute(key, value)
+                    elif value is not None:
+                        otel_span.set_attribute(key, str(value))
+
+            otel_span_id = otel_span.get_span_context().span_id
+
+        response_duration_us = int((time.monotonic() - response_start_mono) * 1_000_000)
+
+        if response_tags is not None:
+            sls_span = SpanData(
+                trace_id=self.trial_id,
+                span_id=f"{otel_span_id:016x}",
+                operation_name="agent.response",
+                start_time=response_start_us,
+                duration=response_duration_us,
+                parent_span_id=None,
+                tags=response_tags,
+            )
+            emit_span_sls_only(sls_span)
         # Compact memory for next iteration when context becomes too large
         if (
             self._estimate_memory_tokens(memory_after_dicts)
