@@ -158,7 +158,7 @@ class GameTrialManager:
 
         hash_input = f"{self.game_id}-{datetime.now(timezone.utc).isoformat()}"
         hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        self.trial_id = f"nba-game-{self.game_id}-{hash_suffix}"
+        self.trial_id = f"adhoc_nba_game_{self.game_id}_{hash_suffix}"
 
         # All output files live under output_dir as {trial_id}.*
         self.output_dir.mkdir(parents=True, exist_ok=True)
