@@ -14,11 +14,11 @@ When using --server flag, trials are submitted to a Dashboard Server which handl
 
 Usage:
     # Local mode (no trace export to server)
-    python nba_trial_runner.py run --data-dir outputs
+    python nba_trial_runner.py run --output-dir outputs
 
     # Server mode (traces exported via Dashboard Server)
     # First start: dojo0 serve --trace-backend jaeger
-    python nba_trial_runner.py run --data-dir outputs --server http://localhost:8000
+    python nba_trial_runner.py run --output-dir outputs --server http://localhost:8000
 """
 
 # Load .env file before importing other modules
@@ -59,8 +59,7 @@ class GameTrialManager:
         base_config: Path,
         pre_start_hours: float = 0.1,
         check_interval_seconds: float = 60.0,
-        data_dir: Path | None = None,
-        game_date: str | None = None,
+        output_dir: Path = Path("outputs"),
         log_level: str = "INFO",
         server: str | None = None,
     ):
@@ -71,9 +70,8 @@ class GameTrialManager:
             base_config: Path to base config template
             pre_start_hours: Hours before game to start trial (default: 0.1)
             check_interval_seconds: Interval to check game status (default: 60.0)
-            data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
-                      If None, use defaults: configs/ and outputs/
-            game_date: Date string (YYYY-MM-DD) for date-organized structure
+            output_dir: Directory for output files (default: outputs/).
+                        Files are written as {output_dir}/{trial_id}.jsonl, .yaml, .log
             log_level: Logging level for subprocess (default: INFO)
             server: Dashboard Server URL (e.g., http://localhost:8000). If provided,
                     trials are submitted to the server which exports traces to Jaeger.
@@ -83,8 +81,7 @@ class GameTrialManager:
         self.base_config = base_config
         self.pre_start_hours = pre_start_hours
         self.check_interval_seconds = check_interval_seconds
-        self.data_dir = data_dir
-        self.game_date = game_date
+        self.output_dir = output_dir
         self.log_level = log_level
         self.server = server
 
@@ -156,34 +153,23 @@ class GameTrialManager:
         # Update espn_game_id
         config["scenario"]["config"]["espn_game_id"] = self.game_id
 
-        # Determine file paths
-        if self.data_dir:
-            # Data dir structure: {data_dir}/{date}/{game_id}.yaml, {game_id}.jsonl, {game_id}.log
-            if not self.game_date:
-                # If data_dir is provided but no game_date, use today's date
-                self.game_date = datetime.now().strftime("%Y-%m-%d")
-            date_dir = self.data_dir / self.game_date
-            config_file = date_dir / f"{self.game_id}.yaml"
-            events_file = date_dir / f"{self.game_id}.jsonl"
-            log_file = date_dir / f"{self.game_id}.log"
-        else:
-            # Flat structure: use default directories
-            project_root = Path(__file__).parent.parent
-            configs_dir = project_root / "configs"
-            outputs_dir = project_root / "outputs"
-            config_file = configs_dir / f"nba-moneyline_{self.game_id}.yaml"
-            events_file = outputs_dir / f"nba_betting_events_{self.game_id}.jsonl"
-            log_file = outputs_dir / f"{self.game_id}.log"
+        # Generate trial_id first — file paths derive from it.
+        import hashlib
+
+        hash_input = f"{self.game_id}-{datetime.now(timezone.utc).isoformat()}"
+        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
+        self.trial_id = f"nba-game-{self.game_id}-{hash_suffix}"
+
+        # All output files live under output_dir as {trial_id}.*
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        config_file = self.output_dir / f"{self.trial_id}.yaml"
+        events_file = self.output_dir / f"{self.trial_id}.jsonl"
+        log_file = self.output_dir / f"{self.trial_id}.log"
 
         # Update persistence file in config
         if "hub" not in config["scenario"]["config"]:
             config["scenario"]["config"]["hub"] = {}
         config["scenario"]["config"]["hub"]["persistence_file"] = str(events_file)
-
-        # Create directory structure
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        events_file.parent.mkdir(parents=True, exist_ok=True)
-        log_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Save config file
         with open(config_file, "w") as f:
@@ -192,14 +178,6 @@ class GameTrialManager:
         self.config_file = config_file
         self.events_file = events_file
         self.log_file = log_file
-
-        # Unique trial ID with hash suffix so each run gets its own SLS traces.
-        # Prefixed with adhoc_ to distinguish from scheduler-launched trials.
-        import hashlib
-
-        hash_input = f"{self.game_id}-{datetime.now(timezone.utc).isoformat()}"
-        hash_suffix = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
-        self.trial_id = f"adhoc_nba_game_{self.game_id}_{hash_suffix}"
 
         # Set up file logger for this game
         self._setup_file_logger()
@@ -402,7 +380,11 @@ class GameTrialManager:
             Game status (1=scheduled, 2=in progress, 3=finished) or None if error
         """
         try:
-            check_date = self.game_date or datetime.now().strftime("%Y-%m-%d")
+            check_date = (
+                self.game_time_utc.strftime("%Y-%m-%d")
+                if self.game_time_utc
+                else datetime.now().strftime("%Y-%m-%d")
+            )
             games = get_games_for_date(check_date, print_games=False)
             current_game = next(
                 (g for g in games if str(g.get("gameId")) == self.game_id), None
@@ -746,7 +728,7 @@ async def run_trial_for_game(
     base_config: Path,
     pre_start_hours: float = 2.0,
     check_interval_seconds: float = 60.0,
-    data_dir: Path | None = None,
+    output_dir: Path = Path("outputs"),
     log_level: str = "INFO",
     server: str | None = None,
 ) -> list[GameTrialManager]:
@@ -760,8 +742,7 @@ async def run_trial_for_game(
         base_config: Path to base config template
         pre_start_hours: Hours before game to start trial
         check_interval_seconds: Interval to check game status
-        data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
-                  If None, use defaults: configs/ and outputs/
+        output_dir: Directory for output files (default: outputs/)
         log_level: Logging level for subprocess
         server: Dashboard Server URL for trace export
 
@@ -805,8 +786,7 @@ async def run_trial_for_game(
         base_config=base_config,
         pre_start_hours=pre_start_hours,
         check_interval_seconds=check_interval_seconds,
-        data_dir=data_dir,
-        game_date=game_date_str if data_dir else None,
+        output_dir=output_dir,
         log_level=log_level,
         server=server,
     )
@@ -821,7 +801,7 @@ async def run_trials_for_date(
     base_config: Path,
     pre_start_hours: float = 2.0,
     check_interval_seconds: float = 60.0,
-    data_dir: Path | None = None,
+    output_dir: Path = Path("outputs"),
     log_level: str = "INFO",
     server: str | None = None,
 ) -> list[GameTrialManager]:
@@ -832,20 +812,13 @@ async def run_trials_for_date(
         base_config: Path to base config template
         pre_start_hours: Hours before game to start trial
         check_interval_seconds: Interval to check game status
-        data_dir: If provided, use {data_dir}/{date}/{game_id}.yaml and {data_dir}/{date}/{game_id}.jsonl
-                  If None, use defaults: configs/ and outputs/
+        output_dir: Directory for output files (default: outputs/)
         log_level: Logging level for subprocess
         server: Dashboard Server URL for trace export
 
     Returns:
         List of GameTrialManager instances
     """
-    # Parse date string
-    if isinstance(game_date, datetime):
-        date_str = game_date.strftime("%Y-%m-%d")
-    else:
-        date_str = game_date
-
     # Get games for date
     logger.info("Fetching games for date: %s", game_date)
     games = get_games_for_date(game_date, print_games=True)
@@ -867,10 +840,7 @@ async def run_trials_for_date(
             base_config=base_config,
             pre_start_hours=pre_start_hours,
             check_interval_seconds=check_interval_seconds,
-            data_dir=data_dir,
-            game_date=(
-                date_str if data_dir else None
-            ),  # Pass date_str when data_dir is set
+            output_dir=output_dir,
             log_level=log_level,
             server=server,
         )
@@ -1083,10 +1053,10 @@ def main() -> int:
         help="Path to trial config template (default: trial_params/nba-moneyline.yaml)",
     )
     run_parser.add_argument(
-        "--data-dir",
+        "--output-dir",
         type=Path,
-        default=None,
-        help="Data directory for output: {data-dir}/{date}/{game_id}.yaml and {data-dir}/{date}/{game_id}.jsonl",
+        default=Path("outputs"),
+        help="Output directory for trial files: {output-dir}/{trial_id}.jsonl, .yaml, .log",
     )
     run_parser.add_argument(
         "--pre-start-hours",
@@ -1162,7 +1132,7 @@ def main() -> int:
                         base_config=args.config,
                         pre_start_hours=args.pre_start_hours,
                         check_interval_seconds=args.check_interval,
-                        data_dir=args.data_dir,
+                        output_dir=args.output_dir,
                         log_level=args.log_level,
                         server=args.server,
                     )
@@ -1180,7 +1150,7 @@ def main() -> int:
                         base_config=args.config,
                         pre_start_hours=args.pre_start_hours,
                         check_interval_seconds=args.check_interval,
-                        data_dir=args.data_dir,
+                        output_dir=args.output_dir,
                         log_level=args.log_level,
                         server=args.server,
                     )
