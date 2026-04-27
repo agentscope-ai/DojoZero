@@ -340,6 +340,16 @@ async def _build_trial_spec(
                 broker_config["initial_balance"] = op_config.initial_balance
             if op_config.allowed_tools:
                 broker_config["allowed_tools"] = op_config.allowed_tools
+            if op_config.scoring_system:
+                broker_config["scoring_system"] = op_config.scoring_system
+            if op_config.max_predictions is not None:
+                broker_config["max_predictions"] = op_config.max_predictions
+            if op_config.quarter_pools is not None:
+                broker_config["quarter_pools"] = op_config.quarter_pools
+            if op_config.base_score is not None:
+                broker_config["base_score"] = op_config.base_score
+            if op_config.decay_lambda is not None:
+                broker_config["decay_lambda"] = op_config.decay_lambda
             operator_config: BrokerOperatorConfig = broker_config
         else:
             raise ValueError(f"Unsupported operator class: {op_config.class_name}")

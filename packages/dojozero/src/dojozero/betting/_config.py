@@ -41,8 +41,35 @@ class TrialBrokerConfig(BaseModel):
             "place_market_bet_moneyline, place_limit_bet_moneyline, "
             "place_market_bet_spread, place_limit_bet_spread, "
             "place_market_bet_total, place_limit_bet_total, "
-            "cancel_bet, get_pending_orders, get_bet_history, get_statistics"
+            "cancel_bet, get_pending_orders, get_bet_history, get_statistics, "
+            "submit_prediction, get_my_predictions"
         ),
+    )
+
+    # --- ScoringSys fields (optional, None = classic bet mode) ---
+    scoring_system: str | None = Field(
+        default=None,
+        description=(
+            "Scoring system mode. One of: ScoringSys1 (fixed+quarter_pool), "
+            "ScoringSys2 (fixed+continuous_decay), ScoringSys3 (unlimited+quarter_pool), "
+            "ScoringSys4 (unlimited+continuous_decay). None = classic Polymarket bet mode."
+        ),
+    )
+    max_predictions: int | None = Field(
+        default=None,
+        description="Max predictions per agent per event (used by fixed-entry modes SYS1/SYS2).",
+    )
+    quarter_pools: list[int] | None = Field(
+        default=None,
+        description="Prize pool per quarter, e.g. [4000, 3000, 2000, 1000]. Used by quarter-pool modes.",
+    )
+    base_score: str | None = Field(
+        default=None,
+        description="Base score for correct prediction in continuous decay mode (as string for Decimal).",
+    )
+    decay_lambda: float | None = Field(
+        default=None,
+        description="Decay rate lambda for continuous decay: weight = exp(-lambda * elapsed_ratio).",
     )
 
 

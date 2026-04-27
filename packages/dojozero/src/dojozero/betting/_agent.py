@@ -29,6 +29,7 @@ from dojozero.agents import (
 from dojozero.core import RuntimeContext, Agent, AgentBase, Operator, StreamEvent
 from dojozero.core._tracing import create_span_from_event, emit_span
 from dojozero.betting._config import MEMORY_SUMMARY_PROMPT
+from dojozero.betting._scoring_prompts import get_scoring_system_prompt
 from dojozero.data._models import (
     BaseGameUpdateEvent,
     DataEvent,
@@ -45,6 +46,8 @@ from dojozero.betting._models import (
     BetExecutedPayload,
     BetSettledPayload,
 )
+from dojozero.betting._broker import BrokerOperator
+from dojozero.betting._models import ScoringSystem
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +321,8 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         event_formatter: EventFormatter | None = None,
     ) -> None:
         super().__init__(actor_id, trial_id)
+        # Store the base system prompt to potentially combine with scoring system info later
+        self._base_sys_prompt = sys_prompt
         # Create internal ReActAgent for LLM reasoning
         self._react_agent = ReActAgent(
             name=name,
@@ -344,6 +349,9 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         self._min_event_interval: float = 180.0
         self._last_process_time: float = 0.0
         self._cooldown_task: asyncio.Task[None] | None = None
+
+        # Track scoring system for the agent
+        self._scoring_system: str | None = None
 
         # Memory compression settings
         self._event_history: deque[str] = deque(maxlen=1000)
@@ -605,11 +613,58 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
     async def register_operators(self, operators: Sequence[Operator]) -> None:
         """Register operators and auto-register broker tools if available."""
         all_tools = []
+
         for op in operators:
             self._operator_registry[op.actor_id] = op
             logger.info(
                 "agent '%s' registered operator '%s'", self.actor_id, op.actor_id
             )
+
+            # Detect scoring mode by capability (works for local operator and proxy/wrapper).
+            scoring_strategy = getattr(op, "_scoring_strategy", None)
+            scoring_config = getattr(op, "_scoring_config", None)
+            if scoring_strategy and scoring_config and scoring_config.scoring_system:
+                self._scoring_system = scoring_config.scoring_system.value
+                logger.info(
+                    "Agent '%s' detected scoring system: %s (operator=%s)",
+                    self.actor_id,
+                    self._scoring_system,
+                    type(op).__name__,
+                )
+
+                # Update the agent's system prompt to include scoring system information.
+                scoring_prompt = get_scoring_system_prompt(
+                    self._scoring_system,
+                    max_predictions=scoring_config.max_predictions,
+                    quarter_pools=list(scoring_config.quarter_pools)
+                    if getattr(scoring_config, "quarter_pools", None)
+                    else None,
+                    base_score=str(scoring_config.base_score),
+                    decay_lambda=scoring_config.decay_lambda,
+                )
+                updated_sys_prompt = f"{self._base_sys_prompt}\n\n{scoring_prompt}"
+
+                # ReActAgent exposes `sys_prompt` as read-only property; update
+                # the internal backing field used by that property.
+                if hasattr(self._react_agent, "_sys_prompt"):
+                    self._react_agent._sys_prompt = updated_sys_prompt
+                else:
+                    logger.warning(
+                        "Agent '%s' failed to update scoring prompt: ReActAgent has no _sys_prompt",
+                        self.actor_id,
+                    )
+                logger.info(
+                    "Updated system prompt for agent '%s' with scoring system info",
+                    self.actor_id,
+                )
+            else:
+                logger.info(
+                    "Agent '%s' no scoring system detected (operator=%s, has_strategy=%s, has_config=%s)",
+                    self.actor_id,
+                    type(op).__name__,
+                    bool(scoring_strategy),
+                    bool(scoring_config),
+                )
             agent_tools = getattr(op, "agent_tools", None)
             if callable(agent_tools):
                 tools_result = agent_tools(self.actor_id, operator=op)

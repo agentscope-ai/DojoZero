@@ -68,6 +68,23 @@ class BetType(Enum):
     TOTAL = "TOTAL"  # Over/under total points
 
 
+class ScoringSystem(Enum):
+    """Scoring system mode for prediction-based scoring."""
+
+    SYS1 = "ScoringSys1"  # Fixed entry + Quarter pool
+    SYS2 = "ScoringSys2"  # Fixed entry + Continuous decay
+    SYS3 = "ScoringSys3"  # Unlimited entry + Quarter pool
+    SYS4 = "ScoringSys4"  # Unlimited entry + Continuous decay
+
+
+class PredictionOutcome(Enum):
+    """Discrete prediction outcome for scoring systems."""
+
+    HOME_WIN = "home_win"
+    AWAY_WIN = "away_win"
+    EVEN = "even"
+
+
 # =============================================================================
 # Account
 # =============================================================================
@@ -354,6 +371,18 @@ class BrokerFinalStats(BaseModel):
         default_factory=dict, description="Statistics for each agent"
     )
 
+    # ScoringSys prediction data (empty when using classic bet mode)
+    scoring_system: Optional[str] = Field(
+        default=None, description="ScoringSystem enum value if prediction mode is active"
+    )
+    predictions: Dict[str, 'Prediction'] = Field(
+        default_factory=dict, description="All predictions keyed by prediction_id"
+    )
+    prediction_statistics: Dict[str, 'PredictionStatistics'] = Field(
+        default_factory=dict,
+        description="Per-agent prediction statistics (agent_id -> PredictionStatistics)",
+    )
+
 
 # =============================================================================
 # Agent Message Models for Tracing
@@ -491,6 +520,40 @@ class AgentList(BaseModel):
     )
 
 
+# =============================================================================
+# Prediction Models (ScoringSys)
+# =============================================================================
+
+
+class Prediction(BaseModel):
+    """A discrete prediction submitted by an agent under a ScoringSys."""
+
+    prediction_id: str
+    agent_id: str
+    event_id: str
+    selection: PredictionOutcome
+    submit_time: datetime
+    quarter: int = Field(
+        default=0,
+        description="Game period/quarter when prediction was submitted (0 = pre-game)",
+    )
+    elapsed_ratio: float = Field(
+        default=0.0,
+        description="Fraction of game elapsed at submit time (0.0 ~ 1.0)",
+    )
+    is_correct: Optional[bool] = None
+    score: Optional[Decimal] = None
+
+
+class PredictionStatistics(BaseModel):
+    """Per-agent prediction statistics for ScoringSys trials."""
+
+    total_predictions: int = 0
+    correct_predictions: int = 0
+    accuracy: float = 0.0
+    total_score: Decimal = Decimal("0")
+
+
 __all__ = [
     # Enums
     "BetOutcome",
@@ -498,6 +561,8 @@ __all__ = [
     "BetType",
     "EventStatus",
     "OrderType",
+    "PredictionOutcome",
+    "ScoringSystem",
     "VALID_STATUS_TRANSITIONS",
     # Models
     "Account",
@@ -512,6 +577,8 @@ __all__ = [
     "BrokerStateUpdate",
     "BrokerFinalStats",
     "Holding",
+    "Prediction",
+    "PredictionStatistics",
     "Statistics",
     "StatisticsList",
     # Agent Message Models

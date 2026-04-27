@@ -12,6 +12,7 @@ This broker is sport-agnostic and can be used for NBA, NFL, or any other sports 
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -33,12 +34,18 @@ from dojozero.betting._models import (
     BetStatus,
     BetType,
     BettingEvent,
+    BrokerFinalStats,
     EventStatus,
     Holding,
     OrderType,
+    Prediction,
+    PredictionOutcome,
+    PredictionStatistics,
+    ScoringSystem,
     Statistics,
     VALID_STATUS_TRANSITIONS,
 )
+from dojozero.betting._scoring import ScoringConfig, ScoringStrategy, create_scoring_strategy
 from dojozero.core import (
     Agent,
     Operator,
@@ -164,6 +171,12 @@ class BrokerOperatorConfig(_ActorIdConfig, total=False):
 
     initial_balance: str  # Initial balance for all agents (as string for Decimal)
     allowed_tools: list[str]  # List of allowed agent tool names (default: all tools)
+    # ScoringSys fields (optional, None = classic bet mode)
+    scoring_system: str | None  # Scoring system mode (e.g., "ScoringSys1")
+    max_predictions: int | None  # Max predictions per agent per event (fixed entry mode)
+    quarter_pools: list[int] | None  # Prize pool per quarter for quarter-pool strategies
+    base_score: str | None  # Base score for continuous decay mode (as string for Decimal)
+    decay_lambda: float | None  # Decay rate for continuous decay strategies
 
 
 # =============================================================================
@@ -230,10 +243,34 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         # Global lock for atomic state snapshots during logging
         self._state_snapshot_lock: asyncio.Lock = asyncio.Lock()
 
+        # ScoringSys prediction management
+        self._predictions: Dict[str, Prediction] = {}
+        self._prediction_count: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))  # agent_id -> event_id -> count
+        self._scoring_strategy: Optional[ScoringStrategy] = None
+
         # Configuration
         self.initial_balance = config.get("initial_balance", "0")
         # Default to all tools if not specified (None means all tools allowed)
         self.allowed_tools = config.get("allowed_tools", None)
+
+        # ScoringSys configuration
+        scoring_system_name = config.get("scoring_system")
+        if scoring_system_name:
+            # Create ScoringConfig from broker config
+            from pydantic import TypeAdapter
+            from typing import List as TypingList
+            scoring_config = ScoringConfig(
+                scoring_system=ScoringSystem(scoring_system_name),
+                max_predictions=config.get("max_predictions"),
+                quarter_pools=config.get("quarter_pools", [4000, 3000, 2000, 1000]),
+                base_score=Decimal(config.get("base_score", "1000")),
+                decay_lambda=config.get("decay_lambda", 3.0)
+            )
+            self._scoring_strategy = create_scoring_strategy(scoring_config)
+            # Store the configuration for potential access by agents
+            self._scoring_config = scoring_config
+        else:
+            self._scoring_config = None
 
     @classmethod
     def from_dict(
@@ -1133,6 +1170,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 await self._settle_bet(bet, winner, final_score)
                 settled_count += 1
 
+        # Settle predictions if scoring strategy is active
+        await self._settle_predictions(event_id, winner)
+
         # Update event status
         betting_event.status = EventStatus.SETTLED
 
@@ -1270,6 +1310,38 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             # Log state change
             await self._log_accounts_and_bets_status("bet_settled")
+
+    async def _settle_predictions(self, event_id: str, winner: str) -> None:
+        """Settle all predictions for a completed event using the scoring strategy."""
+        if not self._scoring_strategy:
+            # No scoring system active, skip prediction settlement
+            return
+
+        # Get all predictions for this event
+        predictions_for_event = [
+            pred for pred in self._predictions.values()
+            if pred.event_id == event_id
+        ]
+
+        if not predictions_for_event:
+            logger.info("No predictions to settle for event %s", event_id)
+            return
+
+        # Use the scoring strategy to calculate scores for all predictions
+        settled_predictions = self._scoring_strategy.settle_predictions(
+            predictions_for_event, winner
+        )
+
+        # Update the predictions in our store with calculated scores
+        for pred in settled_predictions:
+            self._predictions[pred.prediction_id] = pred
+
+        logger.info(
+            "Settled %d predictions for event %s - winner: %s",
+            len(predictions_for_event),
+            event_id,
+            winner,
+        )
 
     async def _cancel_all_pending_orders(self, event_id: str) -> None:
         """Cancel all pending orders for an event"""
@@ -1414,6 +1486,62 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 tags["broker.statistics"] = statistics_adapter.dump_json(
                     statistics_dict
                 ).decode()
+
+                # Include prediction data for final_stats log if scoring system is active
+                if self._scoring_strategy:
+                    # Add scoring system information
+                    tags["broker.scoring_system"] = self._scoring_strategy.config.scoring_system.value
+
+                    # Filter predictions to current event only for this final stats
+                    if self._event:
+                        current_event_predictions = {
+                            pid: pred for pid, pred in self._predictions.items()
+                            if pred.event_id == self._event.event_id
+                        }
+
+                        # Serialize predictions
+                        predictions_adapter = TypeAdapter(Dict[str, 'Prediction'])
+                        tags["broker.predictions"] = predictions_adapter.dump_json(
+                            current_event_predictions
+                        ).decode()
+
+                        # Calculate prediction statistics per agent
+                        prediction_stats: Dict[str, 'PredictionStatistics'] = {}
+
+                        for agent_id in self._accounts.keys():
+                            # Get predictions for this agent for the current event
+                            agent_predictions = [
+                                pred for pred in self._predictions.values()
+                                if pred.agent_id == agent_id and pred.event_id == self._event.event_id
+                            ]
+
+                            if agent_predictions:
+                                total_predictions = len(agent_predictions)
+                                correct_predictions = sum(
+                                    1 for pred in agent_predictions if pred.is_correct
+                                )
+                                accuracy = (
+                                    correct_predictions / total_predictions
+                                    if total_predictions > 0
+                                    else 0.0
+                                )
+                                total_score = sum(
+                                    float(pred.score) if pred.score is not None else 0.0
+                                    for pred in agent_predictions
+                                )
+
+                                prediction_stats[agent_id] = PredictionStatistics(
+                                    total_predictions=total_predictions,
+                                    correct_predictions=correct_predictions,
+                                    accuracy=accuracy,
+                                    total_score=Decimal(str(total_score))
+                                )
+
+                        # Serialize prediction statistics
+                        pred_stats_adapter = TypeAdapter(Dict[str, PredictionStatistics])
+                        tags["broker.prediction_statistics"] = pred_stats_adapter.dump_json(
+                            prediction_stats
+                        ).decode()
 
             span = create_span_from_event(
                 trial_id=self.trial_id,
@@ -2030,6 +2158,184 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         return self._accounts[agent_id]
 
     # =========================================================================
+    # Prediction Methods (ScoringSys)
+    # =========================================================================
+
+    async def submit_prediction(
+        self, agent_id: str, event_id: str, selection: str, quarter: int = 0
+    ) -> str:
+        """Submit a prediction for the ScoringSys framework.
+
+        Args:
+            agent_id: The agent submitting the prediction
+            event_id: The event to predict on
+            selection: The prediction outcome ("home_win", "away_win", or "even")
+            quarter: Requested period for quarter-pool scoring. ``0`` means: use 0 in pre-game;
+                after the game is live, the broker sets this from the latest game update's period
+                unless you pass 1-4 to override.
+
+        Returns:
+            "prediction_submitted" or "prediction_error: <reason>"
+        """
+        if not self._scoring_strategy:
+            return "prediction_error: Scoring system not active for this trial"
+
+        # Validate event exists and is active
+        if self._event is None or self._event.event_id != event_id:
+            return "prediction_error: Invalid event ID"
+
+        # Validate selection
+        try:
+            prediction_outcome = PredictionOutcome(selection.lower())
+        except ValueError:
+            return f"prediction_error: Invalid selection '{selection}'. Valid options: 'home_win', 'away_win', 'even'"
+
+        # Check entry limits for fixed entry modes
+        if (
+            self._scoring_strategy.config.is_fixed_entry
+            and self._scoring_strategy.config.max_predictions is not None
+        ):
+            current_count = self._prediction_count[agent_id][event_id]
+            if current_count >= self._scoring_strategy.config.max_predictions:
+                return f"prediction_error: Max predictions reached ({self._scoring_strategy.config.max_predictions}) for this event"
+
+        # Generate prediction ID
+        prediction_id = f"pred_{uuid.uuid4().hex[:12]}"
+
+        # Create prediction object
+        from datetime import datetime
+
+        resolved_quarter = self._resolve_prediction_quarter(quarter)
+
+        # Calculate elapsed ratio based on game progression from the latest game update.
+        elapsed_ratio = self._compute_elapsed_ratio()
+
+        prediction = Prediction(
+            prediction_id=prediction_id,
+            agent_id=agent_id,
+            event_id=event_id,
+            selection=prediction_outcome,
+            submit_time=datetime.now(),
+            quarter=resolved_quarter,
+            elapsed_ratio=elapsed_ratio,
+            is_correct=None,
+            score=None
+        )
+
+        # Store prediction
+        self._predictions[prediction_id] = prediction
+
+        # Update prediction count if in fixed mode
+        if self._scoring_strategy.config.is_fixed_entry:
+            self._prediction_count[agent_id][event_id] += 1
+
+        logger.info(
+            "Prediction %s submitted - Agent %s: %s for event %s (quarter %d from req=%d, elapsed_ratio=%.4f)",
+            prediction_id,
+            agent_id,
+            selection,
+            event_id,
+            resolved_quarter,
+            quarter,
+            elapsed_ratio,
+        )
+
+        return "prediction_submitted"
+
+    def _resolve_prediction_quarter(self, requested_quarter: int) -> int:
+        """Resolve ``quarter`` for pool assignment when the tool uses the default (0).
+
+        Non-zero values are returned unchanged (explicit override). For ``0``, return 0 in
+        pre-game; after tip-off, use the most recent game update's ``period`` (1-4, or 5+ for OT).
+        """
+        if requested_quarter != 0:
+            return requested_quarter
+        if self._event is None:
+            return 0
+        if self._event.status == EventStatus.SCHEDULED:
+            return 0
+        if not self._recent_game_updates:
+            return 0
+        update = self._recent_game_updates[-1]
+        period = int(getattr(update, "period", 0) or 0)
+        if period <= 0:
+            return 0
+        return period
+
+    def _compute_elapsed_ratio(self) -> float:
+        """Compute game progress ratio [0.0, 1.0] from the latest game update.
+
+        Uses sport-specific regulation defaults:
+        - NBA: 4 * 12 minutes
+        - NFL: 4 * 15 minutes
+        - NCAA: 2 * 20 minutes
+        """
+        # No active event or still pre-game => no elapsed time.
+        if self._event is None or self._event.status == EventStatus.SCHEDULED:
+            return 0.0
+        if self._event.status in {EventStatus.CLOSED, EventStatus.SETTLED}:
+            return 1.0
+
+        if not self._recent_game_updates:
+            return 0.0
+
+        update = self._recent_game_updates[-1]
+        period = max(0, int(getattr(update, "period", 0) or 0))
+        game_clock = str(getattr(update, "game_clock", "") or "")
+        sport = str(getattr(update, "sport", "") or "").lower()
+
+        # (regulation_periods, seconds_per_period)
+        sport_config = {
+            "nba": (4, 12 * 60),
+            "nfl": (4, 15 * 60),
+            "ncaa": (2, 20 * 60),
+        }
+        regulation_periods, seconds_per_period = sport_config.get(sport, (4, 15 * 60))
+        total_regulation_seconds = regulation_periods * seconds_per_period
+
+        if period <= 0:
+            return 0.0
+
+        remaining = self._parse_clock_to_seconds(game_clock, seconds_per_period)
+        elapsed_periods = max(0, period - 1)
+        elapsed_seconds = elapsed_periods * seconds_per_period + (
+            seconds_per_period - remaining
+        )
+
+        if total_regulation_seconds <= 0:
+            return 0.0
+        return max(0.0, min(1.0, elapsed_seconds / total_regulation_seconds))
+
+    @staticmethod
+    def _parse_clock_to_seconds(clock: str, default_seconds: int) -> int:
+        """Parse MM:SS game clock string to remaining seconds in period."""
+        if not clock:
+            return default_seconds
+        m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", clock)
+        if not m:
+            return default_seconds
+        minutes = int(m.group(1))
+        seconds = int(m.group(2))
+        value = minutes * 60 + seconds
+        return max(0, min(default_seconds, value))
+
+    async def get_my_predictions(self, agent_id: str, event_id: str | None = None) -> list[Prediction]:
+        """Get predictions made by the agent.
+
+        Args:
+            agent_id: The agent ID
+            event_id: Optional event ID to filter by (None for all events)
+
+        Returns:
+            List of Prediction objects
+        """
+        predictions = [
+            pred for pred in self._predictions.values()
+            if pred.agent_id == agent_id and (event_id is None or pred.event_id == event_id)
+        ]
+        return predictions
+
+    # =========================================================================
     # State Management
     # =========================================================================
 
@@ -2589,6 +2895,74 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             stats = await target.get_statistics(agent_id)
             return stats.model_dump_json()
 
+        @tool
+        async def submit_prediction(
+            selection: Literal["home_win", "away_win", "even"],
+            event_id: str | None = None,
+            quarter: int = 0
+        ) -> str:
+            """Submit a discrete prediction for the scoring system.
+
+            Submit a prediction about the outcome of an event. The prediction will be scored
+            according to the active ScoringSys strategy after the event completes.
+
+            Args:
+                selection: Your prediction - "home_win", "away_win", or "even"
+                event_id: Event ID to predict on (defaults to current event if not provided)
+                quarter: Use 0 (default) to let the broker assign the period: pre-game and before
+                    tip stay in the early pool; after the game is live, the broker sets this from
+                    the current game period so your submission is scored in the correct quarter
+                    pool. Pass 1-4 to force a regulation period (override).
+
+            Returns:
+                "prediction_submitted" or error message
+            """
+            # Use current event if event_id not provided
+            target_event_id = event_id
+            if not target_event_id:
+                current_event = await target.get_available_event()
+                if not current_event:
+                    return "prediction_error: No active event available and no event_id provided"
+                target_event_id = current_event.event_id
+
+            try:
+                result = await target.submit_prediction(
+                    agent_id, target_event_id, selection, quarter
+                )
+                return result
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in submit_prediction: %s",
+                    e,
+                    exc_info=True,
+                )
+                return f"prediction_error: Unexpected error - {str(e)}"
+
+        @tool
+        async def get_my_predictions(event_id: str | None = None) -> str:
+            """Get your predictions for an event or all events.
+
+            Args:
+                event_id: Optional event ID to filter by (returns all if not provided)
+
+            Returns:
+                JSON array of prediction objects with: prediction_id, event_id, selection, submit_time, quarter, score (if settled)
+            """
+            try:
+                predictions = await target.get_my_predictions(agent_id, event_id)
+                # Use Pydantic serialization for consistency
+                from pydantic import TypeAdapter
+                from typing import List as TypingList
+                predictions_adapter = TypeAdapter(TypingList[Prediction])
+                return predictions_adapter.dump_json(predictions).decode()
+            except Exception as e:
+                logger.error(
+                    "Unexpected error in get_my_predictions: %s",
+                    e,
+                    exc_info=True,
+                )
+                return f"predictions_error: Unexpected error - {str(e)}"
+
         # Build mapping of tool names to tool functions
         all_tools_map = {
             "get_balance": get_balance,
@@ -2604,6 +2978,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             "get_pending_orders": get_pending_orders,
             "get_bet_history": get_bet_history,
             "get_statistics": get_statistics,
+            "submit_prediction": submit_prediction,
+            "get_my_predictions": get_my_predictions,
         }
 
         # Filter tools based on allowed_tools configuration
