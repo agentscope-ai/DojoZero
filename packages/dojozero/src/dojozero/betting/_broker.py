@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict
+from typing import Any, Dict, List, Literal, Optional, Sequence, Set, TypedDict, cast
 
 from pydantic import TypeAdapter
 
@@ -2279,10 +2279,13 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 ]
             return json.dumps(event_dict)
 
+        _MONEYLINE_SELECTIONS = {"home", "away"}
+        _TOTAL_SELECTIONS = {"over", "under"}
+
         @tool
         async def place_market_bet_moneyline(
             amount: str,
-            selection: Literal["home", "away"],
+            selection: str,
         ) -> str:
             """Place a market order to bet on which team will win (moneyline). Executes immediately at current probability.
 
@@ -2295,6 +2298,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
             """
+            if selection not in _MONEYLINE_SELECTIONS:
+                return f"bet_invalid: selection must be 'home' or 'away', got '{selection}'"
             try:
                 # Get the current event
                 event = await target.get_available_event()
@@ -2303,7 +2308,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
                 bet_request = BetRequestMoneyline(
                     amount=Decimal(amount),
-                    selection=selection,
+                    selection=cast(Literal["home", "away"], selection),
                     event_id=event.event_id,
                     order_type=OrderType.MARKET,
                     limit_probability=None,
@@ -2323,7 +2328,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         @tool
         async def place_limit_bet_moneyline(
             amount: str,
-            selection: Literal["home", "away"],
+            selection: str,
             limit_probability: str,
         ) -> str:
             """Place a limit order to bet on which team will win (moneyline). Executes when probability reaches your minimum.
@@ -2338,6 +2343,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
             """
+            if selection not in _MONEYLINE_SELECTIONS:
+                return f"bet_invalid: selection must be 'home' or 'away', got '{selection}'"
             try:
                 # Get the current event
                 event = await target.get_available_event()
@@ -2346,7 +2353,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
                 bet_request = BetRequestMoneyline(
                     amount=Decimal(amount),
-                    selection=selection,
+                    selection=cast(Literal["home", "away"], selection),
                     event_id=event.event_id,
                     order_type=OrderType.LIMIT,
                     limit_probability=Decimal(limit_probability),
@@ -2366,7 +2373,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         @tool
         async def place_market_bet_spread(
             amount: str,
-            selection: Literal["home", "away"],
+            selection: str,
             spread_value: str,
         ) -> str:
             """Place a market order to bet on point spread. Executes immediately at current probability.
@@ -2381,6 +2388,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
             """
+            if selection not in _MONEYLINE_SELECTIONS:
+                return f"bet_invalid: selection must be 'home' or 'away', got '{selection}'"
             try:
                 # Get the current event
                 event = await target.get_available_event()
@@ -2389,7 +2398,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
                 bet_request = BetRequestSpread(
                     amount=Decimal(amount),
-                    selection=selection,
+                    selection=cast(Literal["home", "away"], selection),
                     event_id=event.event_id,
                     spread_value=Decimal(spread_value),
                     order_type=OrderType.MARKET,
@@ -2408,7 +2417,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         @tool
         async def place_limit_bet_spread(
             amount: str,
-            selection: Literal["home", "away"],
+            selection: str,
             spread_value: str,
             limit_probability: str,
         ) -> str:
@@ -2425,6 +2434,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
             """
+            if selection not in _MONEYLINE_SELECTIONS:
+                return f"bet_invalid: selection must be 'home' or 'away', got '{selection}'"
             try:
                 # Get the current event
                 event = await target.get_available_event()
@@ -2433,7 +2444,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
                 bet_request = BetRequestSpread(
                     amount=Decimal(amount),
-                    selection=selection,
+                    selection=cast(Literal["home", "away"], selection),
                     event_id=event.event_id,
                     spread_value=Decimal(spread_value),
                     order_type=OrderType.LIMIT,
@@ -2452,7 +2463,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         @tool
         async def place_market_bet_total(
             amount: str,
-            selection: Literal["over", "under"],
+            selection: str,
             total_value: str,
         ) -> str:
             """Place a market order to bet on total points scored (over/under). Executes immediately at current probability.
@@ -2467,6 +2478,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
             """
+            if selection not in _TOTAL_SELECTIONS:
+                return f"bet_invalid: selection must be 'over' or 'under', got '{selection}'"
             try:
                 # Get the current event
                 event = await target.get_available_event()
@@ -2475,7 +2488,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
                 bet_request = BetRequestTotal(
                     amount=Decimal(amount),
-                    selection=selection,
+                    selection=cast(Literal["over", "under"], selection),
                     event_id=event.event_id,
                     total_value=Decimal(total_value),
                     order_type=OrderType.MARKET,
@@ -2494,7 +2507,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         @tool
         async def place_limit_bet_total(
             amount: str,
-            selection: Literal["over", "under"],
+            selection: str,
             total_value: str,
             limit_probability: str,
         ) -> str:
@@ -2511,6 +2524,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             Returns:
                 "bet_placed" or "bet_invalid: <reason>"
             """
+            if selection not in _TOTAL_SELECTIONS:
+                return f"bet_invalid: selection must be 'over' or 'under', got '{selection}'"
             try:
                 # Get the current event
                 event = await target.get_available_event()
@@ -2519,7 +2534,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
                 bet_request = BetRequestTotal(
                     amount=Decimal(amount),
-                    selection=selection,
+                    selection=cast(Literal["over", "under"], selection),
                     event_id=event.event_id,
                     total_value=Decimal(total_value),
                     order_type=OrderType.LIMIT,

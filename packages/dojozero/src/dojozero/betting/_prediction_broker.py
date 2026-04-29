@@ -816,9 +816,11 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 return "null"
             return json.dumps(info)
 
+        _VALID_SELECTIONS = {"home_win", "away_win", "even"}
+
         @tool
         async def submit_prediction(
-            selection: Literal["home_win", "away_win", "even"],
+            selection: str,
         ) -> str:
             """Submit a prediction for the current event.
 
@@ -833,6 +835,11 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             Returns:
                 "prediction_submitted" or "prediction_error: <reason>".
             """
+            if selection not in _VALID_SELECTIONS:
+                return (
+                    f"prediction_error: Invalid selection '{selection}'. "
+                    f"Must be one of: {', '.join(sorted(_VALID_SELECTIONS))}"
+                )
             event = target._event  # type: ignore[attr-defined]
             if event is None:
                 return "prediction_error: No active event available"
