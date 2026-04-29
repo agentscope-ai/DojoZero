@@ -68,17 +68,8 @@ class BetType(Enum):
     TOTAL = "TOTAL"  # Over/under total points
 
 
-class ScoringSystem(Enum):
-    """Scoring system mode for prediction-based scoring."""
-
-    SYS1 = "ScoringSys1"  # Fixed entry + Quarter pool
-    SYS2 = "ScoringSys2"  # Fixed entry + Continuous decay
-    SYS3 = "ScoringSys3"  # Unlimited entry + Quarter pool
-    SYS4 = "ScoringSys4"  # Unlimited entry + Continuous decay
-
-
 class PredictionOutcome(Enum):
-    """Discrete prediction outcome for scoring systems."""
+    """Discrete prediction outcome for the prediction contest."""
 
     HOME_WIN = "home_win"
     AWAY_WIN = "away_win"
@@ -371,16 +362,18 @@ class BrokerFinalStats(BaseModel):
         default_factory=dict, description="Statistics for each agent"
     )
 
-    # ScoringSys prediction data (empty when using classic bet mode)
-    scoring_system: Optional[str] = Field(
-        default=None, description="ScoringSystem enum value if prediction mode is active"
-    )
-    predictions: Dict[str, 'Prediction'] = Field(
+    # Prediction contest data (empty when using classic bet mode; populated when
+    # spans are emitted by PredictionBroker instead of BrokerOperator)
+    predictions: Dict[str, "Prediction"] = Field(
         default_factory=dict, description="All predictions keyed by prediction_id"
     )
-    prediction_statistics: Dict[str, 'PredictionStatistics'] = Field(
+    prediction_statistics: Dict[str, "PredictionStatistics"] = Field(
         default_factory=dict,
         description="Per-agent prediction statistics (agent_id -> PredictionStatistics)",
+    )
+    window_pools: Optional[List[int]] = Field(
+        default=None,
+        description="Pool sizes per window (window 0..4) when prediction mode is active",
     )
 
 
@@ -526,16 +519,23 @@ class AgentList(BaseModel):
 
 
 class Prediction(BaseModel):
-    """A discrete prediction submitted by an agent under a ScoringSys."""
+    """A discrete prediction submitted by an agent in the prediction contest.
+
+    Each prediction belongs to one of the five fixed contest windows:
+        0 = Pre-game, 1 = Q1, 2 = Q2, 3 = Q3, 4 = Q4.
+    Each agent can submit at most one prediction per window per event.
+    """
 
     prediction_id: str
     agent_id: str
     event_id: str
     selection: PredictionOutcome
     submit_time: datetime
-    quarter: int = Field(
+    window: int = Field(
         default=0,
-        description="Game period/quarter when prediction was submitted (0 = pre-game)",
+        ge=0,
+        le=4,
+        description="Contest window when prediction was submitted (0 = pre-game, 1-4 = Q1-Q4)",
     )
     elapsed_ratio: float = Field(
         default=0.0,
@@ -546,7 +546,7 @@ class Prediction(BaseModel):
 
 
 class PredictionStatistics(BaseModel):
-    """Per-agent prediction statistics for ScoringSys trials."""
+    """Per-agent prediction statistics for prediction contests."""
 
     total_predictions: int = 0
     correct_predictions: int = 0
@@ -562,7 +562,6 @@ __all__ = [
     "EventStatus",
     "OrderType",
     "PredictionOutcome",
-    "ScoringSystem",
     "VALID_STATUS_TRANSITIONS",
     # Models
     "Account",

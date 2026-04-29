@@ -13,7 +13,7 @@ scenario:
       - expert_prediction
       - pregame_stats
       - twitter_top_tweets
-      
+
     # Game lifecycle
     - id: game_lifecycle_stream
       event_types:
@@ -34,23 +34,21 @@ scenario:
       event_types:
       - nba_play
 
-    operators:                                               
-    - id: betting_broker                                     
-      class: BrokerOperator                                  
-      initial_balance: "1000.00"                             
-      scoring_system: "ScoringSys1"  # Quarter pool strategy with fixed entry                                             
-      max_predictions: 5  # Max 5 predictions per agent per  event                                                        
-      quarter_pools: [4000, 3000, 2000, 1000]  # Prize pools for each quarter                                             
-      allowed_tools:                                  
-      - get_event                                            
+    operators:
+    - id: prediction_broker
+      class: PredictionBroker
+      # Five fixed prediction windows: pre-game + Q1-Q4. Each agent may submit
+      # at most one prediction per window per event. Correct predictions in a
+      # window split that window's pool equally.
+      window_pools: [5000, 4000, 3000, 2000, 500]
+      allowed_tools:
+      - get_rules
+      - get_event_info
       - submit_prediction
-      - get_my_predictions 
-      - get_statistics                                     
-      data_streams:                                          
-      - game_lifecycle_stream                                
-      - odds_update_stream                                   
-      - game_update_stream       
-
+      - get_my_predictions
+      data_streams:
+      - game_lifecycle_stream
+      - game_update_stream
     agents:
     - id: degen_agent
       persona: degen
@@ -58,7 +56,7 @@ scenario:
       persona_config_path: agents/personas/degen.yaml
       llm_config_path: agents/llms/qwen.yaml
       operators:
-      - betting_broker
+      - prediction_broker
       data_streams:
       - pre_game_insights_stream
       - game_update_stream
@@ -71,7 +69,7 @@ scenario:
       persona_config_path: agents/personas/mystic.yaml
       llm_config_path: agents/llms/qwen.yaml
       operators:
-        - betting_broker
+        - prediction_broker
       data_streams:
         - pre_game_insights_stream
         - game_update_stream
@@ -84,7 +82,7 @@ scenario:
       persona_config_path: agents/personas/pundit.yaml
       llm_config_path: agents/llms/qwen.yaml
       operators:
-        - betting_broker
+        - prediction_broker
       data_streams:
         - pre_game_insights_stream
         - game_update_stream
@@ -97,7 +95,7 @@ scenario:
       persona_config_path: agents/personas/shark.yaml
       llm_config_path: agents/llms/qwen.yaml
       operators:
-      - betting_broker
+      - prediction_broker
       data_streams:
       - pre_game_insights_stream
       - game_update_stream
@@ -110,7 +108,7 @@ scenario:
       persona_config_path: agents/personas/sheep.yaml
       llm_config_path: agents/llms/qwen.yaml
       operators:
-      - betting_broker
+      - prediction_broker
       data_streams:
       - pre_game_insights_stream
       - game_update_stream
@@ -123,7 +121,7 @@ scenario:
       persona_config_path: agents/personas/whale.yaml
       llm_config_path: agents/llms/qwen.yaml
       operators:
-      - betting_broker
+      - prediction_broker
       data_streams:
       - pre_game_insights_stream
       - game_update_stream

@@ -10,10 +10,10 @@ from datetime import datetime, timezone, timedelta
 # ─────────────────────────────────────────
 JAEGER_URL = "http://localhost:16686"
 OUTPUT_DIR = Path("outputs/jaeger")
-LOOKBACK_HOURS = 24 * 1        # 最近1天，对齐你的 SLS 脚本
-LIMIT_PER_SERVICE = 20000    # 每个服务最多拉多少条 trace（无 trial 过滤时）
+LOOKBACK_HOURS = 24 * 1  # 最近1天，对齐你的 SLS 脚本
+LIMIT_PER_SERVICE = 20000  # 每个服务最多拉多少条 trace（无 trial 过滤时）
 LIMIT_TRIAL_TRACES = 1_000_000  # 按 trial 拉时 Jaeger 的 trace 条数上限
-MAX_CONCURRENT = 5              # 并发数
+MAX_CONCURRENT = 5  # 并发数
 FILE_NAME = "dojozero-spans-401810753.jsonl"
 
 
@@ -27,17 +27,19 @@ def _default_start() -> datetime:
 class JaegerReader:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
-        self._session: aiohttp.ClientSession = None
+        self._session: aiohttp.ClientSession | None = None
 
     async def _session_get(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
 
-    async def _get(self, path: str, params: dict = None) -> dict:
+    async def _get(self, path: str, params: dict | None = None) -> dict:
         session = await self._session_get()
         url = f"{self.base_url}{path}"
-        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        async with session.get(
+            url, params=params, timeout=aiohttp.ClientTimeout(total=30)
+        ) as resp:
             resp.raise_for_status()
             return await resp.json()
 
@@ -194,9 +196,7 @@ async def download_trial_spans(
     拉取单场 trial 下所有 span 写入 JSONL。
     Jaeger 按 trace 返回，同 trial 可能分布在多个 traceID；此处合并并可选只保留带该 trial id 的 span。
     """
-    traces = await reader.get_traces_for_trial(
-        service, trial_id, start=start, end=end
-    )
+    traces = await reader.get_traces_for_trial(service, trial_id, start=start, end=end)
     if not traces:
         return 0
 
@@ -274,24 +274,26 @@ def _deserialize_event_from_span(span: dict) -> dict | None:
     logs = []
     for log_entry in span.get("logs", []):
         fields = {f["key"]: f["value"] for f in log_entry.get("fields", [])}
-        logs.append({
-            "timestamp": log_entry.get("timestamp"),
-            "fields": fields,
-        })
+        logs.append(
+            {
+                "timestamp": log_entry.get("timestamp"),
+                "fields": fields,
+            }
+        )
 
     # ── 组装 event ────────────────────────
     event = {
-        "traceID":       span.get("_traceID"),
-        "spanID":        span.get("spanID"),
-        "service":       span.get("_service"),
+        "traceID": span.get("_traceID"),
+        "spanID": span.get("spanID"),
+        "service": span.get("_service"),
         "operationName": span.get("operationName"),
-        "startTime":     span.get("startTime"),          # 微秒
-        "duration":      span.get("duration"),            # 微秒
-        "tags":          tags,
-        "logs":          logs,
-        "process":       span.get("_process", {}),
-        "references":    span.get("references", []),
-        "warnings":      span.get("warnings"),
+        "startTime": span.get("startTime"),  # 微秒
+        "duration": span.get("duration"),  # 微秒
+        "tags": tags,
+        "logs": logs,
+        "process": span.get("_process", {}),
+        "references": span.get("references", []),
+        "warnings": span.get("warnings"),
     }
 
     return event
@@ -360,7 +362,9 @@ async def main():
                 start=lookback_start,
             )
             if n == 0:
-                print("[空] 该时间窗内无匹配 trace；可调大 --lookback-hours 或确认 trial 已写入 Jaeger")
+                print(
+                    "[空] 该时间窗内无匹配 trace；可调大 --lookback-hours 或确认 trial 已写入 Jaeger"
+                )
             else:
                 print(f"已保存 {n} 个 spans → {spans_file}")
         except Exception as e:
@@ -392,7 +396,7 @@ async def main():
                     reader, service, spans_file, start=lookback_start
                 )
                 if count == 0:
-                    print(f"  [空] 没有 spans，跳过")
+                    print("  [空] 没有 spans，跳过")
                 else:
                     print(f"  已保存 {count} 个 spans → {spans_file}")
             except Exception as e:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +39,8 @@ from dojozero.gateway._sse import SSEConnection, create_sse_response
 if TYPE_CHECKING:
     from dojozero.betting._broker import BrokerOperator
     from dojozero.data import DataHub
+
+    BrokerLike = "BrokerOperator | PredictionBroker"
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +344,29 @@ def create_gateway_app(
             else None,
             metadata=state.metadata,
         )
+
+    @app.get("/rules")
+    async def get_rules(
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> dict[str, Any]:
+        """Return contest rules when a prediction-style broker is configured.
+
+        For traditional :class:`BrokerOperator` trials this returns
+        ``{"kind": "classic_betting"}``; for :class:`PredictionBroker`
+        trials it returns the structured rule descriptor (windows, pools,
+        valid selections, scoring formula, and a human-readable
+        description).
+        """
+        get_rules_fn = getattr(state.broker, "get_rules", None)
+        if callable(get_rules_fn):
+            return cast(dict[str, Any], get_rules_fn())
+        return {
+            "kind": "classic_betting",
+            "description": (
+                "Place market or limit bets via the standard betting tools. "
+                "Returns are determined by odds and bet outcome."
+            ),
+        }
 
     @app.get("/trial/results", response_model=TrialResultsResponse)
     async def get_trial_results(
