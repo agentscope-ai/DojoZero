@@ -38,6 +38,8 @@ from dojozero.gateway._models import (
 from dojozero.gateway._sse import SSEConnection, create_sse_response
 
 if TYPE_CHECKING:
+    from aip_identity_verify import AIPVerifier
+
     from dojozero.betting._broker import BrokerOperator
     from dojozero.data import DataHub
 
@@ -54,6 +56,7 @@ class GatewayState:
     adapter: ExternalAgentAdapter
     authenticator: AgentAuthenticator = field(default_factory=NoOpAuthenticator)
     metadata: dict[str, Any] = field(default_factory=dict)
+    aip_verifier: "AIPVerifier | None" = None
 
 
 def get_gateway_state(request: Request) -> GatewayState:
@@ -64,42 +67,98 @@ def get_gateway_state(request: Request) -> GatewayState:
     return state
 
 
-def get_agent_id(
+async def get_agent_id(
+    request: Request,
     x_agent_id: str | None = Header(default=None, alias="X-Agent-ID"),
     authorization: str | None = Header(default=None),
 ) -> str:
-    """Extract agent ID from request headers.
+    """Extract verified agent ID from request headers.
 
-    Phase 1-2: Simple X-Agent-ID header
-    Phase 3: JWT token validation (TODO)
+    Auth precedence:
+        1. ``Authorization: AIP <token>`` — verified via the gateway's
+           ``AIPVerifier`` (when configured). Returns the token's ``sub``
+           claim (an ``aip:<domain>:<uuid>`` identity).
+        2. ``X-Agent-ID: <id>`` — legacy header path; accepted unconditionally
+           for backwards-compat with the existing SDK and tooling.
+        3. Otherwise → 401.
 
     Args:
-        x_agent_id: Agent ID from X-Agent-ID header
-        authorization: Bearer token (future JWT support)
+        request: FastAPI request (used to access gateway state).
+        x_agent_id: Agent ID from ``X-Agent-ID`` header.
+        authorization: ``Authorization`` header value.
 
     Returns:
-        Agent ID string
+        Agent ID string.
 
     Raises:
-        HTTPException: If no agent ID provided
+        HTTPException: If authentication fails or no credentials provided.
     """
+    if authorization and authorization.startswith("AIP "):
+        state = getattr(request.app.state, "gateway_state", None)
+        verifier = getattr(state, "aip_verifier", None) if state else None
+        if verifier is not None:
+            return await _verify_aip_token(authorization[4:], verifier)
+        # AIP token presented but verifier not configured — explicit 401
+        # rather than silent fall-through, so misconfiguration is loud.
+        raise HTTPException(
+            status_code=401,
+            detail=ErrorResponse(
+                error=ErrorDetail(
+                    code=ErrorCodes.INVALID_TOKEN,
+                    message="AIP authentication is not configured on this gateway",
+                )
+            ).model_dump(by_alias=True),
+        )
+
     if x_agent_id:
         return x_agent_id
-
-    # TODO Phase 3: Extract from JWT
-    if authorization and authorization.startswith("Bearer "):
-        # For now, just require X-Agent-ID
-        pass
 
     raise HTTPException(
         status_code=401,
         detail=ErrorResponse(
             error=ErrorDetail(
                 code=ErrorCodes.AUTH_REQUIRED,
-                message="X-Agent-ID header required",
+                message="Authentication required: provide 'Authorization: AIP <token>' or 'X-Agent-ID' header",
             )
         ).model_dump(by_alias=True),
     )
+
+
+async def _verify_aip_token(token: str, verifier: "AIPVerifier") -> str:
+    """Verify an AIP token and return the agent_id, mapping AIP errors to HTTP 401."""
+    # Imports are local so the gateway works without aip-identity-verify
+    # installed (AIP just stays disabled).
+    from aip_identity_verify.errors import (  # noqa: PLC0415
+        AIPProviderUntrusted,
+        AIPSignatureInvalid,
+        AIPTokenExpired,
+        AIPTokenInvalid,
+    )
+
+    try:
+        agent = await verifier.verify_token(token)
+    except AIPTokenExpired as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=ErrorResponse(
+                error=ErrorDetail(
+                    code=ErrorCodes.TOKEN_EXPIRED,
+                    message="AIP token has expired",
+                )
+            ).model_dump(by_alias=True),
+        ) from exc
+    except (AIPTokenInvalid, AIPProviderUntrusted, AIPSignatureInvalid) as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=ErrorResponse(
+                error=ErrorDetail(
+                    code=ErrorCodes.INVALID_TOKEN,
+                    message=f"Invalid AIP token: {exc}",
+                )
+            ).model_dump(by_alias=True),
+        ) from exc
+
+    return agent.agent_id
 
 
 def create_gateway_app(
@@ -108,6 +167,7 @@ def create_gateway_app(
     broker: "BrokerOperator",
     metadata: dict[str, Any] | None = None,
     authenticator: AgentAuthenticator | None = None,
+    aip_verifier: "AIPVerifier | None" = None,
 ) -> FastAPI:
     """Create the Agent Gateway FastAPI application.
 
@@ -118,6 +178,9 @@ def create_gateway_app(
         metadata: Trial metadata
         authenticator: Optional authenticator for API key validation.
             If None, uses NoOpAuthenticator (allows any agent_id).
+        aip_verifier: Optional ``AIPVerifier`` from ``aip-identity-verify``.
+            When provided, ``Authorization: AIP <token>`` headers are accepted.
+            Build via :func:`dojozero.gateway._aip.aip_verifier_from_env`.
 
     Returns:
         FastAPI application
@@ -141,11 +204,18 @@ def create_gateway_app(
             adapter=adapter,
             authenticator=auth,
             metadata=metadata or {},
+            aip_verifier=aip_verifier,
         )
 
         app.state.gateway_state = state
         auth_status = "enabled" if auth.is_enabled() else "disabled"
-        logger.info("Gateway started for trial %s (auth: %s)", trial_id, auth_status)
+        aip_status = "enabled" if aip_verifier is not None else "disabled"
+        logger.info(
+            "Gateway started for trial %s (auth: %s, aip: %s)",
+            trial_id,
+            auth_status,
+            aip_status,
+        )
 
         yield
 
