@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 import httpx
 
@@ -22,6 +22,9 @@ from dojozero_client._exceptions import (
     StaleReferenceError,
     StreamDisconnectedError,
 )
+
+if TYPE_CHECKING:
+    from aip_identity_sdk import AIPClient
 
 logger = logging.getLogger(__name__)
 
@@ -62,29 +65,43 @@ class GatewayTransport:
         self,
         base_url: str,
         timeout: float = 30.0,
+        aip_client: "AIPClient | None" = None,
+        aip_audience: str | None = None,
     ):
         """Initialize transport.
 
         Args:
             base_url: Gateway base URL (e.g., "http://localhost:8080")
             timeout: Request timeout in seconds
+            aip_client: Optional ``AIPClient`` from ``aip-identity-sdk``. When
+                provided, requests authenticate via ``Authorization: AIP <token>``
+                instead of the legacy ``X-Agent-ID`` header. The client owns
+                token caching and refresh; we just call ``get_token(audience)``
+                per request.
+            aip_audience: Audience claim used when minting AIP tokens. Defaults
+                to ``base_url``, which matches the gateway's expected ``aud``.
+                Override only if the gateway runs behind a proxy where the
+                audience differs from the URL.
         """
         self.base_url = base_url.rstrip("/")
         self.agent_id: str | None = None
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
         self._last_event_id: str | None = None
+        self._aip_client = aip_client
+        self._aip_audience = aip_audience or self.base_url
 
     def set_agent_id(self, agent_id: str) -> None:
-        """Set agent ID after registration.
+        """Set agent ID for the legacy ``X-Agent-ID`` auth path.
+
+        No-op when ``aip_client`` is configured — the gateway derives identity
+        from the verified JWT ``sub`` claim in that case. We still record
+        ``agent_id`` because callers query it as a property.
 
         Args:
             agent_id: Agent ID from registration response
         """
         self.agent_id = agent_id
-        # Update client headers if already initialized
-        if self._client:
-            self._client.headers.update(self._auth_headers())
 
     def set_last_event_id(self, event_id: int | str) -> None:
         """Set last event ID for reconnection replay.
@@ -98,10 +115,11 @@ class GatewayTransport:
 
     async def __aenter__(self) -> "GatewayTransport":
         """Enter async context."""
+        # Auth headers are computed per-request (so AIP token refresh + legacy
+        # X-Agent-ID both work without re-baking the client).
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self.timeout,
-            headers=self._auth_headers(),
         )
         return self
 
@@ -111,8 +129,17 @@ class GatewayTransport:
             await self._client.aclose()
             self._client = None
 
-    def _auth_headers(self) -> dict[str, str]:
-        """Get authentication headers."""
+    async def _auth_headers(self) -> dict[str, str]:
+        """Get authentication headers for the current request.
+
+        AIP path takes precedence: when ``aip_client`` is set, returns a fresh
+        ``Authorization: AIP <token>`` (cached by the SDK; refreshed 60s
+        before expiry). Otherwise falls back to the legacy ``X-Agent-ID``
+        header.
+        """
+        if self._aip_client is not None:
+            token = await self._aip_client.get_token(self._aip_audience)
+            return {"Authorization": f"AIP {token}"}
         if self.agent_id:
             return {"X-Agent-ID": self.agent_id}
         return {}
@@ -145,6 +172,7 @@ class GatewayTransport:
             Various DojoClientError subclasses based on response
         """
         client = self._get_client()
+        headers = await self._auth_headers()
 
         try:
             response = await client.request(
@@ -152,6 +180,7 @@ class GatewayTransport:
                 url=path,
                 json=json,
                 params=params,
+                headers=headers,
             )
         except httpx.ConnectError as e:
             raise ConnectionError(f"Failed to connect to gateway: {e}") from e
@@ -216,7 +245,7 @@ class GatewayTransport:
             StreamDisconnectedError: If stream disconnects unexpectedly
         """
         client = self._get_client()
-        headers = self._auth_headers().copy()
+        headers = await self._auth_headers()
         headers["Accept"] = "text/event-stream"
 
         # Include Last-Event-ID for reconnection
