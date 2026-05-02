@@ -3,7 +3,7 @@
 Status: **Design — approved, Phase 0 in implementation**.
 Scope: gateway identity integration via the [`aip-identity-verify`](https://pypi.org/project/aip-identity-verify/) library (talks to an [aip-idp](https://github.com/agentscope-ai/agent-identity) instance, e.g. `https://pre.agent-id.live`), and a single-image canary runner using [`aip-identity-sdk`](https://pypi.org/project/aip-identity-sdk/) that externalizes the `daily`-tier agent. Deployment plumbing (Aone app registration, runner Dockerfile, compose entries) is intentionally deferred to a sibling doc in `DojoZeroDeploy`.
 
-> **Auth header note**: AIP uses `Authorization: AIP <token>` — **not** `Bearer`. This is the scheme `aip-identity-sdk`'s `AIPClient` sends (`client.py:78`) and `aip-identity-verify`'s `AIPVerifier.verify` accepts (`verifier.py:200`).
+> **Auth header note**: AIP uses `Authorization: Bearer <token>` — **not** `Bearer`. This is the scheme `aip-identity-sdk`'s `AIPClient` sends (`client.py:78`) and `aip-identity-verify`'s `Verifier.verify` accepts (`verifier.py:200`).
 
 ## Why now, why scoped
 
@@ -62,19 +62,19 @@ A "farm orchestrator", per-LLM secret distribution, multi-tenant isolation, and 
 
 We **do not roll our own JWKS cache or JWT verifier**. The work is wiring `aip-identity-verify` into the gateway and adding a parallel auth path.
 
-New file: `packages/dojozero/src/dojozero/gateway/_aip.py`
-- Thin module exposing `aip_verifier_from_env() -> AIPVerifier | None`.
+New file: `packages/dojozero/src/dojozero/gateway/_agentid.py`
+- Thin module exposing `agentid_verifier_from_env() -> Verifier | None`.
 - Returns `None` if AIP not configured, raises if configured but the optional dep is missing.
 - Keeps the import of `aip_identity_verify` lazy so dojozero works without the dep installed.
 
 `packages/dojozero/src/dojozero/gateway/_server.py`
-- `GatewayState` gains an optional `aip_verifier: AIPVerifier | None` field.
-- `create_gateway_app()` accepts an `aip_verifier` parameter and stores it on state.
+- `GatewayState` gains an optional `agentid_verifier: Verifier | None` field.
+- `create_gateway_app()` accepts an `agentid_verifier` parameter and stores it on state.
 - `get_agent_id()` becomes `async`. Order of precedence per request:
-  1. `Authorization: AIP <token>` — if `aip_verifier` is configured, call `verifier.verify_token(token)`, return `agent.agent_id`.
-  2. `X-Agent-ID: <id>` — existing path; stays valid through the canary.
-  3. Otherwise → 401.
-- Existing `AuthProvider`/`validate_jwt` plumbing in `_auth.py` is untouched. AIP is its own parallel path; the legacy Bearer-JWT plumbing (which is unused) stays where it is for future cleanup.
+  1. `Authorization: Bearer <token>` — verified via `verifier.verify_token(token)`. Returns the verified `agent.agent_id`.
+  2. Anything else → 401 (no fallback).
+  3. If the gateway has no verifier configured, returns 503.
+- Existing `AuthProvider`/`validate_jwt` plumbing in `_auth.py` is untouched. AgentID is the only live auth path; the unused legacy plumbing stays where it is and is scheduled for cleanup in a follow-up.
 
 ### Configuration
 
@@ -82,13 +82,13 @@ New env vars on the dashboard server / gateway:
 
 | Env | Required | Purpose |
 |---|---|---|
-| `DOJOZERO_AIP_TRUSTED_PROVIDERS` | yes (when AIP enabled) | Comma-separated list of trusted IdP domains (e.g., `pre.agent-id.live`). |
-| `DOJOZERO_AIP_AUDIENCE` | yes (when AIP enabled) | Expected `aud` claim — the gateway's public origin (e.g., `https://api.dojozero.live`). |
-| `DOJOZERO_AIP_CACHE_TTL_SECONDS` | optional, default `3600` | JWKS cache TTL passed to `AIPVerifier`. |
-| `DOJOZERO_AIP_CLOCK_SKEW_SECONDS` | optional, default `30` | Clock skew tolerance for `exp` validation. |
-| `DOJOZERO_AIP_PROVIDER_URLS` | optional | JSON object mapping domain → base URL, for local-dev / non-https IdP overrides. |
+| `DOJOZERO_AGENTID_TRUSTED_PROVIDERS` | yes (when AIP enabled) | Comma-separated list of trusted IdP domains (e.g., `pre.agent-id.live`). |
+| `DOJOZERO_AGENTID_AUDIENCE` | yes (when AIP enabled) | Expected `aud` claim — the gateway's public origin (e.g., `https://api.dojozero.live`). |
+| `DOJOZERO_AGENTID_CACHE_TTL_SECONDS` | optional, default `3600` | JWKS cache TTL passed to `Verifier`. |
+| `DOJOZERO_AGENTID_CLOCK_SKEW_SECONDS` | optional, default `30` | Clock skew tolerance for `exp` validation. |
+| `DOJOZERO_AGENTID_PROVIDER_URLS` | optional | JSON object mapping domain → base URL, for local-dev / non-https IdP overrides. |
 
-If neither `DOJOZERO_AIP_TRUSTED_PROVIDERS` nor `DOJOZERO_AIP_AUDIENCE` are set, AIP is disabled and the gateway runs on the legacy header path only — no behaviour change.
+If `DOJOZERO_AGENTID_TRUSTED_PROVIDERS` and `DOJOZERO_AGENTID_AUDIENCE` are not both set, the verifier is not configured and any Bearer-authenticated request gets 503. There is no fallback.
 
 ### Optional dependency
 
@@ -98,14 +98,14 @@ If neither `DOJOZERO_AIP_TRUSTED_PROVIDERS` nor `DOJOZERO_AIP_AUDIENCE` are set,
 
 The existing `AgentKeyManager` keys agents by API-key-derived `agent_id`. For AIP-authed requests, the `sub` claim *is* the agent identity directly (`aip:<domain>:<uuid>`); we do **not** require a pre-registered API key, but we do require the agent to be registered for the active trial via the existing `POST /agents` flow. Phase 0 keeps `POST /agents` unchanged; the AIP token just carries the identity instead of the header.
 
-### Backwards-compat
+### Compatibility
 
-Both auth paths run side-by-side. There is no flag day. Once the canary has run cleanly for N trials (see [Success criteria](#success-criteria)), we open a second PR to log a deprecation warning when `X-Agent-ID` is presented without an AIP token. We do **not** remove the header path in this phase.
+The legacy `X-Agent-ID` header is no longer accepted by the gateway or sent by `dojozero-client`. AgentID Bearer is the only auth path. The existing `dojozero-agent` CLI and `demos/external_agent/robust_agent.py` still send `X-Agent-ID` — those will get 401 against an AgentID-enabled gateway and need a follow-up to migrate (out of Phase 0+1 scope).
 
 ### Tests
 
-- Unit: `aip_verifier_from_env()` reads env correctly; partial config logs warning and returns None; missing dep raises clearly.
-- Unit: `get_agent_id` with stubbed `AIPVerifier` — happy path returns `agent_id`; expired/invalid/untrusted-provider tokens raise 401 with the right `ErrorCode`; falls through to header path when no `Authorization` header.
+- Unit: `agentid_verifier_from_env()` reads env correctly; partial config logs warning and returns None; missing dep raises clearly.
+- Unit: `get_agent_id` with stubbed `Verifier` — happy path returns `agent_id`; expired/invalid/untrusted-provider tokens raise 401 with the right `ErrorCode`; falls through to header path when no `Authorization` header.
 - Integration (deferred — needs a reachable IdP): hit a real `pre.agent-id.live` instance, mint a token via `aip-identity-sdk`, call `/events/recent`, assert 200.
 
 ## Phase 1 — canary runner
@@ -234,18 +234,18 @@ These are deliberately deferred to the implementation review — they're operati
 
 Added:
 - `docs/external_agent_migration.md` (this file)
-- `packages/dojozero/src/dojozero/gateway/_aip.py` — env-driven `AIPVerifier` factory
+- `packages/dojozero/src/dojozero/gateway/_agentid.py` — env-driven `Verifier` factory
 - `packages/dojozero-agent-runner/` (new package, Phase 1)
 - Tests: `packages/dojozero/tests/gateway/test_aip_auth.py` and `packages/dojozero-agent-runner/tests/`
 
 Modified:
 - `packages/dojozero/pyproject.toml` — add `aip` extra with `aip-identity-verify`
-- `packages/dojozero/src/dojozero/gateway/_server.py` — `aip_verifier` field on `GatewayState`, async `get_agent_id` with AIP scheme support, `create_gateway_app` accepts verifier
+- `packages/dojozero/src/dojozero/gateway/_server.py` — `agentid_verifier` field on `GatewayState`, async `get_agent_id` with AIP scheme support, `create_gateway_app` accepts verifier
 - `packages/dojozero-client/src/dojozero_client/_transport.py` — accept optional `AIPClient`, delegate auth-header generation when present (Phase 1)
 - Top-level workspace `pyproject.toml` — register `dojozero-agent-runner` (Phase 1)
 
 No changes to:
-- `packages/dojozero/src/dojozero/gateway/_auth.py` — `AuthProvider` and its unused legacy JWT plumbing stay as-is. AIP is implemented as a parallel auth path in `_server.py:get_agent_id` and `_aip.py`.
+- `packages/dojozero/src/dojozero/gateway/_auth.py` — `AuthProvider` and its unused legacy JWT plumbing stay as-is. AIP is implemented as a parallel auth path in `_server.py:get_agent_id` and `_agentid.py`.
 - `packages/dojozero/src/dojozero/agents/`, `betting/`, `nba/`, `nfl/`, `ncaa/` — in-process agents continue to work unchanged.
 - `trial_params/` — the canary is configured outside the trial spec for now (separate registration via `POST /agents`).
 - Any deployment files — those land in DojoZeroDeploy after this design is approved and the code changes ship.

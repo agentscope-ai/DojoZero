@@ -512,12 +512,13 @@ def create_dashboard_app(
         )
         shared_httpx_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
 
-        # Build the AIP verifier once per process (shared JWKS cache across trials).
-        # Returns None when DOJOZERO_AIP_TRUSTED_PROVIDERS / DOJOZERO_AIP_AUDIENCE
-        # are unset — gateways then accept only the legacy X-Agent-ID header.
-        from dojozero.gateway._aip import aip_verifier_from_env
+        # Build the AgentID verifier once per process (shared JWKS cache across
+        # trials). Returns None when DOJOZERO_AGENTID_TRUSTED_PROVIDERS /
+        # DOJOZERO_AGENTID_AUDIENCE are unset — gateways then accept only the
+        # legacy X-Agent-ID header.
+        from dojozero.gateway._agentid import agentid_verifier_from_env
 
-        aip_verifier = aip_verifier_from_env()
+        agentid_verifier = agentid_verifier_from_env()
 
         # Create trial manager with gateway router if enabled
         trial_manager = TrialManager(
@@ -528,7 +529,7 @@ def create_dashboard_app(
             stale_threshold_hours=stale_threshold_hours,
             gateway_router=gateway_router,
             authenticator=authenticator,
-            aip_verifier=aip_verifier,
+            agentid_verifier=agentid_verifier,
             server_id=server_id,
             peer_registry=peer_registry_instance,
         )

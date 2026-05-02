@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "dojozero-client>=0.3.0",
-    "aip-identity-sdk>=0.1.7",
+    "agent-id-client-sdk>=0.2.0",
     "agentscope>=1.0.14",
     "PyYAML>=6.0",
 ]

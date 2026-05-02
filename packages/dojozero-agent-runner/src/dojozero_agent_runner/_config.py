@@ -3,11 +3,10 @@
 The runner is a single image, parameterized entirely by env. The same image
 runs any persona × LLM combination — N processes, one image.
 
-Env precedence for auth:
-- ``AIP_AGENT_ID`` set → AIP path. Identity is loaded by ``aip-identity-sdk``
-  via ``AIPIdentity.from_env()``; the runner only records ``use_aip=True``.
-- Otherwise, ``DOJOZERO_AGENT_API_KEY`` set → legacy ``X-Agent-ID`` path.
-- Neither set → ``ValueError`` at config load time.
+Authentication is AgentID-only. The agent identity (``AGENTID_AGENT_ID``,
+``AGENTID_AGENT_KID``, ``AGENTID_PRIVATE_KEY``, optional ``AGENTID_IDP_URL``)
+is read by ``agent-id-client-sdk``'s ``Identity.from_env()``; the runner just
+verifies the required keys are present at config-load time.
 """
 
 from __future__ import annotations
@@ -32,8 +31,8 @@ class RunnerConfig:
 
     Built by :func:`load_config_from_env`. Holds everything needed to wire up
     the SDK transport, the LLM, and the persona prompt — no further env
-    reads happen after this is constructed (except for AIP env, which is
-    read inside ``aip-identity-sdk`` directly).
+    reads happen after this is constructed (except for AgentID env, which is
+    read inside ``agent-id-client-sdk`` directly).
     """
 
     persona: str
@@ -43,12 +42,7 @@ class RunnerConfig:
     sys_prompt: str
     llm_config: dict[str, Any]
     poll_interval_seconds: float
-
-    # Exactly one of these is set:
-    use_aip: bool
-    api_key: str | None
-
-    aip_audience: str | None  # None → defaults to ``gateway_url``
+    agentid_audience: str | None  # None → defaults to ``gateway_url``
     persona_path: Path
     llm_config_path: Path
 
@@ -62,8 +56,9 @@ def load_config_from_env() -> RunnerConfig:
             the LLM matrix YAML, e.g. ``Claude``.
         ``DOJOZERO_TRIAL_ID``: trial to join.
         ``DOJOZERO_GATEWAY_URL``: gateway base URL.
-        Either ``AIP_AGENT_ID`` (AIP auth) or ``DOJOZERO_AGENT_API_KEY``
-        (legacy auth) — at least one.
+        ``AGENTID_AGENT_ID``: AgentID identity (also requires
+            ``AGENTID_AGENT_KID`` and ``AGENTID_PRIVATE_KEY``, both consumed
+            directly by ``agent-id-client-sdk.Identity.from_env``).
 
     Optional:
         ``DOJOZERO_PERSONA_PATH``: override path to persona YAML; default is
@@ -71,7 +66,7 @@ def load_config_from_env() -> RunnerConfig:
         ``DOJOZERO_LLM_CONFIG_PATH``: override path to LLM matrix YAML;
             default is ``agents/llms/default.yaml``.
         ``DOJOZERO_POLL_INTERVAL_SECONDS``: default ``5``.
-        ``DOJOZERO_AIP_AUDIENCE``: override AIP audience claim; default is
+        ``DOJOZERO_AGENTID_AUDIENCE``: override AgentID audience claim; default is
             ``DOJOZERO_GATEWAY_URL``.
 
     Raises:
@@ -83,15 +78,12 @@ def load_config_from_env() -> RunnerConfig:
     trial_id = _require_env("DOJOZERO_TRIAL_ID")
     gateway_url = _require_env("DOJOZERO_GATEWAY_URL").rstrip("/")
 
-    aip_agent_id = os.environ.get("AIP_AGENT_ID", "").strip()
-    api_key = os.environ.get("DOJOZERO_AGENT_API_KEY", "").strip() or None
-    use_aip = bool(aip_agent_id)
-
-    if not use_aip and not api_key:
-        raise ValueError(
-            "No authentication configured: set AIP_AGENT_ID (preferred) or "
-            "DOJOZERO_AGENT_API_KEY"
-        )
+    # Validate AgentID identity is present. The SDK reads these env vars
+    # itself in Identity.from_env() — we only check up front so the failure
+    # mode is a clear config error rather than a deep stack later.
+    _require_env("AGENTID_AGENT_ID")
+    _require_env("AGENTID_AGENT_KID")
+    _require_env("AGENTID_PRIVATE_KEY")
 
     persona_path = Path(
         os.environ.get(
@@ -120,7 +112,7 @@ def load_config_from_env() -> RunnerConfig:
             f"{poll_interval_raw!r}"
         ) from exc
 
-    aip_audience = os.environ.get("DOJOZERO_AIP_AUDIENCE", "").strip() or None
+    agentid_audience = os.environ.get("DOJOZERO_AGENTID_AUDIENCE", "").strip() or None
 
     return RunnerConfig(
         persona=persona,
@@ -130,9 +122,7 @@ def load_config_from_env() -> RunnerConfig:
         sys_prompt=sys_prompt,
         llm_config=llm_config,
         poll_interval_seconds=poll_interval_seconds,
-        use_aip=use_aip,
-        api_key=api_key,
-        aip_audience=aip_audience,
+        agentid_audience=agentid_audience,
         persona_path=persona_path,
         llm_config_path=llm_config_path,
     )

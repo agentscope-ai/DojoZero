@@ -24,7 +24,7 @@ from dojozero_client._exceptions import (
 )
 
 if TYPE_CHECKING:
-    from aip_identity_sdk import AIPClient
+    from agent_id_client_sdk import AIPClient
 
 logger = logging.getLogger(__name__)
 
@@ -65,38 +65,39 @@ class GatewayTransport:
         self,
         base_url: str,
         timeout: float = 30.0,
-        aip_client: "AIPClient | None" = None,
-        aip_audience: str | None = None,
+        agentid_client: "AIPClient | None" = None,
+        agentid_audience: str | None = None,
     ):
         """Initialize transport.
 
         Args:
             base_url: Gateway base URL (e.g., "http://localhost:8080")
             timeout: Request timeout in seconds
-            aip_client: Optional ``AIPClient`` from ``aip-identity-sdk``. When
-                provided, requests authenticate via ``Authorization: AIP <token>``
-                instead of the legacy ``X-Agent-ID`` header. The client owns
-                token caching and refresh; we just call ``get_token(audience)``
-                per request.
-            aip_audience: Audience claim used when minting AIP tokens. Defaults
-                to ``base_url``, which matches the gateway's expected ``aud``.
-                Override only if the gateway runs behind a proxy where the
-                audience differs from the URL.
+            agentid_client: ``AIPClient`` (alias for ``Client``) from
+                ``agent-id-client-sdk``. The transport authenticates every
+                request via ``Authorization: Bearer <token>`` minted through
+                ``client.get_token(audience)`` — the SDK owns token caching
+                and refresh. If omitted, no auth header is sent and the
+                gateway will return 401.
+            agentid_audience: Audience claim used when minting AgentID tokens.
+                Defaults to ``base_url``, which matches the gateway's expected
+                ``aud``. Override only if the gateway runs behind a proxy where
+                the audience differs from the URL.
         """
         self.base_url = base_url.rstrip("/")
         self.agent_id: str | None = None
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
         self._last_event_id: str | None = None
-        self._aip_client = aip_client
-        self._aip_audience = aip_audience or self.base_url
+        self._agentid_client = agentid_client
+        self._agentid_audience = agentid_audience or self.base_url
 
     def set_agent_id(self, agent_id: str) -> None:
-        """Set agent ID for the legacy ``X-Agent-ID`` auth path.
+        """Record the agent ID returned by registration.
 
-        No-op when ``aip_client`` is configured — the gateway derives identity
-        from the verified JWT ``sub`` claim in that case. We still record
-        ``agent_id`` because callers query it as a property.
+        Stored on ``self.agent_id`` so callers can read it as a property.
+        The transport does **not** send this in any header — the gateway
+        derives identity from the verified JWT ``sub`` claim instead.
 
         Args:
             agent_id: Agent ID from registration response
@@ -115,8 +116,8 @@ class GatewayTransport:
 
     async def __aenter__(self) -> "GatewayTransport":
         """Enter async context."""
-        # Auth headers are computed per-request (so AIP token refresh + legacy
-        # X-Agent-ID both work without re-baking the client).
+        # Auth headers are computed per-request so AgentID token refresh works
+        # transparently without re-baking the client.
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self.timeout,
@@ -130,19 +131,18 @@ class GatewayTransport:
             self._client = None
 
     async def _auth_headers(self) -> dict[str, str]:
-        """Get authentication headers for the current request.
+        """Build the auth header for the current request.
 
-        AIP path takes precedence: when ``aip_client`` is set, returns a fresh
-        ``Authorization: AIP <token>`` (cached by the SDK; refreshed 60s
-        before expiry). Otherwise falls back to the legacy ``X-Agent-ID``
-        header.
+        Returns a fresh ``Authorization: Bearer <token>`` from the configured
+        AgentID client (cached by the SDK; refreshed 60s before expiry). If
+        no client is configured, returns no header — the gateway will reject
+        the request with 401, which is the desired failure mode for
+        misconfigured runners.
         """
-        if self._aip_client is not None:
-            token = await self._aip_client.get_token(self._aip_audience)
-            return {"Authorization": f"AIP {token}"}
-        if self.agent_id:
-            return {"X-Agent-ID": self.agent_id}
-        return {}
+        if self._agentid_client is None:
+            return {}
+        token = await self._agentid_client.get_token(self._agentid_audience)
+        return {"Authorization": f"Bearer {token}"}
 
     def _get_client(self) -> httpx.AsyncClient:
         """Get the HTTP client, raising if not initialized."""

@@ -1,9 +1,12 @@
-"""Tests for AIP auth in ``GatewayTransport``.
+"""Tests for AgentID auth in ``GatewayTransport``.
 
-Covers the optional ``aip_client`` parameter:
-- ``Authorization: AIP <token>`` is attached when ``aip_client`` is set.
-- Legacy ``X-Agent-ID`` path still works when ``aip_client`` is None.
-- ``aip_audience`` defaults to ``base_url`` and can be overridden.
+The transport authenticates every request via ``Authorization: Bearer
+<token>`` minted through ``agent-id-client-sdk``. Tests cover:
+- Bearer header is attached when ``agentid_client`` is set.
+- No header is sent when ``agentid_client`` is omitted (the gateway will
+  return 401 — the desired failure mode for misconfigured runners).
+- ``agentid_audience`` defaults to ``base_url`` and can be overridden.
+- ``set_agent_id`` records the value but the transport never sends it.
 """
 
 from __future__ import annotations
@@ -26,9 +29,10 @@ def _stub_response(json_body: dict | None = None) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_request_uses_x_agent_id_when_no_aip_client():
+async def test_request_sends_no_auth_header_when_agentid_client_missing():
+    """No Bearer client → no auth header. Gateway will 401, which is the point."""
     transport = GatewayTransport(base_url="https://api.dojozero.live")
-    transport.set_agent_id("legacy-agent-1")
+    transport.set_agent_id("recorded-but-not-sent")
 
     with patch("httpx.AsyncClient") as mock_client_class:
         mock_client = AsyncMock()
@@ -40,17 +44,17 @@ async def test_request_uses_x_agent_id_when_no_aip_client():
             await transport.request("GET", "/balance")
 
         kwargs = mock_client.request.await_args.kwargs
-        assert kwargs["headers"] == {"X-Agent-ID": "legacy-agent-1"}
+        assert kwargs["headers"] == {}
 
 
 @pytest.mark.asyncio
-async def test_request_uses_aip_token_when_aip_client_set():
-    aip_client = AsyncMock()
-    aip_client.get_token = AsyncMock(return_value="signed-jwt")
+async def test_request_uses_bearer_token_when_agentid_client_set():
+    agentid_client = AsyncMock()
+    agentid_client.get_token = AsyncMock(return_value="signed-jwt")
 
     transport = GatewayTransport(
         base_url="https://api.dojozero.live",
-        aip_client=aip_client,
+        agentid_client=agentid_client,
     )
 
     with patch("httpx.AsyncClient") as mock_client_class:
@@ -63,20 +67,20 @@ async def test_request_uses_aip_token_when_aip_client_set():
             await transport.request("GET", "/balance")
 
         # Audience defaults to base_url
-        aip_client.get_token.assert_awaited_once_with("https://api.dojozero.live")
+        agentid_client.get_token.assert_awaited_once_with("https://api.dojozero.live")
         kwargs = mock_client.request.await_args.kwargs
-        assert kwargs["headers"] == {"Authorization": "AIP signed-jwt"}
+        assert kwargs["headers"] == {"Authorization": "Bearer signed-jwt"}
 
 
 @pytest.mark.asyncio
-async def test_aip_audience_override():
-    aip_client = AsyncMock()
-    aip_client.get_token = AsyncMock(return_value="t")
+async def test_agentid_audience_override():
+    agentid_client = AsyncMock()
+    agentid_client.get_token = AsyncMock(return_value="t")
 
     transport = GatewayTransport(
         base_url="https://internal-gw.example.test",
-        aip_client=aip_client,
-        aip_audience="https://api.dojozero.live",
+        agentid_client=agentid_client,
+        agentid_audience="https://api.dojozero.live",
     )
 
     with patch("httpx.AsyncClient") as mock_client_class:
@@ -88,20 +92,20 @@ async def test_aip_audience_override():
         async with transport:
             await transport.request("GET", "/balance")
 
-        aip_client.get_token.assert_awaited_once_with("https://api.dojozero.live")
+        agentid_client.get_token.assert_awaited_once_with("https://api.dojozero.live")
 
 
 @pytest.mark.asyncio
-async def test_aip_takes_precedence_over_x_agent_id():
-    """Setting both should send AIP, not X-Agent-ID — JWT is the stronger claim."""
-    aip_client = AsyncMock()
-    aip_client.get_token = AsyncMock(return_value="t")
+async def test_x_agent_id_is_never_sent():
+    """set_agent_id stores the value but the transport must not emit it."""
+    agentid_client = AsyncMock()
+    agentid_client.get_token = AsyncMock(return_value="t")
 
     transport = GatewayTransport(
         base_url="https://api.dojozero.live",
-        aip_client=aip_client,
+        agentid_client=agentid_client,
     )
-    transport.set_agent_id("legacy-also-set")
+    transport.set_agent_id("recorded-but-not-sent")
 
     with patch("httpx.AsyncClient") as mock_client_class:
         mock_client = AsyncMock()
@@ -113,20 +117,20 @@ async def test_aip_takes_precedence_over_x_agent_id():
             await transport.request("GET", "/balance")
 
         kwargs = mock_client.request.await_args.kwargs
-        assert "Authorization" in kwargs["headers"]
+        assert kwargs["headers"] == {"Authorization": "Bearer t"}
         assert "X-Agent-ID" not in kwargs["headers"]
 
 
 @pytest.mark.asyncio
 async def test_token_fetched_per_request_so_refresh_is_transparent():
     """AIPClient handles caching internally; we just call get_token each time."""
-    aip_client = AsyncMock()
-    # Simulate the AIPClient returning a refreshed token on the second call.
-    aip_client.get_token = AsyncMock(side_effect=["token-v1", "token-v2"])
+    agentid_client = AsyncMock()
+    # Simulate the AgentID Client returning a refreshed token on the second call.
+    agentid_client.get_token = AsyncMock(side_effect=["token-v1", "token-v2"])
 
     transport = GatewayTransport(
         base_url="https://api.dojozero.live",
-        aip_client=aip_client,
+        agentid_client=agentid_client,
     )
 
     with patch("httpx.AsyncClient") as mock_client_class:
@@ -139,22 +143,22 @@ async def test_token_fetched_per_request_so_refresh_is_transparent():
             await transport.request("GET", "/balance")
             await transport.request("GET", "/balance")
 
-        assert aip_client.get_token.await_count == 2
+        assert agentid_client.get_token.await_count == 2
         first_headers = mock_client.request.await_args_list[0].kwargs["headers"]
         second_headers = mock_client.request.await_args_list[1].kwargs["headers"]
-        assert first_headers["Authorization"] == "AIP token-v1"
-        assert second_headers["Authorization"] == "AIP token-v2"
+        assert first_headers["Authorization"] == "Bearer token-v1"
+        assert second_headers["Authorization"] == "Bearer token-v2"
 
 
 @pytest.mark.asyncio
-async def test_set_agent_id_is_noop_under_aip():
-    """When AIP is configured, set_agent_id stores the id but it's not sent."""
-    aip_client = AsyncMock()
-    aip_client.get_token = AsyncMock(return_value="t")
+async def test_set_agent_id_records_but_does_not_emit():
+    """set_agent_id stores the id for property reads but the transport never sends it."""
+    agentid_client = AsyncMock()
+    agentid_client.get_token = AsyncMock(return_value="t")
 
     transport = GatewayTransport(
         base_url="https://api.dojozero.live",
-        aip_client=aip_client,
+        agentid_client=agentid_client,
     )
     transport.set_agent_id("recorded-but-unused")
 
@@ -171,4 +175,4 @@ async def test_set_agent_id_is_noop_under_aip():
             await transport.request("GET", "/balance")
 
         kwargs = mock_client.request.await_args.kwargs
-        assert kwargs["headers"] == {"Authorization": "AIP t"}
+        assert kwargs["headers"] == {"Authorization": "Bearer t"}

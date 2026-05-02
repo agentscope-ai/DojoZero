@@ -31,7 +31,7 @@ from dojozero.dashboard_server._jsonl_utils import (
 from dojozero.gateway import NoOpAuthenticator
 
 if TYPE_CHECKING:
-    from aip_identity_verify import AIPVerifier
+    from agent_id_service_sdk import Verifier
 
     from ._cluster import PeerRegistry
     from ._gateway_routing import GatewayRouter
@@ -94,7 +94,7 @@ class TrialManager:
         gateway_router: "GatewayRouter | None" = None,
         gateway_grace_period: float = 5.0,
         authenticator: "AgentAuthenticator | None" = None,
-        aip_verifier: "AIPVerifier | None" = None,
+        agentid_verifier: "Verifier | None" = None,
         server_id: str | None = None,
         peer_registry: "PeerRegistry | None" = None,
     ):
@@ -114,9 +114,10 @@ class TrialManager:
                                   API calls (e.g., get_results).
             authenticator: AgentAuthenticator for validating agent API keys.
                           If None, uses NoOpAuthenticator (no auth).
-            aip_verifier: Shared AIPVerifier for accepting ``Authorization: AIP <token>``
-                          on each trial's gateway. If None, only the legacy
-                          X-Agent-ID header path is accepted.
+            agentid_verifier: Shared AgentID Verifier for accepting
+                          ``Authorization: Bearer <token>`` on each trial's
+                          gateway. If None, only the legacy X-Agent-ID header
+                          path is accepted.
         """
         self._orchestrator = orchestrator
         self._max_concurrent = max_concurrent
@@ -127,7 +128,7 @@ class TrialManager:
         self._gateway_router = gateway_router
         self._gateway_grace_period = gateway_grace_period
         self._authenticator = authenticator
-        self._aip_verifier = aip_verifier
+        self._agentid_verifier = agentid_verifier
         self._server_id = server_id
         self._peer_registry: PeerRegistry | None = peer_registry
 
@@ -233,7 +234,7 @@ class TrialManager:
                 broker=broker,
                 metadata=metadata,
                 authenticator=self._authenticator,
-                aip_verifier=self._aip_verifier,
+                agentid_verifier=self._agentid_verifier,
             )
 
             # Create adapter and state manually since lifespan doesn't run for in-process routing
@@ -250,7 +251,7 @@ class TrialManager:
                 adapter=adapter,
                 authenticator=self._authenticator or NoOpAuthenticator(),
                 metadata=metadata,
-                aip_verifier=self._aip_verifier,
+                agentid_verifier=self._agentid_verifier,
             )
 
             # Ensure broker has event initialized from metadata if missing

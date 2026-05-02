@@ -551,26 +551,26 @@ class TestGatewayServer:
         data = response.json()
         assert data["trialId"] == "trial123"
 
-    def test_get_odds_requires_registration(self, client):
-        """Test odds endpoint requires agent registration."""
+    def test_get_odds_x_agent_id_no_longer_accepted(self, client):
+        """X-Agent-ID is no longer an auth method — request is rejected at auth."""
         response = client.get(
             "/odds/current",
             headers={"X-Agent-ID": "unknown"},
         )
-        assert response.status_code == 403
+        assert response.status_code == 401
 
     def test_get_odds_requires_auth(self, client):
-        """Test odds endpoint requires X-Agent-ID header."""
+        """Test odds endpoint requires Authorization header."""
         response = client.get("/odds/current")
         assert response.status_code == 401
 
-    def test_get_balance_requires_registration(self, client):
-        """Test balance endpoint requires registration."""
+    def test_get_balance_x_agent_id_no_longer_accepted(self, client):
+        """X-Agent-ID is no longer an auth method — request is rejected at auth."""
         response = client.get(
             "/balance",
             headers={"X-Agent-ID": "unknown"},
         )
-        assert response.status_code == 403
+        assert response.status_code == 401
 
     def test_place_bet_requires_auth(self, client):
         """Test bet placement requires auth."""

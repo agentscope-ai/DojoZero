@@ -38,7 +38,7 @@ from dojozero.gateway._models import (
 from dojozero.gateway._sse import SSEConnection, create_sse_response
 
 if TYPE_CHECKING:
-    from aip_identity_verify import AIPVerifier
+    from agent_id_service_sdk import Verifier
 
     from dojozero.betting._broker import BrokerOperator
     from dojozero.data import DataHub
@@ -56,7 +56,7 @@ class GatewayState:
     adapter: ExternalAgentAdapter
     authenticator: AgentAuthenticator = field(default_factory=NoOpAuthenticator)
     metadata: dict[str, Any] = field(default_factory=dict)
-    aip_verifier: "AIPVerifier | None" = None
+    agentid_verifier: "Verifier | None" = None
 
 
 def get_gateway_state(request: Request) -> GatewayState:
@@ -69,91 +69,101 @@ def get_gateway_state(request: Request) -> GatewayState:
 
 async def get_agent_id(
     request: Request,
-    x_agent_id: str | None = Header(default=None, alias="X-Agent-ID"),
     authorization: str | None = Header(default=None),
 ) -> str:
-    """Extract verified agent ID from request headers.
+    """Extract the verified agent_id from the AgentID Bearer token.
 
-    Auth precedence:
-        1. ``Authorization: AIP <token>`` — verified via the gateway's
-           ``AIPVerifier`` (when configured). Returns the token's ``sub``
-           claim (an ``aip:<domain>:<uuid>`` identity).
-        2. ``X-Agent-ID: <id>`` — legacy header path; accepted unconditionally
-           for backwards-compat with the existing SDK and tooling.
-        3. Otherwise → 401.
+    The gateway authenticates external agents via ``Authorization: Bearer
+    <token>``, verified against the configured AgentID provider. The returned
+    string is the token's ``sub`` claim (e.g. ``agentid:<domain>:<uuid>``).
 
     Args:
         request: FastAPI request (used to access gateway state).
-        x_agent_id: Agent ID from ``X-Agent-ID`` header.
         authorization: ``Authorization`` header value.
 
     Returns:
-        Agent ID string.
+        Verified agent ID string.
 
     Raises:
-        HTTPException: If authentication fails or no credentials provided.
+        HTTPException: 401 if the header is missing, malformed, or fails
+            verification; 503 if the gateway has no AgentID verifier
+            configured (operator misconfiguration).
     """
-    if authorization and authorization.startswith("AIP "):
-        state = getattr(request.app.state, "gateway_state", None)
-        verifier = getattr(state, "aip_verifier", None) if state else None
-        if verifier is not None:
-            return await _verify_aip_token(authorization[4:], verifier)
-        # AIP token presented but verifier not configured — explicit 401
-        # rather than silent fall-through, so misconfiguration is loud.
+    if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(
                 error=ErrorDetail(
-                    code=ErrorCodes.INVALID_TOKEN,
-                    message="AIP authentication is not configured on this gateway",
+                    code=ErrorCodes.AUTH_REQUIRED,
+                    message="Authentication required: 'Authorization: Bearer <token>'",
                 )
             ).model_dump(by_alias=True),
         )
 
-    if x_agent_id:
-        return x_agent_id
+    state = getattr(request.app.state, "gateway_state", None)
+    verifier = getattr(state, "agentid_verifier", None) if state else None
+    if verifier is None:
+        # The gateway requires an AgentID verifier; refusing to authenticate
+        # silently would mask a deployment misconfiguration.
+        raise HTTPException(
+            status_code=503,
+            detail=ErrorResponse(
+                error=ErrorDetail(
+                    code=ErrorCodes.AUTH_REQUIRED,
+                    message="AgentID provider is not configured on this gateway",
+                )
+            ).model_dump(by_alias=True),
+        )
 
-    raise HTTPException(
-        status_code=401,
-        detail=ErrorResponse(
-            error=ErrorDetail(
-                code=ErrorCodes.AUTH_REQUIRED,
-                message="Authentication required: provide 'Authorization: AIP <token>' or 'X-Agent-ID' header",
-            )
-        ).model_dump(by_alias=True),
+    return await _verify_agentid_token(
+        authorization[7:],
+        verifier,
+        route=request.url.path,
     )
 
 
-async def _verify_aip_token(token: str, verifier: "AIPVerifier") -> str:
-    """Verify an AIP token and return the agent_id, mapping AIP errors to HTTP 401."""
-    # Imports are local so the gateway works without aip-identity-verify
-    # installed (AIP just stays disabled).
-    from aip_identity_verify.errors import (  # noqa: PLC0415
-        AIPProviderUntrusted,
-        AIPSignatureInvalid,
-        AIPTokenExpired,
-        AIPTokenInvalid,
+async def _verify_agentid_token(
+    token: str,
+    verifier: "Verifier",
+    *,
+    route: str | None = None,
+) -> str:
+    """Verify an AgentID token and return the agent_id, mapping errors to HTTP 401.
+
+    Passes ``route`` to the verifier so the auto-emitted ``auth.verify``
+    activity event records which endpoint was hit.
+    """
+    # Imports are local so the gateway works without agent-id-service-sdk
+    # installed (AgentID auth just stays disabled).
+    from agent_id_service_sdk.errors import (  # noqa: PLC0415
+        ProviderUntrustedError,
+        SignatureInvalidError,
+        TokenExpiredError,
+        TokenInvalidError,
     )
 
     try:
-        agent = await verifier.verify_token(token)
-    except AIPTokenExpired as exc:
+        agent = await verifier.verify_token(
+            token,
+            request_context={"route": route} if route else None,
+        )
+    except TokenExpiredError as exc:
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(
                 error=ErrorDetail(
                     code=ErrorCodes.TOKEN_EXPIRED,
-                    message="AIP token has expired",
+                    message="AgentID token has expired",
                 )
             ).model_dump(by_alias=True),
         ) from exc
-    except (AIPTokenInvalid, AIPProviderUntrusted, AIPSignatureInvalid) as exc:
+    except (TokenInvalidError, ProviderUntrustedError, SignatureInvalidError) as exc:
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(
                 error=ErrorDetail(
                     code=ErrorCodes.INVALID_TOKEN,
-                    message=f"Invalid AIP token: {exc}",
+                    message=f"Invalid AgentID token: {exc}",
                 )
             ).model_dump(by_alias=True),
         ) from exc
@@ -167,7 +177,7 @@ def create_gateway_app(
     broker: "BrokerOperator",
     metadata: dict[str, Any] | None = None,
     authenticator: AgentAuthenticator | None = None,
-    aip_verifier: "AIPVerifier | None" = None,
+    agentid_verifier: "Verifier | None" = None,
 ) -> FastAPI:
     """Create the Agent Gateway FastAPI application.
 
@@ -176,11 +186,12 @@ def create_gateway_app(
         data_hub: DataHub instance for event subscriptions
         broker: BrokerOperator for betting operations
         metadata: Trial metadata
-        authenticator: Optional authenticator for API key validation.
-            If None, uses NoOpAuthenticator (allows any agent_id).
-        aip_verifier: Optional ``AIPVerifier`` from ``aip-identity-verify``.
-            When provided, ``Authorization: AIP <token>`` headers are accepted.
-            Build via :func:`dojozero.gateway._aip.aip_verifier_from_env`.
+        authenticator: Optional authenticator for API key validation
+            (used by registration flows). If None, uses NoOpAuthenticator.
+        agentid_verifier: ``Verifier`` from ``agent-id-service-sdk``. The
+            gateway authenticates all per-trial requests via Bearer tokens
+            verified by this object — pass ``None`` only in tests. Build via
+            :func:`dojozero.gateway._agentid.agentid_verifier_from_env`.
 
     Returns:
         FastAPI application
@@ -204,12 +215,12 @@ def create_gateway_app(
             adapter=adapter,
             authenticator=auth,
             metadata=metadata or {},
-            aip_verifier=aip_verifier,
+            agentid_verifier=agentid_verifier,
         )
 
         app.state.gateway_state = state
         auth_status = "enabled" if auth.is_enabled() else "disabled"
-        aip_status = "enabled" if aip_verifier is not None else "disabled"
+        aip_status = "enabled" if agentid_verifier is not None else "disabled"
         logger.info(
             "Gateway started for trial %s (auth: %s, aip: %s)",
             trial_id,
