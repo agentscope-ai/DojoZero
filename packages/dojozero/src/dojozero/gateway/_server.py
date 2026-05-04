@@ -162,7 +162,7 @@ async def _verify_agentid_token(
         )
     except TokenExpiredError as exc:
         await emit_auth_deny(
-            verifier, token=token, route=route or "", reason="token_expired"
+            verifier, token=token, route=route or "", error_class="token_expired"
         )
         raise HTTPException(
             status_code=401,
@@ -175,7 +175,7 @@ async def _verify_agentid_token(
         ) from exc
     except TokenInvalidError as exc:
         await emit_auth_deny(
-            verifier, token=token, route=route or "", reason="token_invalid"
+            verifier, token=token, route=route or "", error_class="token_invalid"
         )
         raise HTTPException(
             status_code=401,
@@ -188,7 +188,7 @@ async def _verify_agentid_token(
         ) from exc
     except ProviderUntrustedError as exc:
         await emit_auth_deny(
-            verifier, token=token, route=route or "", reason="provider_untrusted"
+            verifier, token=token, route=route or "", error_class="provider_untrusted"
         )
         raise HTTPException(
             status_code=401,
@@ -201,7 +201,7 @@ async def _verify_agentid_token(
         ) from exc
     except SignatureInvalidError as exc:
         await emit_auth_deny(
-            verifier, token=token, route=route or "", reason="signature_invalid"
+            verifier, token=token, route=route or "", error_class="signature_invalid"
         )
         raise HTTPException(
             status_code=401,
@@ -729,18 +729,16 @@ def create_gateway_app(
         # bet response. The activity service preserves amount as a string
         # so cross-hub aggregation can avoid float rounding.
 
+        # Hub-specific richness (market, selection, probability, shares,
+        # reference_sequence) does NOT go in the canonical transfer.value
+        # — it'll land in a Tier-2 dojozero.bet_decision event linked via
+        # transaction_id (= bet_id) once that schema ships.
         await emit_transfer_value(
             state.agentid_verifier,
             agent_id=agent_id,
             trial_id=state.trial_id,
             amount=response.amount,
-            market=response.market,
-            selection=response.selection,
             bet_id=response.bet_id,
-            event_id=response.event_id,
-            probability=response.probability,
-            shares=response.shares,
-            reference_sequence=request.reference_sequence,
         )
         return response
 

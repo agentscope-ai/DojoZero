@@ -82,9 +82,15 @@ async def emit_auth_deny(
     *,
     token: str,
     route: str,
-    reason: str,
+    error_class: str,
 ) -> None:
     """Emit ``auth.deny`` for a Bearer token that failed verification.
+
+    Payload is the canonical Tier-1 ``{route, error_class}`` shape. The
+    ``error_class`` is a short code naming the failure mode
+    (``token_expired``, ``token_invalid``, ``signature_invalid``,
+    ``provider_untrusted``). Cross-hub anomaly detection consumers
+    aggregate by this field.
 
     Pulls claimed identity from the unverified JWT payload so the
     activity service can record "agent X *claimed* to act but failed
@@ -125,7 +131,7 @@ async def emit_auth_deny(
             agent=agent,
             outcome="failure",
             route=route,
-            payload={"route": route, "reason": reason},
+            payload={"route": route, "error_class": error_class},
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("emit_auth_deny: emission failed: %s", exc)
@@ -141,24 +147,35 @@ async def emit_session_start(
     model: str | None = None,
     sport_type: str | None = None,
 ) -> None:
-    """Emit ``session.start`` after a successful agent registration."""
+    """Emit ``session.start`` after a successful agent registration.
+
+    Canonical Tier-1 payload is ``{session_id, scenario?, attributes?}``.
+    DojoZero-specific context (persona, model, sport_type) goes into the
+    open ``attributes`` dict so it doesn't pollute the cross-hub
+    canonical schema. Aggregation that wants persona-level analytics
+    subscribes to a future Tier-2 ``dojozero.session_attributes`` event.
+    """
     if verifier is None:
         return
 
-    payload_extras: dict[str, Any] = {"trial_id": trial_id}
+    attributes: dict[str, Any] = {}
     if persona:
-        payload_extras["persona"] = persona
+        attributes["persona"] = persona
     if model:
-        payload_extras["model"] = model
+        attributes["model"] = model
     if sport_type:
-        payload_extras["sport_type"] = sport_type
+        attributes["sport_type"] = sport_type
+
+    extras: dict[str, Any] = {"scenario": "trial"}
+    if attributes:
+        extras["attributes"] = attributes
 
     agent = _build_verified_agent(agent_id=agent_id, agent_name=agent_name)
     try:
         await verifier.report_session_start(
             agent,
             session_id=trial_id,
-            **payload_extras,
+            **extras,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("emit_session_start: emission failed: %s", exc)
@@ -171,21 +188,34 @@ async def emit_session_end(
     trial_id: str,
     duration_ms: int,
     agent_name: str = "",
+    outcome: str = "completed",
     final_balance: str | None = None,
     last_observed_sequence: int | None = None,
     bet_count: int | None = None,
 ) -> None:
-    """Emit ``session.end`` when an agent unregisters or the trial closes."""
+    """Emit ``session.end`` when an agent unregisters or the trial closes.
+
+    Canonical Tier-1 payload is
+    ``{session_id, duration_ms, outcome?, total_tokens?, total_cost_usd?, summary?}``.
+    DojoZero-specific roll-ups (final_balance, last_observed_sequence,
+    bet_count) go into the open ``summary`` dict. ``total_tokens`` and
+    ``total_cost_usd`` aren't tracked at the gateway level today; they'd
+    come from the runner if we wired LLM-cost rollup later.
+    """
     if verifier is None:
         return
 
-    payload_extras: dict[str, Any] = {"trial_id": trial_id}
+    summary: dict[str, Any] = {}
     if final_balance is not None:
-        payload_extras["final_balance"] = final_balance
+        summary["final_balance"] = final_balance
     if last_observed_sequence is not None:
-        payload_extras["last_observed_sequence"] = last_observed_sequence
+        summary["last_observed_sequence"] = last_observed_sequence
     if bet_count is not None:
-        payload_extras["bet_count"] = bet_count
+        summary["bet_count"] = bet_count
+
+    extras: dict[str, Any] = {"outcome": outcome}
+    if summary:
+        extras["summary"] = summary
 
     agent = _build_verified_agent(agent_id=agent_id, agent_name=agent_name)
     try:
@@ -193,10 +223,31 @@ async def emit_session_end(
             agent,
             session_id=trial_id,
             duration_ms=max(0, duration_ms),
-            **payload_extras,
+            **extras,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("emit_session_end: emission failed: %s", exc)
+
+
+def _amount_bucket(amount: str | float) -> str:
+    """Bucket a raw amount into the canonical Tier-1 bracket.
+
+    Mirrors ``aip-activity/app/schemas/categories.py:AMOUNT_BUCKETS``. The
+    bucket whitelist is fixed at the activity service; if it changes,
+    this function and the server enum need to migrate together. Negative
+    or unparseable amounts fall into ``lt_100`` defensively.
+    """
+    try:
+        v = float(amount)
+    except (TypeError, ValueError):
+        return "lt_100"
+    if v < 100:
+        return "lt_100"
+    if v < 1_000:
+        return "100_1k"
+    if v < 10_000:
+        return "1k_10k"
+    return "10k_plus"
 
 
 async def emit_transfer_value(
@@ -205,47 +256,49 @@ async def emit_transfer_value(
     agent_id: str,
     trial_id: str,
     amount: str,
-    market: str,
-    selection: str,
     bet_id: str,
-    event_id: str = "",
-    probability: str | None = None,
-    shares: str | None = None,
-    reference_sequence: int | None = None,
+    currency: str = "USD",
+    direction: str = "out",
+    purpose: str = "stake",
+    counterparty_principal_id: str | None = None,
+    linked_tier2: str | None = "dojozero.bet_decision",
     agent_name: str = "",
 ) -> None:
     """Emit ``transfer.value`` for an accepted bet.
 
-    AIP convention: ``transfer.value`` records *outgoing* value movement —
-    the stake the agent committed. Bet settlement (win / loss / payout)
-    is a separate event that lands in a follow-up commit. ``amount`` is
-    the stake size as a decimal string; the activity service preserves
-    string formatting to avoid float rounding across hubs.
+    Canonical Tier-1 payload:
+    ``{amount_bucket, currency, direction, amount?, purpose, transaction_id,
+       counterparty_principal_id?, linked_tier2?}``.
 
-    The payload is rich on purpose — every field is useful for
-    cross-platform analytics (which markets does each persona prefer?
-    how big are typical stakes? does this LLM size bets sensibly given
-    its bankroll?). DojoZero is the AIP team's first product-domain
-    adopter and this is the most product-meaningful event we emit.
+    Hub-specific richness (market, selection, probability, shares, etc.)
+    does NOT go here — it belongs in the linked Tier-2
+    ``dojozero.bet_decision`` event (emitted alongside this one once the
+    Tier-2 schema lands). ``transaction_id`` (= ``bet_id``) is the join
+    key.
+
+    DojoZero defaults: stakes are *outgoing* value to the trial broker,
+    purpose ``stake``, currency ``USD`` (informal — DojoZero trials use
+    USD-denominated paper money). ``linked_tier2`` defaults to
+    ``dojozero.bet_decision`` as a forward reference; consumers who join
+    by ``transaction_id`` will find the Tier-2 event when it ships.
     """
     if verifier is None:
         return
 
     payload: dict[str, Any] = {
-        "trial_id": trial_id,
-        "amount": amount,
-        "market": market,
-        "selection": selection,
-        "bet_id": bet_id,
+        "amount_bucket": _amount_bucket(amount),
+        "currency": currency,
+        "direction": direction,
+        # Raw amount kept at privacy_level=full; activity service drops it
+        # at summary. amount_bucket is what cross-hub aggregation reads.
+        "amount": float(amount) if amount else 0.0,
+        "purpose": purpose,
+        "transaction_id": bet_id,
     }
-    if event_id:
-        payload["event_id"] = event_id
-    if probability is not None:
-        payload["probability"] = probability
-    if shares is not None:
-        payload["shares"] = shares
-    if reference_sequence is not None:
-        payload["reference_sequence"] = reference_sequence
+    if counterparty_principal_id is not None:
+        payload["counterparty_principal_id"] = counterparty_principal_id
+    if linked_tier2 is not None:
+        payload["linked_tier2"] = linked_tier2
 
     agent = _build_verified_agent(agent_id=agent_id, agent_name=agent_name)
     try:

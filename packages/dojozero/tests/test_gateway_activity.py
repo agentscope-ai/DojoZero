@@ -1,8 +1,15 @@
 """Tests for AgentID activity event emission helpers.
 
 Covers ``gateway/_activity.py`` — best-effort emitters for ``auth.deny``,
-``session.start``, ``session.end``. Verifier internals are mocked; we
-just assert which methods got called and with what shape.
+``session.start``, ``session.end``, ``transfer.value``. Verifier
+internals are mocked; we just assert which methods got called and with
+what shape.
+
+Payload shapes match aip-activity's canonical Tier-1 schemas in
+``aip-activity/app/schemas/categories.py``. Hub-specific richness lives
+in ``attributes`` / ``summary`` open dicts (sessions) or in linked
+Tier-2 events (transfer.value via ``transaction_id`` /
+``linked_tier2``).
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ import jwt
 import pytest
 
 from dojozero.gateway._activity import (
+    _amount_bucket,
     emit_auth_deny,
     emit_session_end,
     emit_session_start,
@@ -32,6 +40,39 @@ def _make_verifier_mock():
 
 
 # ---------------------------------------------------------------------------
+# _amount_bucket
+# ---------------------------------------------------------------------------
+
+
+class TestAmountBucket:
+    """Mirrors aip-activity's AMOUNT_BUCKETS whitelist."""
+
+    @pytest.mark.parametrize(
+        "amount,bucket",
+        [
+            ("0", "lt_100"),
+            ("99.99", "lt_100"),
+            ("100", "100_1k"),
+            ("999", "100_1k"),
+            ("1000", "1k_10k"),
+            ("9999", "1k_10k"),
+            ("10000", "10k_plus"),
+            ("100000", "10k_plus"),
+        ],
+    )
+    def test_buckets(self, amount, bucket):
+        assert _amount_bucket(amount) == bucket
+
+    def test_unparseable_falls_back_to_lt_100(self):
+        assert _amount_bucket("not-a-number") == "lt_100"
+        assert _amount_bucket(None) == "lt_100"  # type: ignore[arg-type]
+
+    def test_negative_falls_back_to_lt_100(self):
+        # Defensive: negative amounts shouldn't happen but won't crash.
+        assert _amount_bucket("-50") == "lt_100"
+
+
+# ---------------------------------------------------------------------------
 # emit_auth_deny
 # ---------------------------------------------------------------------------
 
@@ -39,9 +80,8 @@ def _make_verifier_mock():
 class TestEmitAuthDeny:
     @pytest.mark.asyncio
     async def test_no_op_when_verifier_is_none(self):
-        # Just shouldn't raise.
         await emit_auth_deny(
-            None, token="anything", route="/balance", reason="token_expired"
+            None, token="anything", route="/balance", error_class="token_expired"
         )
 
     @pytest.mark.asyncio
@@ -52,7 +92,7 @@ class TestEmitAuthDeny:
                 "sub": "agentid:dojozero:degen-claude",
                 "iss": "https://pre.agent-id.live",
                 "aud": "https://api.dojozero.live",
-                "exp": int(time.time()) - 60,  # already expired (we're emitting deny)
+                "exp": int(time.time()) - 60,
             },
             "secret",
             algorithm="HS256",
@@ -60,7 +100,7 @@ class TestEmitAuthDeny:
         )
 
         await emit_auth_deny(
-            verifier, token=token, route="/bets", reason="token_expired"
+            verifier, token=token, route="/bets", error_class="token_expired"
         )
 
         verifier.report_event.assert_awaited_once()
@@ -68,7 +108,11 @@ class TestEmitAuthDeny:
         assert kwargs["category"] == "auth.deny"
         assert kwargs["outcome"] == "failure"
         assert kwargs["route"] == "/bets"
-        assert kwargs["payload"] == {"route": "/bets", "reason": "token_expired"}
+        # Canonical Tier-1 shape: {route, error_class}
+        assert kwargs["payload"] == {
+            "route": "/bets",
+            "error_class": "token_expired",
+        }
         agent = kwargs["agent"]
         assert agent.agent_id == "agentid:dojozero:degen-claude"
         assert agent.issuer == "https://pre.agent-id.live"
@@ -76,13 +120,12 @@ class TestEmitAuthDeny:
 
     @pytest.mark.asyncio
     async def test_garbage_token_still_emits_with_empty_identity(self):
-        """A token so malformed we can't even parse should still emit an event."""
         verifier = _make_verifier_mock()
         await emit_auth_deny(
             verifier,
             token="not.a.jwt",
             route="/balance",
-            reason="signature_invalid",
+            error_class="signature_invalid",
         )
         verifier.report_event.assert_awaited_once()
         agent = verifier.report_event.await_args.kwargs["agent"]
@@ -90,7 +133,6 @@ class TestEmitAuthDeny:
 
     @pytest.mark.asyncio
     async def test_emission_failure_is_swallowed(self, caplog):
-        """If the activity service rejects the event, the gateway must not break."""
         from unittest.mock import AsyncMock
 
         verifier = _make_verifier_mock()
@@ -98,7 +140,10 @@ class TestEmitAuthDeny:
 
         with caplog.at_level("WARNING"):
             await emit_auth_deny(
-                verifier, token="x.y.z", route="/balance", reason="token_invalid"
+                verifier,
+                token="x.y.z",
+                route="/balance",
+                error_class="token_invalid",
             )
         assert any(
             "emit_auth_deny" in r.message and "activity-down" in r.message
@@ -119,7 +164,7 @@ class TestEmitSessionStart:
         )
 
     @pytest.mark.asyncio
-    async def test_passes_through_session_id_and_extras(self):
+    async def test_passes_canonical_fields_and_attributes(self):
         verifier = _make_verifier_mock()
         await emit_session_start(
             verifier,
@@ -139,19 +184,25 @@ class TestEmitSessionStart:
         agent = args[0]
         assert agent.agent_id == "agentid:dojozero:degen"
         assert kwargs["session_id"] == "trial-canary-001"
-        assert kwargs["trial_id"] == "trial-canary-001"
-        assert kwargs["persona"] == "degen"
-        assert kwargs["model"] == "qwen3-max"
-        assert kwargs["sport_type"] == "nba"
+        # scenario is a canonical Tier-1 field; "trial" is DojoZero's label
+        # for a betting-trial session.
+        assert kwargs["scenario"] == "trial"
+        # Hub-specific richness lives in `attributes`, not at payload top
+        # level — that's the canonical-vs-domain split.
+        assert kwargs["attributes"] == {
+            "persona": "degen",
+            "model": "qwen3-max",
+            "sport_type": "nba",
+        }
 
     @pytest.mark.asyncio
-    async def test_omits_unset_optional_fields(self):
+    async def test_no_attributes_when_no_extras(self):
         verifier = _make_verifier_mock()
         await emit_session_start(verifier, agent_id="agentid:dojozero:x", trial_id="t1")
         kwargs = verifier.report_session_start.await_args.kwargs
-        assert "persona" not in kwargs
-        assert "model" not in kwargs
-        assert "sport_type" not in kwargs
+        # scenario always set; attributes only if non-empty
+        assert kwargs["scenario"] == "trial"
+        assert "attributes" not in kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +221,7 @@ class TestEmitSessionEnd:
         )
 
     @pytest.mark.asyncio
-    async def test_includes_duration_and_optional_payload(self):
+    async def test_includes_outcome_and_summary_dict(self):
         verifier = _make_verifier_mock()
         await emit_session_end(
             verifier,
@@ -184,9 +235,38 @@ class TestEmitSessionEnd:
         kwargs = verifier.report_session_end.await_args.kwargs
         assert kwargs["session_id"] == "trial-canary-001"
         assert kwargs["duration_ms"] == 5_400_000
-        assert kwargs["final_balance"] == "1234.56"
-        assert kwargs["last_observed_sequence"] == 812
-        assert kwargs["bet_count"] == 12
+        # outcome is a canonical Tier-1 field
+        assert kwargs["outcome"] == "completed"
+        # Hub-specific roll-ups live in `summary`, not at payload top level
+        assert kwargs["summary"] == {
+            "final_balance": "1234.56",
+            "last_observed_sequence": 812,
+            "bet_count": 12,
+        }
+
+    @pytest.mark.asyncio
+    async def test_outcome_override(self):
+        verifier = _make_verifier_mock()
+        await emit_session_end(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            duration_ms=1000,
+            outcome="cancelled",
+        )
+        assert verifier.report_session_end.await_args.kwargs["outcome"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_no_summary_when_no_extras(self):
+        verifier = _make_verifier_mock()
+        await emit_session_end(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            duration_ms=1000,
+        )
+        kwargs = verifier.report_session_end.await_args.kwargs
+        assert "summary" not in kwargs
 
     @pytest.mark.asyncio
     async def test_negative_duration_clamped_to_zero(self):
@@ -213,13 +293,11 @@ class TestEmitTransferValue:
             agent_id="agentid:dojozero:x",
             trial_id="t1",
             amount="100",
-            market="moneyline",
-            selection="home",
             bet_id="bet_1",
         )
 
     @pytest.mark.asyncio
-    async def test_emits_with_full_payload(self):
+    async def test_canonical_payload_shape(self):
         verifier = _make_verifier_mock()
         await emit_transfer_value(
             verifier,
@@ -227,13 +305,7 @@ class TestEmitTransferValue:
             agent_name="Danny Hype",
             trial_id="trial-canary-001",
             amount="50.00",
-            market="moneyline",
-            selection="home",
             bet_id="bet_42",
-            event_id="lakers_warriors_2026_05_04",
-            probability="0.55",
-            shares="90.91",
-            reference_sequence=812,
         )
 
         verifier.report_event.assert_awaited_once()
@@ -242,35 +314,60 @@ class TestEmitTransferValue:
         assert kwargs["outcome"] == "success"
         assert kwargs["session_id"] == "trial-canary-001"
         payload = kwargs["payload"]
-        assert payload == {
-            "trial_id": "trial-canary-001",
-            "amount": "50.00",
-            "market": "moneyline",
-            "selection": "home",
-            "bet_id": "bet_42",
-            "event_id": "lakers_warriors_2026_05_04",
-            "probability": "0.55",
-            "shares": "90.91",
-            "reference_sequence": 812,
-        }
+        # Canonical Tier-1 fields, not hub-specific richness
+        assert payload["amount_bucket"] == "lt_100"
+        assert payload["currency"] == "USD"
+        assert payload["direction"] == "out"
+        assert payload["amount"] == 50.0
+        assert payload["purpose"] == "stake"
+        assert payload["transaction_id"] == "bet_42"
+        # Forward reference to the Tier-2 event that carries hub-specific
+        # richness (market, selection, etc.) — not yet emitted.
+        assert payload["linked_tier2"] == "dojozero.bet_decision"
+        # Hub-specific fields explicitly NOT in canonical Tier-1 payload
+        assert "market" not in payload
+        assert "selection" not in payload
 
     @pytest.mark.asyncio
-    async def test_omits_unset_optional_fields(self):
+    async def test_amount_bucket_derived_from_amount(self):
         verifier = _make_verifier_mock()
         await emit_transfer_value(
             verifier,
             agent_id="agentid:dojozero:x",
             trial_id="t1",
-            amount="10",
-            market="spread",
-            selection="away",
-            bet_id="bet_1",
+            amount="500",
+            bet_id="bet_x",
         )
         payload = verifier.report_event.await_args.kwargs["payload"]
-        assert "probability" not in payload
-        assert "shares" not in payload
-        assert "reference_sequence" not in payload
-        assert "event_id" not in payload
+        assert payload["amount_bucket"] == "100_1k"
+
+    @pytest.mark.asyncio
+    async def test_counterparty_optional(self):
+        verifier = _make_verifier_mock()
+        await emit_transfer_value(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            amount="100",
+            bet_id="bet_x",
+            counterparty_principal_id="agentid:dojozero:broker",
+        )
+        payload = verifier.report_event.await_args.kwargs["payload"]
+        assert payload["counterparty_principal_id"] == "agentid:dojozero:broker"
+
+    @pytest.mark.asyncio
+    async def test_linked_tier2_can_be_disabled(self):
+        verifier = _make_verifier_mock()
+        await emit_transfer_value(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            amount="100",
+            bet_id="bet_x",
+            linked_tier2=None,
+        )
+        payload = verifier.report_event.await_args.kwargs["payload"]
+        assert "linked_tier2" not in payload
 
     @pytest.mark.asyncio
     async def test_emission_failure_swallowed(self, caplog):
@@ -285,9 +382,7 @@ class TestEmitTransferValue:
                 agent_id="agentid:dojozero:x",
                 trial_id="t1",
                 amount="100",
-                market="moneyline",
-                selection="home",
-                bet_id="bet_1",
+                bet_id="bet_x",
             )
         assert any(
             "emit_transfer_value" in r.message and "activity-down" in r.message
