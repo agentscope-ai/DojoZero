@@ -777,16 +777,28 @@ class DojoClient:
         api_key: str,
         initial_balance: float | None = None,
         session_key: str | None = None,
+        agentid_client: Any = None,
+        agentid_audience: str | None = None,
     ) -> AsyncIterator[TrialConnection]:
         """Connect to a trial.
 
         Args:
             gateway_url: Gateway URL (e.g., "http://localhost:8080")
-            api_key: API key for authentication (from dojo0 agents add).
-                     Agent identity (agent_id, display_name, persona, model)
-                     all come from agent_keys.yaml based on this key.
+            api_key: Identifier the gateway uses to look up agent identity
+                metadata (display name, persona, model). When connecting via
+                AgentID, pass the verified agent_id (the JWT ``sub``) so the
+                two stay aligned.
             initial_balance: Starting balance (if registering)
-            session_key: Session key from previous connection (for secure reconnection)
+            session_key: Session key from previous connection (for secure
+                reconnection)
+            agentid_client: Optional ``Client`` from ``agent-id-client-sdk``.
+                When provided, every per-trial request authenticates with
+                ``Authorization: Bearer <token>`` minted by the client.
+                The gateway requires this for AgentID-only deployments;
+                without it, requests after registration will 401.
+            agentid_audience: Override for the AgentID token audience claim.
+                Defaults to ``gateway_url``, which matches the gateway's
+                configured ``DOJOZERO_AGENTID_AUDIENCE``.
 
         Yields:
             TrialConnection for interacting with the trial.
@@ -800,6 +812,8 @@ class DojoClient:
         transport = GatewayTransport(
             base_url=gateway_url,
             timeout=self._timeout,
+            agentid_client=agentid_client,
+            agentid_audience=agentid_audience,
         )
 
         async with transport:

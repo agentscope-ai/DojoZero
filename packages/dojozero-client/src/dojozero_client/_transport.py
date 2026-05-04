@@ -24,7 +24,7 @@ from dojozero_client._exceptions import (
 )
 
 if TYPE_CHECKING:
-    from agent_id_client_sdk import AIPClient
+    from agent_id_client_sdk import Client
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class GatewayTransport:
         self,
         base_url: str,
         timeout: float = 30.0,
-        agentid_client: "AIPClient | None" = None,
+        agentid_client: "Client | None" = None,
         agentid_audience: str | None = None,
     ):
         """Initialize transport.
@@ -73,7 +73,7 @@ class GatewayTransport:
         Args:
             base_url: Gateway base URL (e.g., "http://localhost:8080")
             timeout: Request timeout in seconds
-            agentid_client: ``AIPClient`` (alias for ``Client``) from
+            agentid_client: ``Client`` from
                 ``agent-id-client-sdk``. The transport authenticates every
                 request via ``Authorization: Bearer <token>`` minted through
                 ``client.get_token(audience)`` — the SDK owns token caching

@@ -35,6 +35,35 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _load_agentid_or_legacy(legacy_api_key: str) -> tuple[Any, str]:
+    """Resolve auth: AgentID (preferred) or fall back to the legacy api_key.
+
+    Returns ``(agentid_client_or_none, api_key_for_registration)``. When
+    ``AGENTID_AGENT_ID`` is set, ``Identity.from_env()`` provides a
+    cryptographically backed identity and the Client mints Bearer tokens for
+    every per-trial request; ``api_key_for_registration`` is set to the
+    verified agent_id so the gateway's POST /agents call attributes the
+    registration to the same identity as the Bearer ``sub`` claim.
+
+    When AgentID env is absent, returns ``(None, legacy_api_key)``. The
+    transport will send no auth header and the AgentID-only gateway will
+    return 401 — that's the desired loud failure for misconfigured runners.
+    """
+    if not os.environ.get("AGENTID_AGENT_ID"):
+        return None, legacy_api_key
+
+    try:
+        from agent_id_client_sdk import Client, Identity  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError(
+            "AGENTID_AGENT_ID is set but agent-id-client-sdk is not "
+            "installed. Install with: pip install dojozero-client[agentid]"
+        ) from exc
+
+    identity = Identity.from_env()
+    return Client(identity), identity.agent_id
+
+
 def _write_results(
     results_file: Path,
     trial_id: str,
@@ -236,13 +265,22 @@ class TrialHandler:
             existing_state.get("session_key", "") if existing_state else ""
         )
 
-        # Connect to trial using async context manager
+        # Connect to trial using async context manager.
+        #
+        # AgentID auth precedence: when AGENTID_AGENT_ID is set in env we load
+        # the Identity + Client from agent-id-client-sdk and use Bearer auth
+        # for all per-trial requests. The api_key arg is set to the verified
+        # agent_id (the JWT ``sub``) so the gateway-side identity matches.
         gateway_url = load_config().get_gateway_url(self.trial_id)
+
+        agentid_client, api_key_for_registration = _load_agentid_or_legacy(self.api_key)
+
         self._context_manager = self.client.connect_trial(
             gateway_url=gateway_url,
-            api_key=self.api_key,
+            api_key=api_key_for_registration,
             initial_balance=1000.0,
             session_key=stored_session_key,
+            agentid_client=agentid_client,
         )
         # Enter the context manager manually
         self._trial = await self._context_manager.__aenter__()
@@ -819,11 +857,15 @@ class UnifiedDaemon:
 
     async def start(self) -> None:
         """Start the unified daemon."""
-        # Load API key from credentials file
-        self._api_key = load_api_key()
-        if not self._api_key:
+        # Resolve auth: AgentID env (preferred) or stored API key.
+        self._api_key = load_api_key() or ""
+        if not self._api_key and not os.environ.get("AGENTID_AGENT_ID"):
             raise RuntimeError(
-                "No API key configured. Run 'dojozero-agent config --api-key <key>'"
+                "No authentication configured. Either set AGENTID_AGENT_ID + "
+                "AGENTID_AGENT_KID + AGENTID_PRIVATE_KEY (preferred) or run "
+                "'dojozero-agent config --api-key <key>' for the legacy path. "
+                "Note: the legacy X-Agent-ID header is no longer accepted by "
+                "AgentID-enabled gateways and registration will fail."
             )
 
         self._write_pid()

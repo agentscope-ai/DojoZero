@@ -123,7 +123,7 @@ async def test_x_agent_id_is_never_sent():
 
 @pytest.mark.asyncio
 async def test_token_fetched_per_request_so_refresh_is_transparent():
-    """AIPClient handles caching internally; we just call get_token each time."""
+    """The AgentID Client handles caching internally; we just call get_token each time."""
     agentid_client = AsyncMock()
     # Simulate the AgentID Client returning a refreshed token on the second call.
     agentid_client.get_token = AsyncMock(side_effect=["token-v1", "token-v2"])
