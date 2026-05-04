@@ -108,8 +108,13 @@ def agentid_verifier_from_env() -> "Verifier | None":
         activity_api_key=activity_api_key,
         activity_endpoint=activity_endpoint,
         service_name=service_name,
-        # Auto-emit auth.verify whenever activity reporting is configured.
-        report_auto_verify=bool(activity_api_key),
+        # Per-request auth.verify auto-emit is OFF on purpose. At full
+        # DojoZero load the SDK's auto-emit produces millions of
+        # near-identical events per day; we hand-emit Tier-1 categories
+        # with real signal (auth.deny, session.start, session.end) from
+        # ``gateway/_activity.py`` instead. See that module's docstring
+        # for the first-adopter rationale.
+        report_auto_verify=False,
         agent_token_for_emit=agent_token,
     )
 

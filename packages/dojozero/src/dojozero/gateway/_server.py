@@ -7,6 +7,7 @@ Follows patterns from dashboard_server/_server.py.
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -14,6 +15,12 @@ from typing import TYPE_CHECKING, Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from dojozero.gateway._activity import (
+    emit_auth_deny,
+    emit_session_end,
+    emit_session_start,
+    emit_transfer_value,
+)
 from dojozero.gateway._adapter import ExternalAgentAdapter
 from dojozero.gateway._auth import AgentAuthenticator, NoOpAuthenticator
 from dojozero.gateway._models import (
@@ -57,6 +64,11 @@ class GatewayState:
     authenticator: AgentAuthenticator = field(default_factory=NoOpAuthenticator)
     metadata: dict[str, Any] = field(default_factory=dict)
     agentid_verifier: "Verifier | None" = None
+    # Wall-clock time (``time.time()``) when each agent registered, keyed by
+    # agent_id. Populated on session.start emission and consumed on
+    # session.end so we can report a real ``duration_ms``. Best-effort: a
+    # missing entry means duration is reported as 0.
+    session_start_times: dict[str, float] = field(default_factory=dict)
 
 
 def get_gateway_state(request: Request) -> GatewayState:
@@ -130,8 +142,9 @@ async def _verify_agentid_token(
 ) -> str:
     """Verify an AgentID token and return the agent_id, mapping errors to HTTP 401.
 
-    Passes ``route`` to the verifier so the auto-emitted ``auth.verify``
-    activity event records which endpoint was hit.
+    On verification failure, emits an ``auth.deny`` activity event so the
+    activity service has a record of the rejected attempt (see
+    ``gateway/_activity.py``).
     """
     # Imports are local so the gateway works without agent-id-service-sdk
     # installed (AgentID auth just stays disabled).
@@ -148,6 +161,9 @@ async def _verify_agentid_token(
             request_context={"route": route} if route else None,
         )
     except TokenExpiredError as exc:
+        await emit_auth_deny(
+            verifier, token=token, route=route or "", reason="token_expired"
+        )
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(
@@ -157,7 +173,36 @@ async def _verify_agentid_token(
                 )
             ).model_dump(by_alias=True),
         ) from exc
-    except (TokenInvalidError, ProviderUntrustedError, SignatureInvalidError) as exc:
+    except TokenInvalidError as exc:
+        await emit_auth_deny(
+            verifier, token=token, route=route or "", reason="token_invalid"
+        )
+        raise HTTPException(
+            status_code=401,
+            detail=ErrorResponse(
+                error=ErrorDetail(
+                    code=ErrorCodes.INVALID_TOKEN,
+                    message=f"Invalid AgentID token: {exc}",
+                )
+            ).model_dump(by_alias=True),
+        ) from exc
+    except ProviderUntrustedError as exc:
+        await emit_auth_deny(
+            verifier, token=token, route=route or "", reason="provider_untrusted"
+        )
+        raise HTTPException(
+            status_code=401,
+            detail=ErrorResponse(
+                error=ErrorDetail(
+                    code=ErrorCodes.INVALID_TOKEN,
+                    message=f"Invalid AgentID token: {exc}",
+                )
+            ).model_dump(by_alias=True),
+        ) from exc
+    except SignatureInvalidError as exc:
+        await emit_auth_deny(
+            verifier, token=token, route=route or "", reason="signature_invalid"
+        )
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(
@@ -230,6 +275,34 @@ def create_gateway_app(
 
         yield
 
+        # Emit session.end for any agent that didn't unregister cleanly
+        # before the gateway shut down (process killed, network gone,
+        # trial ended without explicit DELETE /agents). Agents that DID
+        # unregister already had session.end emitted and were popped from
+        # session_start_times in the unregister handler.
+        if state.session_start_times:
+            now = time.time()
+            last_seq = state.data_hub.subscription_manager.global_sequence
+            for stranded_agent_id, started_at in list(
+                state.session_start_times.items()
+            ):
+                duration_ms = int((now - started_at) * 1000)
+                try:
+                    final_balance = str(
+                        getattr(adapter.get_balance(stranded_agent_id), "balance", "")
+                    )
+                except Exception:  # noqa: BLE001
+                    final_balance = None
+                await emit_session_end(
+                    state.agentid_verifier,
+                    agent_id=stranded_agent_id,
+                    trial_id=state.trial_id,
+                    duration_ms=duration_ms,
+                    final_balance=final_balance,
+                    last_observed_sequence=last_seq,
+                )
+            state.session_start_times.clear()
+
         app.state.gateway_state = None
         logger.info("Gateway stopped for trial %s", trial_id)
 
@@ -292,7 +365,7 @@ def create_gateway_app(
         )
 
         try:
-            return await state.adapter.register_agent(
+            response = await state.adapter.register_agent(
                 agent_id=identity.agent_id,
                 initial_balance=initial_balance,
                 display_name=identity.display_name,
@@ -315,6 +388,21 @@ def create_gateway_app(
                     ).model_dump(by_alias=True),
                 )
             raise HTTPException(status_code=400, detail=error_msg)
+
+        # Activity event: agent joined the trial. Best-effort — emission
+        # never raises and never blocks registration.
+
+        state.session_start_times[identity.agent_id] = time.time()
+        await emit_session_start(
+            state.agentid_verifier,
+            agent_id=identity.agent_id,
+            agent_name=identity.display_name or "",
+            trial_id=state.trial_id,
+            persona=identity.persona,
+            model=identity.model,
+            sport_type=state.metadata.get("sport_type"),
+        )
+        return response
 
     @app.post("/agents/reconnect", response_model=AgentRegistrationResponse)
     async def reconnect_agent(
@@ -383,8 +471,33 @@ def create_gateway_app(
 
         Requires the session key (returned during registration) to prove ownership.
         """
+        # Capture pre-unregister info for the session.end activity event
+        # before adapter state is torn down.
+        last_observed_sequence = state.data_hub.subscription_manager.global_sequence
+        final_balance: str | None = None
+        try:
+            balance_obj = state.adapter.get_balance(agent_id)
+            final_balance = str(getattr(balance_obj, "balance", ""))
+        except Exception:  # noqa: BLE001 — diagnostic only, never block unregister
+            final_balance = None
+
         try:
             if await state.adapter.unregister_agent(agent_id, request.session_key):
+                started_at = state.session_start_times.pop(agent_id, None)
+                duration_ms = (
+                    int((time.time() - started_at) * 1000)
+                    if started_at is not None
+                    else 0
+                )
+
+                await emit_session_end(
+                    state.agentid_verifier,
+                    agent_id=agent_id,
+                    trial_id=state.trial_id,
+                    duration_ms=duration_ms,
+                    final_balance=final_balance,
+                    last_observed_sequence=last_observed_sequence,
+                )
                 return {"message": "Unregistered successfully"}
             raise HTTPException(status_code=404, detail="Agent not found")
         except ValueError as e:
@@ -582,7 +695,7 @@ def create_gateway_app(
     ) -> BetResponse:
         """Place a bet."""
         try:
-            return await state.adapter.place_bet(agent_id, request)
+            response = await state.adapter.place_bet(agent_id, request)
         except ValueError as e:
             error_str = str(e)
 
@@ -611,6 +724,25 @@ def create_gateway_app(
                     error=ErrorDetail(code=code, message=error_str)
                 ).model_dump(by_alias=True),
             )
+
+        # Activity event: stake committed. Best-effort; never blocks the
+        # bet response. The activity service preserves amount as a string
+        # so cross-hub aggregation can avoid float rounding.
+
+        await emit_transfer_value(
+            state.agentid_verifier,
+            agent_id=agent_id,
+            trial_id=state.trial_id,
+            amount=response.amount,
+            market=response.market,
+            selection=response.selection,
+            bet_id=response.bet_id,
+            event_id=response.event_id,
+            probability=response.probability,
+            shares=response.shares,
+            reference_sequence=request.reference_sequence,
+        )
+        return response
 
     @app.get("/bets", response_model=BetsListResponse)
     async def get_bets(

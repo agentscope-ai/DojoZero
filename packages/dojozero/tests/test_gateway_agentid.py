@@ -97,7 +97,11 @@ class TestAipVerifierFromEnv:
         assert verifier._clock_skew_seconds == 10
         assert verifier._provider_urls == {"localhost:8000": "http://localhost:8000"}
 
-    def test_activity_reporting_enabled_when_api_key_set(self, monkeypatch):
+    def test_activity_reporting_wired_when_api_key_set(self, monkeypatch):
+        """Activity service config is forwarded; per-request auto-verify stays
+        OFF on purpose — DojoZero hand-emits Tier-1 categories with real
+        signal (auth.deny / session.start / session.end) instead.
+        """
         monkeypatch.setenv("DOJOZERO_AGENTID_TRUSTED_PROVIDERS", "pre.agent-id.live")
         monkeypatch.setenv("DOJOZERO_AGENTID_AUDIENCE", "https://api.dojozero.live")
         monkeypatch.setenv("DOJOZERO_AGENTID_ACTIVITY_API_KEY", "act_test_xxx")
@@ -108,7 +112,7 @@ class TestAipVerifierFromEnv:
         assert verifier._activity_api_key == "act_test_xxx"
         assert verifier._agent_token_for_emit == "gateway.jwt.token"
         assert verifier._service_name == "dojozero-gateway-test"
-        assert verifier._report_auto_verify is True
+        assert verifier._report_auto_verify is False
 
 
 # ============================================================================
