@@ -26,7 +26,6 @@ from dojozero.gateway._activity import (
 )
 from dojozero.gateway._adapter import ExternalAgentAdapter
 from dojozero.gateway._auth import AgentAuthenticator, NoOpAuthenticator
-from dojozero.gateway._hub_publisher import HubPublisher
 from dojozero.gateway._models import (
     AgentReconnectRequest,
     AgentRegistrationRequest,
@@ -69,9 +68,6 @@ class GatewayState:
     authenticator: AgentAuthenticator = field(default_factory=NoOpAuthenticator)
     metadata: dict[str, Any] = field(default_factory=dict)
     agentid_verifier: "Verifier | None" = None
-    # Hub-discovery publisher (None when DOJOZERO_HUB_* env not configured;
-    # the well-known routes return 503 in that case).
-    hub_publisher: HubPublisher | None = None
     # Wall-clock time (``time.time()``) when each agent registered, keyed by
     # agent_id. Populated on session.start emission and consumed on
     # session.end so we can report a real ``duration_ms``. Best-effort: a
@@ -231,7 +227,6 @@ def create_gateway_app(
     metadata: dict[str, Any] | None = None,
     authenticator: AgentAuthenticator | None = None,
     agentid_verifier: "Verifier | None" = None,
-    hub_publisher: HubPublisher | None = None,
 ) -> FastAPI:
     """Create the Agent Gateway FastAPI application.
 
@@ -270,7 +265,6 @@ def create_gateway_app(
             authenticator=auth,
             metadata=metadata or {},
             agentid_verifier=agentid_verifier,
-            hub_publisher=hub_publisher,
         )
 
         app.state.gateway_state = state
@@ -953,57 +947,10 @@ def create_gateway_app(
         )
         return {"accepted": True}
 
-    # =========================================================================
-    # AgentID hub discovery (public; consumed by aip-activity)
-    # =========================================================================
-
-    def _require_publisher(state: GatewayState) -> HubPublisher:
-        pub = state.hub_publisher
-        if pub is None:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "hub publisher is not configured "
-                    "(DOJOZERO_HUB_SERVICE_ID + DOJOZERO_HUB_SIGNING_KEY_PEM)"
-                ),
-            )
-        return pub
-
-    @app.get("/.well-known/agent-id-jwks")
-    async def well_known_jwks(
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> dict[str, Any]:
-        return _require_publisher(state).jwks_doc()
-
-    @app.get("/.well-known/agent-id-activity-manifest")
-    async def well_known_manifest(
-        state: GatewayState = Depends(get_gateway_state),
-    ):
-        from fastapi.responses import PlainTextResponse
-
-        jws = _require_publisher(state).signed_manifest()
-        return PlainTextResponse(jws, media_type="application/jose")
-
-    @app.get("/.well-known/agent-id-activity-categories")
-    async def well_known_categories(
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> dict[str, Any]:
-        return _require_publisher(state).categories_doc()
-
-    @app.get("/.well-known/agent-id-activity-schemas/{verb}/{version}")
-    async def well_known_schema(
-        verb: str,
-        version: str,
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> dict[str, Any]:
-        pub = _require_publisher(state)
-        schema = pub.schema(f"{pub.namespace}.{verb}", version)
-        if schema is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"no schema for category {verb!r} version {version!r}",
-            )
-        return schema
+    # AgentID hub-discovery routes used to live on this per-trial app.
+    # They moved to the dashboard server because hub identity is
+    # process-wide, not trial-scoped — see
+    # ``dashboard_server/_server.py`` and ``gateway/_hub_routes.py``.
 
     return app
 

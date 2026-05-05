@@ -1065,7 +1065,6 @@ async def _start_gateway_server(
 
     from dojozero.gateway import create_gateway_app
     from dojozero.gateway._agentid import agentid_verifier_from_env
-    from dojozero.gateway._hub_publisher import HubPublisher
     from dojozero.betting import BrokerOperator
 
     # TODO: Refactor to use public API instead of accessing private members (_trials, _context).
@@ -1111,14 +1110,14 @@ async def _start_gateway_server(
     elif hasattr(runtime.spec.metadata, "model_dump"):
         metadata = runtime.spec.metadata.model_dump()
 
-    # Create gateway app
+    # Create gateway app. Hub-discovery routes (`.well-known/*`) are
+    # served by the dashboard server's persistent app, not per-trial.
     app = create_gateway_app(
         trial_id=trial_id,
         data_hub=data_hub,
         broker=broker,
         metadata=metadata,
         agentid_verifier=agentid_verifier_from_env(),
-        hub_publisher=HubPublisher.from_env(),
     )
 
     # Create uvicorn config

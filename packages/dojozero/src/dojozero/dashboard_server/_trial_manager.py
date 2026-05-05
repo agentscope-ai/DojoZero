@@ -170,7 +170,6 @@ class TrialManager:
         try:
             from dojozero.gateway import create_gateway_app, GatewayState
             from dojozero.gateway._adapter import ExternalAgentAdapter
-            from dojozero.gateway._hub_publisher import HubPublisher
             from dojozero.betting import BrokerOperator
 
             # Get trial runtime from orchestrator
@@ -228,8 +227,9 @@ class TrialManager:
             ):  # Dataclass instance
                 metadata = asdict(spec.metadata)
 
-            # Create gateway app (note: lifespan won't run since we're not using uvicorn)
-            hub_publisher = HubPublisher.from_env()
+            # Create gateway app (note: lifespan won't run since we're not using uvicorn).
+            # Hub-discovery routes (`.well-known/*`) live on the dashboard's
+            # persistent app, not on per-trial gateways.
             app = create_gateway_app(
                 trial_id=trial_id,
                 data_hub=data_hub,
@@ -237,7 +237,6 @@ class TrialManager:
                 metadata=metadata,
                 authenticator=self._authenticator,
                 agentid_verifier=self._agentid_verifier,
-                hub_publisher=hub_publisher,
             )
 
             # Create adapter and state manually since lifespan doesn't run for in-process routing
@@ -255,7 +254,6 @@ class TrialManager:
                 authenticator=self._authenticator or NoOpAuthenticator(),
                 metadata=metadata,
                 agentid_verifier=self._agentid_verifier,
-                hub_publisher=hub_publisher,
             )
 
             # Ensure broker has event initialized from metadata if missing

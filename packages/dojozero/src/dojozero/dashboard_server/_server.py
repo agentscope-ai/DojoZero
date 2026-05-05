@@ -520,6 +520,25 @@ def create_dashboard_app(
 
         agentid_verifier = agentid_verifier_from_env()
 
+        # Hub publisher (design §5.0). Lives on the dashboard's persistent
+        # app — hub identity is process-wide, not trial-scoped. Per-trial
+        # gateways still receive the same publisher instance for envelope
+        # signing on outbound emissions, but the public .well-known/* surface
+        # is served once, here.
+        from dojozero.gateway._hub_publisher import HubPublisher
+
+        try:
+            hub_publisher = HubPublisher.from_env()
+        except Exception as exc:
+            LOGGER.warning(
+                "Hub publisher load failed: %s; .well-known/* routes will 503",
+                exc,
+            )
+            hub_publisher = None
+        app.state.hub_publisher = hub_publisher
+        if hub_publisher is not None:
+            LOGGER.info("Hub publisher serving .well-known/* at this server's origin")
+
         # Create trial manager with gateway router if enabled
         trial_manager = TrialManager(
             orchestrator=orchestrator,
@@ -799,6 +818,20 @@ def create_dashboard_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # -------------------------------------------------------------------------
+    # AgentID hub discovery (design §3 / §5.0)
+    #
+    # The four `.well-known/*` routes serve the hub's public identity
+    # surface. They live on the dashboard's persistent app — not on
+    # per-trial gateways — because hub identity is process-wide and must
+    # remain reachable even when no trial is active. Routes read
+    # `app.state.hub_publisher` at request time; populated above in lifespan.
+    # -------------------------------------------------------------------------
+
+    from dojozero.gateway._hub_routes import register_hub_routes
+
+    register_hub_routes(app)
 
     # -------------------------------------------------------------------------
     # Trial Control Endpoints

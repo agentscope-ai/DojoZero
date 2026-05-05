@@ -15,7 +15,7 @@ aip-activity's discovery client.
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import jwt
 import pytest
@@ -29,7 +29,6 @@ from cryptography.hazmat.primitives.serialization import (
 from fastapi.testclient import TestClient
 
 from dojozero.gateway._hub_publisher import HubPublisher
-from dojozero.gateway._server import create_gateway_app
 
 SERVICE_ID = "https://api.dojozero.live"
 NAMESPACE = "dojozero"
@@ -44,27 +43,6 @@ def _generate_key_pem() -> tuple[Ed25519PrivateKey, str]:
         encryption_algorithm=NoEncryption(),
     ).decode("utf-8")
     return key, pem
-
-
-@pytest.fixture
-def mock_data_hub():
-    hub = MagicMock()
-    hub.subscribe = AsyncMock()
-    hub.unsubscribe = AsyncMock()
-    hub.get_recent_events.return_value = []
-    return hub
-
-
-@pytest.fixture
-def mock_broker():
-    broker = MagicMock()
-    broker.initial_balance = "1000"
-    broker.create_account = AsyncMock()
-    broker.delete_account = AsyncMock(return_value=True)
-    broker.has_account = MagicMock(return_value=False)
-    broker._event = None
-    broker._accounts = {}
-    return broker
 
 
 @pytest.fixture
@@ -84,28 +62,32 @@ def publisher(keypair):
     )
 
 
+def _hub_only_app(publisher):
+    """Minimal FastAPI app exercising only the hub-discovery routes.
+
+    These routes live on the dashboard server in production, not on
+    per-trial gateways. The helper exposed by ``_hub_routes`` is what
+    both code paths use; tests just mount it on a bare app.
+    """
+    from fastapi import FastAPI
+
+    from dojozero.gateway._hub_routes import register_hub_routes
+
+    app = FastAPI()
+    app.state.hub_publisher = publisher
+    register_hub_routes(app)
+    return app
+
+
 @pytest.fixture
-def client_with_publisher(mock_data_hub, mock_broker, publisher):
-    app = create_gateway_app(
-        trial_id="trial123",
-        data_hub=mock_data_hub,
-        broker=mock_broker,
-        metadata={},
-        hub_publisher=publisher,
-    )
-    with TestClient(app) as c:
+def client_with_publisher(publisher):
+    with TestClient(_hub_only_app(publisher)) as c:
         yield c
 
 
 @pytest.fixture
-def client_without_publisher(mock_data_hub, mock_broker):
-    app = create_gateway_app(
-        trial_id="trial123",
-        data_hub=mock_data_hub,
-        broker=mock_broker,
-        metadata={},
-    )
-    with TestClient(app) as c:
+def client_without_publisher():
+    with TestClient(_hub_only_app(None)) as c:
         yield c
 
 

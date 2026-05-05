@@ -29,7 +29,7 @@ dep — deferred until there's a CI environment that can host it.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -43,7 +43,6 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi.testclient import TestClient
 
 from dojozero.gateway._hub_publisher import HubPublisher
-from dojozero.gateway._server import create_gateway_app
 
 pytestmark = pytest.mark.integration
 
@@ -70,17 +69,19 @@ def hub_publisher():
 
 @pytest.fixture
 def gateway_app(hub_publisher):
-    data_hub = MagicMock()
-    broker = MagicMock()
-    broker._event = None
-    broker._accounts = {}
-    return create_gateway_app(
-        trial_id="trial-e2e",
-        data_hub=data_hub,
-        broker=broker,
-        metadata={},
-        hub_publisher=hub_publisher,
-    )
+    """Minimal app exposing only the hub-discovery routes — same helper
+    the dashboard server mounts in production. The ASGI transport in
+    routed_async_client_factory drives this app; aip-activity's fetcher
+    sees identical wire shape to a real deployment.
+    """
+    from fastapi import FastAPI
+
+    from dojozero.gateway._hub_routes import register_hub_routes
+
+    app = FastAPI()
+    app.state.hub_publisher = hub_publisher
+    register_hub_routes(app)
+    return app
 
 
 @pytest.fixture
