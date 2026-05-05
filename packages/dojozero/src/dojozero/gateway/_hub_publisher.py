@@ -26,13 +26,10 @@ from __future__ import annotations
 
 import logging
 import os
-from base64 import urlsafe_b64encode
 from typing import Any
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
+from agent_id_service_sdk import public_key_to_jwk
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 logger = logging.getLogger(__name__)
@@ -137,7 +134,7 @@ class HubPublisher:
     # -- artefacts ------------------------------------------------------
 
     def jwks_doc(self) -> dict[str, Any]:
-        return {"keys": [_public_key_to_jwk(self._public_key, self.kid)]}
+        return {"keys": [public_key_to_jwk(self._public_key, self.kid)]}
 
     def signed_manifest(self) -> str:
         # Memoise: the inputs are immutable for the publisher's lifetime,
@@ -235,17 +232,6 @@ class HubPublisher:
             publisher.kid,
         )
         return publisher
-
-
-def _public_key_to_jwk(public_key: Ed25519PublicKey, kid: str) -> dict[str, str]:
-    """Encode an Ed25519 public key as a JWK (RFC 8037)."""
-    raw = public_key.public_bytes_raw()
-    return {
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "kid": kid,
-        "x": urlsafe_b64encode(raw).rstrip(b"=").decode("ascii"),
-    }
 
 
 __all__ = ["HubPublisher"]

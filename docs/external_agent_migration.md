@@ -90,6 +90,19 @@ New env vars on the dashboard server / gateway:
 
 If `DOJOZERO_AGENTID_TRUSTED_PROVIDERS` and `DOJOZERO_AGENTID_AUDIENCE` are not both set, the verifier is not configured and any Bearer-authenticated request gets 503. There is no fallback.
 
+### Hub publisher (Tier-2 manifest discovery)
+
+The gateway optionally serves four `.well-known/*` endpoints so `aip-activity` can verify Tier-2 events from this hub via decentralized manifest discovery (see `agent-identity/design/2026-05-04-activity-discovery.en.md`). Without these env vars set, the four routes return 503 and only Tier-1 events flow.
+
+| Env | Required | Purpose |
+|---|---|---|
+| `DOJOZERO_HUB_SERVICE_ID` | yes (to enable) | Public origin of the gateway, e.g. `https://api.dojozero.live`. Must match the JWT `aud` of every event the hub emits, and its eTLD+1 must match `DOJOZERO_HUB_NAMESPACE` per the namespace-ownership rule. |
+| `DOJOZERO_HUB_SIGNING_KEY_PEM` | yes (to enable) | Ed25519 private key in PKCS#8 PEM form. Mint with `python -m agent_id_service_sdk.keygen --out hub.pem` (writes a 0600 file); inject the file's contents via your secret manager. |
+| `DOJOZERO_HUB_NAMESPACE` | optional, default `dojozero` | Tier-2 prefix this hub claims. |
+| `DOJOZERO_HUB_SIGNING_KID` | optional, default `hub-key-1` | Key id embedded in the JWKS and the manifest's JWS header. Must match what the keygen used. |
+
+Once configured, `aip-activity` will fetch and verify the manifest at `<service_id>/.well-known/agent-id-activity-manifest`, accept Tier-2 events under the claimed namespace, and validate payloads against the JSON Schema served at `<service_id>/.well-known/agent-id-activity-schemas/<verb>/<version>`.
+
 ### Optional dependency
 
 `aip-identity-verify` is added as an extra: `pip install dojozero[aip]` or `uv sync --extra aip`. The gateway runs without it; AIP just stays disabled.
