@@ -1065,6 +1065,7 @@ async def _start_gateway_server(
 
     from dojozero.gateway import create_gateway_app
     from dojozero.gateway._agentid import agentid_verifier_from_env
+    from dojozero.gateway._hub_publisher import HubPublisher
     from dojozero.betting import BrokerOperator
 
     # TODO: Refactor to use public API instead of accessing private members (_trials, _context).
@@ -1117,6 +1118,7 @@ async def _start_gateway_server(
         broker=broker,
         metadata=metadata,
         agentid_verifier=agentid_verifier_from_env(),
+        hub_publisher=HubPublisher.from_env(),
     )
 
     # Create uvicorn config
