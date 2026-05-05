@@ -13,27 +13,38 @@ packages/
 │   └── src/dojozero/
 │       ├── core/              # Actor framework, runtime, trial orchestration
 │       ├── agents/            # AI agent implementations (PredictionAgent, AgentGroup)
+│       ├── betting/           # Betting broker + agent wager bookkeeping
 │       ├── data/              # Data infrastructure (stores, events, processors, hub)
 │       │   ├── nba/           # NBA game data (play-by-play, boxscores)
 │       │   ├── nfl/           # NFL game data
+│       │   ├── ncaa/          # NCAA game data
 │       │   ├── espn/          # ESPN data integration
 │       │   ├── polymarket/    # Prediction market odds
+│       │   ├── socialmedia/   # Social media feeds
 │       │   └── websearch/     # Web search with LLM processing
-│       ├── prediction/        # Shared prediction utilities
 │       ├── nba/               # NBA prediction scenario
 │       ├── nfl/               # NFL prediction scenario
-│       ├── samples/           # Reference implementations (bounded_random)
+│       ├── ncaa/              # NCAA prediction scenario
 │       ├── dashboard_server/  # Trial orchestration server
 │       ├── arena_server/      # Web UI server
+│       ├── gateway/           # External agent gateway
+│       ├── sync_service/      # Background sync jobs
 │       ├── ray_runtime/       # Distributed execution via Ray
 │       ├── utils/             # Shared utilities
 │       └── cli.py             # CLI entry point
 └── dojozero-client/           # Python SDK for external agents
     ├── pyproject.toml
     └── src/dojozero_client/
+
+trial_params/                  # Trial-builder params YAML (e.g. nba-moneyline.yaml)
+trial_sources/                 # Source manifests per env (base/daily/pre/prod/image)
+outputs/                       # Local JSONL event dumps (used as backtest inputs)
+dojozero-store/                # Local trial store (spec.json, result.json, checkpoints)
 ```
 
 ## Development Commands
+
+The CLI entry point is `dojo0` (not `dojozero`). Invoke as `uv run dojo0 <subcommand>`.
 
 ```bash
 # Install project + dev deps (includes alicloud/redis packages used in tests)
@@ -100,7 +111,7 @@ Three actor types:
 
 - Use Pydantic models for validation
 - Environment variables use `DOJOZERO_` prefix
-- YAML configs in `configs/` directory
+- Trial-builder params YAML lives in `trial_params/`; per-env source manifests in `trial_sources/`
 
 ### Module Naming
 
