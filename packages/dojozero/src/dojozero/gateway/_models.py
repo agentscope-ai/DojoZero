@@ -224,6 +224,13 @@ class BetRequest(BaseModel):
         alias="idempotencyKey",
     )
 
+    # Optional Tier-2 ``dojozero.bet_decision`` enrichment. Agent-supplied
+    # provenance — emitted alongside transfer.value via transaction_id.
+    # All optional; absent fields are simply omitted from the Tier-2 event.
+    model: str | None = Field(default=None, max_length=255)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    rationale: str | None = Field(default=None, max_length=8 * 1024)
+
 
 class BetResponse(BaseModel):
     """Response for a placed bet."""

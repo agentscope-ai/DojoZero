@@ -448,8 +448,114 @@ async def emit_transfer_value(
         logger.warning("emit_transfer_value: emission failed: %s", exc)
 
 
+def _confidence_bucket(confidence: float | None) -> str | None:
+    """Bucket a 0..1 confidence into the Tier-2 enum (low/medium/high)."""
+    if confidence is None:
+        return None
+    try:
+        c = float(confidence)
+    except (TypeError, ValueError):
+        return None
+    if c < 0.4:
+        return "low"
+    if c < 0.7:
+        return "medium"
+    return "high"
+
+
+def _stake_bucket(amount: str | float) -> str:
+    """Stake bucketing for the dojozero.bet_decision Tier-2 schema.
+
+    Same buckets as the Tier-1 ``transfer.value`` ``amount_bucket`` so
+    consumers can reconcile across the linked events.
+    """
+    return _amount_bucket(amount)
+
+
+# Map BetRequest.market → dojozero.bet_decision.decision_kind enum.
+_DECISION_KIND_BY_MARKET = {
+    "moneyline": "moneyline",
+    "spread": "spread",
+    "total": "over_under",
+}
+
+
+async def emit_bet_decision(
+    verifier: "Verifier | None",
+    *,
+    agent_id: str,
+    trial_id: str,
+    bet_id: str,
+    market: str,
+    selection: str,
+    amount: str,
+    model: str | None = None,
+    confidence: float | None = None,
+    rationale: str | None = None,
+    sport: str | None = None,
+    game_id: str | None = None,
+    agent_name: str = "",
+) -> None:
+    """Emit ``dojozero.bet_decision`` (Tier-2) joined to ``transfer.value``
+    via ``transaction_id`` (= ``bet_id``).
+
+    The Tier-2 schema is published at
+    ``<service_id>/.well-known/agent-id-activity-schemas/bet_decision/1.0.0``;
+    aip-activity validates payloads against it.
+
+    ``rationale`` is hashed server-side (sha256) — raw natural-language
+    reasoning never leaves the gateway. ``confidence`` is bucketed
+    (low/medium/high) so the cardinality stays useful for cross-trial
+    aggregation.
+    """
+    if verifier is None:
+        return
+
+    decision_kind = _DECISION_KIND_BY_MARKET.get(market.lower())
+    if decision_kind is None:
+        # Unrecognised market — refuse to emit a malformed Tier-2 event
+        # rather than risk schema validation failure at the activity service.
+        logger.warning(
+            "emit_bet_decision: unknown market %r; skipping Tier-2 emission", market
+        )
+        return
+
+    payload: dict[str, Any] = {
+        "transaction_id": bet_id,
+        "decision_kind": decision_kind,
+        "selection": selection,
+        "stake_bucket": _stake_bucket(amount),
+    }
+    bucket = _confidence_bucket(confidence)
+    if bucket is not None:
+        payload["confidence_bucket"] = bucket
+    if rationale:
+        payload["rationale_hash"] = (
+            "sha256:" + hashlib.sha256(rationale.encode("utf-8")).hexdigest()
+        )
+    if model:
+        payload["model"] = model
+    if game_id:
+        payload["game_id"] = game_id
+    if sport:
+        payload["sport"] = sport
+
+    agent = _build_verified_agent(agent_id=agent_id, agent_name=agent_name)
+    try:
+        await verifier.report_event(
+            category="dojozero.bet_decision",
+            agent=agent,
+            payload=payload,
+            session_id=trial_id,
+            outcome="success",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("emit_bet_decision: emission failed: %s", exc)
+
+
 __all__ = [
     "emit_auth_deny",
+    "emit_bet_decision",
     "emit_model_call",
     "emit_session_end",
     "emit_session_start",

@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from dojozero.gateway._activity import (
     emit_auth_deny,
+    emit_bet_decision,
     emit_model_call,
     emit_session_end,
     emit_session_start,
@@ -764,20 +765,35 @@ def create_gateway_app(
             linked_transfer_id=response.bet_id,
         )
 
-        # Activity event: stake committed. Best-effort; never blocks the
-        # bet response. The activity service preserves amount as a string
-        # so cross-hub aggregation can avoid float rounding.
-
-        # Hub-specific richness (market, selection, probability, shares,
-        # reference_sequence) does NOT go in the canonical transfer.value
-        # — it'll land in a Tier-2 dojozero.bet_decision event linked via
-        # transaction_id (= bet_id) once that schema ships.
+        # Activity events: Tier-1 transfer.value (stake committed) plus
+        # Tier-2 dojozero.bet_decision (hub-flavored richness) — joined
+        # by transaction_id = bet_id. Both are best-effort.
         await emit_transfer_value(
             state.agentid_verifier,
             agent_id=agent_id,
             trial_id=state.trial_id,
             amount=response.amount,
             bet_id=response.bet_id,
+        )
+        sport = state.metadata.get("sport_type") if state.metadata else None
+        game_id = (
+            getattr(state.broker._event, "event_id", None)
+            if state.broker._event is not None
+            else None
+        )
+        await emit_bet_decision(
+            state.agentid_verifier,
+            agent_id=agent_id,
+            trial_id=state.trial_id,
+            bet_id=response.bet_id,
+            market=request.market,
+            selection=request.selection,
+            amount=response.amount,
+            model=request.model,
+            confidence=request.confidence,
+            rationale=request.rationale,
+            sport=sport,
+            game_id=game_id,
         )
         return response
 

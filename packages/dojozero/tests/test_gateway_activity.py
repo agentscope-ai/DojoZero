@@ -21,8 +21,10 @@ import pytest
 
 from dojozero.gateway._activity import (
     _amount_bucket,
+    _confidence_bucket,
     _hash_args,
     emit_auth_deny,
+    emit_bet_decision,
     emit_model_call,
     emit_session_end,
     emit_session_start,
@@ -633,3 +635,200 @@ class TestEmitModelCall:
             "emit_model_call" in r.message and "activity-down" in r.message
             for r in caplog.records
         )
+
+
+# ---------------------------------------------------------------------------
+# emit_bet_decision (Tier-2)
+# ---------------------------------------------------------------------------
+
+
+class TestConfidenceBucket:
+    @pytest.mark.parametrize(
+        "value,bucket",
+        [
+            (0.0, "low"),
+            (0.39, "low"),
+            (0.4, "medium"),
+            (0.69, "medium"),
+            (0.7, "high"),
+            (1.0, "high"),
+        ],
+    )
+    def test_buckets(self, value, bucket):
+        assert _confidence_bucket(value) == bucket
+
+    def test_none_returns_none(self):
+        assert _confidence_bucket(None) is None
+
+    def test_unparseable_returns_none(self):
+        assert _confidence_bucket("not-a-number") is None  # type: ignore[arg-type]
+
+
+class TestEmitBetDecision:
+    @pytest.mark.asyncio
+    async def test_no_op_when_verifier_is_none(self):
+        await emit_bet_decision(
+            None,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            bet_id="bet_1",
+            market="moneyline",
+            selection="home",
+            amount="100",
+        )
+
+    @pytest.mark.asyncio
+    async def test_minimal_payload_shape(self):
+        verifier = _make_verifier_mock()
+        await emit_bet_decision(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            bet_id="bet_42",
+            market="moneyline",
+            selection="home",
+            amount="50",
+        )
+        kwargs = verifier.report_event.await_args.kwargs
+        assert kwargs["category"] == "dojozero.bet_decision"
+        assert kwargs["session_id"] == "t1"
+        payload = kwargs["payload"]
+        assert payload["transaction_id"] == "bet_42"
+        assert payload["decision_kind"] == "moneyline"
+        assert payload["selection"] == "home"
+        assert payload["stake_bucket"] == "lt_100"
+        # Optional fields absent → not in payload.
+        assert "model" not in payload
+        assert "confidence_bucket" not in payload
+        assert "rationale_hash" not in payload
+
+    @pytest.mark.asyncio
+    async def test_full_payload_with_richness(self):
+        verifier = _make_verifier_mock()
+        await emit_bet_decision(
+            verifier,
+            agent_id="agentid:dojozero:degen",
+            trial_id="trial-canary-001",
+            bet_id="bet_42",
+            market="total",  # → "over_under" in schema
+            selection="over",
+            amount="500",
+            model="qwen-max",
+            confidence=0.85,
+            rationale="model says home is undervalued at this line",
+            sport="nba",
+            game_id="gameid_xyz",
+        )
+        payload = verifier.report_event.await_args.kwargs["payload"]
+        assert payload["decision_kind"] == "over_under"
+        assert payload["selection"] == "over"
+        assert payload["stake_bucket"] == "100_1k"
+        assert payload["confidence_bucket"] == "high"
+        assert payload["rationale_hash"].startswith("sha256:")
+        assert len(payload["rationale_hash"]) == len("sha256:") + 64
+        # Raw rationale text MUST NOT leak.
+        assert "model says" not in str(payload)
+        assert payload["model"] == "qwen-max"
+        assert payload["sport"] == "nba"
+        assert payload["game_id"] == "gameid_xyz"
+
+    @pytest.mark.asyncio
+    async def test_market_to_decision_kind_mapping(self):
+        verifier = _make_verifier_mock()
+        for market, expected in [
+            ("moneyline", "moneyline"),
+            ("spread", "spread"),
+            ("total", "over_under"),
+        ]:
+            verifier.report_event.reset_mock()
+            await emit_bet_decision(
+                verifier,
+                agent_id="agentid:dojozero:x",
+                trial_id="t1",
+                bet_id=f"bet_{market}",
+                market=market,
+                selection="home",
+                amount="10",
+            )
+            assert (
+                verifier.report_event.await_args.kwargs["payload"]["decision_kind"]
+                == expected
+            )
+
+    @pytest.mark.asyncio
+    async def test_unknown_market_skips_emission(self, caplog):
+        verifier = _make_verifier_mock()
+        with caplog.at_level("WARNING"):
+            await emit_bet_decision(
+                verifier,
+                agent_id="agentid:dojozero:x",
+                trial_id="t1",
+                bet_id="bet_x",
+                market="prop",  # not in schema enum
+                selection="home",
+                amount="10",
+            )
+        verifier.report_event.assert_not_awaited()
+        assert any("unknown market" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_emission_failure_swallowed(self, caplog):
+        from unittest.mock import AsyncMock
+
+        verifier = _make_verifier_mock()
+        verifier.report_event = AsyncMock(side_effect=RuntimeError("activity-down"))
+        with caplog.at_level("WARNING"):
+            await emit_bet_decision(
+                verifier,
+                agent_id="agentid:dojozero:x",
+                trial_id="t1",
+                bet_id="bet_x",
+                market="moneyline",
+                selection="home",
+                amount="10",
+            )
+        assert any(
+            "emit_bet_decision" in r.message and "activity-down" in r.message
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_payload_validates_against_published_schema(self):
+        """Sanity: a representative payload validates against the JSON
+        Schema the gateway publishes at /.well-known/.../bet_decision/1.0.0.
+        Catches drift between emit_bet_decision and HubPublisher's catalog.
+        """
+        import jsonschema
+
+        from dojozero.gateway._hub_publisher import HubPublisher
+
+        verifier = _make_verifier_mock()
+        await emit_bet_decision(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            bet_id="bet_x",
+            market="moneyline",
+            selection="home",
+            amount="500",
+            model="qwen-max",
+            confidence=0.8,
+            rationale="reasoning",
+            sport="nba",
+            game_id="gameid",
+        )
+        payload = verifier.report_event.await_args.kwargs["payload"]
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+        )
+
+        pub = HubPublisher(
+            service_id="https://api.dojozero.live",
+            namespace="dojozero",
+            private_key=Ed25519PrivateKey.generate(),
+            kid="hub-key-1",
+        )
+        schema = pub.schema("dojozero.bet_decision", "1.0.0")
+        assert schema is not None
+        jsonschema.validate(instance=payload, schema=schema)
