@@ -64,8 +64,8 @@ class TestAipVerifierFromEnv:
         assert verifier._audience == "https://api.dojozero.live"
         assert verifier._cache_ttl == 3600
         assert verifier._clock_skew_seconds == 30
-        # Activity reporting off when no API key set.
-        assert verifier._activity_api_key is None
+        # Activity reporting off when no hub publisher configured.
+        assert verifier._hub_signing_key is None
         assert verifier._report_auto_verify is False
 
     def test_parses_multiple_trusted_providers(self, monkeypatch):
@@ -97,19 +97,33 @@ class TestAipVerifierFromEnv:
         assert verifier._clock_skew_seconds == 10
         assert verifier._provider_urls == {"localhost:8000": "http://localhost:8000"}
 
-    def test_activity_reporting_wired_when_api_key_set(self, monkeypatch):
+    def test_activity_reporting_wired_when_hub_publisher_configured(self, monkeypatch):
         """Activity service config is forwarded; per-request auto-verify stays
         OFF on purpose — DojoZero hand-emits Tier-1 categories with real
         signal (auth.deny / session.start / session.end) instead.
+
+        Reporting is enabled by ``DOJOZERO_HUB_*`` (the hub publisher):
+        the same Ed25519 key that signs the manifest also signs the
+        outer envelope on every activity emission (design §5.0).
         """
+        from agent_id_service_sdk import generate_signing_keypair
+
+        _, _, pem = generate_signing_keypair(kid="test-kid")
+
         monkeypatch.setenv("DOJOZERO_AGENTID_TRUSTED_PROVIDERS", "pre.agent-id.live")
         monkeypatch.setenv("DOJOZERO_AGENTID_AUDIENCE", "https://api.dojozero.live")
-        monkeypatch.setenv("DOJOZERO_AGENTID_ACTIVITY_API_KEY", "act_test_xxx")
         monkeypatch.setenv("DOJOZERO_AGENTID_AGENT_TOKEN", "gateway.jwt.token")
         monkeypatch.setenv("DOJOZERO_AGENTID_SERVICE_NAME", "dojozero-gateway-test")
+        # HubJWS envelope auth needs the hub publisher.
+        monkeypatch.setenv("DOJOZERO_HUB_SERVICE_ID", "https://api.dojozero.live")
+        monkeypatch.setenv("DOJOZERO_HUB_SIGNING_KEY_PEM", pem)
+        monkeypatch.setenv("DOJOZERO_HUB_SIGNING_KID", "test-kid")
+
         verifier = agentid_verifier_from_env()
         assert verifier is not None
-        assert verifier._activity_api_key == "act_test_xxx"
+        assert verifier._hub_signing_key is not None
+        assert verifier._hub_signing_kid == "test-kid"
+        assert verifier._hub_service_id == "https://api.dojozero.live"
         assert verifier._agent_token_for_emit == "gateway.jwt.token"
         assert verifier._service_name == "dojozero-gateway-test"
         assert verifier._report_auto_verify is False

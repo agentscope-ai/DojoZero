@@ -94,10 +94,29 @@ def agentid_verifier_from_env() -> "Verifier | None":
     if provider_urls_raw:
         provider_urls = json.loads(provider_urls_raw)
 
-    activity_api_key = os.environ.get("DOJOZERO_AGENTID_ACTIVITY_API_KEY") or None
     agent_token = os.environ.get("DOJOZERO_AGENTID_AGENT_TOKEN") or None
     activity_endpoint = os.environ.get("DOJOZERO_AGENTID_ACTIVITY_ENDPOINT") or None
     service_name = os.environ.get("DOJOZERO_AGENTID_SERVICE_NAME") or "dojozero-gateway"
+
+    # HubJWS envelope auth (design §5.0): the gateway signs each activity
+    # POST with the same Ed25519 key it uses for manifest signing. Reuse
+    # HubPublisher's loaded key so we don't double-load the PEM.
+    hub_signing_key = None
+    hub_signing_kid = None
+    hub_service_id = None
+    try:
+        from dojozero.gateway._hub_publisher import HubPublisher  # noqa: PLC0415
+
+        publisher = HubPublisher.from_env()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "hub publisher load failed (%s); activity emission disabled", exc
+        )
+        publisher = None
+    if publisher is not None:
+        hub_signing_key = publisher._private_key  # type: ignore[attr-defined]
+        hub_signing_kid = publisher.kid
+        hub_service_id = publisher.service_id
 
     verifier = Verifier(
         trusted_providers=trusted,
@@ -105,7 +124,6 @@ def agentid_verifier_from_env() -> "Verifier | None":
         cache_ttl=cache_ttl,
         clock_skew_seconds=clock_skew,
         provider_urls=provider_urls,
-        activity_api_key=activity_api_key,
         activity_endpoint=activity_endpoint,
         service_name=service_name,
         # Per-request auth.verify auto-emit is OFF on purpose. At full
@@ -116,6 +134,9 @@ def agentid_verifier_from_env() -> "Verifier | None":
         # for the first-adopter rationale.
         report_auto_verify=False,
         agent_token_for_emit=agent_token,
+        hub_signing_key=hub_signing_key,
+        hub_signing_kid=hub_signing_kid,
+        hub_service_id=hub_service_id,
     )
 
     logger.info(
@@ -126,7 +147,7 @@ def agentid_verifier_from_env() -> "Verifier | None":
         cache_ttl,
         clock_skew,
         provider_urls or "(none)",
-        "enabled" if activity_api_key else "disabled",
+        "enabled" if hub_signing_key else "disabled",
     )
     return verifier
 
