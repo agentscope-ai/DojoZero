@@ -17,19 +17,14 @@ end-to-end against the real fetcher — catches drift between signer and
 verifier, JWK encoding mismatches, schema URL drift, eTLD+1 enforcement.
 
 Marked ``@pytest.mark.integration``; opt-in via ``pytest -m integration
---run-integration`` because it requires ``aip-activity`` installed in
-the venv (it's not a runtime dep of DojoZero, so it's not in the dev
-group). To enable:
+--run-integration``. The test depends only on the SDK and the local
+gateway code — no cross-repo dependency on aip-activity. (Earlier
+versions imported ``app.schemas.namespace_ownership`` from aip-activity;
+that helper now lives in agent-id-service-sdk.)
 
-    uv pip install -e ../aip-activity
-
-GitHub CI doesn't run this — DojoZero is on github.com but aip-activity
-lives on Alibaba's internal GitLab, so cross-repo checkout isn't
-available. Aone is the planned CI home where both repos are reachable.
-For now: contributors touching the discovery surface run this locally
-before merging.
-
-Pass 2 (full ingest path with mocked IdP) is a separate test, deferred.
+GitHub CI runs this freely now that the cross-repo dep is gone. Pass 2
+(full ingest path with mocked IdP) would re-introduce the aip-activity
+dep — deferred until there's a CI environment that can host it.
 """
 
 from __future__ import annotations
@@ -38,22 +33,17 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-
-# aip-activity isn't a hard dep of DojoZero; skip if not installed.
-pytest.importorskip("app.main")
-pytest.importorskip("app.routes.activity")
-
-from agent_id_service_sdk import (  # noqa: E402
+from agent_id_service_sdk import (
     HubManifestFetcher,
+    NamespaceOwnershipError,
     generate_signing_keypair,
+    verify_namespace_ownership,
 )
-from cryptography.hazmat.primitives.serialization import (  # noqa: E402
-    load_pem_private_key,
-)
-from fastapi.testclient import TestClient  # noqa: E402
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from fastapi.testclient import TestClient
 
-from dojozero.gateway._hub_publisher import HubPublisher  # noqa: E402
-from dojozero.gateway._server import create_gateway_app  # noqa: E402
+from dojozero.gateway._hub_publisher import HubPublisher
+from dojozero.gateway._server import create_gateway_app
 
 pytestmark = pytest.mark.integration
 
@@ -230,27 +220,13 @@ class TestFetcherConsumesGatewaySurface:
 
 class TestNamespaceOwnership:
     """eTLD+1 ownership rule (design §6) catches namespace squatting on
-    the verify side. We exercise this by giving aip-activity's namespace
-    check the manifest's actual service_id and asserting it accepts
-    *dojozero* but would reject a hub at a different registrable domain."""
+    the verify side. The helper now lives in the SDK; same one any hub
+    adopter's verifier would call after fetching the manifest."""
 
     def test_dojozero_passes_ownership(self):
-        # Imported lazily — the module-level pytest.importorskip gates
-        # whether this whole module runs. Pyright can't see that runtime
-        # gate, so silence its missing-import complaint here.
-        from app.schemas.namespace_ownership import (  # type: ignore[import-not-found]  # noqa: PLC0415
-            verify_namespace_ownership,
-        )
-
-        # Real check — same one aip-activity runs after fetcher.fetch().
         verify_namespace_ownership(SERVICE_ID, NAMESPACE)
 
     def test_cross_domain_squat_rejected(self):
-        from app.schemas.namespace_ownership import (  # type: ignore[import-not-found]  # noqa: PLC0415
-            NamespaceOwnershipError,
-            verify_namespace_ownership,
-        )
-
         with pytest.raises(NamespaceOwnershipError):
             verify_namespace_ownership("https://api.evil.com", NAMESPACE)
 

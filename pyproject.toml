@@ -11,8 +11,6 @@ members = ["packages/*"]
 dojozero = { workspace = true }
 dojozero-client = { workspace = true }
 dojozero-agent-runner = { workspace = true }
-# Local path during 0.4.0 development; flip back to the index once published.
-agent-id-service-sdk = { path = "../agent-identity/agent-id-service-sdk", editable = true }
 
 [dependency-groups]
 dev = [
@@ -23,7 +21,7 @@ dev = [
     "alibabacloud-credentials>=1.0.0",
     "aliyun-log-python-sdk",
     "redis>=7.2.1",
-    "agent-id-service-sdk>=0.4.0",
+    "agent-id-service-sdk>=0.4.1",
     "agent-id-client-sdk>=0.2.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
