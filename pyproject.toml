@@ -11,8 +11,6 @@ members = ["packages/*"]
 dojozero = { workspace = true }
 dojozero-client = { workspace = true }
 dojozero-agent-runner = { workspace = true }
-# Local path during 0.3.0 development; flip back to the index once published.
-agent-id-service-sdk = { path = "../agent-identity/agent-id-service-sdk", editable = true }
 
 [dependency-groups]
 dev = [
