@@ -56,6 +56,16 @@ class TestAipVerifierFromEnv:
         assert any("partially configured" in r.message for r in caplog.records)
 
     def test_builds_verifier_with_minimum_config(self, monkeypatch):
+        # Clear DOJOZERO_HUB_* in case the dev's .env (auto-loaded by
+        # core/_credentials.py at import) populated them — this test
+        # deliberately exercises the minimum-config path.
+        for var in (
+            "DOJOZERO_HUB_SERVICE_ID",
+            "DOJOZERO_HUB_SIGNING_KEY_PEM",
+            "DOJOZERO_HUB_SIGNING_KID",
+            "DOJOZERO_HUB_NAMESPACE",
+        ):
+            monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("DOJOZERO_AGENTID_TRUSTED_PROVIDERS", "pre.agent-id.live")
         monkeypatch.setenv("DOJOZERO_AGENTID_AUDIENCE", "https://api.dojozero.live")
         verifier = agentid_verifier_from_env()
@@ -112,19 +122,26 @@ class TestAipVerifierFromEnv:
 
         monkeypatch.setenv("DOJOZERO_AGENTID_TRUSTED_PROVIDERS", "pre.agent-id.live")
         monkeypatch.setenv("DOJOZERO_AGENTID_AUDIENCE", "https://api.dojozero.live")
-        monkeypatch.setenv("DOJOZERO_AGENTID_AGENT_TOKEN", "gateway.jwt.token")
         monkeypatch.setenv("DOJOZERO_AGENTID_SERVICE_NAME", "dojozero-gateway-test")
         # HubJWS envelope auth needs the hub publisher.
         monkeypatch.setenv("DOJOZERO_HUB_SERVICE_ID", "https://api.dojozero.live")
         monkeypatch.setenv("DOJOZERO_HUB_SIGNING_KEY_PEM", pem)
         monkeypatch.setenv("DOJOZERO_HUB_SIGNING_KID", "test-kid")
+        monkeypatch.setenv("DOJOZERO_HUB_PRIVACY_DEFAULT_LEVEL", "summary")
+        monkeypatch.setenv(
+            "DOJOZERO_HUB_PRIVACY_OVERRIDES",
+            '{"transfer.value": "full"}',
+        )
 
         verifier = agentid_verifier_from_env()
         assert verifier is not None
         assert verifier._hub_signing_key is not None
         assert verifier._hub_signing_kid == "test-kid"
         assert verifier._hub_service_id == "https://api.dojozero.live"
-        assert verifier._agent_token_for_emit == "gateway.jwt.token"
+        assert verifier._hub_privacy_claim == {
+            "default_level": "summary",
+            "category_overrides": {"transfer.value": "full"},
+        }
         assert verifier._service_name == "dojozero-gateway-test"
         assert verifier._report_auto_verify is False
 

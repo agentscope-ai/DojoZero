@@ -21,7 +21,7 @@ dev = [
     "alibabacloud-credentials>=1.0.0",
     "aliyun-log-python-sdk",
     "redis>=7.2.1",
-    "agent-id-service-sdk>=0.4.1",
+    "agent-id-service-sdk>=0.4.2",
     "agent-id-client-sdk>=0.2.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

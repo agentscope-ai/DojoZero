@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agent_id_service_sdk import Verifier
@@ -43,19 +43,25 @@ def agentid_verifier_from_env() -> "Verifier | None":
         ``DOJOZERO_AGENTID_PROVIDER_URLS``: JSON object mapping provider domain to
             base URL, used to override the default ``https://<domain>`` lookup
             for local-dev / non-https IdPs.
-        ``DOJOZERO_AGENTID_ACTIVITY_API_KEY``: API key for posting events to the
-            activity service. When set together with ``DOJOZERO_AGENTID_AGENT_TOKEN``,
-            the verifier auto-emits ``auth.verify`` events on every successful
-            token check, and the gateway emits ``session.start``/``session.end``
-            at agent register / shutdown.
-        ``DOJOZERO_AGENTID_AGENT_TOKEN``: the gateway's own AgentID management token.
-            Forwarded as ``X-AIP-Token`` to the activity service so the
-            principal-policy claim can be verified.
         ``DOJOZERO_AGENTID_ACTIVITY_ENDPOINT``: override for the activity-service
             POST URL. Normally resolved via the IdP's discovery doc; set this
             only when discovery is unreachable.
         ``DOJOZERO_AGENTID_SERVICE_NAME``: ``service`` envelope field on emitted
             events. Defaults to ``"dojozero-gateway"``.
+
+    Hub publisher / activity emission (design §5.0):
+        Activity emission is enabled iff the hub publisher is configured
+        (see ``DOJOZERO_HUB_*`` env in ``_hub_publisher.py``). The same
+        Ed25519 key that signs the manifest also signs the HubJWS envelope
+        on each emission. There is no separate ``DOJOZERO_AGENTID_AGENT_TOKEN``
+        / ``X-AgentID-Token`` forwarding for hub emissions — the hub's
+        privacy posture travels in the signed envelope.
+
+        ``DOJOZERO_HUB_PRIVACY_DEFAULT_LEVEL``: ``full`` | ``summary`` |
+            ``existence`` | ``none``. Default ``summary``.
+        ``DOJOZERO_HUB_PRIVACY_OVERRIDES``: optional JSON map of
+            ``category → level``, e.g.
+            ``{"transfer.value": "full", "tool.use": "summary"}``.
     """
     trusted_raw = os.environ.get("DOJOZERO_AGENTID_TRUSTED_PROVIDERS", "").strip()
     audience = os.environ.get("DOJOZERO_AGENTID_AUDIENCE", "").strip()
@@ -94,9 +100,21 @@ def agentid_verifier_from_env() -> "Verifier | None":
     if provider_urls_raw:
         provider_urls = json.loads(provider_urls_raw)
 
-    agent_token = os.environ.get("DOJOZERO_AGENTID_AGENT_TOKEN") or None
     activity_endpoint = os.environ.get("DOJOZERO_AGENTID_ACTIVITY_ENDPOINT") or None
     service_name = os.environ.get("DOJOZERO_AGENTID_SERVICE_NAME") or "dojozero-gateway"
+
+    # Hub privacy posture (design §5.0): travels in the signed envelope
+    # alongside each emission. Conservative default if unset.
+    privacy_level = (
+        os.environ.get("DOJOZERO_HUB_PRIVACY_DEFAULT_LEVEL") or "summary"
+    ).strip()
+    privacy_overrides_raw = os.environ.get("DOJOZERO_HUB_PRIVACY_OVERRIDES", "").strip()
+    privacy_overrides: dict[str, str] = {}
+    if privacy_overrides_raw:
+        privacy_overrides = json.loads(privacy_overrides_raw)
+    hub_privacy_claim: dict[str, Any] = {"default_level": privacy_level}
+    if privacy_overrides:
+        hub_privacy_claim["category_overrides"] = privacy_overrides
 
     # HubJWS envelope auth (design §5.0): the gateway signs each activity
     # POST with the same Ed25519 key it uses for manifest signing. Reuse
@@ -133,10 +151,10 @@ def agentid_verifier_from_env() -> "Verifier | None":
         # ``gateway/_activity.py`` instead. See that module's docstring
         # for the first-adopter rationale.
         report_auto_verify=False,
-        agent_token_for_emit=agent_token,
         hub_signing_key=hub_signing_key,
         hub_signing_kid=hub_signing_kid,
         hub_service_id=hub_service_id,
+        hub_privacy_claim=hub_privacy_claim,
     )
 
     logger.info(
