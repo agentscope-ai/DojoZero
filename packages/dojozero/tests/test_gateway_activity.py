@@ -21,10 +21,13 @@ import pytest
 
 from dojozero.gateway._activity import (
     _amount_bucket,
+    _hash_args,
     emit_auth_deny,
     emit_session_end,
     emit_session_start,
+    emit_tool_use,
     emit_transfer_value,
+    new_tool_invocation_id,
 )
 
 
@@ -388,3 +391,139 @@ class TestEmitTransferValue:
             "emit_transfer_value" in r.message and "activity-down" in r.message
             for r in caplog.records
         )
+
+
+# ---------------------------------------------------------------------------
+# emit_tool_use
+# ---------------------------------------------------------------------------
+
+
+class TestHashArgs:
+    def test_canonical_form_stable_across_key_order(self):
+        a = _hash_args({"market": "moneyline", "stake": "100"})
+        b = _hash_args({"stake": "100", "market": "moneyline"})
+        assert a == b
+        assert a.startswith("sha256:")
+        assert len(a) == len("sha256:") + 64
+
+    def test_different_args_different_hash(self):
+        assert _hash_args({"x": 1}) != _hash_args({"x": 2})
+
+    def test_empty_and_none_hash_to_same(self):
+        assert _hash_args({}) == _hash_args(None)
+
+
+class TestEmitToolUse:
+    @pytest.mark.asyncio
+    async def test_no_op_when_verifier_is_none_returns_invocation_id(self):
+        result = await emit_tool_use(
+            None,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            tool_name="dojozero.place_bet",
+            args={"stake": "100"},
+        )
+        # Caller still gets an id even when emission is disabled, so
+        # downstream linked_transfer_id wiring works in dev/local mode.
+        assert result.startswith("inv_")
+
+    @pytest.mark.asyncio
+    async def test_canonical_payload_shape(self):
+        verifier = _make_verifier_mock()
+        invocation_id = await emit_tool_use(
+            verifier,
+            agent_id="agentid:dojozero:degen",
+            agent_name="Danny Hype",
+            trial_id="trial-canary-001",
+            tool_name="dojozero.place_bet",
+            args={"market": "moneyline", "selection": "home"},
+            duration_ms=42,
+            success=True,
+            linked_transfer_id="bet_42",
+        )
+
+        verifier.report_event.assert_awaited_once()
+        kwargs = verifier.report_event.await_args.kwargs
+        assert kwargs["category"] == "tool.use"
+        assert kwargs["outcome"] == "success"
+        assert kwargs["session_id"] == "trial-canary-001"
+        payload = kwargs["payload"]
+        assert payload["tool_name"] == "dojozero.place_bet"
+        assert payload["args_hash"].startswith("sha256:")
+        assert payload["tool_invocation_id"] == invocation_id
+        assert payload["duration_ms"] == 42
+        assert payload["success"] is True
+        assert payload["linked_transfer_id"] == "bet_42"
+        # Raw args MUST NOT leak.
+        assert "market" not in payload
+        assert "selection" not in payload
+
+    @pytest.mark.asyncio
+    async def test_failure_outcome(self):
+        verifier = _make_verifier_mock()
+        await emit_tool_use(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            tool_name="dojozero.place_bet",
+            args={"stake": "999999"},
+            duration_ms=5,
+            success=False,
+        )
+        kwargs = verifier.report_event.await_args.kwargs
+        assert kwargs["outcome"] == "failure"
+        assert kwargs["payload"]["success"] is False
+        # No linked_transfer_id on failure (no transfer happened).
+        assert "linked_transfer_id" not in kwargs["payload"]
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_invocation_id_passes_through(self):
+        verifier = _make_verifier_mock()
+        result = await emit_tool_use(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            tool_name="dojozero.place_bet",
+            tool_invocation_id="inv_explicit_42",
+        )
+        assert result == "inv_explicit_42"
+        kwargs = verifier.report_event.await_args.kwargs
+        assert kwargs["payload"]["tool_invocation_id"] == "inv_explicit_42"
+
+    @pytest.mark.asyncio
+    async def test_negative_duration_clamped(self):
+        verifier = _make_verifier_mock()
+        await emit_tool_use(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            tool_name="dojozero.place_bet",
+            duration_ms=-5,
+        )
+        payload = verifier.report_event.await_args.kwargs["payload"]
+        assert payload["duration_ms"] == 0
+
+    @pytest.mark.asyncio
+    async def test_emission_failure_swallowed(self, caplog):
+        from unittest.mock import AsyncMock
+
+        verifier = _make_verifier_mock()
+        verifier.report_event = AsyncMock(side_effect=RuntimeError("activity-down"))
+        with caplog.at_level("WARNING"):
+            invocation_id = await emit_tool_use(
+                verifier,
+                agent_id="agentid:dojozero:x",
+                trial_id="t1",
+                tool_name="dojozero.place_bet",
+            )
+        # Caller still gets the id even when emission failed.
+        assert invocation_id.startswith("inv_")
+        assert any(
+            "emit_tool_use" in r.message and "activity-down" in r.message
+            for r in caplog.records
+        )
+
+    def test_new_tool_invocation_id_is_unique(self):
+        ids = {new_tool_invocation_id() for _ in range(100)}
+        assert len(ids) == 100
+        assert all(i.startswith("inv_") for i in ids)

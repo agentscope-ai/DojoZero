@@ -28,7 +28,10 @@ requests.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -250,6 +253,80 @@ def _amount_bucket(amount: str | float) -> str:
     return "10k_plus"
 
 
+def _hash_args(args: dict[str, Any] | None) -> str:
+    """Hash an args dict deterministically as ``sha256:<hex>``.
+
+    Canonical-JSON form (sorted keys, no whitespace) so the same args
+    always hash the same. Empty/None hashes the empty object — a stable
+    sentinel "we ran but with no args worth recording".
+    """
+    payload = args or {}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def new_tool_invocation_id() -> str:
+    """Mint a fresh ``tool_invocation_id`` (callers may also pass their own)."""
+    return f"inv_{uuid.uuid4().hex}"
+
+
+async def emit_tool_use(
+    verifier: "Verifier | None",
+    *,
+    agent_id: str,
+    trial_id: str,
+    tool_name: str,
+    args: dict[str, Any] | None = None,
+    duration_ms: int | None = None,
+    success: bool = True,
+    linked_transfer_id: str | None = None,
+    tool_invocation_id: str | None = None,
+    agent_name: str = "",
+) -> str:
+    """Emit ``tool.use`` for an agent's tool invocation.
+
+    Canonical Tier-1 payload:
+    ``{tool_name, args_hash, tool_invocation_id, duration_ms?, success?,
+       linked_transfer_id?}``.
+
+    Returns the ``tool_invocation_id`` so callers that emit other events
+    in the same invocation (e.g., a paired ``transfer.value`` where the
+    ``transaction_id`` ends up in ``linked_transfer_id`` here) can join.
+
+    ``args_hash`` is sha256 of the canonical-JSON form of ``args`` so raw
+    arguments never leave the gateway. Hub-specific richness (which
+    market, which selection) belongs in a Tier-2 ``dojozero.bet_decision``
+    event linked via the same ``transaction_id``.
+    """
+    invocation_id = tool_invocation_id or new_tool_invocation_id()
+    if verifier is None:
+        return invocation_id
+
+    payload: dict[str, Any] = {
+        "tool_name": tool_name,
+        "args_hash": _hash_args(args),
+        "tool_invocation_id": invocation_id,
+    }
+    if duration_ms is not None:
+        payload["duration_ms"] = max(0, duration_ms)
+    payload["success"] = bool(success)
+    if linked_transfer_id is not None:
+        payload["linked_transfer_id"] = linked_transfer_id
+
+    agent = _build_verified_agent(agent_id=agent_id, agent_name=agent_name)
+    try:
+        await verifier.report_event(
+            category="tool.use",
+            agent=agent,
+            payload=payload,
+            session_id=trial_id,
+            outcome="success" if success else "failure",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("emit_tool_use: emission failed: %s", exc)
+    return invocation_id
+
+
 async def emit_transfer_value(
     verifier: "Verifier | None",
     *,
@@ -317,5 +394,7 @@ __all__ = [
     "emit_auth_deny",
     "emit_session_end",
     "emit_session_start",
+    "emit_tool_use",
     "emit_transfer_value",
+    "new_tool_invocation_id",
 ]

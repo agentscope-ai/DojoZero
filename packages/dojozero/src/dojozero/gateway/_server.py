@@ -19,6 +19,7 @@ from dojozero.gateway._activity import (
     emit_auth_deny,
     emit_session_end,
     emit_session_start,
+    emit_tool_use,
     emit_transfer_value,
 )
 from dojozero.gateway._adapter import ExternalAgentAdapter
@@ -700,9 +701,27 @@ def create_gateway_app(
         state: GatewayState = Depends(get_gateway_state),
     ) -> BetResponse:
         """Place a bet."""
+        # Treat the HTTP call as a tool invocation: the agent invoked the
+        # ``dojozero.place_bet`` tool. We emit ``tool.use`` whether the
+        # bet succeeds or fails (the agent did try); a successful bet
+        # also emits ``transfer.value`` linked by transaction_id.
+        bet_args = request.model_dump(by_alias=False, exclude_none=True)
+        tool_started = time.monotonic()
+
         try:
             response = await state.adapter.place_bet(agent_id, request)
         except ValueError as e:
+            duration_ms = int((time.monotonic() - tool_started) * 1000)
+            await emit_tool_use(
+                state.agentid_verifier,
+                agent_id=agent_id,
+                trial_id=state.trial_id,
+                tool_name="dojozero.place_bet",
+                args=bet_args,
+                duration_ms=duration_ms,
+                success=False,
+            )
+
             error_str = str(e)
 
             if "stale" in error_str.lower():
@@ -730,6 +749,18 @@ def create_gateway_app(
                     error=ErrorDetail(code=code, message=error_str)
                 ).model_dump(by_alias=True),
             )
+
+        duration_ms = int((time.monotonic() - tool_started) * 1000)
+        await emit_tool_use(
+            state.agentid_verifier,
+            agent_id=agent_id,
+            trial_id=state.trial_id,
+            tool_name="dojozero.place_bet",
+            args=bet_args,
+            duration_ms=duration_ms,
+            success=True,
+            linked_transfer_id=response.bet_id,
+        )
 
         # Activity event: stake committed. Best-effort; never blocks the
         # bet response. The activity service preserves amount as a string
