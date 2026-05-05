@@ -279,6 +279,28 @@ class BalanceResponse(BaseModel):
 # ============================================================================
 
 
+class ModelCallReport(BaseModel):
+    """Body for ``POST /activity/model-call``.
+
+    Runners post LLM usage here after each chat-model call. The gateway
+    forwards as a canonical ``model.call`` Tier-1 event so the hub stays
+    the single source of activity emission.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    model: str = Field(min_length=1, max_length=255)
+    tokens_in: int = Field(default=0, ge=0, alias="tokensIn")
+    tokens_out: int = Field(default=0, ge=0, alias="tokensOut")
+    latency_ms: int | None = Field(default=None, ge=0, alias="latencyMs")
+    cost_usd: float | None = Field(default=None, ge=0, alias="costUsd")
+    purpose: str | None = None
+    outcome: Literal["success", "error", "filtered"] | None = None
+    linked_tool_invocation_id: str | None = Field(
+        default=None, alias="linkedToolInvocationId"
+    )
+
+
 class ErrorDetail(BaseModel):
     """Error detail structure."""
 
@@ -408,6 +430,8 @@ __all__ = [
     "BetsListResponse",
     "BalanceResponse",
     "HoldingResponse",
+    # Activity
+    "ModelCallReport",
     # Errors
     "ErrorCodes",
     "ErrorDetail",

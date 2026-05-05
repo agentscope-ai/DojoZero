@@ -23,6 +23,7 @@ from dojozero.gateway._activity import (
     _amount_bucket,
     _hash_args,
     emit_auth_deny,
+    emit_model_call,
     emit_session_end,
     emit_session_start,
     emit_tool_use,
@@ -527,3 +528,108 @@ class TestEmitToolUse:
         ids = {new_tool_invocation_id() for _ in range(100)}
         assert len(ids) == 100
         assert all(i.startswith("inv_") for i in ids)
+
+
+# ---------------------------------------------------------------------------
+# emit_model_call
+# ---------------------------------------------------------------------------
+
+
+class TestEmitModelCall:
+    @pytest.mark.asyncio
+    async def test_no_op_when_verifier_is_none(self):
+        await emit_model_call(
+            None,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            model="qwen-max",
+            tokens_in=10,
+            tokens_out=5,
+        )
+
+    @pytest.mark.asyncio
+    async def test_canonical_payload_shape(self):
+        verifier = _make_verifier_mock()
+        await emit_model_call(
+            verifier,
+            agent_id="agentid:dojozero:degen",
+            agent_name="Danny Hype",
+            trial_id="trial-canary-001",
+            model="qwen-max",
+            tokens_in=120,
+            tokens_out=85,
+            latency_ms=420,
+            cost_usd=0.0042,
+            purpose="bet_decision",
+            outcome="success",
+            linked_tool_invocation_id="inv_abc",
+        )
+        verifier.report_event.assert_awaited_once()
+        kwargs = verifier.report_event.await_args.kwargs
+        assert kwargs["category"] == "model.call"
+        assert kwargs["session_id"] == "trial-canary-001"
+        assert kwargs["outcome"] == "success"
+        payload = kwargs["payload"]
+        assert payload["model"] == "qwen-max"
+        assert payload["tokens_in"] == 120
+        assert payload["tokens_out"] == 85
+        assert payload["latency_ms"] == 420
+        assert payload["cost_usd"] == 0.0042
+        assert payload["purpose"] == "bet_decision"
+        assert payload["outcome"] == "success"
+        assert payload["linked_tool_invocation_id"] == "inv_abc"
+
+    @pytest.mark.asyncio
+    async def test_negatives_clamped(self):
+        verifier = _make_verifier_mock()
+        await emit_model_call(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            model="qwen",
+            tokens_in=-5,
+            tokens_out=-2,
+            latency_ms=-1,
+            cost_usd=-0.01,
+        )
+        payload = verifier.report_event.await_args.kwargs["payload"]
+        assert payload["tokens_in"] == 0
+        assert payload["tokens_out"] == 0
+        assert payload["latency_ms"] == 0
+        assert payload["cost_usd"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_outcome_propagates_to_envelope(self):
+        verifier = _make_verifier_mock()
+        await emit_model_call(
+            verifier,
+            agent_id="agentid:dojozero:x",
+            trial_id="t1",
+            model="qwen",
+            tokens_in=10,
+            tokens_out=5,
+            outcome="error",
+        )
+        kwargs = verifier.report_event.await_args.kwargs
+        assert kwargs["outcome"] == "error"
+        assert kwargs["payload"]["outcome"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_emission_failure_swallowed(self, caplog):
+        from unittest.mock import AsyncMock
+
+        verifier = _make_verifier_mock()
+        verifier.report_event = AsyncMock(side_effect=RuntimeError("activity-down"))
+        with caplog.at_level("WARNING"):
+            await emit_model_call(
+                verifier,
+                agent_id="agentid:dojozero:x",
+                trial_id="t1",
+                model="qwen",
+                tokens_in=1,
+                tokens_out=1,
+            )
+        assert any(
+            "emit_model_call" in r.message and "activity-down" in r.message
+            for r in caplog.records
+        )

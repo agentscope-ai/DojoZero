@@ -23,6 +23,7 @@ from agentscope.tool import Toolkit
 from dojozero_client import DojoClient, TrialConnection
 
 from dojozero_agent_runner._config import RunnerConfig
+from dojozero_agent_runner._emitting_model import EmittingChatModel
 from dojozero_agent_runner._llm import create_formatter, create_model
 from dojozero_agent_runner._tools import build_tools
 
@@ -68,7 +69,9 @@ async def run(config: RunnerConfig) -> None:
 async def _run_react_loop(config: RunnerConfig, connection: TrialConnection) -> None:
     """Build the ReActAgent and pump polled events through it until trial_ended."""
     model_type = str(config.llm_config.get("model_type", ""))
-    model = create_model(config.llm_config)
+    # Wrap the chat model so each LLM call reports back to the gateway as
+    # a Tier-1 ``model.call`` (best-effort; never blocks the loop).
+    model = EmittingChatModel(create_model(config.llm_config), connection)
     formatter = create_formatter(model_type)
 
     toolkit = Toolkit()

@@ -253,6 +253,64 @@ def _amount_bucket(amount: str | float) -> str:
     return "10k_plus"
 
 
+async def emit_model_call(
+    verifier: "Verifier | None",
+    *,
+    agent_id: str,
+    trial_id: str,
+    model: str,
+    tokens_in: int,
+    tokens_out: int,
+    latency_ms: int | None = None,
+    cost_usd: float | None = None,
+    purpose: str | None = None,
+    outcome: str | None = None,
+    linked_tool_invocation_id: str | None = None,
+    agent_name: str = "",
+) -> None:
+    """Emit ``model.call`` for an LLM invocation.
+
+    Canonical Tier-1 payload:
+    ``{model, tokens_in, tokens_out, latency_ms?, cost_usd?, purpose?,
+       outcome?, linked_tool_invocation_id?}``.
+
+    The runner reports model usage *to the gateway* (not directly to
+    aip-activity) so the hub stays the single source of activity emission.
+    The gateway then forwards via the same verifier path used by the
+    other Tier-1 emitters here. Best-effort: failures log + return.
+    """
+    if verifier is None:
+        return
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "tokens_in": max(0, int(tokens_in)),
+        "tokens_out": max(0, int(tokens_out)),
+    }
+    if latency_ms is not None:
+        payload["latency_ms"] = max(0, int(latency_ms))
+    if cost_usd is not None:
+        payload["cost_usd"] = max(0.0, float(cost_usd))
+    if purpose is not None:
+        payload["purpose"] = purpose
+    if outcome is not None:
+        payload["outcome"] = outcome
+    if linked_tool_invocation_id is not None:
+        payload["linked_tool_invocation_id"] = linked_tool_invocation_id
+
+    agent = _build_verified_agent(agent_id=agent_id, agent_name=agent_name)
+    try:
+        await verifier.report_event(
+            category="model.call",
+            agent=agent,
+            payload=payload,
+            session_id=trial_id,
+            outcome=outcome or "success",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("emit_model_call: emission failed: %s", exc)
+
+
 def _hash_args(args: dict[str, Any] | None) -> str:
     """Hash an args dict deterministically as ``sha256:<hex>``.
 
@@ -392,6 +450,7 @@ async def emit_transfer_value(
 
 __all__ = [
     "emit_auth_deny",
+    "emit_model_call",
     "emit_session_end",
     "emit_session_start",
     "emit_tool_use",

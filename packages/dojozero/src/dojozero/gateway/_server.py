@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from dojozero.gateway._activity import (
     emit_auth_deny,
+    emit_model_call,
     emit_session_end,
     emit_session_start,
     emit_tool_use,
@@ -39,6 +40,7 @@ from dojozero.gateway._models import (
     ErrorDetail,
     ErrorResponse,
     EventEnvelope,
+    ModelCallReport,
     RecentEventsResponse,
     TrialEndedInfo,
     TrialMetadataResponse,
@@ -900,6 +902,40 @@ def create_gateway_app(
             if state.broker._event
             else False,
         }
+
+    # =========================================================================
+    # Activity reports from runners (forwarded to aip-activity)
+    # =========================================================================
+
+    @app.post("/activity/model-call", status_code=202)
+    async def report_model_call(
+        report: ModelCallReport,
+        agent_id: str = Depends(get_agent_id),
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> dict[str, Any]:
+        """Runner-side ``model.call`` forwarder.
+
+        Runners can't talk to aip-activity directly (the hub is the
+        single emission source). They post LLM usage here after each
+        chat-model call; the gateway forwards as a Tier-1 ``model.call``
+        event scoped to the runner's authenticated agent_id.
+        """
+        if not state.adapter.is_registered(agent_id):
+            raise HTTPException(status_code=403, detail="Agent not registered")
+        await emit_model_call(
+            state.agentid_verifier,
+            agent_id=agent_id,
+            trial_id=state.trial_id,
+            model=report.model,
+            tokens_in=report.tokens_in,
+            tokens_out=report.tokens_out,
+            latency_ms=report.latency_ms,
+            cost_usd=report.cost_usd,
+            purpose=report.purpose,
+            outcome=report.outcome,
+            linked_tool_invocation_id=report.linked_tool_invocation_id,
+        )
+        return {"accepted": True}
 
     # =========================================================================
     # AgentID hub discovery (public; consumed by aip-activity)

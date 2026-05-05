@@ -591,6 +591,48 @@ class TrialConnection:
         response = await self._transport.request("GET", "/trial/results")
         return TrialResults.from_dict(response)
 
+    async def report_model_call(
+        self,
+        *,
+        model: str,
+        tokens_in: int,
+        tokens_out: int,
+        latency_ms: int | None = None,
+        cost_usd: float | None = None,
+        purpose: str | None = None,
+        outcome: str | None = None,
+        linked_tool_invocation_id: str | None = None,
+    ) -> None:
+        """Report an LLM call back to the gateway as a ``model.call`` event.
+
+        Best-effort: any error is swallowed. Activity reporting is
+        observability and must not block the agent's main loop.
+        """
+        body: dict[str, Any] = {
+            "model": model,
+            "tokensIn": int(tokens_in),
+            "tokensOut": int(tokens_out),
+        }
+        if latency_ms is not None:
+            body["latencyMs"] = int(latency_ms)
+        if cost_usd is not None:
+            body["costUsd"] = float(cost_usd)
+        if purpose is not None:
+            body["purpose"] = purpose
+        if outcome is not None:
+            body["outcome"] = outcome
+        if linked_tool_invocation_id is not None:
+            body["linkedToolInvocationId"] = linked_tool_invocation_id
+        try:
+            await self._transport.request(
+                "POST",
+                "/activity/model-call",
+                json=body,
+            )
+        except Exception:
+            # Swallow: model.call reporting is best-effort.
+            pass
+
     async def unregister(self) -> dict[str, Any]:
         """Unregister this agent from the trial server.
 
