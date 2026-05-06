@@ -229,10 +229,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         try:
             state = client.call_sync("status", trial_id=trial_id)
             _print_status(state, daemon_running=True)
-            # Show bet history from disk
             tid = state.get("trial_id", trial_id or "")
             if tid:
-                _print_bet_history(_trial_state_dir(tid))
+                if state.get("contest_kind") == "window_pool_prediction":
+                    _print_prediction_history(_trial_state_dir(tid))
+                else:
+                    _print_bet_history(_trial_state_dir(tid))
             return 0
         except RPCError as e:
             if e.code == "NO_TRIALS":
@@ -263,8 +265,12 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
     away_team = state.get("away_team", "")
     home_tri = state.get("home_team_tricode", "")
     away_tri = state.get("away_team_tricode", "")
+    contest_kind = state.get("contest_kind", "classic_betting")
+    is_prediction = contest_kind == "window_pool_prediction"
 
     print(f"Trial: {state.get('trial_id', 'unknown')}")
+    mode_label = "prediction" if is_prediction else "classic betting"
+    print(f"Mode: {mode_label}")
     if home_team and away_team:
         sport = state.get("sport_type", "")
         game_time = state.get("game_time", "")
@@ -283,37 +289,67 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
     else:
         print(f"Status: {status_label} (daemon not running)")
 
-    # Use tricodes for compact score/odds, fall back to full name or "Home"/"Away"
     home_label = home_tri or home_team or "Home"
     away_label = away_tri or away_team or "Away"
 
-    if game_state:
-        home_score = game_state.get("home_score", "?")
-        away_score = game_state.get("away_score", "?")
-        period = game_state.get("period", game_state.get("quarter", "?"))
-        clock = game_state.get("clock", game_state.get("time", ""))
-        print(
-            f"Score: {home_label} {home_score} - {away_label} {away_score} (Q{period} {clock})"
-        )
-
-    if odds:
-        home_prob = odds.get("home_probability", 0)
-        away_prob = odds.get("away_probability", 0)
-        print(f"Moneyline: {home_label} {home_prob:.1%}, {away_label} {away_prob:.1%}")
-        for s in odds.get("spreads", []):
-            spread_val = s.get("spread", 0)
-            h_p = s.get("home_probability", 0)
-            a_p = s.get("away_probability", 0)
+    if is_prediction:
+        # Show event info for prediction mode
+        event_info = state.get("event_info", {})
+        if event_info:
+            window = event_info.get("current_window", "?")
+            ratio = event_info.get("elapsed_ratio", 0)
+            window_labels = {0: "Pre-game", 1: "Q1", 2: "Q2", 3: "Q3", 4: "Q4"}
+            wlabel = window_labels.get(window, f"W{window}")
+            print(f"Window: {wlabel} (elapsed {ratio:.0%})")
+            h_score = event_info.get("home_score")
+            a_score = event_info.get("away_score")
+            if h_score is not None and a_score is not None:
+                period = event_info.get("period", "?")
+                clock = event_info.get("game_clock", "")
+                time_str = f"Q{period} {clock}" if clock else f"Q{period}"
+                print(
+                    f"Score: {home_label} {h_score} - {away_label} {a_score} ({time_str})"
+                )
+        elif game_state:
+            home_score = game_state.get("home_score", "?")
+            away_score = game_state.get("away_score", "?")
+            period = game_state.get("period", game_state.get("quarter", "?"))
+            clock = game_state.get("clock", game_state.get("time", ""))
             print(
-                f"Spread {spread_val:+g}: {home_label} {h_p:.1%}, {away_label} {a_p:.1%}"
+                f"Score: {home_label} {home_score} - {away_label} {away_score} (Q{period} {clock})"
             )
-        for t in odds.get("totals", []):
-            total_val = t.get("total", 0)
-            over_p = t.get("over_probability", 0)
-            under_p = t.get("under_probability", 0)
-            print(f"Total {total_val}: over {over_p:.1%}, under {under_p:.1%}")
+    else:
+        # Classic betting mode
+        if game_state:
+            home_score = game_state.get("home_score", "?")
+            away_score = game_state.get("away_score", "?")
+            period = game_state.get("period", game_state.get("quarter", "?"))
+            clock = game_state.get("clock", game_state.get("time", ""))
+            print(
+                f"Score: {home_label} {home_score} - {away_label} {away_score} (Q{period} {clock})"
+            )
 
-    print(f"Balance: ${state.get('balance', 0):.2f}")
+        if odds:
+            home_prob = odds.get("home_probability", 0)
+            away_prob = odds.get("away_probability", 0)
+            print(
+                f"Moneyline: {home_label} {home_prob:.1%}, {away_label} {away_prob:.1%}"
+            )
+            for s in odds.get("spreads", []):
+                spread_val = s.get("spread", 0)
+                h_p = s.get("home_probability", 0)
+                a_p = s.get("away_probability", 0)
+                print(
+                    f"Spread {spread_val:+g}: {home_label} {h_p:.1%}, {away_label} {a_p:.1%}"
+                )
+            for t in odds.get("totals", []):
+                total_val = t.get("total", 0)
+                over_p = t.get("over_probability", 0)
+                under_p = t.get("under_probability", 0)
+                print(f"Total {total_val}: over {over_p:.1%}, under {under_p:.1%}")
+
+        print(f"Balance: ${state.get('balance', 0):.2f}")
+
     print(f"Last Update: {state.get('last_updated', 'never')}")
 
 
@@ -342,6 +378,36 @@ def _print_bet_history(state_dir: Path) -> None:
             ts = b.get("placed_at", "")[:16]
             prob_str = f" @ {prob:.0%}" if prob else ""
             print(f"  ${amt:.0f} on {selection} ({market}){prob_str} - {ts}")
+
+
+def _print_prediction_history(state_dir: Path) -> None:
+    """Print prediction history from predictions.jsonl."""
+    preds_file = state_dir / "predictions.jsonl"
+    if not preds_file.exists():
+        return
+
+    lines = preds_file.read_text().strip().split("\n")
+    preds = []
+    for line in lines:
+        if line:
+            try:
+                preds.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    if preds:
+        print(f"\nPredictions ({len(preds)}):")
+        for p in preds:
+            sel = p.get("selection", "?")
+            window = p.get("window", "?")
+            correct = p.get("is_correct")
+            score = p.get("score")
+            ts = p.get("submit_time", "")[:16]
+            status_str = ""
+            if correct is not None:
+                status_str = f" {'correct' if correct else 'incorrect'}"
+                if score is not None:
+                    status_str += f" (score={score:.1f})"
+            print(f"  W{window} {sel}{status_str} - {ts}")
 
 
 def cmd_logs(args: argparse.Namespace) -> int:
@@ -403,6 +469,92 @@ def cmd_bet(args: argparse.Namespace) -> int:
     except RPCError as e:
         print(f"Error: {e.message}", file=sys.stderr)
         return 1
+
+
+def cmd_predict(args: argparse.Namespace) -> int:
+    """Submit a prediction via daemon RPC."""
+    trial_id = getattr(args, "trial_id", None)
+
+    if not is_daemon_running():
+        print("Daemon not running. Use 'start <trial-id>' first.", file=sys.stderr)
+        return 1
+
+    client = RPCClient(SOCKET_PATH)
+    try:
+        result = client.call_sync(
+            "predict",
+            trial_id=trial_id,
+            selection=args.selection,
+        )
+        window = result.get("window", "?")
+        print(f"Prediction submitted: {args.selection} (window {window})")
+        print(f"Prediction ID: {result.get('prediction_id')}")
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
+
+
+def cmd_predictions(args: argparse.Namespace) -> int:
+    """Show prediction history."""
+    trial_id = getattr(args, "trial_id", None)
+
+    # Try RPC first for live data
+    if is_daemon_running():
+        client = RPCClient(SOCKET_PATH)
+        try:
+            result = client.call_sync("predictions", trial_id=trial_id)
+            preds = result.get("predictions", [])
+            if not preds:
+                print("No predictions")
+                return 0
+
+            print(f"Predictions ({len(preds)}):")
+            for p in preds:
+                pid = p.get("prediction_id", "?")[:8]
+                sel = p.get("selection", "?")
+                window = p.get("window", "?")
+                correct = p.get("is_correct")
+                score = p.get("score")
+                status_str = ""
+                if correct is not None:
+                    status_str = f" {'✓' if correct else '✗'}"
+                    if score is not None:
+                        status_str += f" score={score:.1f}"
+                print(f"  [{pid}] W{window} {sel}{status_str}")
+            return 0
+        except RPCError as e:
+            print(f"Error: {e.message}", file=sys.stderr)
+            return 1
+
+    # Fall back to predictions.jsonl on disk
+    state_dir = _get_state_dir(args)
+    preds_file = state_dir / "predictions.jsonl"
+    if not preds_file.exists():
+        print("No predictions")
+        return 0
+
+    lines = preds_file.read_text().strip().split("\n")
+    count = args.count if hasattr(args, "count") and args.count else 20
+    for line in lines[-count:]:
+        if not line:
+            continue
+        try:
+            p = json.loads(line)
+            pid = p.get("prediction_id", "?")[:8]
+            sel = p.get("selection", "?")
+            window = p.get("window", "?")
+            correct = p.get("is_correct")
+            score = p.get("score")
+            status_str = ""
+            if correct is not None:
+                status_str = f" {'✓' if correct else '✗'}"
+                if score is not None:
+                    status_str += f" score={score:.1f}"
+            print(f"  [{pid}] W{window} {sel}{status_str}")
+        except json.JSONDecodeError:
+            continue
+    return 0
 
 
 def _format_event_summary(payload: dict[str, Any], home: str, away: str) -> str:
@@ -587,8 +739,12 @@ def cmd_list(_: argparse.Namespace) -> int:
         print(f"Connected trials ({len(trials)}):")
         for trial_id, info in trials.items():
             status = "connected" if info.get("connected") else "disconnected"
-            balance = info.get("balance", 0)
-            print(f"  {trial_id}: {status}, balance=${balance:.2f}")
+            kind = info.get("contest_kind", "classic_betting")
+            if kind == "window_pool_prediction":
+                print(f"  {trial_id}: {status} (prediction mode)")
+            else:
+                balance = info.get("balance", 0)
+                print(f"  {trial_id}: {status}, balance=${balance:.2f}")
         return 0
     except RPCError as e:
         print(f"Error: {e.message}", file=sys.stderr)
@@ -627,6 +783,7 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
 
         data = resp.json()
         board = data.get("leaderboard", [])
+        mode = data.get("mode", "classic_betting")
 
         if not board:
             print("No agents registered")
@@ -645,27 +802,49 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
             f"{data.get('internal_agents', 0)} internal)"
         )
         print()
-        print(
-            f"  {'#':<4} {'Agent':<24} {'Balance':>10} {'P/L':>10} {'Bets':>6} {'Win%':>6} {'ROI':>7}"
-        )
-        print(
-            f"  {'─' * 4} {'─' * 24} {'─' * 10} {'─' * 10} {'─' * 6} {'─' * 6} {'─' * 7}"
-        )
 
-        for i, entry in enumerate(board, 1):
-            agent = entry["agent_id"]
-            if len(agent) > 23:
-                agent = agent[:20] + "..."
-            tag = " *" if entry.get("is_external") else ""
-            balance = float(entry.get("balance", 0))
-            pnl = float(entry.get("net_profit", 0))
-            bets = entry.get("total_bets", 0)
-            wr = entry.get("win_rate", 0)
-            roi = entry.get("roi", 0)
+        if mode == "prediction":
             print(
-                f"  {i:<4} {agent + tag:<24} ${balance:>9.2f} "
-                f"{'+' if pnl >= 0 else ''}{pnl:>9.2f} {bets:>6} {wr:>5.0%} {roi:>6.0%}"
+                f"  {'#':<4} {'Agent':<24} {'Score':>10} {'Preds':>6} "
+                f"{'Correct':>8} {'Accuracy':>9}"
             )
+            print(f"  {'─' * 4} {'─' * 24} {'─' * 10} {'─' * 6} {'─' * 8} {'─' * 9}")
+            for i, entry in enumerate(board, 1):
+                agent = entry["agent_id"]
+                if len(agent) > 23:
+                    agent = agent[:20] + "..."
+                tag = " *" if entry.get("is_external") else ""
+                score = float(entry.get("total_score", 0))
+                total = entry.get("total_predictions", 0)
+                correct = entry.get("correct_predictions", 0)
+                accuracy = entry.get("accuracy", 0)
+                print(
+                    f"  {i:<4} {agent + tag:<24} {score:>10.1f} "
+                    f"{total:>6} {correct:>8} {accuracy:>8.0%}"
+                )
+        else:
+            print(
+                f"  {'#':<4} {'Agent':<24} {'Balance':>10} {'P/L':>10} "
+                f"{'Bets':>6} {'Win%':>6} {'ROI':>7}"
+            )
+            print(
+                f"  {'─' * 4} {'─' * 24} {'─' * 10} {'─' * 10} "
+                f"{'─' * 6} {'─' * 6} {'─' * 7}"
+            )
+            for i, entry in enumerate(board, 1):
+                agent = entry["agent_id"]
+                if len(agent) > 23:
+                    agent = agent[:20] + "..."
+                tag = " *" if entry.get("is_external") else ""
+                balance = float(entry.get("balance", 0))
+                pnl = float(entry.get("net_profit", 0))
+                bets = entry.get("total_bets", 0)
+                wr = entry.get("win_rate", 0)
+                roi = entry.get("roi", 0)
+                print(
+                    f"  {i:<4} {agent + tag:<24} ${balance:>9.2f} "
+                    f"{'+' if pnl >= 0 else ''}{pnl:>9.2f} {bets:>6} {wr:>5.0%} {roi:>6.0%}"
+                )
 
         print()
         print("  * = external agent")
@@ -1119,6 +1298,26 @@ def create_parser() -> argparse.ArgumentParser:
         help="Total value for total bets (e.g., 215.5)",
     )
     p_bet.set_defaults(func=cmd_bet)
+
+    # predict (prediction mode)
+    p_predict = subparsers.add_parser("predict", help="Submit a prediction")
+    p_predict.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
+    p_predict.add_argument(
+        "selection",
+        choices=["home_win", "away_win", "even"],
+        help="Prediction selection",
+    )
+    p_predict.set_defaults(func=cmd_predict)
+
+    # predictions (prediction mode)
+    p_preds = subparsers.add_parser("predictions", help="Show prediction history")
+    p_preds.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
+    p_preds.add_argument("-n", "--count", type=int, default=20, help="Number to show")
+    p_preds.set_defaults(func=cmd_predictions)
 
     # events
     p_events = subparsers.add_parser("events", help="Show event log")

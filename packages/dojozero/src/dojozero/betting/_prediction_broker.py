@@ -772,6 +772,39 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             )
             emit_span(span)
 
+    def get_prediction_statistics(self) -> Dict[str, PredictionStatistics]:
+        """Return per-agent prediction statistics for the current event."""
+        current_event_predictions = {
+            pid: p
+            for pid, p in self._predictions.items()
+            if self._event is None or p.event_id == self._event.event_id
+        }
+
+        stats: Dict[str, PredictionStatistics] = {}
+        agents_seen: set[str] = set()
+        for p in current_event_predictions.values():
+            agents_seen.add(p.agent_id)
+
+        for agent_id in agents_seen:
+            agent_preds = [
+                p for p in current_event_predictions.values() if p.agent_id == agent_id
+            ]
+            if not agent_preds:
+                continue
+            total = len(agent_preds)
+            correct = sum(1 for p in agent_preds if p.is_correct)
+            accuracy = correct / total if total > 0 else 0.0
+            total_score = sum(
+                float(p.score) if p.score is not None else 0.0 for p in agent_preds
+            )
+            stats[agent_id] = PredictionStatistics(
+                total_predictions=total,
+                correct_predictions=correct,
+                accuracy=accuracy,
+                total_score=Decimal(str(total_score)),
+            )
+        return stats
+
     # =========================================================================
     # Agent Tools
     # =========================================================================

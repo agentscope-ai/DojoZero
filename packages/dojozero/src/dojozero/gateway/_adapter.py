@@ -1,7 +1,8 @@
 """Adapter bridging external agent HTTP API to internal Actor system.
 
 The ExternalAgentAdapter provides the business logic layer between the
-HTTP Gateway and the internal DataHub + BrokerOperator infrastructure.
+HTTP Gateway and the internal DataHub + BrokerOperator / PredictionBroker
+infrastructure.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from dojozero.betting._models import (
     AgentInfo,
@@ -34,7 +35,9 @@ from dojozero.gateway._models import (
     BetRequest,
     BetResponse,
     CurrentOddsResponse,
+    EventInfoResponse,
     HoldingResponse,
+    PredictionResponse,
     SpreadLine,
     TotalLine,
     TrialEndedMessage,
@@ -43,6 +46,7 @@ from dojozero.gateway._models import (
 
 if TYPE_CHECKING:
     from dojozero.betting._broker import BrokerOperator
+    from dojozero.betting._prediction_broker import PredictionBroker
     from dojozero.data import DataHub
 
 logger = logging.getLogger(__name__)
@@ -87,7 +91,7 @@ class ExternalAgentAdapter:
     def __init__(
         self,
         data_hub: "DataHub",
-        broker: "BrokerOperator",
+        broker: "BrokerOperator | PredictionBroker",
         trial_id: str,
         max_sequence_staleness: int = 10,
     ):
@@ -95,7 +99,7 @@ class ExternalAgentAdapter:
 
         Args:
             data_hub: DataHub instance for event subscriptions
-            broker: BrokerOperator for betting operations
+            broker: BrokerOperator or PredictionBroker for trial operations
             trial_id: ID of the trial this adapter serves
             max_sequence_staleness: Max events behind for bet validity
         """
@@ -115,6 +119,23 @@ class ExternalAgentAdapter:
         self._trial_ended_message: TrialEndedMessage | None = None
 
         logger.info("ExternalAgentAdapter initialized for trial %s", trial_id)
+
+    @property
+    def is_prediction_mode(self) -> bool:
+        """True when the broker is a PredictionBroker."""
+        from dojozero.betting._prediction_broker import PredictionBroker
+
+        return isinstance(self._broker, PredictionBroker)
+
+    @property
+    def _betting_broker(self) -> "BrokerOperator":
+        """Return broker narrowed to BrokerOperator. Only call when not in prediction mode."""
+        return cast("BrokerOperator", self._broker)
+
+    @property
+    def _pred_broker(self) -> "PredictionBroker":
+        """Return broker narrowed to PredictionBroker. Only call when in prediction mode."""
+        return cast("PredictionBroker", self._broker)
 
     @property
     def trial_id(self) -> str:
@@ -163,20 +184,22 @@ class ExternalAgentAdapter:
         if agent_id in self._agents:
             raise ValueError(f"Agent {agent_id} already connected")
 
-        # Use broker's default balance if not specified
-        balance = initial_balance or self._broker.initial_balance
-
-        # Check if account exists (reconnection case)
-        if self._broker.has_account(agent_id):
-            logger.info(
-                "Agent %s reconnecting with existing account",
-                agent_id,
-            )
+        if self.is_prediction_mode:
+            # PredictionBroker: no accounts or balances
+            balance = "0"
         else:
-            # New agent: create account in broker (mark as external)
-            await self._broker.create_account(
-                agent_id, Decimal(balance), is_external=True
-            )
+            # Classic betting: create account with balance
+            broker = self._betting_broker
+            balance = initial_balance or broker.initial_balance
+            if broker.has_account(agent_id):
+                logger.info(
+                    "Agent %s reconnecting with existing account",
+                    agent_id,
+                )
+            else:
+                await broker.create_account(
+                    agent_id, Decimal(balance), is_external=True
+                )
 
         # Generate session key for secure reconnection/unregistration
         session_key = secrets.token_urlsafe(32)
@@ -261,12 +284,16 @@ class ExternalAgentAdapter:
         # Update activity timestamp
         state.last_activity_at = datetime.now(timezone.utc)
 
-        # Get current balance from broker
-        balance = self._broker.initial_balance
-        if self._broker.has_account(agent_id):
-            account = self._broker._accounts.get(agent_id)
-            if account:
-                balance = str(account.balance)
+        # Get current balance from broker (prediction mode has no balance)
+        if self.is_prediction_mode:
+            balance = "0"
+        else:
+            broker = self._betting_broker
+            balance = broker.initial_balance
+            if broker.has_account(agent_id):
+                account = broker._accounts.get(agent_id)
+                if account:
+                    balance = str(account.balance)
 
         logger.info("Agent %s reconnected with session key", agent_id)
 
@@ -320,8 +347,9 @@ class ExternalAgentAdapter:
                 state.subscription.subscription_id
             )
 
-        # Delete broker account so agent can rejoin
-        await self._broker.delete_account(agent_id)
+        # Delete broker account so agent can rejoin (classic betting only)
+        if not self.is_prediction_mode:
+            await self._betting_broker.delete_account(agent_id)
 
         logger.info("Unregistered external agent: %s", agent_id)
         return True
@@ -495,7 +523,7 @@ class ExternalAgentAdapter:
             existing_bet_id = self._idempotency_keys.get(request.idempotency_key)
             if existing_bet_id:
                 # Return existing bet
-                bet = self._broker._bets.get(existing_bet_id)
+                bet = self._betting_broker._bets.get(existing_bet_id)
                 if bet:
                     return self._bet_to_response(bet)
                 raise ValueError("Duplicate idempotency key but bet not found")
@@ -568,7 +596,7 @@ class ExternalAgentAdapter:
             raise ValueError(f"Invalid market type: {request.market}")
 
         # Place bet through broker
-        result = await self._broker.place_bet(agent_id, bet_request)
+        result = await self._betting_broker.place_bet(agent_id, bet_request)
 
         # Get the bet that was just placed
         # The broker returns a status string, we need to find the actual bet
@@ -613,15 +641,16 @@ class ExternalAgentAdapter:
 
     def _get_agent_bets_internal(self, agent_id: str) -> list:
         """Get all bets for an agent (internal, returns Bet objects)."""
+        broker = self._betting_broker
         bet_ids = (
-            self._broker._active_bets.get(agent_id, [])
-            + self._broker._pending_orders.get(agent_id, [])
-            + self._broker._bet_history.get(agent_id, [])
+            broker._active_bets.get(agent_id, [])
+            + broker._pending_orders.get(agent_id, [])
+            + broker._bet_history.get(agent_id, [])
         )
 
         bets = []
         for bet_id in bet_ids:
-            bet = self._broker._bets.get(bet_id)
+            bet = broker._bets.get(bet_id)
             if bet:
                 bets.append(bet)
 
@@ -646,7 +675,7 @@ class ExternalAgentAdapter:
         if not self.is_registered(agent_id):
             raise ValueError(f"Agent {agent_id} not registered")
 
-        account = self._broker._accounts.get(agent_id)
+        account = self._betting_broker._accounts.get(agent_id)
         if account is None:
             raise ValueError(f"Account not found for agent {agent_id}")
 
@@ -741,45 +770,150 @@ class ExternalAgentAdapter:
             len(final_results),
         )
 
+    # =========================================================================
+    # Prediction Operations (PredictionBroker mode)
+    # =========================================================================
+
+    async def submit_prediction(
+        self, agent_id: str, selection: str
+    ) -> PredictionResponse:
+        """Submit a prediction (PredictionBroker mode only)."""
+        if not self.is_registered(agent_id):
+            raise ValueError(f"Agent {agent_id} not registered")
+
+        broker = self._pred_broker
+        event = broker._event
+        if event is None:
+            raise ValueError("No active event available")
+
+        result = await broker.submit_prediction(agent_id, event.event_id, selection)
+
+        if result.startswith("prediction_error"):
+            raise ValueError(result)
+
+        # Find the prediction just submitted
+        preds = await broker.get_my_predictions(agent_id, event.event_id)
+        if not preds:
+            raise ValueError("Prediction submitted but not found")
+
+        pred = preds[-1]
+        self._agents[agent_id].last_activity_at = datetime.now(timezone.utc)
+
+        return PredictionResponse(
+            prediction_id=pred.prediction_id,
+            agent_id=pred.agent_id,
+            event_id=pred.event_id,
+            selection=pred.selection.value,
+            window=pred.window,
+            submit_time=pred.submit_time,
+            elapsed_ratio=pred.elapsed_ratio,
+            is_correct=pred.is_correct,
+            score=str(pred.score) if pred.score is not None else None,
+        )
+
+    async def get_predictions(self, agent_id: str) -> list[PredictionResponse]:
+        """Get predictions for an agent (PredictionBroker mode only)."""
+        if not self.is_registered(agent_id):
+            raise ValueError(f"Agent {agent_id} not registered")
+
+        broker = self._pred_broker
+        event = broker._event
+        event_id = event.event_id if event is not None else None
+        preds = await broker.get_my_predictions(agent_id, event_id)
+
+        return [
+            PredictionResponse(
+                prediction_id=p.prediction_id,
+                agent_id=p.agent_id,
+                event_id=p.event_id,
+                selection=p.selection.value,
+                window=p.window,
+                submit_time=p.submit_time,
+                elapsed_ratio=p.elapsed_ratio,
+                is_correct=p.is_correct,
+                score=str(p.score) if p.score is not None else None,
+            )
+            for p in preds
+        ]
+
+    async def get_event_info(self) -> EventInfoResponse | None:
+        """Get current event info (PredictionBroker mode only)."""
+        info = await self._pred_broker.get_event_info()
+        if info is None:
+            return None
+
+        return EventInfoResponse(
+            event_id=info["event_id"],
+            home_team=info["home_team"],
+            away_team=info["away_team"],
+            game_time=info.get("game_time"),
+            status=info["status"],
+            current_window=info["current_window"],
+            elapsed_ratio=info["elapsed_ratio"],
+            period=info.get("period"),
+            game_clock=info.get("game_clock"),
+            home_score=info.get("home_score"),
+            away_score=info.get("away_score"),
+        )
+
     async def _build_final_results(self) -> list[AgentResult]:
         """Build final results for all agents from broker."""
         results = []
 
-        for agent_id in self._broker._accounts:
-            try:
-                stats = await self._broker.get_statistics(agent_id)
-                account = self._broker._accounts.get(agent_id)
-                if account is None:
-                    continue
-
-                # Get agent state for display_name (if currently connected)
+        if self.is_prediction_mode:
+            pred_stats = self._pred_broker.get_prediction_statistics()
+            for agent_id, pstats in pred_stats.items():
                 agent_state = self._agents.get(agent_id)
                 display_name = agent_state.display_name if agent_state else None
-
-                # Use agent_state.authenticated if connected, otherwise fall back to
-                # account.is_external (persisted) - external agents are authenticated
-                # by definition since API key is required to create the account
-                if agent_state is not None:
-                    authenticated = agent_state.authenticated
-                else:
-                    authenticated = account.is_external
-
+                authenticated = (
+                    agent_state.authenticated if agent_state is not None else False
+                )
                 results.append(
                     AgentResult(
                         agent_id=agent_id,
                         display_name=display_name,
                         authenticated=authenticated,
-                        final_balance=str(account.balance),
-                        net_profit=str(stats.net_profit),
-                        total_bets=stats.total_bets,
-                        win_rate=round(stats.win_rate, 4),
-                        roi=round(stats.roi, 4),
+                        final_balance=str(pstats.total_score),
+                        net_profit=str(pstats.total_score),
+                        total_bets=pstats.total_predictions,
+                        win_rate=round(pstats.accuracy, 4),
+                        roi=0.0,
                     )
                 )
-            except Exception as e:
-                logger.warning("Failed to get results for agent %s: %s", agent_id, e)
+        else:
+            broker = self._betting_broker
+            for agent_id in broker._accounts:
+                try:
+                    stats = await broker.get_statistics(agent_id)
+                    account = broker._accounts.get(agent_id)
+                    if account is None:
+                        continue
 
-        # Sort by balance descending
+                    agent_state = self._agents.get(agent_id)
+                    display_name = agent_state.display_name if agent_state else None
+
+                    if agent_state is not None:
+                        authenticated = agent_state.authenticated
+                    else:
+                        authenticated = account.is_external
+
+                    results.append(
+                        AgentResult(
+                            agent_id=agent_id,
+                            display_name=display_name,
+                            authenticated=authenticated,
+                            final_balance=str(account.balance),
+                            net_profit=str(stats.net_profit),
+                            total_bets=stats.total_bets,
+                            win_rate=round(stats.win_rate, 4),
+                            roi=round(stats.roi, 4),
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to get results for agent %s: %s", agent_id, e
+                    )
+
         results.sort(key=lambda r: float(r.final_balance), reverse=True)
         return results
 

@@ -267,6 +267,68 @@ class BalanceResponse(BaseModel):
 # ============================================================================
 
 
+# ============================================================================
+# Prediction Models (PredictionBroker mode)
+# ============================================================================
+
+
+class PredictionRequest(BaseModel):
+    """Request body for submitting a prediction."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    selection: str = Field(
+        description="Prediction selection: 'home_win', 'away_win', or 'even'"
+    )
+
+
+class PredictionResponse(BaseModel):
+    """Response for a submitted prediction."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    prediction_id: str = Field(serialization_alias="predictionId")
+    agent_id: str = Field(serialization_alias="agentId")
+    event_id: str = Field(serialization_alias="eventId")
+    selection: str
+    window: int
+    submit_time: datetime = Field(serialization_alias="submitTime")
+    elapsed_ratio: float = Field(serialization_alias="elapsedRatio")
+    is_correct: bool | None = Field(default=None, serialization_alias="isCorrect")
+    score: str | None = None
+
+
+class PredictionsListResponse(BaseModel):
+    """Response for listing agent's predictions."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    predictions: list[PredictionResponse]
+
+
+class EventInfoResponse(BaseModel):
+    """Response for current event info (prediction mode)."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    event_id: str = Field(serialization_alias="eventId")
+    home_team: str = Field(serialization_alias="homeTeam")
+    away_team: str = Field(serialization_alias="awayTeam")
+    game_time: str | None = Field(default=None, serialization_alias="gameTime")
+    status: str
+    current_window: int = Field(serialization_alias="currentWindow")
+    elapsed_ratio: float = Field(serialization_alias="elapsedRatio")
+    period: int | None = None
+    game_clock: str | None = Field(default=None, serialization_alias="gameClock")
+    home_score: int | None = Field(default=None, serialization_alias="homeScore")
+    away_score: int | None = Field(default=None, serialization_alias="awayScore")
+
+
+# ============================================================================
+# Error Models
+# ============================================================================
+
+
 class ErrorDetail(BaseModel):
     """Error detail structure."""
 
@@ -309,6 +371,12 @@ class ErrorCodes:
     DUPLICATE_BET = "DUPLICATE_BET"
     INVALID_MARKET = "INVALID_MARKET"
     INVALID_SELECTION = "INVALID_SELECTION"
+
+    # Prediction errors
+    PREDICTION_REJECTED = "PREDICTION_REJECTED"
+    PREDICTION_CLOSED = "PREDICTION_CLOSED"
+    PREDICTION_MODE_ONLY = "PREDICTION_MODE_ONLY"
+    BETTING_MODE_ONLY = "BETTING_MODE_ONLY"
 
     # Trial errors
     TRIAL_NOT_FOUND = "TRIAL_NOT_FOUND"
@@ -396,6 +464,11 @@ __all__ = [
     "BetsListResponse",
     "BalanceResponse",
     "HoldingResponse",
+    # Predictions
+    "PredictionRequest",
+    "PredictionResponse",
+    "PredictionsListResponse",
+    "EventInfoResponse",
     # Errors
     "ErrorCodes",
     "ErrorDetail",

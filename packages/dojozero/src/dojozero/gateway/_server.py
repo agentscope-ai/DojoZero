@@ -30,6 +30,10 @@ from dojozero.gateway._models import (
     ErrorDetail,
     ErrorResponse,
     EventEnvelope,
+    EventInfoResponse,
+    PredictionRequest,
+    PredictionResponse,
+    PredictionsListResponse,
     RecentEventsResponse,
     TrialMetadataResponse,
     TrialResultsResponse,
@@ -38,9 +42,8 @@ from dojozero.gateway._sse import SSEConnection, create_sse_response
 
 if TYPE_CHECKING:
     from dojozero.betting._broker import BrokerOperator
+    from dojozero.betting._prediction_broker import PredictionBroker
     from dojozero.data import DataHub
-
-    BrokerLike = "BrokerOperator | PredictionBroker"
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +54,7 @@ class GatewayState:
 
     trial_id: str
     data_hub: "DataHub"
-    broker: "BrokerOperator"
+    broker: "BrokerOperator | PredictionBroker"
     adapter: ExternalAgentAdapter
     authenticator: AgentAuthenticator = field(default_factory=NoOpAuthenticator)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -106,7 +109,7 @@ def get_agent_id(
 def create_gateway_app(
     trial_id: str,
     data_hub: "DataHub",
-    broker: "BrokerOperator",
+    broker: "BrokerOperator | PredictionBroker",
     metadata: dict[str, Any] | None = None,
     authenticator: AgentAuthenticator | None = None,
 ) -> FastAPI:
@@ -115,7 +118,7 @@ def create_gateway_app(
     Args:
         trial_id: ID of the trial this gateway serves
         data_hub: DataHub instance for event subscriptions
-        broker: BrokerOperator for betting operations
+        broker: BrokerOperator or PredictionBroker for trial operations
         metadata: Trial metadata
         authenticator: Optional authenticator for API key validation.
             If None, uses NoOpAuthenticator (allows any agent_id).
@@ -331,10 +334,11 @@ def create_gateway_app(
     ) -> TrialMetadataResponse:
         """Get trial metadata."""
         event = state.broker._event
+        can_bet = getattr(event, "can_bet", False) if event else False
 
         return TrialMetadataResponse(
             trial_id=state.trial_id,
-            phase="running" if event and event.can_bet else "unknown",
+            phase="running" if event and can_bet else "unknown",
             sport_type=state.metadata.get("sport_type", ""),
             game_id=event.event_id if event else "",
             home_team=event.home_team if event else "",
@@ -511,22 +515,53 @@ def create_gateway_app(
         )
 
     # =========================================================================
-    # Odds
+    # Odds (classic betting only)
     # =========================================================================
+
+    def _require_betting_mode(state: GatewayState, endpoint: str) -> None:
+        if state.adapter.is_prediction_mode:
+            raise HTTPException(
+                status_code=404,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.BETTING_MODE_ONLY,
+                        message=(
+                            f"This trial uses prediction mode. "
+                            f"{endpoint} is only available in classic betting mode."
+                        ),
+                    )
+                ).model_dump(by_alias=True),
+            )
+
+    def _require_prediction_mode(state: GatewayState, endpoint: str) -> None:
+        if not state.adapter.is_prediction_mode:
+            raise HTTPException(
+                status_code=404,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.PREDICTION_MODE_ONLY,
+                        message=(
+                            f"This trial uses classic betting mode. "
+                            f"{endpoint} is only available in prediction mode."
+                        ),
+                    )
+                ).model_dump(by_alias=True),
+            )
 
     @app.get("/odds/current", response_model=CurrentOddsResponse)
     async def get_current_odds(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
     ) -> CurrentOddsResponse:
-        """Get current betting odds."""
+        """Get current betting odds (classic betting only)."""
+        _require_betting_mode(state, "GET /odds/current")
         if not state.adapter.is_registered(agent_id):
             raise HTTPException(status_code=403, detail="Agent not registered")
 
         return state.adapter.get_current_odds()
 
     # =========================================================================
-    # Betting
+    # Betting (classic only)
     # =========================================================================
 
     @app.post("/bets", response_model=BetResponse)
@@ -535,7 +570,8 @@ def create_gateway_app(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
     ) -> BetResponse:
-        """Place a bet."""
+        """Place a bet (classic betting only)."""
+        _require_betting_mode(state, "POST /bets. Use POST /predictions instead")
         try:
             return await state.adapter.place_bet(agent_id, request)
         except ValueError as e:
@@ -572,7 +608,8 @@ def create_gateway_app(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
     ) -> BetsListResponse:
-        """Get all bets for the agent."""
+        """Get all bets for the agent (classic betting only)."""
+        _require_betting_mode(state, "GET /bets. Use GET /predictions instead")
         if not state.adapter.is_registered(agent_id):
             raise HTTPException(status_code=403, detail="Agent not registered")
 
@@ -583,7 +620,8 @@ def create_gateway_app(
         agent_id: str = Depends(get_agent_id),
         state: GatewayState = Depends(get_gateway_state),
     ) -> BalanceResponse:
-        """Get agent's balance and holdings."""
+        """Get agent's balance and holdings (classic betting only)."""
+        _require_betting_mode(state, "GET /balance")
         try:
             return state.adapter.get_balance(agent_id)
         except ValueError as e:
@@ -591,6 +629,69 @@ def create_gateway_app(
             if "not registered" in error_str.lower():
                 raise HTTPException(status_code=403, detail="Agent not registered")
             raise HTTPException(status_code=404, detail=error_str)
+
+    # =========================================================================
+    # Predictions (PredictionBroker only)
+    # =========================================================================
+
+    @app.post("/predictions", response_model=PredictionResponse)
+    async def submit_prediction(
+        request: PredictionRequest,
+        agent_id: str = Depends(get_agent_id),
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> PredictionResponse:
+        """Submit a prediction (prediction mode only)."""
+        _require_prediction_mode(state, "POST /predictions. Use POST /bets instead")
+        try:
+            return await state.adapter.submit_prediction(agent_id, request.selection)
+        except ValueError as e:
+            error_str = str(e)
+            if "not registered" in error_str.lower():
+                code = ErrorCodes.NOT_REGISTERED
+                status = 403
+            elif "closed" in error_str.lower() or "not accepting" in error_str.lower():
+                code = ErrorCodes.PREDICTION_CLOSED
+                status = 400
+            else:
+                code = ErrorCodes.PREDICTION_REJECTED
+                status = 400
+
+            raise HTTPException(
+                status_code=status,
+                detail=ErrorResponse(
+                    error=ErrorDetail(code=code, message=error_str)
+                ).model_dump(by_alias=True),
+            )
+
+    @app.get("/predictions", response_model=PredictionsListResponse)
+    async def get_predictions(
+        agent_id: str = Depends(get_agent_id),
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> PredictionsListResponse:
+        """Get all predictions for the agent (prediction mode only)."""
+        _require_prediction_mode(state, "GET /predictions. Use GET /bets instead")
+        if not state.adapter.is_registered(agent_id):
+            raise HTTPException(status_code=403, detail="Agent not registered")
+
+        preds = await state.adapter.get_predictions(agent_id)
+        return PredictionsListResponse(predictions=preds)
+
+    @app.get("/event/info", response_model=EventInfoResponse)
+    async def get_event_info(
+        agent_id: str = Depends(get_agent_id),
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> EventInfoResponse:
+        """Get current event info (prediction mode only)."""
+        _require_prediction_mode(
+            state, "GET /event/info. Use GET /odds/current instead"
+        )
+        if not state.adapter.is_registered(agent_id):
+            raise HTTPException(status_code=403, detail="Agent not registered")
+
+        info = await state.adapter.get_event_info()
+        if info is None:
+            raise HTTPException(status_code=404, detail="No active event")
+        return info
 
     # =========================================================================
     # Agent List
@@ -603,21 +704,18 @@ def create_gateway_app(
         """List all registered external agents."""
         agents = []
         for agent_id, agent_state in state.adapter._agents.items():
-            # Get balance from broker if account exists
-            balance = None
-            if agent_id in state.broker._accounts:
-                balance = str(state.broker._accounts[agent_id].balance)
-
-            agents.append(
-                {
-                    "agent_id": agent_id,
-                    "registered_at": agent_state.registered_at.isoformat(),
-                    "last_activity_at": agent_state.last_activity_at.isoformat()
-                    if agent_state.last_activity_at
-                    else None,
-                    "balance": balance,
-                }
-            )
+            info: dict[str, Any] = {
+                "agent_id": agent_id,
+                "registered_at": agent_state.registered_at.isoformat(),
+                "last_activity_at": agent_state.last_activity_at.isoformat()
+                if agent_state.last_activity_at
+                else None,
+            }
+            if not state.adapter.is_prediction_mode:
+                accounts = getattr(state.broker, "_accounts", {})
+                if agent_id in accounts:
+                    info["balance"] = str(accounts[agent_id].balance)
+            agents.append(info)
         return {
             "agents": agents,
             "count": len(agents),
@@ -631,40 +729,55 @@ def create_gateway_app(
     async def get_leaderboard(
         state: GatewayState = Depends(get_gateway_state),
     ) -> dict[str, Any]:
-        """Get leaderboard showing all agents' balances and statistics.
+        """Get leaderboard showing all agents' statistics.
 
-        Includes both internal AI agents and external agents.
+        In classic betting mode returns balances and ROI; in prediction mode
+        returns accuracy and scores.
         """
-        leaderboard = []
+        leaderboard: list[dict[str, Any]] = []
 
-        # Get all accounts from broker
-        for agent_id, account in state.broker._accounts.items():
-            # Get statistics for this agent
-            stats = await state.broker.get_statistics(agent_id)
-
-            # Check if this is an external agent (Account is single source of truth)
-            is_external = account.is_external
-
-            leaderboard.append(
-                {
-                    "agent_id": agent_id,
-                    "is_external": is_external,
-                    "balance": str(account.balance),
-                    "total_bets": stats.total_bets,
-                    "total_wagered": str(stats.total_wagered),
-                    "wins": stats.wins,
-                    "losses": stats.losses,
-                    "win_rate": round(stats.win_rate, 4),
-                    "net_profit": str(stats.net_profit),
-                    "roi": round(stats.roi, 4),
-                }
-            )
-
-        # Sort by balance descending
-        leaderboard.sort(key=lambda x: float(x["balance"]), reverse=True)
+        if state.adapter.is_prediction_mode:
+            pred_broker = state.adapter._pred_broker
+            pred_stats = pred_broker.get_prediction_statistics()
+            for agent_id, pstats in pred_stats.items():
+                is_external = agent_id in state.adapter._agents
+                leaderboard.append(
+                    {
+                        "agent_id": agent_id,
+                        "is_external": is_external,
+                        "total_predictions": pstats.total_predictions,
+                        "correct_predictions": pstats.correct_predictions,
+                        "accuracy": round(pstats.accuracy, 4),
+                        "total_score": str(pstats.total_score),
+                    }
+                )
+            leaderboard.sort(key=lambda x: float(x["total_score"]), reverse=True)
+        else:
+            betting_broker = state.adapter._betting_broker
+            for agent_id, account in betting_broker._accounts.items():
+                stats = await betting_broker.get_statistics(agent_id)
+                is_external = account.is_external
+                leaderboard.append(
+                    {
+                        "agent_id": agent_id,
+                        "is_external": is_external,
+                        "balance": str(account.balance),
+                        "total_bets": stats.total_bets,
+                        "total_wagered": str(stats.total_wagered),
+                        "wins": stats.wins,
+                        "losses": stats.losses,
+                        "win_rate": round(stats.win_rate, 4),
+                        "net_profit": str(stats.net_profit),
+                        "roi": round(stats.roi, 4),
+                    }
+                )
+            leaderboard.sort(key=lambda x: float(x["balance"]), reverse=True)
 
         return {
             "trial_id": state.trial_id,
+            "mode": "prediction"
+            if state.adapter.is_prediction_mode
+            else "classic_betting",
             "leaderboard": leaderboard,
             "total_agents": len(leaderboard),
             "external_agents": sum(1 for a in leaderboard if a["is_external"]),
@@ -680,13 +793,20 @@ def create_gateway_app(
         state: GatewayState = Depends(get_gateway_state),
     ) -> dict[str, Any]:
         """Health check endpoint."""
+        event = state.broker._event
+        if state.adapter.is_prediction_mode:
+            accepting = event is not None
+        else:
+            accepting = event.can_bet if event else False
+
         return {
             "status": "ok",
             "trial_id": state.trial_id,
+            "mode": "prediction"
+            if state.adapter.is_prediction_mode
+            else "classic_betting",
             "registered_agents": len(state.adapter._agents),
-            "betting_open": state.broker._event.can_bet
-            if state.broker._event
-            else False,
+            "accepting": accepting,
         }
 
     return app

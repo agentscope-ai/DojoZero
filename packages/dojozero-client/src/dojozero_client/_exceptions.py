@@ -70,6 +70,26 @@ class BettingClosedError(BetRejectedError):
     pass
 
 
+class PredictionRejectedError(DojoClientError):
+    """Prediction was rejected by the gateway."""
+
+    def __init__(
+        self,
+        message: str,
+        code: str | None = None,
+        details: dict[str, Any] | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.details: dict[str, Any] = details or {}
+
+
+class PredictionClosedError(PredictionRejectedError):
+    """Prediction rejected because predictions are closed for this window."""
+
+    pass
+
+
 class RateLimitedError(DojoClientError):
     """Request was rate limited."""
 
@@ -112,6 +132,8 @@ __all__ = [
     "StaleReferenceError",
     "InsufficientBalanceError",
     "BettingClosedError",
+    "PredictionRejectedError",
+    "PredictionClosedError",
     "RateLimitedError",
     "StreamDisconnectedError",
     "TrialEndedError",
