@@ -734,6 +734,71 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip confirmation prompt.",
     )
 
+    # agents build-brains
+    build_brains_parser = agents_subparsers.add_parser(
+        "build-brains",
+        help="Generate per-(persona × llm) agent-brain YAMLs for the agent runner",
+        description=(
+            "Read persona YAMLs and the LLM matrix, emit one "
+            "agent-brain YAML per combination into --out-dir. The runner "
+            "consumes these via `--agent-brain <path>`. Identity is "
+            "decoupled — these files have no relationship to "
+            "$AGENTID_HOME/agents/ profile dirs."
+        ),
+    )
+    build_brains_parser.add_argument(
+        "--personas-dir",
+        default="agents/personas",
+        help="Directory containing per-persona YAML files (default: agents/personas).",
+    )
+    build_brains_parser.add_argument(
+        "--llms",
+        default="agents/llms/default.yaml",
+        help="LLM matrix YAML (default: agents/llms/default.yaml).",
+    )
+    build_brains_parser.add_argument(
+        "--out-dir",
+        default="agent-brains",
+        help=(
+            "Where to write generated brains (default: ./agent-brains/). "
+            "Each combination writes to "
+            "<out-dir>/<name-prefix>-<persona>-<llm>.yaml."
+        ),
+    )
+    build_brains_parser.add_argument(
+        "--name-prefix",
+        default="dojozero",
+        help=(
+            "Prefix for generated brain filenames "
+            "(<prefix>-<persona>-<llm>.yaml). Default: dojozero."
+        ),
+    )
+    build_brains_parser.add_argument(
+        "--personas",
+        nargs="*",
+        default=None,
+        help="Subset of persona names to build (default: all in --personas-dir).",
+    )
+    build_brains_parser.add_argument(
+        "--llms-filter",
+        nargs="*",
+        default=None,
+        help=(
+            "Subset of LLM display names to build "
+            "(case-insensitive; default: all in --llms YAML)."
+        ),
+    )
+    build_brains_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing brain files (default: refuse).",
+    )
+    build_brains_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be written without touching the filesystem.",
+    )
+
     return parser
 
 
@@ -3031,10 +3096,144 @@ async def _sync_service_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _agents_build_brains_command(args: argparse.Namespace) -> int:
+    """Generate per-(persona × llm) agent-brain YAMLs into ``--out-dir``.
+
+    Reads ``agents/personas/*.yaml`` (each with a ``sys_prompt``) and
+    ``agents/llms/default.yaml`` (a list keyed by
+    ``model_display_name``). For each combination, writes
+    ``<out-dir>/<prefix>-<persona>-<llm>.yaml`` — a single YAML carrying
+    the persona's ``sys_prompt`` plus the LLM's ``model:`` block.
+
+    These brains are *decoupled from agent identity*. Pass them to the
+    runner via ``--agent-brain <path>``; identity comes from
+    ``--agent-profile`` separately.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    personas_dir = Path(args.personas_dir)
+    llms_path = Path(args.llms)
+    out_dir = Path(args.out_dir)
+    name_prefix = args.name_prefix.strip()
+
+    if not personas_dir.is_dir():
+        LOGGER.error("personas dir not found: %s", personas_dir)
+        return 1
+    if not llms_path.is_file():
+        LOGGER.error("llms YAML not found: %s", llms_path)
+        return 1
+
+    # Load personas
+    persona_filter = set(args.personas) if args.personas else None
+    personas: dict[str, str] = {}
+    for f in sorted(personas_dir.glob("*.yaml")):
+        name = f.stem
+        if persona_filter and name not in persona_filter:
+            continue
+        with f.open("r", encoding="utf-8") as fp:
+            data = yaml.safe_load(fp) or {}
+        sp = data.get("sys_prompt")
+        if not isinstance(sp, str) or not sp.strip():
+            LOGGER.warning("skipping %s: no non-empty 'sys_prompt'", f.name)
+            continue
+        personas[name] = sp
+    if not personas:
+        LOGGER.error("no personas matched (filter=%s)", persona_filter)
+        return 1
+
+    # Load LLM matrix
+    with llms_path.open("r", encoding="utf-8") as fp:
+        llm_data = yaml.safe_load(fp) or {}
+    entries = llm_data.get("llm", [])
+    if not isinstance(entries, list) or not entries:
+        LOGGER.error("llms YAML at %s missing 'llm' list", llms_path)
+        return 1
+
+    llms_filter = {x.casefold() for x in args.llms_filter} if args.llms_filter else None
+    llms: dict[str, dict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        display = str(entry.get("model_display_name") or "").strip()
+        if not display:
+            continue
+        if llms_filter and display.casefold() not in llms_filter:
+            continue
+        # Slug for the config filename (lowercase, no spaces).
+        slug = display.casefold().replace(" ", "-")
+        model = {
+            "type": entry.get("model_type"),
+            "name": entry.get("model_name"),
+            "api_key_env": entry.get("api_key_env"),
+        }
+        # Carry through any extra fields verbatim (temperature, etc.).
+        for k, v in entry.items():
+            if k in ("model_type", "model_name", "model_display_name"):
+                continue
+            model.setdefault(k, v)
+        llms[slug] = model
+    if not llms:
+        LOGGER.error("no LLMs matched (filter=%s)", llms_filter)
+        return 1
+
+    # Generate
+    written = 0
+    skipped = 0
+    errors = 0
+    if not args.dry_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    for persona_name, sys_prompt in personas.items():
+        for llm_slug, model in llms.items():
+            config_name = f"{name_prefix}-{persona_name}-{llm_slug}.yaml"
+            config_path = out_dir / config_name
+
+            if config_path.is_file() and not args.force:
+                LOGGER.info(
+                    "skipping %s: file exists (pass --force to overwrite)",
+                    config_path,
+                )
+                skipped += 1
+                continue
+
+            payload = {
+                "sys_prompt": sys_prompt,
+                "model": model,
+            }
+            rendered = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+
+            if args.dry_run:
+                print(f"--- {config_path} ---")
+                print(rendered)
+                written += 1
+                continue
+
+            try:
+                config_path.write_text(rendered, encoding="utf-8")
+                LOGGER.info("wrote %s", config_path)
+                written += 1
+            except OSError as exc:
+                LOGGER.error("failed to write %s: %s", config_path, exc)
+                errors += 1
+
+    print(
+        f"\nbuild-brains done: written={written} skipped={skipped} "
+        f"errors={errors} (dry-run={args.dry_run})"
+    )
+    return 1 if errors else 0
+
+
 def _agents_command(args: argparse.Namespace) -> int:
     """Handle agents command - manage agent API keys."""
     import json as json_module
     from pathlib import Path
+
+    # build-brains operates on YAML files in --out-dir, not agent_keys.yaml
+    # — dispatch before the AgentKeyManager setup so it doesn't fail when
+    # --store is absent.
+    if args.agents_command == "build-brains":
+        return _agents_build_brains_command(args)
 
     from dojozero.gateway._auth import AgentKeyManager
 

@@ -39,9 +39,8 @@ async def run(config: RunnerConfig) -> None:
     agentid_client = Client(identity, default_audience=audience)
 
     logger.info(
-        "Runner starting: persona=%s llm=%s trial=%s gateway=%s agent=%s",
-        config.persona,
-        config.llm,
+        "Runner starting: name=%s trial=%s gateway=%s agent=%s",
+        config.agent_display_name,
         config.trial_id,
         config.gateway_url,
         identity.agent_id,
@@ -81,7 +80,7 @@ async def _run_react_loop(config: RunnerConfig, connection: TrialConnection) -> 
         toolkit.register_tool_function(tool)
 
     agent = ReActAgent(
-        name=f"{config.persona}-{config.llm}",
+        name=config.agent_display_name,
         sys_prompt=config.sys_prompt,
         model=model,
         formatter=formatter,

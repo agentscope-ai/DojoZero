@@ -1,22 +1,37 @@
 """Entry point: ``python -m dojozero_agent_runner`` / ``dojozero-agent-runner``.
 
-Three ways to configure:
+Identity (durable) and brain config (iteration-friendly) are decoupled.
+The runner takes one of each:
 
-  1. **CLI flags** (most explicit; preferred for local + ad-hoc launches)::
+  Identity sources (mutually exclusive):
+    --agent-profile <name>   identity from $AGENTID_HOME/agents/<name>/
+    --agent-zip <path>       identity from an agent zip (e.g. portal export)
+    (none)                   AGENTID_* env vars (k8s pod default)
 
-         python -m dojozero_agent_runner \\
-             --portal-zip /path/to/portal-degen.zip \\
-             --persona degen --llm qwen-max \\
-             --trial-id <id> --gateway-url http://localhost:8080
+  Brain sources:
+    --agent-brain <path>    one YAML with sys_prompt + model: block
+    --agent-prompt <path> + --agent-model <path>   two-file split
+    (both)                   piecewise overrides individual fields
 
-  2. **Environment variables** (k8s-pod style; default fallback)::
+Examples::
 
-         DOJOZERO_PERSONA=degen DOJOZERO_LLM=qwen-max ... \\
-             python -m dojozero_agent_runner
+    # Profile identity + agent brain (the common shape)
+    python -m dojozero_agent_runner \\
+        --agent-profile cli-agent \\
+        --agent-brain ./agent-brains/dojozero-degen-claude.yaml \\
+        --trial-id <id> --dashboard-url http://localhost:8080
 
-  3. **Programmatic** — call :func:`dojozero_agent_runner.run`
-     with a :class:`RunnerConfig` directly. Useful when one process
-     orchestrates multiple runners.
+    # Same identity, different brain (A/B test)
+    python -m dojozero_agent_runner \\
+        --agent-profile cli-agent \\
+        --agent-brain ./agent-brains/dojozero-whale-qwen.yaml \\
+        --trial-id <id> --dashboard-url http://localhost:8080
+
+    # Ad-hoc smoke test (zip identity, piecewise brain)
+    python -m dojozero_agent_runner \\
+        --agent-zip /path/to/agent.zip \\
+        --agent-prompt ./prompt.md --agent-model ./model.yaml \\
+        --trial-id <id> --dashboard-url http://localhost:8080
 
 CLI flags override environment variables when both are set.
 """
@@ -38,16 +53,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "DOJOZERO_* / AGENTID_* environment variable."
         ),
     )
-    parser.add_argument(
-        "--persona",
-        default=None,
-        help="Persona name (env: DOJOZERO_PERSONA). Maps to a YAML in agents/personas/.",
-    )
-    parser.add_argument(
-        "--llm",
-        default=None,
-        help="LLM model_display_name (env: DOJOZERO_LLM). Looked up in agents/llms/default.yaml.",
-    )
+
+    # --- trial / transport ---
     parser.add_argument(
         "--trial-id",
         default=None,
@@ -72,16 +79,61 @@ def _build_parser() -> argparse.ArgumentParser:
             "is at root. Mutually exclusive with --dashboard-url."
         ),
     )
+
+    # --- identity sources (mutually exclusive; env fallback if all unset) ---
     parser.add_argument(
-        "--persona-path",
+        "--agent-profile",
         default=None,
-        help="Override persona YAML path (env: DOJOZERO_PERSONA_PATH).",
+        help=(
+            "Name of an agent profile under $AGENTID_HOME/agents/<name>/ "
+            "(default ~/.agentid/agents/<name>/). Identity-only — supplies "
+            "agent.json + private_key. Brain config is provided separately "
+            "via --agent-brain. Env: DOJOZERO_AGENT_PROFILE."
+        ),
     )
     parser.add_argument(
-        "--llm-config-path",
+        "--agent-zip",
         default=None,
-        help="Override LLM matrix YAML path (env: DOJOZERO_LLM_CONFIG_PATH).",
+        help=(
+            "Path to an agent zip (e.g. portal export) containing agent.json "
+            "+ private_key. Identity-only — pair with --agent-brain (or "
+            "--sys-prompt-file + --model-config) to supply the brain. "
+            "Env: DOJOZERO_AGENT_ZIP."
+        ),
     )
+
+    # --- brain config (decoupled from --agent-profile) ---
+    parser.add_argument(
+        "--agent-brain",
+        default=None,
+        help=(
+            "Path to an agent-brain YAML (sys_prompt + model: block). "
+            "The canonical shape produced by `dojo0 agents build-brains`. "
+            "Env: DOJOZERO_AGENT_BRAIN."
+        ),
+    )
+    parser.add_argument(
+        "--agent-prompt",
+        default=None,
+        help=(
+            "Path to a file containing the system prompt (raw text). "
+            "Two-file alternative to --agent-brain; overrides the "
+            "sys_prompt field when both are given. "
+            "Env: DOJOZERO_AGENT_PROMPT."
+        ),
+    )
+    parser.add_argument(
+        "--agent-model",
+        default=None,
+        help=(
+            "Path to a YAML file with the model config "
+            "(model_type, model_name, api_key_env, ...). Two-file "
+            "alternative to --agent-brain; overrides the model block "
+            "when both are given. Env: DOJOZERO_AGENT_MODEL."
+        ),
+    )
+
+    # --- misc ---
     parser.add_argument(
         "--poll-interval-seconds",
         type=float,
@@ -93,24 +145,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "AgentID JWT 'aud' claim override "
-            "(env: DOJOZERO_AGENTID_AUDIENCE; default = gateway-url)."
-        ),
-    )
-    parser.add_argument(
-        "--portal-zip",
-        default=None,
-        help=(
-            "Path to a portal-agent.zip containing agent.json + private_key. "
-            "When set, takes precedence over --agent-profile and AGENTID_* env vars."
-        ),
-    )
-    parser.add_argument(
-        "--agent-profile",
-        default=None,
-        help=(
-            "Name of an agent created by `agent-id-cli agent create --name X`. "
-            "Loaded from $AGENTID_HOME/agents/<name>/ (default ~/.agentid/agents/<name>/). "
-            "Mutually exclusive with --portal-zip; both override AGENTID_* env."
+            "(env: DOJOZERO_AGENTID_AUDIENCE; default = dashboard or gateway URL)."
         ),
     )
     parser.add_argument(
