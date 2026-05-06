@@ -76,7 +76,6 @@ class TestRequiredFields:
             "DOJOZERO_PERSONA",
             "DOJOZERO_LLM",
             "DOJOZERO_TRIAL_ID",
-            "DOJOZERO_GATEWAY_URL",
             "AGENTID_AGENT_ID",
             "AGENTID_AGENT_KID",
             "AGENTID_PRIVATE_KEY",
@@ -86,6 +85,25 @@ class TestRequiredFields:
         monkeypatch.delenv(missing, raising=False)
         with pytest.raises(ValueError, match=f"Required env var not set: {missing}"):
             load_config_from_env()
+
+    def test_missing_both_url_envs_raises(self, monkeypatch, base_env):
+        # DOJOZERO_GATEWAY_URL and DOJOZERO_DASHBOARD_URL are alternatives;
+        # the env loader requires *one* of them.
+        monkeypatch.delenv("DOJOZERO_GATEWAY_URL", raising=False)
+        monkeypatch.delenv("DOJOZERO_DASHBOARD_URL", raising=False)
+        with pytest.raises(
+            ValueError,
+            match="DOJOZERO_DASHBOARD_URL or DOJOZERO_GATEWAY_URL is required",
+        ):
+            load_config_from_env()
+
+    def test_dashboard_url_derives_gateway_url(self, monkeypatch, base_env):
+        # DOJOZERO_DASHBOARD_URL alone is enough — loader composes the
+        # trial-prefixed gateway URL from it.
+        monkeypatch.delenv("DOJOZERO_GATEWAY_URL", raising=False)
+        monkeypatch.setenv("DOJOZERO_DASHBOARD_URL", "http://localhost:8080")
+        cfg = load_config_from_env()
+        assert cfg.gateway_url == (f"http://localhost:8080/api/trials/{cfg.trial_id}")
 
 
 # ---------------------------------------------------------------------------

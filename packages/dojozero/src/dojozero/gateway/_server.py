@@ -333,51 +333,115 @@ def create_gateway_app(
     async def register_agent(
         request: AgentRegistrationRequest,
         state: GatewayState = Depends(get_gateway_state),
+        authorization: str | None = Header(default=None),
     ) -> AgentRegistrationResponse:
         """Register an external agent for this trial.
 
-        API key is required. Agent identity (agent_id, display_name) is derived
-        from the verified identity in agent_keys.yaml.
+        Two auth paths:
 
-        Use 'dojo0 agents add' to register agents and get API keys.
+        - **AgentID Bearer JWT (preferred)**. When ``Authorization: Bearer
+          <jwt>`` is present and the gateway has an ``agentid_verifier``
+          configured, identity is taken from the cryptographically
+          verified ``sub`` claim. The legacy ``apiKey`` body field is
+          ignored.
+        - **Legacy apiKey** (back-compat for pre-AgentID clients). When
+          no Bearer is present, ``apiKey`` is validated against the
+          configured authenticator (agent_keys.yaml + GitHub PAT).
         """
         # Convert initial_balance to string if it's a float
         initial_balance: str | None = None
         if request.initial_balance is not None:
             initial_balance = str(request.initial_balance)
 
-        # Validate API key and get identity
-        identity = await state.authenticator.validate(request.api_key)
-        if identity is None:
-            raise HTTPException(
-                status_code=401,
-                detail=ErrorResponse(
-                    error=ErrorDetail(
-                        code=ErrorCodes.INVALID_TOKEN,
-                        message="Invalid API key",
-                    )
-                ).model_dump(by_alias=True),
-            )
+        bearer_agent_id: str | None = None
+        if (
+            authorization
+            and authorization.startswith("Bearer ")
+            and state.agentid_verifier is not None
+        ):
+            token = authorization[len("Bearer ") :]
+            try:
+                bearer_agent_id = await _verify_agentid_token(
+                    token, state.agentid_verifier
+                )
+            except HTTPException:
+                # 401 etc — propagate; refuse a valid-looking-but-bad token.
+                raise
 
-        # Use verified identity - API key is the single source of truth
-        # All identity/metadata comes from agent_keys.yaml
-        logger.info(
-            "Agent authenticated: api_key=***%s, agent_id=%s, persona=%s",
-            request.api_key[-4:] if len(request.api_key) > 4 else "****",
-            identity.agent_id,
-            identity.persona or "(none)",
-        )
+        if bearer_agent_id is not None:
+            # Bearer is the source of truth. Pull richer metadata from
+            # agent_keys.yaml *if* the agent is pre-registered there;
+            # otherwise default everything from the verified agent_id.
+            yaml_identity = None
+            try:
+                yaml_identity = await state.authenticator.validate(request.api_key)
+            except Exception:  # noqa: BLE001
+                yaml_identity = None
+            if yaml_identity is not None and yaml_identity.agent_id != bearer_agent_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.INVALID_TOKEN,
+                            message=(
+                                f"apiKey identity {yaml_identity.agent_id!r} "
+                                f"does not match Bearer identity "
+                                f"{bearer_agent_id!r}"
+                            ),
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            agent_id = bearer_agent_id
+            display_name = yaml_identity.display_name if yaml_identity else agent_id
+            persona = yaml_identity.persona if yaml_identity else None
+            model = yaml_identity.model if yaml_identity else None
+            model_display_name = (
+                yaml_identity.model_display_name if yaml_identity else None
+            )
+            cdn_url = yaml_identity.cdn_url if yaml_identity else None
+            logger.info(
+                "Agent authenticated via Bearer: agent_id=%s persona=%s",
+                agent_id,
+                persona or "(none)",
+            )
+        else:
+            # Legacy apiKey path — used by pre-AgentID clients and the
+            # existing test suite. The authenticator validates the body
+            # against agent_keys.yaml or a GitHub PAT.
+            identity = await state.authenticator.validate(request.api_key)
+            if identity is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.INVALID_TOKEN,
+                            message="Invalid API key",
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            agent_id = identity.agent_id
+            display_name = identity.display_name
+            persona = identity.persona
+            model = identity.model
+            model_display_name = identity.model_display_name
+            cdn_url = identity.cdn_url
+            logger.info(
+                "Agent authenticated: api_key=***%s, agent_id=%s, persona=%s",
+                request.api_key[-4:] if len(request.api_key) > 4 else "****",
+                agent_id,
+                persona or "(none)",
+            )
 
         try:
             response = await state.adapter.register_agent(
-                agent_id=identity.agent_id,
+                agent_id=agent_id,
                 initial_balance=initial_balance,
-                display_name=identity.display_name,
-                persona=identity.persona,
-                model=identity.model,
-                model_display_name=identity.model_display_name,
-                cdn_url=identity.cdn_url,
-                authenticated=True,  # Always True - API key is required
+                display_name=display_name,
+                persona=persona,
+                model=model,
+                model_display_name=model_display_name,
+                cdn_url=cdn_url,
+                authenticated=True,
             )
         except ValueError as e:
             error_msg = str(e)
@@ -395,15 +459,14 @@ def create_gateway_app(
 
         # Activity event: agent joined the trial. Best-effort — emission
         # never raises and never blocks registration.
-
-        state.session_start_times[identity.agent_id] = time.time()
+        state.session_start_times[agent_id] = time.time()
         await emit_session_start(
             state.agentid_verifier,
-            agent_id=identity.agent_id,
-            agent_name=identity.display_name or "",
+            agent_id=agent_id,
+            agent_name=display_name or "",
             trial_id=state.trial_id,
-            persona=identity.persona,
-            model=identity.model,
+            persona=persona,
+            model=model,
             sport_type=state.metadata.get("sport_type"),
         )
         return response

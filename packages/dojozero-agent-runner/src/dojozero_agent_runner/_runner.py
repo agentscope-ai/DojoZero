@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 
 async def run(config: RunnerConfig) -> None:
     """Main entry: connect, react to events, exit on trial_ended."""
-    identity = Identity.from_env()
+    # Identity precedence: pre-loaded on config (programmatic / --portal-zip
+    # callers), else read AGENTID_* env (k8s pod default).
+    identity = config.identity if config.identity is not None else Identity.from_env()
     audience = config.agentid_audience or config.gateway_url
     agentid_client = Client(identity, default_audience=audience)
 
