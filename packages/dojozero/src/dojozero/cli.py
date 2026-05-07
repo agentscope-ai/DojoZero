@@ -918,6 +918,7 @@ def _setup_otel_exporter(
     from dojozero.core._tracing import (
         OTelSpanExporter,
         SLSLogExporter,
+        enable_agentscope_tracing,
         get_sls_exporter_headers,
         set_otel_exporter,
         set_sls_log_exporter,
@@ -946,6 +947,9 @@ def _setup_otel_exporter(
         )
         otel_exporter.start()
         set_otel_exporter(otel_exporter)
+        # Flip AgentScope's tracing flag so @trace_llm etc. emit GenAI spans
+        # onto our existing TracerProvider.
+        enable_agentscope_tracing()
         LOGGER.info(
             "OTel exporter configured: %s (backend: sls, service_name: %s)",
             otlp_endpoint,
@@ -982,6 +986,7 @@ def _setup_otel_exporter(
         )
         otel_exporter.start()
         set_otel_exporter(otel_exporter)
+        enable_agentscope_tracing()
         LOGGER.info(
             "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
             otlp_endpoint,
@@ -1445,12 +1450,14 @@ async def _resolve_event_files(
     """Resolve event file patterns to actual file paths.
 
     Supports:
-    - Local file paths: outputs/game.jsonl
-    - Local glob patterns: outputs/*/*.jsonl, outputs/2025-01-*/*.jsonl
+    - Local file paths: outputs/{trial_id}.jsonl
+    - Local glob patterns: outputs/*.jsonl
     - HTTP(S) URLs: http://server/api/trials/{id}/events.jsonl
     - OSS URLs: oss://bucket/prefix/file.jsonl
     - OSS glob patterns: oss://bucket/prefix/*.jsonl
     - SLS trace ids: sls://<trial_id>[@<run_id>]
+
+    Downloaded/materialized files are cached under outputs/{trial_id}.jsonl.
 
     Args:
         patterns: List of file patterns, OSS URLs, or sls:// trace ids
@@ -1529,32 +1536,74 @@ async def _resolve_event_files(
             import httpx
 
             url = pattern
-            # Derive a cache filename from the URL path.
-            # For /api/trials/{trial_id}/events.jsonl, use trial_id as the name.
+            # Derive cache path from URL.
+            # For /api/trials/{trial_id}/events.jsonl → outputs/{trial_id}/events.jsonl
             import re as _re
 
             url_path = url.split("?")[0].rstrip("/")
             trial_match = _re.search(r"/api/trials/([^/]+)/events", url_path)
             if trial_match:
-                url_filename = f"{trial_match.group(1)}.jsonl"
+                cache_path = sls_cache / f"{trial_match.group(1)}.jsonl"
             else:
                 url_filename = Path(url_path).name
                 if not url_filename.endswith(".jsonl"):
                     url_filename += ".jsonl"
-            cache_path = sls_cache / url_filename
+                cache_path = sls_cache / url_filename
             if not cache_path.exists():
                 LOGGER.info("Downloading events from %s", url)
                 try:
-                    async with httpx.AsyncClient(timeout=120.0) as client:
-                        resp = await client.get(url)
-                        resp.raise_for_status()
-                        cache_path.parent.mkdir(parents=True, exist_ok=True)
-                        cache_path.write_bytes(resp.content)
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        delay = 3.0
+                        last_spans = -1
+                        stall_count = 0
+                        max_stalls = 20  # give up after ~5 min of no progress
+                        attempt = 0
+                        while True:
+                            resp = await client.get(url)
+                            if resp.status_code == 200:
+                                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                                cache_path.write_bytes(resp.content)
+                                break
+                            elif resp.status_code == 202:
+                                attempt += 1
+                                body = resp.json()
+                                spans = body.get("spans_fetched", 0)
+                                total = body.get("spans_total", 0)
+                                elapsed = body.get("elapsed_seconds", "?")
+                                pct = f" {100 * spans // total}%" if total > 0 else ""
+                                LOGGER.info(
+                                    "Server is materializing events "
+                                    "(%s/%s spans%s, %ss elapsed). "
+                                    "Retrying in %.0fs... [attempt %d]",
+                                    spans,
+                                    total or "?",
+                                    pct,
+                                    elapsed,
+                                    delay,
+                                    attempt,
+                                )
+                                if spans > last_spans:
+                                    last_spans = spans
+                                    stall_count = 0
+                                else:
+                                    stall_count += 1
+                                if stall_count >= max_stalls:
+                                    raise DojoZeroCLIError(
+                                        f"Server materialization stalled for "
+                                        f"{url} (no progress after "
+                                        f"{max_stalls} retries)"
+                                    )
+                                await asyncio.sleep(delay)
+                                delay = min(delay * 1.5, 15.0)
+                            else:
+                                resp.raise_for_status()
                 except httpx.HTTPStatusError as e:
                     raise DojoZeroCLIError(
                         f"Failed to download events from {url}: "
                         f"HTTP {e.response.status_code}"
                     ) from e
+                except DojoZeroCLIError:
+                    raise
                 except Exception as e:
                     raise DojoZeroCLIError(
                         f"Failed to download events from {url}: {e}"
@@ -1983,9 +2032,10 @@ async def _backtest_command(args: argparse.Namespace) -> int:
             if args.trial_id and total_files == 1:
                 trial_id = args.trial_id
             else:
-                # Use file stem as part of trial_id for traceability
-                file_stem = event_file.stem
-                trial_id = f"{file_stem}-{uuid4().hex[:8]}"
+                # Derive source trial ID from file name:
+                #   outputs/{source_trial_id}.jsonl → use file stem
+                source_id = event_file.stem
+                trial_id = f"{source_id}-bt-{uuid4().hex[:8]}"
 
             LOGGER.info(
                 "=" * 60 + "\nProcessing file %d/%d: %s (trial_id: %s)\n" + "=" * 60,

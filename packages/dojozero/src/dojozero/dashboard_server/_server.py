@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import platform
+import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -44,13 +45,14 @@ from dojozero.core._tracing import (
     SLSLogExporter,
     get_sls_exporter_headers,
     get_sls_log_exporter,
+    enable_agentscope_tracing,
     set_otel_exporter,
     set_sls_log_exporter,
 )
 from dojozero.core._types import RuntimeContext
 from dojozero.dashboard_server._trial_manager import (
+    _legacy_trials_cache_path,
     download_trial_from_oss,
-    ensure_trial_symlink,
     trials_cache_path,
     upload_trial_to_oss,
 )
@@ -144,6 +146,85 @@ class TrialSourceRequest(BaseModel):
 
 
 @dataclass
+class _MaterializationEntry:
+    """Tracks a single in-flight SLS materialization task."""
+
+    task: asyncio.Task[Any]
+    trial_id: str
+    run_id: str | None
+    started_at: float  # time.monotonic()
+    spans_fetched: int = 0  # updated by progress callback
+    spans_total: int = 0  # total from SLS count query
+
+
+class MaterializationTracker:
+    """Track in-flight SLS materialization tasks.
+
+    Keyed by ``(trial_id, run_id)`` so concurrent requests for the same
+    trial share a single background task.
+    """
+
+    def __init__(self) -> None:
+        self._tasks: dict[tuple[str, str | None], _MaterializationEntry] = {}
+
+    def get(self, trial_id: str, run_id: str | None) -> _MaterializationEntry | None:
+        return self._tasks.get((trial_id, run_id))
+
+    def start(
+        self,
+        trial_id: str,
+        run_id: str | None,
+        cached_path: Path,
+    ) -> _MaterializationEntry:
+        """Start a background SLS materialization, or return an existing one."""
+        key = (trial_id, run_id)
+        existing = self._tasks.get(key)
+        if existing is not None and not existing.task.done():
+            return existing  # already in flight
+
+        entry = _MaterializationEntry(
+            task=asyncio.ensure_future(asyncio.sleep(0)),  # replaced below
+            trial_id=trial_id,
+            run_id=run_id,
+            started_at=time.monotonic(),
+        )
+
+        def _on_progress(rows_fetched: int, total: int) -> None:
+            entry.spans_fetched = rows_fetched
+            entry.spans_total = total
+
+        async def _do_materialize() -> Path:
+            from dojozero.data import SLSEventSource
+
+            await SLSEventSource().materialize_jsonl(
+                trial_id,
+                cached_path,
+                run_id=run_id or None,
+                progress_callback=_on_progress,
+            )
+            upload_trial_to_oss(trial_id, cached_path)
+            return cached_path
+
+        task = asyncio.create_task(_do_materialize(), name=f"materialize-{trial_id}")
+
+        def _on_done(t: asyncio.Task[Any]) -> None:
+            if not t.cancelled() and t.exception():
+                LOGGER.error(
+                    "Background materialization failed for '%s': %s",
+                    trial_id,
+                    t.exception(),
+                )
+
+        task.add_done_callback(_on_done)
+        entry.task = task
+        self._tasks[key] = entry
+        return entry
+
+    def remove(self, trial_id: str, run_id: str | None) -> None:
+        self._tasks.pop((trial_id, run_id), None)
+
+
+@dataclass
 class DashboardServerState:
     """Shared state for the Dashboard Server."""
 
@@ -163,6 +244,9 @@ class DashboardServerState:
     scheduler_store: SchedulerStore | None = None
     http_session: Any = None  # aiohttp.ClientSession for cross-server forwarding
     http_client: Any = None  # httpx.AsyncClient for cross-server forwarding
+    materialization_tracker: MaterializationTracker = field(
+        default_factory=MaterializationTracker
+    )
 
 
 def get_server_state(request: Request) -> DashboardServerState:
@@ -565,6 +649,7 @@ def create_dashboard_app(
             )
             otel_exporter.start()
             set_otel_exporter(otel_exporter)
+            enable_agentscope_tracing()
             LOGGER.info("OTel exporter configured: %s (backend: sls)", otlp_endpoint)
 
             sls_project = os.environ.get("DOJOZERO_SLS_PROJECT", "")
@@ -592,6 +677,7 @@ def create_dashboard_app(
             )
             otel_exporter.start()
             set_otel_exporter(otel_exporter)
+            enable_agentscope_tracing()
             LOGGER.info(
                 "OTel exporter configured: %s (backend: jaeger, service_name: %s)",
                 otlp_endpoint,
@@ -876,20 +962,14 @@ def create_dashboard_app(
         builder_config = dict(scenario.config or scenario_config)
         output_base = state.output_dir
 
-        # Generate safe persistence_file path based on trial_id
-        from datetime import date
-
-        date_str = date.today().isoformat()
-        safe_persistence_file = (
-            output_base / scenario.name / date_str / f"{trial_id}.jsonl"
-        )
+        # Generate safe persistence_file: outputs/{trial_id}.jsonl
+        safe_persistence_file = output_base / f"{trial_id}.jsonl"
         safe_persistence_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Inject into hub config (override any user-provided value)
         if "hub" not in builder_config:
             builder_config["hub"] = {}
         builder_config["hub"]["persistence_file"] = str(safe_persistence_file)
-        ensure_trial_symlink(state.output_dir, trial_id, safe_persistence_file)
         LOGGER.debug(
             "Generated persistence_file for trial %s: %s",
             trial_id,
@@ -1236,6 +1316,15 @@ def create_dashboard_app(
         if results is not None:
             return JSONResponse(content=results)
 
+        # Try OSS fallback
+        from dojozero.dashboard_server._trial_manager import (
+            download_trial_file_from_oss,
+        )
+
+        oss_results = download_trial_file_from_oss(trial_id, "results.json")
+        if oss_results is not None:
+            return JSONResponse(content=oss_results)
+
         # Try to proxy to the owning peer in cluster mode
         if state.peer_registry is not None:
             try:
@@ -1284,8 +1373,7 @@ def create_dashboard_app(
         """
         from fastapi.responses import FileResponse
 
-        # 1. Try canonical trials cache (symlinks for live, real files for
-        #    OSS/SLS cached).  Path.exists() follows symlinks transparently.
+        # 1. Try canonical path: outputs/{trial_id}/events.jsonl
         cached_path = trials_cache_path(state.output_dir, trial_id, run_id)
         event_file: Path | None = None
         if cached_path.exists():
@@ -1295,7 +1383,15 @@ def create_dashboard_app(
             # can write a real file at this path.
             cached_path.unlink()
 
-        # 2. Try OSS
+        # 1b. Legacy fallback: outputs/trials/{trial_id}.jsonl
+        if event_file is None:
+            legacy = _legacy_trials_cache_path(state.output_dir, trial_id, run_id)
+            if legacy.exists():
+                event_file = legacy
+            elif legacy.is_symlink():
+                legacy.unlink()
+
+        # 2. Try OSS (downloads to the new canonical path)
         if event_file is None and download_trial_from_oss(trial_id, cached_path):
             event_file = cached_path
 
@@ -1333,35 +1429,79 @@ def create_dashboard_app(
             except Exception:
                 pass  # fall through to SLS fallback
 
-        # 5. SLS materialization (last resort)
+        # 5. SLS materialization (async, non-blocking via 202 polling)
         if event_file is None:
-            try:
-                from dojozero.data import SLSEventSource
+            tracker = state.materialization_tracker
+            entry = tracker.get(trial_id, run_id)
 
-                await SLSEventSource().materialize_jsonl(
-                    trial_id,
-                    cached_path,
-                    run_id=run_id or None,
+            if entry is None:
+                # No in-flight task — kick one off and return 202
+                entry = tracker.start(trial_id, run_id, cached_path)
+                return JSONResponse(
+                    content={
+                        "status": "materializing",
+                        "trial_id": trial_id,
+                        "spans_fetched": 0,
+                        "spans_total": 0,
+                        "message": (
+                            "Materializing events from SLS. "
+                            "Poll this endpoint to check progress."
+                        ),
+                    },
+                    status_code=202,
                 )
-                event_file = cached_path
-                # Upload to OSS for cross-host caching
-                upload_trial_to_oss(trial_id, cached_path)
-            except Exception as e:
+
+            if not entry.task.done():
+                # Still running — return 202 with progress
+                elapsed = time.monotonic() - entry.started_at
+                return JSONResponse(
+                    content={
+                        "status": "materializing",
+                        "trial_id": trial_id,
+                        "elapsed_seconds": round(elapsed, 1),
+                        "spans_fetched": entry.spans_fetched,
+                        "spans_total": entry.spans_total,
+                        "message": "Materialization in progress.",
+                    },
+                    status_code=202,
+                )
+
+            # Task finished — check result
+            tracker.remove(trial_id, run_id)
+            exc = entry.task.exception() if not entry.task.cancelled() else None
+            if exc is not None:
                 LOGGER.error(
                     "SLS materialization failed for trial '%s': %s",
                     trial_id,
-                    e,
-                    exc_info=True,
+                    exc,
+                    exc_info=exc,
                 )
                 return JSONResponse(
                     content={
+                        "status": "failed",
                         "error": (
                             f"Event file for trial '{trial_id}' not available "
-                            f"locally and SLS fallback failed: {e}"
-                        )
+                            f"locally and SLS fallback failed: {exc}"
+                        ),
                     },
                     status_code=424,
                 )
+
+            event_file = cached_path
+
+        # Guard against serving empty files (e.g. from a previous failed
+        # materialization).  Remove the empty file so future requests retry.
+        if event_file.stat().st_size == 0:
+            event_file.unlink(missing_ok=True)
+            return JSONResponse(
+                content={
+                    "error": (
+                        f"Event file for trial '{trial_id}' is empty (0 events). "
+                        "Deleted cached file — retry to re-fetch from SLS."
+                    )
+                },
+                status_code=404,
+            )
 
         return FileResponse(
             path=event_file,
@@ -2026,6 +2166,14 @@ async def run_dashboard_server(
         no_scheduler=no_scheduler,
         cluster_config=cluster_config,
     )
+
+    # Suppress noisy polling endpoint from access logs
+    class _PollFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            msg = record.getMessage()
+            return "/events/recent" not in msg
+
+    logging.getLogger("uvicorn.access").addFilter(_PollFilter())
 
     config = uvicorn.Config(
         app,

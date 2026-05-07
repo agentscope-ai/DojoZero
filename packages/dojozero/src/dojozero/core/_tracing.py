@@ -16,6 +16,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
 from typing import Any, Protocol
 from uuid import uuid4
 import asyncio
@@ -550,6 +551,10 @@ class SLSTraceReader:
     SLS provides OpenTelemetry trace storage with a REST API for querying.
     Authentication is handled by alibabacloud-credentials SDK.
 
+    DEFAULT_LOOKBACK_DAYS (7) is used for broad queries (list_trials,
+    get_all_spans).  TRIAL_LOOKBACK_DAYS (365) is used for get_spans
+    which filters by an exact trace_id — wider window, minimal cost.
+
     Credentials (automatic via SDK):
         - Environment variables (ALIBABA_CLOUD_ACCESS_KEY_ID, etc.)
         - Credentials file (~/.alibabacloud/credentials)
@@ -563,6 +568,7 @@ class SLSTraceReader:
     """
 
     DEFAULT_LOOKBACK_DAYS = 7
+    TRIAL_LOOKBACK_DAYS = 365
 
     def __init__(
         self,
@@ -759,11 +765,45 @@ class SLSTraceReader:
             LOGGER.error("Failed to parse SLS response for trials: %s", e)
             return []
 
+    async def _get_count(
+        self,
+        resource: str,
+        url: str,
+        query: str,
+        from_time: datetime,
+        to_time: datetime,
+    ) -> int:
+        """Get total log count via SLS SQL count query.
+
+        Returns 0 if the query fails (non-fatal).
+        """
+        count_query = f"{query} | select count(1) as cnt"
+        params = {
+            "type": "log",
+            "from": str(int(from_time.timestamp())),
+            "to": str(int(to_time.timestamp())),
+            "query": count_query,
+            "line": "1",
+            "offset": "0",
+        }
+        headers = self._sign_request("GET", resource, params)
+        try:
+            response = await self._client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            rows = data if isinstance(data, list) else data.get("data", [])
+            if rows and isinstance(rows[0], dict):
+                return int(rows[0].get("cnt", 0))
+        except Exception as e:
+            LOGGER.debug("SLS count query failed (non-fatal): %s", e)
+        return 0
+
     async def get_spans(
         self,
         trial_id: str,
         start_time: datetime | None = None,
         operation_names: list[str] | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> list[SpanData]:
         """Get spans for a trial from SLS.
 
@@ -772,15 +812,19 @@ class SLSTraceReader:
             start_time: If provided, only return spans after this time.
             operation_names: If provided, only return spans with operation_name in this list.
                              Exact match with OR logic. None means no filtering.
+            progress_callback: If provided, called with ``(fetched, total)``
+                after each page.  ``total`` is obtained via a count query
+                before pagination begins.
 
         Returns:
             List of SpanData sorted by start time.
         """
         now = datetime.now(timezone.utc)
 
-        # Default time range: 7 days ago to now
+        # Default time range: use TRIAL_LOOKBACK_DAYS (365) for by-trial-id
+        # queries — exact _trace_id match keeps the query efficient.
         if start_time is None:
-            from_time = now - timedelta(days=self.DEFAULT_LOOKBACK_DAYS)
+            from_time = now - timedelta(days=self.TRIAL_LOOKBACK_DAYS)
         else:
             from_time = start_time
 
@@ -798,6 +842,11 @@ class SLSTraceReader:
 
         resource = f"/logstores/{self._logstore}"
         url = f"{self._get_base_url()}{resource}"
+
+        # If a progress callback is provided, get total count first via SQL
+        total_count = 0
+        if progress_callback is not None:
+            total_count = await self._get_count(resource, url, query, from_time, now)
 
         # Pagination: SLS GetLogs API limits to 100 rows per request in search mode
         # We paginate using offset parameter to get all data
@@ -852,6 +901,8 @@ class SLSTraceReader:
                     break  # No more data
 
                 all_rows.extend(rows)
+                if progress_callback is not None:
+                    progress_callback(len(all_rows), total_count)
 
                 if len(rows) < page_size:
                     break  # Last page (less than full page means no more data)
@@ -1968,6 +2019,42 @@ class OTelSpanExporter:
                             span.set_attribute(key, value)
                         else:
                             span.set_attribute(key, str(value))
+                # Export span events (Jaeger-style log entries). Each entry has
+                # a "fields" list with a "event" field naming the event plus
+                # arbitrary attribute fields.
+                for log in span_data.logs:
+                    if not isinstance(log, dict):
+                        continue
+                    fields = log.get("fields", [])
+                    ts = log.get("timestamp")
+                    event_name = ""
+                    attrs: dict[str, Any] = {}
+                    for field_entry in fields:
+                        if not isinstance(field_entry, dict):
+                            continue
+                        k = field_entry.get("key", "")
+                        v = field_entry.get("value")
+                        if k == "event":
+                            event_name = str(v) if v is not None else ""
+                        elif k:
+                            if isinstance(v, (str, int, float, bool)):
+                                attrs[k] = v
+                            elif v is None:
+                                continue
+                            else:
+                                attrs[k] = json.dumps(
+                                    v, default=str, ensure_ascii=False
+                                )
+                    if not event_name:
+                        continue
+                    try:
+                        span.add_event(
+                            name=event_name,
+                            attributes=attrs,
+                            timestamp=int(ts) * 1000 if ts else None,
+                        )
+                    except (ValueError, TypeError):
+                        pass
                 span.set_status(
                     OTelSpanExporter._Status(OTelSpanExporter._StatusCode.OK)
                 )
@@ -2314,6 +2401,17 @@ class SLSLogExporter:
                 flat_key = f"_{flat_key}"
             log_entry[flat_key] = value
 
+        # Serialize span events (logs) as a single JSON field. SLS query syntax
+        # doesn't index nested structures well, but this keeps the data
+        # recoverable for offline analysis.
+        if span_data.logs:
+            try:
+                log_entry["_events"] = json.dumps(
+                    span_data.logs, default=str, ensure_ascii=False
+                )
+            except (TypeError, ValueError):
+                log_entry["_events"] = str(span_data.logs)
+
         # Non-blocking put on queue
         try:
             self._queue.put_nowait(log_entry)
@@ -2389,6 +2487,54 @@ def emit_span(span_data: SpanData) -> None:
         _global_sls_log_exporter.export_span(span_data)
 
 
+def emit_span_sls_only(span_data: SpanData) -> None:
+    """Emit a span only to the SLS Log exporter (bypassing OTLP).
+
+    Used when the caller has already created a real OTel span via
+    ``tracer.start_as_current_span`` (so OTLP already has it) but still
+    wants a flat SLS log row.
+    """
+    if _global_sls_log_exporter is not None:
+        _global_sls_log_exporter.export_span(span_data)
+
+
+def enable_agentscope_tracing(run_id: str | None = None) -> bool:
+    """Tell AgentScope to emit its built-in OTel GenAI spans.
+
+    Our ``OTelSpanExporter`` already installed a ``TracerProvider`` with a
+    ``BatchSpanProcessor`` / OTLP exporter. AgentScope's ``@trace_llm`` etc.
+    decorators use ``opentelemetry.trace.get_tracer("agentscope", ...)``,
+    which picks up that same provider. All we need to do is flip the flag
+    AgentScope checks (``agentscope._config.trace_enabled``) and optionally
+    align ``run_id`` so ``gen_ai.conversation.id`` correlates with our trial.
+
+    Safe to call when AgentScope is not installed — returns ``False`` silently.
+
+    Args:
+        run_id: Optional value for ``agentscope._config.run_id``. The
+            ``@trace_llm`` decorator stamps this onto every LLM span as
+            ``gen_ai.conversation.id``.
+
+    Returns:
+        ``True`` if AgentScope was found and configured; ``False`` otherwise.
+    """
+    try:
+        from agentscope import _config as _as_config
+    except ImportError:
+        return False
+    try:
+        _as_config.trace_enabled = True
+        if run_id is not None:
+            _as_config.run_id = run_id
+    except Exception:
+        LOGGER.warning(
+            "Failed to enable AgentScope tracing",
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 __all__ = [
     "JaegerTraceReader",
     "SLSTraceReader",
@@ -2400,6 +2546,8 @@ __all__ = [
     "convert_agent_message_to_span",
     "convert_checkpoint_event_to_span",
     "create_span_from_event",
+    "emit_span_sls_only",
+    "enable_agentscope_tracing",
     "create_trace_reader",
     "emit_span",
     "get_otel_exporter",

@@ -122,6 +122,15 @@ class EventEnvelope(BaseModel):
     payload: dict[str, Any]
 
 
+class TrialEndedInfo(BaseModel):
+    """Lightweight trial-ended payload included in polling responses."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    reason: str  # "completed", "cancelled", "failed"
+    message: str = ""
+
+
 class RecentEventsResponse(BaseModel):
     """Response for recent events polling."""
 
@@ -129,6 +138,9 @@ class RecentEventsResponse(BaseModel):
 
     events: list[EventEnvelope]
     current_sequence: int = Field(serialization_alias="currentSequence")
+    trial_ended: TrialEndedInfo | None = Field(
+        default=None, serialization_alias="trialEnded"
+    )
 
 
 # ============================================================================

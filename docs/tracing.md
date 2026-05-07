@@ -62,3 +62,15 @@ DojoZero exports tracing data as a unified stream of spans. In Jaeger (and in Ar
 - **Agent message spans (`agent.*`)**: one span per agent conversation/message for the agent’s streams. Operation names include `agent.input` (user/system input), `agent.response` (assistant output), and `agent.tool_result` (system/tool results). These spans include tags such as `event.stream_id`, `event.role`, `event.name`, `event.content`, and (when present) `event.tool_calls` / `event.tool_call_id`.
 
 You’ll also see **trial lifecycle spans** like `trial.started` / `trial.stopped`, and (for the built-in betting broker) **broker spans** such as `broker.bet` or `broker.<change_type>` with `broker.*` tags describing what happened (amount, selection, probabilities, etc.).
+
+### LLM chat spans (`chat {model}`)
+
+LLM call instrumentation is delegated to AgentScope's built-in `@trace_llm` decorator (see [AgentScope tracing docs](https://doc.agentscope.io/tutorial/task_tracing.html)). Whenever DojoZero's OTel exporter is configured (`--trace-backend jaeger|sls`), we flip `agentscope._config.trace_enabled = True` so AgentScope's `ChatModelBase.__call__` decorator emits one OTel span per LLM call using the same `TracerProvider` as DojoZero's own spans.
+
+- **Operation name:** `chat {model}` (e.g. `chat qwen-max`, `chat gpt-4`) — set by AgentScope per the OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/).
+- **Parent:** the `agent.response` span for the turn that triggered the call. DojoZero opens `agent.response` as a context-managed OTel span around the ReActAgent call, so AgentScope's `chat {model}` spans become its children via OTel context propagation (one `agent.response` may have several `chat` children when the ReAct loop takes multiple steps).
+- **Attributes** (from AgentScope, using the official `opentelemetry.semconv._incubating.attributes.gen_ai_attributes` constants): `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.temperature`/`.top_p`/`.top_k`/`.max_tokens`/`.presence_penalty`/`.frequency_penalty`/`.stop_sequences`/`.seed`, `gen_ai.response.id`, `gen_ai.response.finish_reasons`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.tool.definitions`, `gen_ai.conversation.id` (set to the trial id).
+
+**Arena does not render `chat {model}` spans.** They are background-only and must be inspected directly in Jaeger UI (search for `operation=chat *` under `dojozero.trial.id=<trial>`). Arena's span queries pass an explicit whitelist of rendered operation names, so `chat {model}` spans are filtered out server-side.
+
+**SLS coverage:** the OTLP pipeline is configured with Alibaba Cloud's OTel endpoint when `--trace-backend sls` is used, so AgentScope's `chat` spans reach SLS too (alongside our flat-field logstore which only sees DojoZero domain spans).

@@ -357,6 +357,19 @@ class TrialResults:
         )
 
 
+@dataclass
+class PollResult:
+    """Result of a poll_events call."""
+
+    events: list[EventEnvelope]
+    trial_ended: dict[str, Any] | None = None
+
+    @property
+    def is_trial_ended(self) -> bool:
+        """Check if trial has ended."""
+        return self.trial_ended is not None
+
+
 class TrialConnection:
     """Connection to a specific trial.
 
@@ -545,24 +558,20 @@ class TrialConnection:
     async def poll_events(
         self,
         since: int | None = None,
-        limit: int = 50,
-        event_types: list[str] | None = None,
-    ) -> list[EventEnvelope]:
+        limit: int = 100,
+    ) -> "PollResult":
         """Poll for recent events.
 
         Args:
             since: Get events after this sequence number
-            limit: Maximum events to return
-            event_types: Optional event type filter
+            limit: Maximum events to return (max 100)
 
         Returns:
-            List of EventEnvelope objects
+            PollResult with events and trial_ended info
         """
         params: dict[str, Any] = {"limit": limit}
         if since is not None:
             params["since"] = since
-        if event_types:
-            params["event_types"] = ",".join(event_types)
 
         response = await self._transport.request(
             "GET",
@@ -577,7 +586,10 @@ class TrialConnection:
         if current_seq > self._last_sequence:
             self._last_sequence = current_seq
 
-        return events
+        # Check for trial ended
+        trial_ended = response.get("trialEnded")
+
+        return PollResult(events=events, trial_ended=trial_ended)
 
     async def get_current_odds(self) -> Odds:
         """Get current betting odds.
