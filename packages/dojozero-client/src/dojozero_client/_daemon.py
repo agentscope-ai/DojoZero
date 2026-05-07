@@ -427,6 +427,15 @@ class TrialHandler:
             spread_value=spread_value,
             total_value=total_value,
         )
+        # The daemon path doesn't support approval mode (no async loop
+        # to poll). Reject if the gateway returned a pending approval.
+        from dojozero_client._client import BetResult  # noqa: PLC0415
+
+        if not isinstance(result, BetResult):
+            raise RuntimeError(
+                "place_bet returned a pending-approval result; "
+                "the daemon does not support approval mode"
+            )
 
         # Log bet
         bet_record = {

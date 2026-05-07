@@ -553,7 +553,132 @@ async def emit_bet_decision(
         logger.warning("emit_bet_decision: emission failed: %s", exc)
 
 
+async def emit_approval_requested(
+    verifier: "Verifier | None",
+    *,
+    agent_id: str,
+    trial_id: str,
+    approval_id: str,
+    resource: str,
+    agent_name: str = "",
+) -> None:
+    """Emit ``approval.requested`` when the hub has submitted an approval to its IdP.
+
+    Canonical Tier-1 payload:
+    ``{approval_id, resource, idp_status: "pending"}``.
+
+    Resource is what the agent was trying to do (e.g.
+    ``dojozero.place_bet``). Activity consumers join on
+    ``approval_id`` to reconstruct the full request → grant → action
+    chain.
+    """
+    if verifier is None:
+        return
+    payload = {
+        "approval_id": approval_id,
+        "resource": resource,
+        "idp_status": "pending",
+    }
+    agent = _build_verified_agent(agent_id=agent_id, agent_name=agent_name)
+    try:
+        await verifier.report_event(
+            category="approval.requested",
+            agent=agent,
+            payload=payload,
+            session_id=trial_id,
+            outcome="success",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("emit_approval_requested: emission failed: %s", exc)
+
+
+async def emit_approval_granted(
+    verifier: "Verifier | None",
+    *,
+    agent_id: str,
+    trial_id: str,
+    approval_id: str,
+    decided_by: str | None,
+    resource: str,
+    agent_name: str = "",
+) -> None:
+    """Emit ``approval.granted`` when a principal approves and the hub minted a grant.
+
+    Canonical Tier-1 payload:
+    ``{approval_id, resource, decided_by?}``.
+
+    Linked to a prior ``approval.requested`` by ``approval_id`` and
+    typically followed by a ``transfer.value`` (or whatever action the
+    grant authorized) on the same agent in the same session.
+    """
+    if verifier is None:
+        return
+    payload: dict[str, Any] = {
+        "approval_id": approval_id,
+        "resource": resource,
+    }
+    if decided_by is not None:
+        payload["decided_by"] = decided_by
+    agent = _build_verified_agent(agent_id=agent_id, agent_name=agent_name)
+    try:
+        await verifier.report_event(
+            category="approval.granted",
+            agent=agent,
+            payload=payload,
+            session_id=trial_id,
+            outcome="success",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("emit_approval_granted: emission failed: %s", exc)
+
+
+async def emit_approval_denied(
+    verifier: "Verifier | None",
+    *,
+    agent_id: str,
+    trial_id: str,
+    approval_id: str,
+    decided_by: str | None,
+    reason: str | None,
+    resource: str,
+    agent_name: str = "",
+) -> None:
+    """Emit ``approval.denied`` when a principal denies (or the request expires).
+
+    Canonical Tier-1 payload:
+    ``{approval_id, resource, decided_by?, reason?}``.
+
+    Used both for explicit denials and for TTL-expired approvals; in
+    the expired case ``decided_by`` will be empty and ``reason`` will
+    be ``"expired"``.
+    """
+    if verifier is None:
+        return
+    payload: dict[str, Any] = {
+        "approval_id": approval_id,
+        "resource": resource,
+    }
+    if decided_by is not None:
+        payload["decided_by"] = decided_by
+    if reason is not None:
+        payload["reason"] = reason
+    agent = _build_verified_agent(agent_id=agent_id, agent_name=agent_name)
+    try:
+        await verifier.report_event(
+            category="approval.denied",
+            agent=agent,
+            payload=payload,
+            session_id=trial_id,
+            outcome="failure",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("emit_approval_denied: emission failed: %s", exc)
+
+
 __all__ = [
+    "emit_approval_denied",
+    "emit_approval_granted",
+    "emit_approval_requested",
     "emit_auth_deny",
     "emit_bet_decision",
     "emit_model_call",

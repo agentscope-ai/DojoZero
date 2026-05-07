@@ -41,6 +41,11 @@ class RunnerConfig:
     # Pre-loaded AgentID identity. When None, the runner falls back to
     # ``Identity.from_env()`` at start time (k8s pod default).
     identity: Any = None
+    # Approval mode: register such that every bet is gated by an
+    # IdP-mediated approval flow (spec §7.6.7). When True, the runner
+    # also registers the ``check_pending_bet`` tool so the agent can
+    # poll for the principal's decision.
+    request_approval: bool = False
 
 
 def build_config(
@@ -54,6 +59,7 @@ def build_config(
     agentid_audience: str | None = None,
     agent_display_name: str = "agent",
     identity: Any = None,
+    request_approval: bool = False,
 ) -> RunnerConfig:
     """Build a :class:`RunnerConfig` from explicit values.
 
@@ -110,6 +116,7 @@ def build_config(
         agentid_audience=agentid_audience,
         agent_display_name=agent_display_name,
         identity=identity,
+        request_approval=request_approval,
     )
 
 
@@ -179,6 +186,9 @@ def load_config_from_env() -> RunnerConfig:
         ) from exc
 
     agentid_audience = os.environ.get("DOJOZERO_AGENTID_AUDIENCE", "").strip() or None
+    request_approval = os.environ.get(
+        "DOJOZERO_REQUEST_APPROVAL", ""
+    ).strip().lower() in ("1", "true", "yes")
 
     return build_config(
         trial_id=trial_id,
@@ -190,6 +200,7 @@ def load_config_from_env() -> RunnerConfig:
         agentid_audience=agentid_audience,
         agent_display_name=agent_display_name,
         identity=identity,
+        request_approval=request_approval,
     )
 
 
@@ -264,6 +275,10 @@ def load_config_from_args(args: Any) -> RunnerConfig:
     agentid_audience = args.agentid_audience or (
         os.environ.get("DOJOZERO_AGENTID_AUDIENCE", "").strip() or None
     )
+    request_approval = bool(getattr(args, "request_approval", False)) or (
+        os.environ.get("DOJOZERO_REQUEST_APPROVAL", "").strip().lower()
+        in ("1", "true", "yes")
+    )
 
     return build_config(
         trial_id=trial_id,
@@ -275,6 +290,7 @@ def load_config_from_args(args: Any) -> RunnerConfig:
         agentid_audience=agentid_audience,
         agent_display_name=agent_display_name,
         identity=identity,
+        request_approval=request_approval,
     )
 
 

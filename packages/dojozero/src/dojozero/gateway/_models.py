@@ -34,6 +34,12 @@ class AgentRegistrationRequest(BaseModel):
     # Optional override for initial balance (otherwise uses broker default)
     initial_balance: float | str | None = Field(default=None, alias="initialBalance")
 
+    # Approval mode: when True, every bet from this agent in this trial
+    # is gated by an IdP-mediated approval flow (spec §7.6.7). Set at
+    # registration time and frozen for the trial. Default off — most
+    # agents place bets directly.
+    request_approval: bool = Field(default=False, alias="requestApproval")
+
 
 class AgentReconnectRequest(BaseModel):
     """Request body for agent reconnection.
@@ -247,6 +253,53 @@ class BetResponse(BaseModel):
     shares: str
     status: str
     created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class PendingApprovalResponse(BaseModel):
+    """Response when a bet is queued for principal approval (spec §7.6.7).
+
+    The runner submits ``POST /bets`` for an agent registered in
+    approval mode and gets this back instead of a ``BetResponse``.
+    To resolve, the agent calls ``GET /bets/pending/{approval_id}``
+    until the principal decides; that endpoint returns either a real
+    ``BetResponse`` (approved + placed in one shot) or a final
+    failure status.
+    """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    status: Literal["pending_approval"] = "pending_approval"
+    approval_id: str = Field(serialization_alias="approvalId")
+    expires_at: datetime = Field(serialization_alias="expiresAt")
+    poll_url: str = Field(
+        serialization_alias="pollUrl",
+        description="Relative URL the agent should poll for resolution.",
+    )
+    summary: str = Field(
+        description="One-line summary the principal sees on the approval card.",
+    )
+
+
+class PendingBetStatus(BaseModel):
+    """Response from polling ``GET /bets/pending/{approval_id}``.
+
+    Returned only when the bet hasn't yet been placed. Once approved,
+    the same endpoint returns a ``BetResponse`` directly (the bet is
+    placed atomically with the grant consume). The agent decides what
+    to do based on ``status``:
+
+    - ``pending``: keep polling.
+    - ``denied``: the principal rejected; ``denial_note`` may explain.
+    - ``expired``: TTL elapsed; the bet won't happen.
+    """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    status: Literal["pending", "denied", "expired"]
+    approval_id: str = Field(serialization_alias="approvalId")
+    expires_at: datetime = Field(serialization_alias="expiresAt")
+    denial_note: str | None = Field(default=None, serialization_alias="denialNote")
+    decided_by: str | None = Field(default=None, serialization_alias="decidedBy")
 
 
 class BetsListResponse(BaseModel):

@@ -55,6 +55,7 @@ async def run(config: RunnerConfig) -> None:
         api_key=identity.agent_id,
         agentid_client=agentid_client,
         agentid_audience=audience,
+        request_approval=config.request_approval,
     ) as connection:
         logger.info(
             "Connected to trial %s as %s",
@@ -76,7 +77,7 @@ async def _run_react_loop(config: RunnerConfig, connection: TrialConnection) -> 
     formatter = create_formatter(model_type)
 
     toolkit = Toolkit()
-    for tool in build_tools(connection):
+    for tool in build_tools(connection, request_approval=config.request_approval):
         toolkit.register_tool_function(tool)
 
     agent = ReActAgent(

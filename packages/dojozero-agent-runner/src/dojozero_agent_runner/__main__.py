@@ -141,6 +141,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Event-poll cadence (env: DOJOZERO_POLL_INTERVAL_SECONDS, default 5).",
     )
     parser.add_argument(
+        "--request-approval",
+        action="store_true",
+        help=(
+            "Register in approval mode (spec §7.6.7). Every bet from this "
+            "agent in this trial is queued for principal approval on the "
+            "IdP portal. The agent gets a check_pending_bet tool to poll. "
+            "Env: DOJOZERO_REQUEST_APPROVAL=1."
+        ),
+    )
+    parser.add_argument(
         "--agentid-audience",
         default=None,
         help=(

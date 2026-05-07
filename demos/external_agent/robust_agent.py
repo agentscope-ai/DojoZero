@@ -313,6 +313,14 @@ class RobustBettingAgent:
                 amount=self.bet_amount,
                 reference_sequence=reference_sequence,
             )
+            from dojozero_client import BetResult  # noqa: PLC0415
+
+            if not isinstance(result, BetResult):
+                # Demo doesn't run in approval mode — this would only fire
+                # if the gateway gated this agent, in which case the demo
+                # has nothing useful to do.
+                logger.warning("Bet returned pending approval; demo skips.")
+                return
 
             self.state.bets_placed += 1
             self.state.total_wagered += self.bet_amount

@@ -63,6 +63,59 @@ class BetResult:
 
 
 @dataclass
+class PendingApproval:
+    """A bet queued for principal approval (spec §7.6.7).
+
+    Returned by :meth:`TrialConnection.place_bet` when the agent
+    registered with ``request_approval=True``. The bet hasn't been
+    placed yet — the principal has to approve it on the IdP portal.
+    Use :meth:`TrialConnection.check_pending_bet` to poll for the
+    decision.
+    """
+
+    approval_id: str
+    expires_at: datetime
+    poll_url: str
+    summary: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PendingApproval":
+        return cls(
+            approval_id=data["approvalId"],
+            expires_at=datetime.fromisoformat(data["expiresAt"].replace("Z", "+00:00")),
+            poll_url=data["pollUrl"],
+            summary=data.get("summary", ""),
+        )
+
+
+@dataclass
+class PendingBetStatus:
+    """Non-terminal status from polling an approval.
+
+    Distinct from :class:`PendingApproval`: that's the *initial*
+    response from ``place_bet``; this is what subsequent
+    ``check_pending_bet`` polls return *until* the bet either places
+    (returns a :class:`BetResult`) or terminally fails.
+    """
+
+    status: str  # "pending" | "denied" | "expired"
+    approval_id: str
+    expires_at: datetime
+    denial_note: str | None = None
+    decided_by: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PendingBetStatus":
+        return cls(
+            status=data["status"],
+            approval_id=data["approvalId"],
+            expires_at=datetime.fromisoformat(data["expiresAt"].replace("Z", "+00:00")),
+            denial_note=data.get("denialNote"),
+            decided_by=data.get("decidedBy"),
+        )
+
+
+@dataclass
 class Holding:
     """A single holding position."""
 
@@ -517,8 +570,16 @@ class TrialConnection:
         model: str | None = None,
         confidence: float | None = None,
         rationale: str | None = None,
-    ) -> BetResult:
+    ) -> BetResult | PendingApproval:
         """Place a bet.
+
+        For agents registered without ``request_approval``, returns a
+        :class:`BetResult` with the placed bet.
+
+        For agents registered with ``request_approval=True`` (spec
+        §7.6.7), returns a :class:`PendingApproval` instead — the bet
+        is queued for principal approval on the IdP portal. Call
+        :meth:`check_pending_bet` with the ``approval_id`` to resolve.
 
         Args:
             market: Market to bet on (e.g., "moneyline")
@@ -536,7 +597,10 @@ class TrialConnection:
                 hashes (sha256) before emitting; raw text never leaves.
 
         Returns:
-            BetResult with placement details
+            BetResult on direct placement, or PendingApproval when the
+            bet was queued for approval. Discriminate on the return
+            type (``isinstance(...)``) or on the ``status`` field of
+            the underlying response.
 
         Raises:
             StaleReferenceError: If reference_sequence is stale
@@ -571,6 +635,35 @@ class TrialConnection:
             json=body,
         )
 
+        if response.get("status") == "pending_approval":
+            return PendingApproval.from_dict(response)
+        return BetResult.from_dict(response)
+
+    async def check_pending_bet(self, approval_id: str) -> BetResult | PendingBetStatus:
+        """Poll a pending approval; on approve, the bet is placed atomically.
+
+        For an approval that's still pending (or terminally failed),
+        returns :class:`PendingBetStatus`. For a successful approval,
+        the gateway places the bet immediately and returns the
+        :class:`BetResult`.
+
+        Args:
+            approval_id: The id from a prior :class:`PendingApproval`.
+
+        Returns:
+            BetResult if approved + placed; PendingBetStatus otherwise.
+
+        Raises:
+            ConnectionError: If the gateway can't be reached or the
+                approval doesn't belong to this agent.
+        """
+        response = await self._transport.request(
+            "GET",
+            f"/bets/pending/{approval_id}",
+        )
+        status = response.get("status")
+        if status in ("pending", "denied", "expired"):
+            return PendingBetStatus.from_dict(response)
         return BetResult.from_dict(response)
 
     async def get_bets(self) -> list[BetResult]:
@@ -836,6 +929,7 @@ class DojoClient:
         session_key: str | None = None,
         agentid_client: Any = None,
         agentid_audience: str | None = None,
+        request_approval: bool = False,
     ) -> AsyncIterator[TrialConnection]:
         """Connect to a trial.
 
@@ -856,6 +950,11 @@ class DojoClient:
             agentid_audience: Override for the AgentID token audience claim.
                 Defaults to ``gateway_url``, which matches the gateway's
                 configured ``DOJOZERO_AGENTID_AUDIENCE``.
+            request_approval: When True, register in approval mode (spec
+                §7.6.7). Every bet from this agent in this trial will be
+                gated by an IdP-mediated approval flow; the agent
+                receives a ``PendingApprovalResult`` from ``place_bet``
+                and must call ``check_pending_bet`` to resolve.
 
         Yields:
             TrialConnection for interacting with the trial.
@@ -917,6 +1016,7 @@ class DojoClient:
                         json={
                             "apiKey": api_key,
                             "initialBalance": initial_balance,
+                            "requestApproval": request_approval,
                         },
                     )
                     trial_id = reg_response.get("trialId", "")

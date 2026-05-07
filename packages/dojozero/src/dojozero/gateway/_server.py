@@ -16,6 +16,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from dojozero.gateway._activity import (
+    emit_approval_denied,
+    emit_approval_granted,
+    emit_approval_requested,
     emit_auth_deny,
     emit_bet_decision,
     emit_model_call,
@@ -25,6 +28,12 @@ from dojozero.gateway._activity import (
     emit_transfer_value,
 )
 from dojozero.gateway._adapter import ExternalAgentAdapter
+from dojozero.gateway._approvals import (
+    ApprovalCoordinator,
+    ApprovalError,
+    build_bet_facts,
+    build_bet_summary,
+)
 from dojozero.gateway._auth import AgentAuthenticator, NoOpAuthenticator
 from dojozero.gateway._models import (
     AgentReconnectRequest,
@@ -35,6 +44,8 @@ from dojozero.gateway._models import (
     BetRequest,
     BetResponse,
     BetsListResponse,
+    PendingApprovalResponse,
+    PendingBetStatus,
     CurrentOddsResponse,
     ErrorCodes,
     ErrorDetail,
@@ -73,6 +84,11 @@ class GatewayState:
     # session.end so we can report a real ``duration_ms``. Best-effort: a
     # missing entry means duration is reported as 0.
     session_start_times: dict[str, float] = field(default_factory=dict)
+    # Approval coordinator for the spec §7.6.7 grant flow. ``None`` when
+    # the gateway has no AgentID verifier configured (approval mode is
+    # only meaningful with a verified-agent path); the /bets handler
+    # rejects approval-mode registrations in that case.
+    approval_coordinator: "ApprovalCoordinator | None" = None
 
 
 def get_gateway_state(request: Request) -> GatewayState:
@@ -220,6 +236,90 @@ async def _verify_agentid_token(
     return agent.agent_id
 
 
+def _build_approval_coordinator(
+    verifier: "Verifier | None",
+) -> ApprovalCoordinator | None:
+    """Wire an :class:`ApprovalCoordinator` from gateway env, or return None.
+
+    Returns ``None`` (approval mode disabled) when:
+
+    - No AgentID verifier is configured (approval mode requires
+      verified-agent auth to be meaningful).
+    - The hub's ``service_id`` (audience) isn't set.
+    - We can't resolve a single IdP URL to use for approvals.
+
+    For v1 we assume a single trusted IdP for the approval flow. When
+    multi-IdP support lands, this should look up the IdP per agent at
+    submit time using the agent's ``iss`` claim.
+    """
+    if verifier is None:
+        return None
+
+    import os  # noqa: PLC0415
+
+    hub_audience = (
+        os.environ.get("DOJOZERO_HUB_SERVICE_ID")
+        or os.environ.get("DOJOZERO_AGENTID_AUDIENCE", "")
+    ).strip()
+    if not hub_audience:
+        logger.info(
+            "approval coordinator disabled: no DOJOZERO_HUB_SERVICE_ID "
+            "or DOJOZERO_AGENTID_AUDIENCE set"
+        )
+        return None
+
+    # Either an explicit env override, or derive from the single configured IdP.
+    approval_endpoint = os.environ.get("DOJOZERO_AGENTID_APPROVAL_ENDPOINT", "").strip()
+    idp_base = ""
+    trusted_issuers: set[str] = set()
+
+    provider_urls_raw = os.environ.get("DOJOZERO_AGENTID_PROVIDER_URLS", "").strip()
+    if provider_urls_raw:
+        try:
+            import json  # noqa: PLC0415
+
+            provider_urls: dict[str, str] = json.loads(provider_urls_raw)
+        except ValueError:
+            provider_urls = {}
+        if len(provider_urls) == 1:
+            idp_base = next(iter(provider_urls.values())).rstrip("/")
+        trusted_issuers = {url.rstrip("/") for url in provider_urls.values()}
+
+    if not approval_endpoint and idp_base:
+        approval_endpoint = f"{idp_base}/agentid/approvals"
+    if not approval_endpoint:
+        logger.info(
+            "approval coordinator disabled: cannot resolve IdP approval endpoint "
+            "(set DOJOZERO_AGENTID_APPROVAL_ENDPOINT or configure "
+            "DOJOZERO_AGENTID_PROVIDER_URLS with a single entry)"
+        )
+        return None
+
+    if not idp_base:
+        # Fall back to deriving the JWKS URL from the approval endpoint.
+        from urllib.parse import urlparse  # noqa: PLC0415
+
+        parsed = urlparse(approval_endpoint)
+        idp_base = f"{parsed.scheme}://{parsed.netloc}"
+        if not trusted_issuers:
+            trusted_issuers = {idp_base}
+
+    jwks_url = f"{idp_base}/.well-known/agentid-jwks"
+
+    logger.info(
+        "approval coordinator enabled: endpoint=%s aud=%s issuers=%s",
+        approval_endpoint,
+        hub_audience,
+        sorted(trusted_issuers),
+    )
+    return ApprovalCoordinator(
+        approval_endpoint=approval_endpoint,
+        hub_audience=hub_audience,
+        trusted_issuers=trusted_issuers,
+        idp_jwks_url=jwks_url,
+    )
+
+
 def create_gateway_app(
     trial_id: str,
     data_hub: "DataHub",
@@ -257,6 +357,12 @@ def create_gateway_app(
             trial_id=trial_id,
         )
 
+        # Approval coordinator wires up only when AgentID verification is
+        # configured — approval mode is meaningful only with verified-agent
+        # auth. _build_approval_coordinator returns None if any required
+        # config (approval_endpoint, hub_audience, JWKS URL) is missing.
+        approval_coordinator = _build_approval_coordinator(agentid_verifier)
+
         state = GatewayState(
             trial_id=trial_id,
             data_hub=data_hub,
@@ -265,19 +371,25 @@ def create_gateway_app(
             authenticator=auth,
             metadata=metadata or {},
             agentid_verifier=agentid_verifier,
+            approval_coordinator=approval_coordinator,
         )
 
         app.state.gateway_state = state
         auth_status = "enabled" if auth.is_enabled() else "disabled"
         aip_status = "enabled" if agentid_verifier is not None else "disabled"
+        approval_status = "enabled" if approval_coordinator is not None else "disabled"
         logger.info(
-            "Gateway started for trial %s (auth: %s, aip: %s)",
+            "Gateway started for trial %s (auth: %s, aip: %s, approval: %s)",
             trial_id,
             auth_status,
             aip_status,
+            approval_status,
         )
 
         yield
+
+        if approval_coordinator is not None:
+            await approval_coordinator.aclose()
 
         # Emit session.end for any agent that didn't unregister cleanly
         # before the gateway shut down (process killed, network gone,
@@ -442,6 +554,7 @@ def create_gateway_app(
                 model_display_name=model_display_name,
                 cdn_url=cdn_url,
                 authenticated=True,
+                request_approval=request.request_approval,
             )
         except ValueError as e:
             error_msg = str(e)
@@ -754,17 +867,24 @@ def create_gateway_app(
     # Betting
     # =========================================================================
 
-    @app.post("/bets", response_model=BetResponse)
-    async def place_bet(
+    async def _execute_bet_placement(
+        state: GatewayState,
+        agent_id: str,
         request: BetRequest,
-        agent_id: str = Depends(get_agent_id),
-        state: GatewayState = Depends(get_gateway_state),
     ) -> BetResponse:
-        """Place a bet."""
-        # Treat the HTTP call as a tool invocation: the agent invoked the
-        # ``dojozero.place_bet`` tool. We emit ``tool.use`` whether the
-        # bet succeeds or fails (the agent did try); a successful bet
-        # also emits ``transfer.value`` linked by transaction_id.
+        """Place a bet via the broker and emit the activity it implies.
+
+        Shared between the direct ``/bets`` path (no approval needed)
+        and the post-approval ``/bets/pending/{approval_id}`` path
+        (after consuming a grant). Treats the call as a
+        ``dojozero.place_bet`` tool invocation and emits accordingly:
+        ``tool.use`` either way, plus ``transfer.value`` and
+        ``dojozero.bet_decision`` on success.
+
+        Raises an ``HTTPException`` translated from the broker's
+        ``ValueError`` codes — same mapping the inline handler used
+        before this was lifted out.
+        """
         bet_args = request.model_dump(by_alias=False, exclude_none=True)
         tool_started = time.monotonic()
 
@@ -821,10 +941,6 @@ def create_gateway_app(
             success=True,
             linked_transfer_id=response.bet_id,
         )
-
-        # Activity events: Tier-1 transfer.value (stake committed) plus
-        # Tier-2 dojozero.bet_decision (hub-flavored richness) — joined
-        # by transaction_id = bet_id. Both are best-effort.
         await emit_transfer_value(
             state.agentid_verifier,
             agent_id=agent_id,
@@ -853,6 +969,190 @@ def create_gateway_app(
             game_id=game_id,
         )
         return response
+
+    @app.post("/bets")
+    async def place_bet(
+        request: BetRequest,
+        fastapi_request: Request,
+        agent_id: str = Depends(get_agent_id),
+        state: GatewayState = Depends(get_gateway_state),
+    ):
+        """Place a bet — directly, or via the approval gate if the agent
+        is registered with ``request_approval=True``.
+
+        Direct path returns ``BetResponse`` (the historical shape).
+
+        Approval path returns ``PendingApprovalResponse``. The agent is
+        expected to poll ``GET /bets/pending/{approval_id}`` until the
+        principal decides; that endpoint returns a ``BetResponse`` on
+        approve-and-placed or a ``PendingBetStatus`` otherwise.
+        """
+        if not state.adapter.is_registered(agent_id):
+            raise HTTPException(status_code=403, detail="Agent not registered")
+
+        if state.adapter.is_approval_required(agent_id):
+            coordinator = state.approval_coordinator
+            if coordinator is None:
+                # Agent registered in approval mode but the gateway can't
+                # reach an IdP — operator misconfig. Fail closed: refuse
+                # to place a bet that should have been gated.
+                raise HTTPException(
+                    status_code=503,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.AUTH_REQUIRED,
+                            message=(
+                                "approval mode requires an IdP-backed approval "
+                                "coordinator; gateway has none configured"
+                            ),
+                        )
+                    ).model_dump(by_alias=True),
+                )
+            try:
+                pending = await coordinator.submit(
+                    agent_id=agent_id,
+                    bet_request=request,
+                    summary=build_bet_summary(request),
+                    facts=build_bet_facts(request, state.trial_id),
+                    hub_id=coordinator._hub_audience,
+                )
+            except ApprovalError as exc:
+                raise HTTPException(
+                    status_code=exc.status_hint,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.AUTH_REQUIRED,
+                            message=str(exc),
+                        )
+                    ).model_dump(by_alias=True),
+                ) from exc
+
+            await emit_approval_requested(
+                state.agentid_verifier,
+                agent_id=agent_id,
+                trial_id=state.trial_id,
+                approval_id=pending.approval_id,
+                resource="dojozero.place_bet",
+            )
+            base = str(fastapi_request.url).rstrip("/")
+            # `fastapi_request.url` is the full POST /bets URL — strip the
+            # /bets segment to get the per-trial base, then add the pending
+            # path. Keeps poll_url valid even if the gateway is mounted under
+            # a per-trial prefix (e.g. /api/trials/<id>/bets).
+            if base.endswith("/bets"):
+                base = base[: -len("/bets")]
+            return PendingApprovalResponse(
+                approval_id=pending.approval_id,
+                expires_at=pending.expires_at,
+                poll_url=f"{base}/bets/pending/{pending.approval_id}",
+                summary=build_bet_summary(request),
+            )
+
+        return await _execute_bet_placement(state, agent_id, request)
+
+    @app.get("/bets/pending/{approval_id}")
+    async def poll_pending_bet(
+        approval_id: str,
+        agent_id: str = Depends(get_agent_id),
+        state: GatewayState = Depends(get_gateway_state),
+    ):
+        """Resolve a pending bet by polling the IdP approval status.
+
+        On approved: verify the IdP's decision JWT, mint and consume an
+        internal grant, place the bet, return ``BetResponse``. The
+        runner's tool layer surfaces this as the same shape it would
+        have gotten from a direct ``POST /bets``.
+
+        On still-pending / denied / expired: return ``PendingBetStatus``
+        so the agent can react in conversation.
+        """
+        if not state.adapter.is_registered(agent_id):
+            raise HTTPException(status_code=403, detail="Agent not registered")
+        coordinator = state.approval_coordinator
+        if coordinator is None:
+            raise HTTPException(
+                status_code=503,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.AUTH_REQUIRED,
+                        message="approval coordinator not configured",
+                    )
+                ).model_dump(by_alias=True),
+            )
+
+        try:
+            poll = await coordinator.poll(approval_id, agent_id=agent_id)
+        except ApprovalError as exc:
+            raise HTTPException(
+                status_code=exc.status_hint,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.AUTH_REQUIRED,
+                        message=str(exc),
+                    )
+                ).model_dump(by_alias=True),
+            ) from exc
+
+        if poll.status == "approved":
+            assert poll.grant_id is not None and poll.bet_request is not None
+            try:
+                bet_request = await coordinator.consume_grant(
+                    poll.grant_id, agent_id=agent_id
+                )
+            except ApprovalError as exc:
+                raise HTTPException(
+                    status_code=exc.status_hint,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.AUTH_REQUIRED,
+                            message=str(exc),
+                        )
+                    ).model_dump(by_alias=True),
+                ) from exc
+
+            response = await _execute_bet_placement(state, agent_id, bet_request)
+            await emit_approval_granted(
+                state.agentid_verifier,
+                agent_id=agent_id,
+                trial_id=state.trial_id,
+                approval_id=approval_id,
+                decided_by=poll.decided_by,
+                resource="dojozero.place_bet",
+            )
+            return response
+
+        if poll.status == "denied":
+            await emit_approval_denied(
+                state.agentid_verifier,
+                agent_id=agent_id,
+                trial_id=state.trial_id,
+                approval_id=approval_id,
+                decided_by=poll.decided_by,
+                reason=poll.denial_note,
+                resource="dojozero.place_bet",
+            )
+
+        # poll.status is "pending" | "denied" | "expired" here — the
+        # "approved" branch returned above. PollResult uses ``str`` for
+        # forward-compat with future status values; PendingBetStatus
+        # locks to the three we surface to clients.
+        if poll.status not in ("pending", "denied", "expired"):
+            raise HTTPException(
+                status_code=502,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.AUTH_REQUIRED,
+                        message=f"unexpected approval status: {poll.status!r}",
+                    )
+                ).model_dump(by_alias=True),
+            )
+        return PendingBetStatus(
+            status=poll.status,  # type: ignore[arg-type]
+            approval_id=approval_id,
+            expires_at=poll.expires_at,
+            denial_note=poll.denial_note,
+            decided_by=poll.decided_by,
+        )
 
     @app.get("/bets", response_model=BetsListResponse)
     async def get_bets(

@@ -68,6 +68,11 @@ class ExternalAgentState:
     last_activity_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+    # When True, every bet from this agent in this trial is gated by an
+    # IdP-mediated approval flow (spec §7.6.7). The /bets handler
+    # routes through the ApprovalCoordinator instead of placing
+    # directly. Set at registration time and frozen for the trial.
+    request_approval: bool = False
 
 
 class ExternalAgentAdapter:
@@ -135,6 +140,7 @@ class ExternalAgentAdapter:
         model_display_name: str | None = None,
         cdn_url: str | None = None,
         authenticated: bool = False,
+        request_approval: bool = False,
     ) -> AgentRegistrationResponse:
         """Register an external agent.
 
@@ -191,6 +197,7 @@ class ExternalAgentAdapter:
             model_display_name=model_display_name,
             cdn_url=cdn_url,
             authenticated=authenticated,
+            request_approval=request_approval,
         )
         self._agents[agent_id] = state
 
@@ -329,6 +336,16 @@ class ExternalAgentAdapter:
     def is_registered(self, agent_id: str) -> bool:
         """Check if agent is registered."""
         return agent_id in self._agents
+
+    def is_approval_required(self, agent_id: str) -> bool:
+        """Whether this registered agent requested approval mode at registration.
+
+        Returns ``False`` for unknown agents. Callers that need a hard
+        guarantee about registration should call :meth:`is_registered`
+        first; this method is purely a policy lookup.
+        """
+        state = self._agents.get(agent_id)
+        return bool(state and state.request_approval)
 
     # =========================================================================
     # Tracing
