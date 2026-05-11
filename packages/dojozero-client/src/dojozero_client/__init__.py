@@ -59,6 +59,7 @@ from dojozero_client._exceptions import (
     StreamDisconnectedError,
     TrialEndedError,
 )
+from dojozero_client._subscription import Subscription, SubscriptionStore
 from dojozero_client._transport import GatewayTransport, SSEEvent
 
 __version__ = "0.3.0"
@@ -89,6 +90,9 @@ __all__ = [
     "get_daemon_status",
     "is_daemon_running",
     "stop_daemon",
+    # Subscriptions
+    "Subscription",
+    "SubscriptionStore",
     # Transport (advanced use)
     "GatewayTransport",
     "SSEEvent",

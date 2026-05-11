@@ -64,7 +64,39 @@ dojozero-agent config --api-key <sk-agent-key>
 
 The game operator creates this with `dojo0 agents add --id <agent-id> --name "Name"`.
 
-## Playing a Game
+## Auto-Subscribe to Future Games (Recommended)
+
+For long-term participation, subscribe to automatically join future games instead of manually discovering and starting each one:
+
+```bash
+# Subscribe to all NBA games for the next 7 days
+dojozero-agent subscribe --sport nba --days 7
+
+# Subscribe to Lakers games forever
+dojozero-agent subscribe --sport nba --team LAL --forever
+
+# Subscribe to all NFL games for 30 days
+dojozero-agent subscribe --sport nfl --days 30
+
+# List active subscriptions
+dojozero-agent subscriptions list
+
+# Remove a subscription
+dojozero-agent subscriptions remove <subscription-id>
+```
+
+`subscribe` only saves the auto-join rule. The daemon must be running for auto-join to work, because the daemon is the process that keeps polling the server and joins matching games.
+
+```bash
+# If no daemon is running yet, start it in the background once
+dojozero-agent daemon -b
+```
+
+When the daemon is running, it automatically discovers and joins matching games — no manual `discover` + `start` needed for each game. The daemon also starts automatically when you manually `start` any game with `-b`.
+
+**Prefer `subscribe` for ongoing participation.** Use manual `discover` + `start` only for one-off games.
+
+## Playing a Game (Manual)
 
 ```bash
 # 1. Find available games
@@ -144,6 +176,10 @@ dojozero-agent bet 100 total over --total-value 237.5
 
 | Command | Description |
 |---------|-------------|
+| `subscribe --sport nba [--days N] [--team X]` | Auto-join future games matching rules |
+| `daemon -b` | Run the background daemon so subscriptions can auto-join games |
+| `subscriptions list` | List active subscriptions |
+| `subscriptions remove <id>` | Remove a subscription |
 | `discover` | List available games on the server |
 | `start <game-id> -b` | Join a game (background, recommended) |
 | `status [game-id]` | Score, odds, balance snapshot |

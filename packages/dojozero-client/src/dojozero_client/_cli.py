@@ -50,6 +50,7 @@ from dojozero_client._daemon import (
     _trial_state_dir,
 )
 from dojozero_client._rpc import RPCClient, RPCError
+from dojozero_client._subscription import Subscription, SubscriptionStore
 
 logger = logging.getLogger(__name__)
 
@@ -1029,6 +1030,194 @@ def cmd_leave(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_subscribe(args: argparse.Namespace) -> int:
+    """Subscribe to future trials matching rules."""
+    profile = _get_profile(args)
+    sport = args.sport
+    teams = args.team or []
+    days = args.days
+    forever = args.forever
+    poll_interval = args.poll_interval
+    max_active = args.max_active
+
+    # If daemon is running, subscribe via RPC so the watcher picks it up immediately
+    if is_daemon_running():
+        client = RPCClient(SOCKET_PATH)
+        try:
+            result = client.call_sync(
+                "subscribe",
+                sport=sport,
+                teams=teams if teams else None,
+                days=days,
+                forever=forever,
+                poll_interval=poll_interval,
+                max_active=max_active,
+            )
+            sub_id = result.get("subscription_id", "")
+            expires = result.get("expires_at")
+            teams_display = result.get("teams", [])
+            print(f"Subscribed: {sub_id}")
+            print(f"  Sport: {sport}")
+            if teams_display:
+                print(f"  Teams: {', '.join(teams_display)}")
+            if expires:
+                print(f"  Expires: {expires}")
+            else:
+                print("  Expires: never")
+            print("\nThe daemon will automatically join matching trials.")
+            return 0
+        except RPCError as e:
+            print(f"Error: {e.message}", file=sys.stderr)
+            return 1
+        except ConnectionError as e:
+            print(f"Cannot connect to daemon: {e}", file=sys.stderr)
+            return 1
+
+    # Daemon not running — write directly to store
+    profile_dir = get_profile_dir(profile)
+    store = SubscriptionStore(profile_dir=profile_dir)
+    sub = Subscription.create(
+        sport=sport,
+        teams=teams if teams else None,
+        days=days,
+        forever=forever,
+        poll_interval_seconds=poll_interval,
+        max_active_trials=max_active,
+    )
+    store.add(sub)
+    print(f"Subscribed: {sub.subscription_id}")
+    print(f"  Sport: {sub.sport}")
+    if sub.teams:
+        print(f"  Teams: {', '.join(sub.teams)}")
+    if sub.expires_at:
+        print(f"  Expires: {sub.expires_at}")
+    else:
+        print("  Expires: never")
+    print(
+        "\nSubscription saved. Start the daemon ('dojozero-agent start <trial-id> -b' or "
+        "'dojozero-agent daemon') to activate auto-join."
+    )
+    return 0
+
+
+def cmd_subscriptions(args: argparse.Namespace) -> int:
+    """Manage subscriptions (list / remove)."""
+    action = getattr(args, "subs_action", None)
+    if action is None:
+        # Default to list
+        action = "list"
+
+    profile = _get_profile(args)
+
+    if action == "list":
+        return _subscriptions_list(profile)
+    elif action == "remove":
+        sub_id = args.subscription_id
+        return _subscriptions_remove(profile, sub_id)
+
+    print(f"Unknown action: {action}", file=sys.stderr)
+    return 1
+
+
+def _subscriptions_list(profile: str | None) -> int:
+    """List all subscriptions."""
+    # Try daemon RPC first for live data
+    if is_daemon_running():
+        client = RPCClient(SOCKET_PATH)
+        try:
+            result = client.call_sync("subscriptions")
+            subs = result.get("subscriptions", [])
+            if not subs:
+                print("No subscriptions.")
+                return 0
+            print(f"Subscriptions ({len(subs)}):")
+            for s in subs:
+                _print_subscription(s)
+            return 0
+        except (RPCError, ConnectionError):
+            pass  # Fall through to disk
+
+    # Read from disk
+    profile_dir = get_profile_dir(profile)
+    store = SubscriptionStore(profile_dir=profile_dir)
+    subs = store.load()
+    if not subs:
+        print("No subscriptions.")
+        return 0
+    print(f"Subscriptions ({len(subs)}):")
+    for s in subs:
+        _print_subscription(s.to_dict())
+    return 0
+
+
+def _subscriptions_remove(profile: str | None, subscription_id: str) -> int:
+    """Remove a subscription."""
+    # Try daemon RPC first
+    if is_daemon_running():
+        client = RPCClient(SOCKET_PATH)
+        try:
+            client.call_sync("unsubscribe", subscription_id=subscription_id)
+            print(f"Removed subscription {subscription_id}")
+            return 0
+        except RPCError as e:
+            if e.code == "NOT_FOUND":
+                print(f"Subscription {subscription_id} not found", file=sys.stderr)
+                return 1
+            print(f"Error: {e.message}", file=sys.stderr)
+            return 1
+        except ConnectionError:
+            pass  # Fall through to disk
+
+    # Direct disk operation
+    profile_dir = get_profile_dir(profile)
+    store = SubscriptionStore(profile_dir=profile_dir)
+    removed = store.remove(subscription_id)
+    if not removed:
+        print(f"Subscription {subscription_id} not found", file=sys.stderr)
+        return 1
+    print(f"Removed subscription {subscription_id}")
+    return 0
+
+
+def _print_subscription(s: dict) -> None:
+    """Print a single subscription in human-readable format."""
+    sub_id = s.get("subscription_id", "?")
+    sport = s.get("sport", "?")
+    enabled = s.get("enabled", True)
+    teams = s.get("teams", [])
+    expires = s.get("expires_at")
+    joined = s.get("joined_trial_ids", [])
+    poll = s.get("poll_interval_seconds", 60)
+    max_active = s.get("max_active_trials", 0)
+
+    status = "active" if enabled else "disabled"
+    # Check expiry
+    if expires:
+        try:
+            from datetime import datetime, timezone
+
+            exp_dt = datetime.fromisoformat(expires)
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > exp_dt:
+                status = "expired"
+        except (ValueError, TypeError):
+            pass
+
+    print(f"\n  {sub_id} [{status}]")
+    print(f"    Sport: {sport}")
+    if teams:
+        print(f"    Teams: {', '.join(teams)}")
+    if expires:
+        print(f"    Expires: {expires}")
+    else:
+        print("    Expires: never")
+    if max_active > 0:
+        print(f"    Max active: {max_active}")
+    print(f"    Poll interval: {poll}s")
+    print(f"    Joined trials: {len(joined)}")
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create argument parser."""
     parser = argparse.ArgumentParser(
@@ -1230,6 +1419,53 @@ def create_parser() -> argparse.ArgumentParser:
         help="Set the default profile",
     )
     p_config.set_defaults(func=cmd_config)
+
+    # subscribe - subscribe to future trials
+    p_sub = subparsers.add_parser(
+        "subscribe", help="Subscribe to auto-join future trials"
+    )
+    p_sub.add_argument(
+        "--sport",
+        required=True,
+        choices=["nba", "nfl", "ncaa"],
+        help="Sport type to subscribe to",
+    )
+    p_sub.add_argument(
+        "--team",
+        action="append",
+        help="Team tricode filter (repeatable, e.g. --team LAL --team BOS)",
+    )
+    p_sub.add_argument(
+        "--days",
+        type=int,
+        help="Subscription duration in days (default: 7)",
+    )
+    p_sub.add_argument(
+        "--forever",
+        action="store_true",
+        help="Never expire this subscription",
+    )
+    p_sub.add_argument(
+        "--poll-interval",
+        type=int,
+        default=60,
+        help="Poll interval in seconds (default: 60)",
+    )
+    p_sub.add_argument(
+        "--max-active",
+        type=int,
+        default=0,
+        help="Max concurrent trials for this subscription (0=unlimited)",
+    )
+    p_sub.set_defaults(func=cmd_subscribe)
+
+    # subscriptions - manage subscriptions
+    p_subs = subparsers.add_parser("subscriptions", help="Manage subscriptions")
+    subs_sub = p_subs.add_subparsers(dest="subs_action")
+    subs_sub.add_parser("list", help="List all subscriptions")
+    p_rm = subs_sub.add_parser("remove", help="Remove a subscription")
+    p_rm.add_argument("subscription_id", help="Subscription ID to remove")
+    p_subs.set_defaults(func=cmd_subscriptions)
 
     # leave - leave a trial
     p_leave = subparsers.add_parser(

@@ -28,6 +28,8 @@ from dojozero_client._config import (
 )
 from dojozero_client._credentials import load_api_key
 from dojozero_client._rpc import RPCError, RPCServer
+from dojozero_client._subscription import Subscription, SubscriptionStore
+from dojozero_client._watcher import SubscriptionWatcher
 
 if TYPE_CHECKING:
     from dojozero_client._client import TrialConnection
@@ -806,6 +808,10 @@ class UnifiedDaemon:
         self._stop_event: asyncio.Event | None = None
         self._running = False
 
+        # Subscription support
+        self._subscription_store = SubscriptionStore()
+        self._watcher = SubscriptionWatcher(self, self._subscription_store)
+
         # Register RPC handlers
         self._rpc.register("join", self._handle_join)
         self._rpc.register("leave", self._handle_leave)
@@ -816,6 +822,9 @@ class UnifiedDaemon:
         self._rpc.register("balance", self._handle_balance)
         self._rpc.register("results", self._handle_results)
         self._rpc.register("ping", self._handle_ping)
+        self._rpc.register("subscribe", self._handle_subscribe)
+        self._rpc.register("unsubscribe", self._handle_unsubscribe)
+        self._rpc.register("subscriptions", self._handle_subscriptions)
 
     async def start(self) -> None:
         """Start the unified daemon."""
@@ -837,6 +846,9 @@ class UnifiedDaemon:
             await self._rpc.start()
             logger.info("RPC server started at %s", SOCKET_PATH)
 
+            # Start subscription watcher
+            await self._watcher.start()
+
             # Keep running until stopped
             await self._stop_event.wait()
 
@@ -848,6 +860,9 @@ class UnifiedDaemon:
     async def stop(self) -> None:
         """Stop the daemon and all trial connections."""
         self._running = False
+
+        # Stop subscription watcher
+        await self._watcher.stop()
 
         # Disconnect all trials
         for trial_id in list(self._trials.keys()):
@@ -979,6 +994,50 @@ class UnifiedDaemon:
         """Health check."""
         return {"status": "ok", "trials": len(self._trials)}
 
+    async def _handle_subscribe(
+        self,
+        sport: str,
+        teams: list[str] | None = None,
+        days: int | None = None,
+        forever: bool = False,
+        poll_interval: int = 60,
+        max_active: int = 0,
+        filters: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new subscription."""
+        sub = Subscription.create(
+            sport=sport,
+            teams=teams,
+            days=days,
+            forever=forever,
+            poll_interval_seconds=poll_interval,
+            max_active_trials=max_active,
+            filters=filters,
+        )
+        self._subscription_store.add(sub)
+        logger.info("Created subscription %s for %s", sub.subscription_id, sport)
+        return {
+            "subscription_id": sub.subscription_id,
+            "sport": sub.sport,
+            "teams": sub.teams,
+            "expires_at": sub.expires_at,
+        }
+
+    async def _handle_unsubscribe(self, subscription_id: str) -> dict[str, Any]:
+        """Remove a subscription."""
+        removed = self._subscription_store.remove(subscription_id)
+        if not removed:
+            raise RPCError("NOT_FOUND", f"Subscription {subscription_id} not found")
+        return {"status": "removed", "subscription_id": subscription_id}
+
+    async def _handle_subscriptions(self) -> dict[str, Any]:
+        """List all subscriptions."""
+        subs = self._subscription_store.load()
+        return {
+            "subscriptions": [s.to_dict() for s in subs],
+            "count": len(subs),
+        }
+
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
@@ -1065,6 +1124,7 @@ __all__ = [
     "TrialHandler",
     "is_daemon_running",
     "stop_daemon",
+    "SubscriptionWatcher",
 ]
 
 
