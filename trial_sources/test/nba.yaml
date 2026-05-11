@@ -1,0 +1,31 @@
+# NBA Trial Source — Test environment (subscription integration test)
+#
+# Purpose: validate subscription auto-join over 1-2 days with real ESPN data.
+#
+# Key differences from daily:
+#   - max_daily_games: 5   → cover all main-slate games, not just 1
+#   - pre_start_hours: 0.5 → trial visible 30 min before tip-off (shorter lag)
+#   - check_interval_seconds: 120 → server re-checks ESPN every 2 min
+#   - sync_interval_seconds: 1800 → sync watcher state every 30 min
+#   - Only `degen` persona to keep LLM cost low during the test run
+#
+# Usage:
+#   dojo0 serve \
+#     --host 0.0.0.0 --port 8001 \
+#     --trial-source trial_sources/test/nba.yaml \
+#     [--trace-backend none]      # disable SLS for pure local test
+
+source_id: nba-moneyline-source-test
+sport_type: nba
+config:
+  scenario_name: nba
+  max_daily_games: 5
+  personas: [degen]
+  llm_config_path: agents/llms/default.yaml
+
+  # Override base schedule for tighter feedback loop
+  schedule:
+    pre_start_hours: 0.5
+    check_interval_seconds: 120.0
+    auto_stop_on_completion: true
+    sync_interval_seconds: 1800.0
