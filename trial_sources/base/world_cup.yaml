@@ -1,0 +1,80 @@
+# World Cup base trial source config (FIFA soccer).
+# Shared data_streams, operators, agent template, and schedule defaults
+# for any FIFA competition discoverable via ESPN's soccer API.
+#
+# The `league` field is set per-tier (daily/prod/pre) so the same base can
+# back the 2026 men's WC (fifa.world), women's WC (fifa.wwc), and historical
+# Club WC backtests (fifa.cwc).
+
+scenario_config:
+  hub: {}
+
+  # Default league for trials built from this base. Per-tier YAMLs override
+  # via the top-level `league:` field in their config block.
+  league: fifa.world
+
+  data_streams:
+  - id: pre_game_insights_stream
+    event_types:
+    - injury_report
+    - power_ranking
+    - expert_prediction
+    - twitter_top_tweets
+
+  - id: game_lifecycle_stream
+    event_types:
+    - game_initialize
+    - game_start
+    - game_result
+
+  - id: game_update_stream
+    event_types:
+    - world_cup_game_update
+
+  - id: play_by_play_stream
+    event_types:
+    - world_cup_play
+
+  # NOTE: odds_update_stream is intentionally omitted. The 2026 WC has a
+  # tournament-winner event-level market on Polymarket but no game-level
+  # markets yet. Uncomment and add "polymarket" to the world_cup trial's
+  # store_types when game-level WC markets land (expect ~T-7).
+  # - id: odds_update_stream
+  #   event_types:
+  #   - odds_update
+
+  operators:
+  - id: betting_broker
+    class: BrokerOperator
+    initial_balance: "1000.00"
+    allowed_tools:
+    - get_event
+    - get_balance
+    - get_holdings
+    - place_market_bet_moneyline
+    - get_bet_history
+    - get_statistics
+    data_streams:
+    - game_lifecycle_stream
+    - game_update_stream
+
+agent_template:
+  class: BettingAgent
+  operators:
+  - betting_broker
+  data_streams:
+  - pre_game_insights_stream
+  - game_update_stream
+  - game_lifecycle_stream
+  - play_by_play_stream
+
+schedule:
+  # Soccer is lineup-driven (starting XI announced ~1h before kickoff),
+  # so the agent gets 2h to ingest team news and pregame insights —
+  # longer than NBA's 0.1h (boxscores publish minutes before tipoff).
+  pre_start_hours: 2.0
+  check_interval_seconds: 60.0
+  auto_stop_on_completion: true
+  # ESPN's WC schedule is locked once published, so a 1-hour sync interval
+  # is plenty (vs NBA's daily slates that can shift).
+  sync_interval_seconds: 3600.0

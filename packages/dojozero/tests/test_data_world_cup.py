@@ -402,6 +402,11 @@ class TestStateTracker:
         assert s.status_name_to_code("STATUS_HALFTIME") == s.STATUS_IN_PROGRESS
         assert s.status_name_to_code("STATUS_SHOOTOUT") == s.STATUS_IN_PROGRESS
         assert s.status_name_to_code("STATUS_FULL_TIME") == s.STATUS_FINAL
+        # AET / PEN are the names ESPN actually returns for matches that go
+        # to extra time / penalties. Tested live with Copa America 2024 QF
+        # (Ecuador-Argentina, STATUS_FINAL_PEN) and CWC 2025 QF (Al Hilal-
+        # Man City, STATUS_FINAL_AET).
+        assert s.status_name_to_code("STATUS_FINAL_AET") == s.STATUS_FINAL
         assert s.status_name_to_code("STATUS_FINAL_PEN") == s.STATUS_FINAL
         # Unknown names default to scheduled
         assert s.status_name_to_code("STATUS_NONSENSE") == s.STATUS_SCHEDULED

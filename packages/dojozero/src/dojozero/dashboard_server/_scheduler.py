@@ -31,7 +31,13 @@ from dojozero.data.espn import (
 )
 from dojozero.utils import utc_to_us_date, us_game_day_today
 
-from ._game_discovery import GameInfo, NBAGameFetcher, NCAAGameFetcher, NFLGameFetcher
+from ._game_discovery import (
+    GameInfo,
+    NBAGameFetcher,
+    NCAAGameFetcher,
+    NFLGameFetcher,
+    WorldCupGameFetcher,
+)
 from ._trial_manager import TrialManager
 from ._types import GameMetadata, ScheduledGameMetadata
 
@@ -692,6 +698,11 @@ class ScheduleManager:
                 games = await self._nfl_fetcher.fetch_games_for_date(date)
             else:
                 games = await self._nfl_fetcher.fetch_games_for_date(None)
+        elif sport_type == "world_cup":
+            # League is configured per-source via scenario_config; for the
+            # ad-hoc batch path we default to the men's WC.
+            league = (scenario_config or {}).get("league", "fifa.world")
+            games = await WorldCupGameFetcher(league=league).fetch_games_for_date(date)
 
         if not games:
             LOGGER.info("No games found for batch scheduling")
@@ -875,7 +886,7 @@ class ScheduleManager:
         if source_id in self._sources:
             raise ValueError(f"Trial source '{source_id}' already exists")
 
-        if sport_type not in ("nba", "nfl", "ncaa"):
+        if sport_type not in ("nba", "nfl", "ncaa", "world_cup"):
             raise ValueError(f"Invalid sport_type: {sport_type}")
 
         source = TrialSource(
@@ -1000,6 +1011,13 @@ class ScheduleManager:
             elif source.sport_type == "nfl":
                 # Fetch NFL games from ESPN scoreboard
                 games = await self._nfl_fetcher.fetch_games_for_date(None)
+
+            elif source.sport_type == "world_cup":
+                # FIFA league code is per-source (e.g. "fifa.world", "fifa.cwc").
+                league = source.config.scenario_config.get("league", "fifa.world")
+                games = await WorldCupGameFetcher(league=league).fetch_games_for_date(
+                    None
+                )
 
         except Exception as e:
             LOGGER.error("Error fetching games for source %s: %s", source.source_id, e)
@@ -1126,6 +1144,13 @@ class ScheduleManager:
                 "away_tricode": game.away_team.tricode,
                 "game_date": game_date,
             }
+            # World Cup trials need the FIFA league code threaded into metadata
+            # so the monitor loop's status check picks the right ESPN endpoint.
+            extra_metadata: dict[str, Any] = {}
+            if source.sport_type == "world_cup":
+                extra_metadata["world_cup_league"] = config.scenario_config.get(
+                    "league", "fifa.world"
+                )
 
             try:
                 schedule_id = await self.schedule_trial(
@@ -1137,7 +1162,7 @@ class ScheduleManager:
                     pre_start_hours=config.pre_start_hours,
                     check_interval_seconds=config.check_interval_seconds,
                     auto_stop_on_completion=config.auto_stop_on_completion,
-                    metadata=dict(trial_metadata),
+                    metadata={**trial_metadata, **extra_metadata},
                     schedule_id=schedule_id,
                 )
 
@@ -1849,6 +1874,16 @@ class ScheduleManager:
                 )
             elif scheduled.sport_type == "nfl":
                 return await self._nfl_fetcher.get_game_status_info(
+                    scheduled.game_id,
+                    scheduled.game_date,
+                )
+            elif scheduled.sport_type == "world_cup":
+                # League stored in scheduled trial metadata; default to men's WC
+                # for back-compat with trials scheduled before this field landed.
+                league = (scheduled.metadata or {}).get(
+                    "world_cup_league", "fifa.world"
+                )
+                return await WorldCupGameFetcher(league=league).get_game_status_info(
                     scheduled.game_id,
                     scheduled.game_date,
                 )

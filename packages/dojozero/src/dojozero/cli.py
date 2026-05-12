@@ -2158,6 +2158,9 @@ def _expand_compact_trial_source(
     """
     personas: list[str] | None = config.pop("personas", None)
     llm_config_path: str | None = config.pop("llm_config_path", None)
+    # Optional per-tier overrides that flow into scenario_config rather than
+    # the source-level config. world_cup uses `league` to pick a FIFA code.
+    league_override: str | None = config.pop("league", None)
     if personas is None:
         return  # Already full format
 
@@ -2174,6 +2177,8 @@ def _expand_compact_trial_source(
 
     # Build scenario_config from base
     scenario_config = dict(base["scenario_config"])
+    if league_override is not None:
+        scenario_config["league"] = league_override
     agent_template = base["agent_template"]
 
     # Generate agents from personas × llm_config_path

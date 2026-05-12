@@ -7,6 +7,12 @@ from dojozero.data.espn._state_tracker import BaseGameStateTracker
 # ESPN soccer status name → status code mapping. The base class map covers
 # generic statuses; soccer adds half/full-time/ET/shootout-specific names.
 # Values follow the base class convention: 1=scheduled, 2=in_progress, 3=final.
+# Mapping verified against live ESPN summary payloads:
+# - STATUS_FULL_TIME      (id 28) — regulation finish
+# - STATUS_FINAL_AET      (id 45) — after extra time
+# - STATUS_FINAL_PEN      — after penalty shootout (Copa America 2024 QF/SF/final)
+# Status names not yet observed in the wild (STATUS_FIRST_HALF/SECOND_HALF/etc.)
+# are included to be safe — they follow ESPN's naming convention across sports.
 _SOCCER_STATUS_NAME_MAP: dict[str, int] = {
     "STATUS_SCHEDULED": 1,
     "STATUS_DELAYED": 1,
@@ -21,8 +27,8 @@ _SOCCER_STATUS_NAME_MAP: dict[str, int] = {
     "STATUS_SHOOTOUT": 2,
     "STATUS_FULL_TIME": 3,
     "STATUS_FINAL": 3,
+    "STATUS_FINAL_AET": 3,
     "STATUS_FINAL_PEN": 3,
-    "STATUS_AFTER_EXTRA_TIME": 3,
     "STATUS_ABANDONED": 3,
     "STATUS_CANCELED": 3,
     "STATUS_FORFEIT": 3,
