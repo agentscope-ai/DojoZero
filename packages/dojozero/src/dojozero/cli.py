@@ -46,6 +46,7 @@ DEFAULT_IMPORTS: tuple[str, ...] = (
     "dojozero.nba",
     "dojozero.ncaa",
     "dojozero.nfl",
+    "dojozero.world_cup",
 )
 DEFAULT_STORE_DIRECTORY: str = "./dojozero-store"
 DEFAULT_RUNTIME_PROVIDER: str = "local"

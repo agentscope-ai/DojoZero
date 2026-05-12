@@ -56,7 +56,7 @@ class BettingTrialMetadata(BaseTrialMetadata):
 
     # Required fields (in addition to base class fields)
     sample: str
-    sport_type: Literal["nba", "nfl", "ncaa"]
+    sport_type: Literal["nba", "nfl", "ncaa", "world_cup"]
     espn_game_id: str
     event_types: tuple[str, ...]
 
@@ -78,7 +78,12 @@ class BettingTrialMetadata(BaseTrialMetadata):
     nba_poll_intervals: dict[str, float] | None = None
     nfl_poll_intervals: dict[str, float] | None = None
     ncaa_poll_intervals: dict[str, float] | None = None
+    world_cup_poll_intervals: dict[str, float] | None = None
     polymarket_poll_intervals: dict[str, float] | None = None
+
+    # World Cup FIFA league code (e.g., "fifa.world"). Only meaningful when
+    # sport_type == "world_cup"; ignored otherwise.
+    world_cup_league: str | None = None
 
 
 @dataclass(slots=True)

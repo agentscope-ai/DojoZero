@@ -5,7 +5,7 @@ description = "DojoZero monorepo workspace"
 requires-python = ">=3.11"
 
 [tool.uv.workspace]
-members = ["packages/*"]
+members = ["packages/dojozero", "packages/dojozero-client"]
 
 [tool.uv.sources]
 dojozero = { workspace = true }

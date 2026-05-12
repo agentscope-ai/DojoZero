@@ -71,6 +71,12 @@ from dojozero.data.nba import (
     NBAPlayEvent,
     NBAStore,
 )
+from dojozero.data.world_cup import (
+    WorldCupExternalAPI,
+    WorldCupGameUpdateEvent,
+    WorldCupPlayEvent,
+    WorldCupStore,
+)
 from dojozero.data.nfl import (
     NFLDriveEvent,
     NFLGameUpdateEvent,
@@ -117,6 +123,8 @@ AnyDataEvent = Annotated[
         StatsInsightEvent,
         NBAPlayEvent,
         NBAGameUpdateEvent,
+        WorldCupPlayEvent,
+        WorldCupGameUpdateEvent,
         NFLPlayEvent,
         NFLDriveEvent,
         NFLGameUpdateEvent,
@@ -218,6 +226,11 @@ __all__ = [
     "NBAGameUpdateEvent",
     "NBAExternalAPI",
     "NBAStore",
+    # World Cup
+    "WorldCupPlayEvent",
+    "WorldCupGameUpdateEvent",
+    "WorldCupExternalAPI",
+    "WorldCupStore",
     # NFL
     "NFLPlayEvent",
     "NFLDriveEvent",
