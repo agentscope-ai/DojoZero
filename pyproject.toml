@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 
 [tool.uv.workspace]
 members = ["packages/*"]
+exclude = ["packages/dojozero-agent-runner"]
 
 [tool.uv.sources]
 dojozero = { workspace = true }
