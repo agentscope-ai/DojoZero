@@ -3043,7 +3043,11 @@ async def _sync_service_command(args: argparse.Namespace) -> int:
     LOGGER.info("Starting Sync Service")
     LOGGER.info("Redis URL: %s", safe_url)
     LOGGER.info("Sync interval: %s seconds", args.sync_interval)
-    LOGGER.info("Lookback days: %s", args.lookback_days)
+    LOGGER.info("Global lookback days: %s", args.lookback_days)
+    LOGGER.info(
+        "Per-league lookback days: %s",
+        dict(config.league_lookback_days),
+    )
 
     await service.start()
     return 0

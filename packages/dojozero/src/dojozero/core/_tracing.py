@@ -755,21 +755,24 @@ class SLSTraceReader:
         # SLS query for trial.started spans
         # Note: Infrastructure fields use _ prefix (_service, _operation_name, _trace_id)
         # Span tag `trial.sport_type` is flattened to `trial_sport_type` by SLSLogExporter.
-        league_clause = ""
+        # IMPORTANT: `trial_sport_type` is NOT in the SLS field index, so we cannot use
+        # `field:"value"` (search-side filter) on it. Apply the filter in the SQL part
+        # after `|` instead — SQL filters do not require an index.
         if sport_type:
             sport_lower = sport_type.lower()
             sport_upper = sport_type.upper()
             if sport_lower == sport_upper:
-                league_clause = f' AND trial_sport_type:"{sport_lower}"'
+                sql_where = f" WHERE trial_sport_type = '{sport_lower}'"
             else:
-                league_clause = (
-                    f' AND (trial_sport_type:"{sport_lower}"'
-                    f' OR trial_sport_type:"{sport_upper}")'
+                sql_where = (
+                    f" WHERE trial_sport_type IN ('{sport_lower}', '{sport_upper}')"
                 )
+        else:
+            sql_where = ""
         query = (
             f'_service:"{self._service_name}" AND '
-            f'_operation_name:"trial.started"{league_clause} | '
-            f"SELECT DISTINCT _trace_id as trial_id LIMIT {limit}"
+            f'_operation_name:"trial.started" | '
+            f"SELECT DISTINCT _trace_id as trial_id{sql_where} LIMIT {limit}"
         )
 
         params = {

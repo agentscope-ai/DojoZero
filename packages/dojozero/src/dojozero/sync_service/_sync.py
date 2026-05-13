@@ -276,49 +276,19 @@ class SyncService:
         if self._temp_cache is None:
             self._temp_cache = LandingPageCache(config=self.config)
 
-        # 1. Get trial list — per-league SLS queries with each league's lookback.
-        #    This narrows trial.started fetches at the SLS query level so old
-        #    trials of leagues with shorter lookback (e.g. NBA 90d) are never
-        #    pulled in. Trials whose sport_type is not configured in
-        #    league_lookback_days will be skipped.
+        # 1. Get trial list — single SLS query with the maximum lookback across
+        #    all configured leagues. Per-league differentiation is applied later
+        #    in `_refresh_aggregated_data` by filtering on game_date.
+        #
+        #    NOTE: We previously tried per-league SLS server-side filtering via
+        #    `list_trials(sport_type=...)`, but the SLS logstore's
+        #    `trial_sport_type` field is not enabled for SQL analysis, so the
+        #    server returns 400. To re-enable SLS-side filtering: open the SLS
+        #    console -> logstore -> index settings -> enable statistical
+        #    analysis on `trial_sport_type`, then switch this block to call
+        #    `list_trials` per league using `self.config.league_lookback_days`.
         now = datetime.now(timezone.utc)
         league_lookbacks = self.config.league_lookback_days
-        trial_id_set: set[str] = set()
-        if league_lookbacks:
-            for league, lookback_days in league_lookbacks.items():
-                league_start = now - timedelta(days=lookback_days)
-                league_ids = await self.trace_reader.list_trials(
-                    start_time=league_start,
-                    limit=self.config.trials_limit,
-                    sport_type=league,
-                )
-                LOGGER.info(
-                    "SyncService: list_trials[%s, lookback=%dd] -> %d trials",
-                    league,
-                    lookback_days,
-                    len(league_ids),
-                )
-                trial_id_set.update(league_ids)
-        else:
-            start_dt = now - timedelta(days=self.config.trials_lookback_days)
-            global_ids = await self.trace_reader.list_trials(
-                start_time=start_dt, limit=self.config.trials_limit
-            )
-            trial_id_set.update(global_ids)
-        trial_ids = list(trial_id_set)
-
-        if not trial_ids:
-            LOGGER.info("SyncService: No trials found, skipping sync")
-            return
-
-        LOGGER.info("SyncService: [2/8] Trial list fetched (%d trials)", len(trial_ids))
-
-        # 2. Fetch spans - full or incremental.
-        #    Span fetch is a time-window bulk query and cannot be filtered by
-        #    sport_type at the SLS level. Use the maximum league lookback as
-        #    the window so all per-league windows are covered. Trials not in
-        #    `trial_ids` (e.g. old NBA trials beyond NBA's 90d window) will be
-        #    pruned later in this method.
         if league_lookbacks:
             effective_lookback_days = max(
                 max(league_lookbacks.values()), self.config.trials_lookback_days
@@ -326,6 +296,25 @@ class SyncService:
         else:
             effective_lookback_days = self.config.trials_lookback_days
 
+        start_dt = now - timedelta(days=effective_lookback_days)
+        trial_ids = await self.trace_reader.list_trials(
+            start_time=start_dt, limit=self.config.trials_limit
+        )
+
+        if not trial_ids:
+            LOGGER.info("SyncService: No trials found, skipping sync")
+            return
+
+        LOGGER.info(
+            "SyncService: [2/8] Trial list fetched (%d trials, lookback=%dd)",
+            len(trial_ids),
+            effective_lookback_days,
+        )
+
+        # 2. Fetch spans - full or incremental.
+        #    Span fetch is a time-window bulk query and cannot be filtered by
+        #    sport_type at the SLS level. Use the maximum league lookback as
+        #    the window so all per-league windows are covered.
         if is_initial or self._last_sync_time is None:
             # Full fetch with lookback buffer
             spans_start_dt = now - timedelta(days=effective_lookback_days + 1)
