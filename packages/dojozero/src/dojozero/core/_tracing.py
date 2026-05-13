@@ -120,6 +120,7 @@ class TraceReader(Protocol):
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         limit: int = 500,
+        sport_type: str | None = None,
     ) -> list[str]:
         """List trial IDs with traces.
 
@@ -127,6 +128,9 @@ class TraceReader(Protocol):
             start_time: Start of time range (inclusive). Defaults to 7 days ago.
             end_time: End of time range (inclusive). Defaults to now.
             limit: Maximum number of trials to return.
+            sport_type: Optional league filter (e.g. "NBA", "NFL"). Backends
+                that support server-side filtering should narrow the query;
+                others may ignore this hint.
 
         Returns:
             List of unique trial IDs.
@@ -196,6 +200,7 @@ class JaegerTraceReader:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         limit: int = 500,
+        sport_type: str | None = None,
     ) -> list[str]:
         """List trial IDs from Jaeger by querying trial.started spans.
 
@@ -206,6 +211,9 @@ class JaegerTraceReader:
             start_time: Start of time range (inclusive). Defaults to 7 days ago.
             end_time: End of time range (inclusive). Defaults to now.
             limit: Maximum number of traces to return. Defaults to 500.
+            sport_type: Optional league filter. Applied as a post-filter on
+                the trial.sport_type tag (Jaeger has no native server-side
+                tag-equality filter via this endpoint).
 
         Returns:
             List of unique trial IDs found in the time range.
@@ -258,7 +266,10 @@ class JaegerTraceReader:
             )
             return []
 
-        # Extract trial IDs from trial.started spans
+        # Extract trial IDs from trial.started spans.
+        # If sport_type is provided, post-filter spans whose `trial.sport_type` tag
+        # matches (case-insensitive).
+        sport_filter = sport_type.lower() if sport_type else None
         trial_ids: set[str] = set()
         try:
             for trace in data.get("data") or []:
@@ -268,14 +279,25 @@ class JaegerTraceReader:
                     if not isinstance(span, dict):
                         continue
                     if _jaeger_span_operation_name(span) == "trial.started":
+                        tid_val: str | None = None
+                        sport_val: str | None = None
                         for tag in span.get("tags") or []:
                             if not isinstance(tag, dict):
                                 continue
-                            if tag.get("key") == "dojozero.trial.id":
+                            key = tag.get("key")
+                            if key == "dojozero.trial.id":
                                 raw = _jaeger_tag_value(tag)
                                 if raw is not None and str(raw).strip():
-                                    trial_ids.add(str(raw).strip())
-                                break
+                                    tid_val = str(raw).strip()
+                            elif key == "trial.sport_type":
+                                raw = _jaeger_tag_value(tag)
+                                if raw is not None:
+                                    sport_val = str(raw).strip().lower()
+                        if tid_val is None:
+                            continue
+                        if sport_filter is not None and sport_val != sport_filter:
+                            continue
+                        trial_ids.add(tid_val)
         except (TypeError, AttributeError, KeyError) as e:
             LOGGER.warning("Jaeger list_trials parse error: %s", e)
             return []
@@ -289,8 +311,16 @@ class JaegerTraceReader:
                 if sp.operation_name != "trial.started":
                     continue
                 tid_raw = sp.tags.get("dojozero.trial.id")
-                if tid_raw is not None and str(tid_raw).strip():
-                    trial_ids.add(str(tid_raw).strip())
+                if tid_raw is None or not str(tid_raw).strip():
+                    continue
+                if sport_filter is not None:
+                    sport_raw = sp.tags.get("trial.sport_type")
+                    if (
+                        sport_raw is None
+                        or str(sport_raw).strip().lower() != sport_filter
+                    ):
+                        continue
+                trial_ids.add(str(tid_raw).strip())
 
         return list(trial_ids)
 
@@ -699,6 +729,7 @@ class SLSTraceReader:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         limit: int = 500,
+        sport_type: str | None = None,
     ) -> list[str]:
         """List trial IDs from SLS by querying for trial.started spans.
 
@@ -706,6 +737,10 @@ class SLSTraceReader:
             start_time: Start of time range. Defaults to 7 days ago.
             end_time: End of time range. Defaults to now.
             limit: Maximum number of trials to return.
+            sport_type: Optional league filter. Adds a server-side clause
+                on the SLS field `trial_sport_type` (which is the flattened
+                form of the `trial.sport_type` span tag). Both lower-case
+                and upper-case stored variants are matched.
 
         Returns:
             List of unique trial IDs.
@@ -719,9 +754,21 @@ class SLSTraceReader:
 
         # SLS query for trial.started spans
         # Note: Infrastructure fields use _ prefix (_service, _operation_name, _trace_id)
+        # Span tag `trial.sport_type` is flattened to `trial_sport_type` by SLSLogExporter.
+        league_clause = ""
+        if sport_type:
+            sport_lower = sport_type.lower()
+            sport_upper = sport_type.upper()
+            if sport_lower == sport_upper:
+                league_clause = f' AND trial_sport_type:"{sport_lower}"'
+            else:
+                league_clause = (
+                    f' AND (trial_sport_type:"{sport_lower}"'
+                    f' OR trial_sport_type:"{sport_upper}")'
+                )
         query = (
             f'_service:"{self._service_name}" AND '
-            f'_operation_name:"trial.started" | '
+            f'_operation_name:"trial.started"{league_clause} | '
             f"SELECT DISTINCT _trace_id as trial_id LIMIT {limit}"
         )
 

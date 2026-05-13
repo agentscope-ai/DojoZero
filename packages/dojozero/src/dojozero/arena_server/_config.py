@@ -20,7 +20,12 @@ class CacheConfig(BaseModel):
 
     # Time range
     trials_lookback_days: int = Field(
-        default=90, description="Days to look back for trials"
+        default=365,
+        description="Days to look back for trials (global SLS fetch window; must be >= max(league_lookback_days))",
+    )
+    league_lookback_days: dict[str, int] = Field(
+        default_factory=lambda: {"NBA": 90, "NFL": 365},
+        description="Per-league lookback (days). Used to filter per-league cached views.",
     )
     trials_limit: int = Field(default=500, description="Max trials to fetch per query")
 
