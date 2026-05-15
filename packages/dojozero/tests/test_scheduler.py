@@ -1113,6 +1113,117 @@ class TestClusterDedup:
         assert len(result) == 1
 
 
+class TestCrossSourceDedup:
+    """Tests for cross-source duplicate trial prevention (issue #244)."""
+
+    @pytest.fixture
+    def mock_trial_manager(self):
+        manager = MagicMock()
+        manager.submit = AsyncMock(return_value="trial-123")
+        manager.cancel = AsyncMock(return_value=True)
+        manager.dashboard = MagicMock()
+        manager.dashboard.stop_trial = AsyncMock()
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_schedule_trial_does_not_overwrite_active_schedule(
+        self, mock_trial_manager
+    ):
+        """Calling schedule_trial twice for the same game keeps the first schedule."""
+        scheduler = ScheduleManager(trial_manager=mock_trial_manager, store=None)
+
+        now = datetime.now(timezone.utc)
+        event_time = now + timedelta(hours=3)
+        game_id = "401871337"
+        sport_type = "nba"
+
+        schedule_id = await scheduler.schedule_trial(
+            scenario_name="nba-moneyline",
+            scenario_config={"hub": {}, "espn_game_id": game_id},
+            sport_type=sport_type,
+            game_id=game_id,
+            event_time=event_time,
+        )
+
+        first_schedule = scheduler._schedules[schedule_id]
+
+        # Simulate second source calling schedule_trial for the same game
+        schedule_id_2 = await scheduler.schedule_trial(
+            scenario_name="nba-moneyline",
+            scenario_config={"hub": {}, "espn_game_id": game_id, "extra": True},
+            sport_type=sport_type,
+            game_id=game_id,
+            event_time=event_time,
+        )
+
+        assert schedule_id == schedule_id_2
+        # The original schedule object must not be replaced
+        assert scheduler._schedules[schedule_id] is first_schedule
+        # Config must still be from the first schedule (no overwrite)
+        assert "extra" not in scheduler._schedules[schedule_id].scenario_config
+
+    @pytest.mark.asyncio
+    async def test_sync_source_skips_game_already_scheduled_by_other_source(
+        self, mock_trial_manager
+    ):
+        """_sync_source skips a game already active in a different source."""
+        scheduler = ScheduleManager(trial_manager=mock_trial_manager, store=None)
+
+        now = datetime.now(timezone.utc)
+        game_id = "401871337"
+
+        # Pre-schedule the game as if source A already did it
+        config_a = TrialSourceConfig(
+            scenario_name="nba-moneyline",
+            scenario_config={},
+        )
+        source_a = scheduler.register_source(
+            source_id="nba-source-a",
+            sport_type="nba",
+            config=config_a,
+        )
+        await scheduler.schedule_trial(
+            scenario_name="nba-moneyline",
+            scenario_config={"hub": {}},
+            sport_type="nba",
+            game_id=game_id,
+            event_time=now + timedelta(hours=3),
+            metadata={"source_id": source_a.source_id},
+        )
+
+        # Source B attempts to sync the same game
+        config_b = TrialSourceConfig(
+            scenario_name="nba-moneyline",
+            scenario_config={},
+        )
+        source_b = scheduler.register_source(
+            source_id="nba-source-b",
+            sport_type="nba",
+            config=config_b,
+        )
+
+        game = MagicMock()
+        game.game_id = game_id
+        game.game_time_utc = now + timedelta(hours=3)
+        game.status = 1
+        game.status_text = "Scheduled"
+        game.short_name = "LAL @ BOS"
+        game.home_team = MagicMock(name="Boston Celtics", tricode="BOS")
+        game.away_team = MagicMock(name="Los Angeles Lakers", tricode="LAL")
+
+        with patch.object(
+            scheduler._nba_fetcher,
+            "fetch_games_for_date",
+            new_callable=AsyncMock,
+            return_value=[game],
+        ):
+            result = await scheduler._sync_source(source_b)
+
+        # Source B must not have created a second schedule for the same game
+        assert len(result) == 0
+        assert len(scheduler._schedules) == 1
+
+
 class _FakeRedis:
     """Minimal in-memory Redis substitute for testing."""
 

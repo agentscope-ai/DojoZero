@@ -617,6 +617,21 @@ class ScheduleManager:
         if schedule_id is None:
             schedule_id = self._generate_schedule_id(sport_type, game_id)
 
+        # Don't overwrite an existing active schedule — the same game can be
+        # discovered by multiple sources; the first one wins and subsequent
+        # calls should be no-ops rather than resetting the phase to WAITING.
+        existing = self._schedules.get(schedule_id)
+        if existing is not None and existing.phase not in (
+            ScheduledTrialPhase.COMPLETED,
+            ScheduledTrialPhase.CANCELLED,
+        ):
+            LOGGER.debug(
+                "Schedule '%s' already active (phase=%s), skipping re-schedule",
+                schedule_id,
+                existing.phase,
+            )
+            return schedule_id
+
         # Extract game_date from event_time in US Eastern time
         game_date = utc_to_us_date(event_time)
 
@@ -1034,6 +1049,11 @@ class ScheduleManager:
         # Schedule trials for new games
         scheduled_trials: list[ScheduledTrial] = []
 
+        # Build a global set of game IDs already actively scheduled (across all
+        # sources) so that the same game is not launched twice when it appears
+        # in more than one source's game list.
+        active_game_ids: set[str] = {gid for (_, gid) in self._scheduled_events}
+
         for game in games:
             # Skip games without time
             if game.game_time_utc is None:
@@ -1063,8 +1083,10 @@ class ScheduleManager:
                 )
                 continue
 
-            # Skip if already scheduled for this source
-            if (source.source_id, game.game_id) in self._scheduled_events:
+            # Skip if already scheduled globally (regardless of which source
+            # originally scheduled it) to prevent duplicate trials for the
+            # same game when multiple sources cover overlapping game slates.
+            if game.game_id in active_game_ids:
                 continue
 
             # Enforce max_daily_games limit (before claiming, to avoid orphaned claims)
