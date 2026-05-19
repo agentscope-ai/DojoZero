@@ -313,6 +313,24 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         )
         return True
 
+    def get_contest_kind(self) -> str:
+        """Return ``"classic_betting"``."""
+        return "classic_betting"
+
+    def is_accepting(self) -> bool:
+        """True when the event exists and betting is open."""
+        return self._event is not None and self._event.can_bet
+
+    def get_rules(self) -> Dict[str, Any]:
+        """Return a basic rule descriptor for classic betting mode."""
+        return {
+            "kind": "classic_betting",
+            "description": (
+                "Place market or limit bets via the standard betting tools. "
+                "Returns are determined by odds and bet outcome."
+            ),
+        }
+
     async def register_agents(self, agents: Sequence[Agent]) -> None:
         """Register agents and create their accounts"""
         super().register_agents(agents)
@@ -1415,13 +1433,28 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                     statistics_dict
                 ).decode()
 
-            span = create_span_from_event(
-                trial_id=self.trial_id,
-                actor_id=self.actor_id,
-                operation_name=f"broker.{change_type}",
-                extra_tags=tags,
-            )
-            emit_span(span)
+            if change_type == "final_stats":
+                tags["contest.kind"] = "classic_betting"
+                # Emit under new name + legacy name for backward compat
+                for op_name in (
+                    "contest.final_stats",
+                    f"broker.{change_type}",
+                ):
+                    span = create_span_from_event(
+                        trial_id=self.trial_id,
+                        actor_id=self.actor_id,
+                        operation_name=op_name,
+                        extra_tags=tags,
+                    )
+                    emit_span(span)
+            else:
+                span = create_span_from_event(
+                    trial_id=self.trial_id,
+                    actor_id=self.actor_id,
+                    operation_name=f"broker.{change_type}",
+                    extra_tags=tags,
+                )
+                emit_span(span)
 
     async def _log_bet_executed(self, payload: BetExecutedPayload) -> None:
         """Emit a span to trace backend when a bet is executed.

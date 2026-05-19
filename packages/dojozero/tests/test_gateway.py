@@ -228,6 +228,7 @@ class TestExternalAgentAdapter:
         broker.create_account = AsyncMock()
         broker.delete_account = AsyncMock(return_value=True)
         broker.has_account = MagicMock(return_value=False)
+        broker.get_contest_kind = MagicMock(return_value="classic_betting")
         broker._event = None
         broker._accounts = {}
         broker._bets = {}
@@ -448,6 +449,7 @@ class TestGatewayServer:
         broker.create_account = AsyncMock()
         broker.delete_account = AsyncMock(return_value=True)
         broker.has_account = MagicMock(return_value=False)
+        broker.get_contest_kind = MagicMock(return_value="classic_betting")
         broker._event = None
         broker._accounts = {}
         return broker

@@ -62,6 +62,7 @@ from dojozero.betting._prediction_broker import (
     PredictionBroker,
     PredictionBrokerConfig,
 )
+from dojozero.betting._protocol import ContestOperator
 from dojozero.betting._scoring import (
     DEFAULT_WINDOW_POOLS,
     NUM_WINDOWS,
@@ -83,6 +84,7 @@ __all__ = [
     "BrokerOperatorConfig",
     "PredictionBroker",
     "PredictionBrokerConfig",
+    "ContestOperator",
     # Scoring
     "DEFAULT_WINDOW_POOLS",
     "NUM_WINDOWS",

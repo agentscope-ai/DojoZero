@@ -65,6 +65,7 @@ _SPORT_CLOCK_DEFAULTS: Dict[str, tuple[int, int]] = {
     "nba": (4, 12 * 60),
     "nfl": (4, 15 * 60),
     "ncaa": (2, 20 * 60),
+    "collegebasketball": (2, 20 * 60),
 }
 
 
@@ -207,6 +208,40 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         """Register agents (no account creation -- this broker is account-less)."""
         super().register_agents(agents)
 
+    def ensure_event_initialized(
+        self,
+        event_id: str,
+        home_team: str,
+        away_team: str,
+        game_time: Optional[datetime] = None,
+    ) -> bool:
+        """Create a fallback event from metadata when no stream event has arrived.
+
+        Used by the trial manager after checkpoint restore so the gateway
+        can serve ``/event/info`` and accept predictions immediately.
+
+        Returns ``True`` if a new event was created, ``False`` if one existed.
+        """
+        if self._event is not None:
+            return False
+        self._event = BettingEvent(
+            event_id=event_id,
+            home_team=home_team,
+            away_team=away_team,
+            game_time=game_time or datetime.now(),
+            status=EventStatus.SCHEDULED,
+            home_probability=None,
+            away_probability=None,
+            last_odds_update=None,
+        )
+        logger.info(
+            "PredictionBroker event initialized from metadata: %s (%s vs %s)",
+            event_id,
+            home_team,
+            away_team,
+        )
+        return True
+
     # =========================================================================
     # Event Stream Processing
     # =========================================================================
@@ -347,6 +382,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 "PredictionBroker initialized event %s from game update",
                 event_id,
             )
+            await self._apply_pending_status_events(event_id)
 
     @staticmethod
     def _extract_team_name(
@@ -377,7 +413,17 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             self._pending_status_events[event_id].append(("game_result", data_event))
             return
         await self._update_event_status(event_id, EventStatus.CLOSED)
-        await self._settle_event(event_id, data_event.winner)
+
+        winner = data_event.winner
+        # Derive "even" when scores are tied and upstream didn't set it
+        if winner not in ("home", "away", "even"):
+            score = getattr(data_event, "final_score", None)
+            if isinstance(score, dict):
+                home_pts = score.get("home", -1)
+                away_pts = score.get("away", -2)
+                if home_pts == away_pts:
+                    winner = "even"
+        await self._settle_event(event_id, winner)
 
     async def _update_event_status(self, event_id: str, status: EventStatus) -> None:
         if self._event is None:
@@ -406,7 +452,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             raise ValueError(
                 f"Cannot settle event with status {self._event.status.value}, must be CLOSED"
             )
-        if winner not in ("home", "away"):
+        if winner not in ("home", "away", "even"):
             raise ValueError(f"Invalid winner: {winner}")
 
         predictions_for_event = [
@@ -477,11 +523,16 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         update = self._recent_game_updates[-1]
         period = max(0, int(getattr(update, "period", 0) or 0))
         game_clock = str(getattr(update, "game_clock", "") or "")
-        sport = str(getattr(update, "sport", "") or "").lower()
+        sport = str(getattr(update, "sport", "") or "").lower().strip().replace("-", "")
 
-        regulation_periods, seconds_per_period = _SPORT_CLOCK_DEFAULTS.get(
-            sport, (4, 15 * 60)
-        )
+        defaults = _SPORT_CLOCK_DEFAULTS.get(sport)
+        if defaults is None:
+            logger.warning(
+                "Unknown sport '%s' for elapsed-ratio computation, returning 0.0",
+                sport,
+            )
+            return 0.0
+        regulation_periods, seconds_per_period = defaults
         total = regulation_periods * seconds_per_period
         if period <= 0 or total <= 0:
             return 0.0
@@ -502,9 +553,18 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         agent_id: str,
         event_id: str,
         selection: str,
-        window: Optional[int] = None,
     ) -> str:
         """Submit a prediction. Returns ``"prediction_submitted"`` or an error."""
+        async with self._event_lock:
+            return await self._submit_prediction_locked(agent_id, event_id, selection)
+
+    async def _submit_prediction_locked(
+        self,
+        agent_id: str,
+        event_id: str,
+        selection: str,
+    ) -> str:
+        """Inner submission logic, must be called under ``_event_lock``."""
         if self._event is None or self._event.event_id != event_id:
             return "prediction_error: Invalid event ID"
 
@@ -516,16 +576,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 "Valid options: 'home_win', 'away_win', 'even'"
             )
 
-        if window is not None and not (0 <= window < NUM_WINDOWS):
-            return f"prediction_error: window must be in [0, {NUM_WINDOWS - 1}], got {window}"
-
-        auto_window = self._resolve_window(None)
-        if window is not None and window != auto_window:
-            return (
-                f"prediction_error: explicit window {window} does not match "
-                f"current game window {auto_window}"
-            )
-        resolved_window = auto_window
+        resolved_window = self._resolve_window(None)
 
         if self._event.status == EventStatus.SETTLED:
             return "prediction_error: Event already settled"
@@ -616,6 +667,16 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             if away_stats is not None:
                 info["away_score"] = getattr(away_stats, "points", None)
         return info
+
+    def get_contest_kind(self) -> str:
+        """Return ``"window_pool_prediction"``."""
+        return "window_pool_prediction"
+
+    def is_accepting(self) -> bool:
+        """True when the event exists and is not closed/settled."""
+        if self._event is None:
+            return False
+        return self._event.status not in (EventStatus.CLOSED, EventStatus.SETTLED)
 
     def get_rules(self) -> Dict[str, Any]:
         """Return the prediction contest rules (used by tools and gateway)."""
@@ -754,6 +815,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             pred_stats_adapter = TypeAdapter(Dict[str, PredictionStatistics])
 
             tags: Dict[str, Any] = {
+                "contest.kind": "window_pool_prediction",
                 "broker.kind": "prediction",
                 "broker.window_pools": json.dumps(list(self._window_pools)),
                 "broker.predictions": preds_adapter.dump_json(
@@ -764,13 +826,15 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 ).decode(),
             }
 
-            span = create_span_from_event(
-                trial_id=self.trial_id,
-                actor_id=self.actor_id,
-                operation_name="broker.final_stats",
-                extra_tags=tags,
-            )
-            emit_span(span)
+            # Emit under new name; keep legacy name for backward compat
+            for op_name in ("contest.final_stats", "broker.final_stats"):
+                span = create_span_from_event(
+                    trial_id=self.trial_id,
+                    actor_id=self.actor_id,
+                    operation_name=op_name,
+                    extra_tags=tags,
+                )
+                emit_span(span)
 
     def get_prediction_statistics(self) -> Dict[str, PredictionStatistics]:
         """Return per-agent prediction statistics for the current event."""

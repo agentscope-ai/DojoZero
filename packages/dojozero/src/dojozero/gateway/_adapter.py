@@ -121,20 +121,26 @@ class ExternalAgentAdapter:
         logger.info("ExternalAgentAdapter initialized for trial %s", trial_id)
 
     @property
-    def is_prediction_mode(self) -> bool:
-        """True when the broker is a PredictionBroker."""
-        from dojozero.betting._prediction_broker import PredictionBroker
+    def contest_kind(self) -> str:
+        """Return the contest kind (``"classic_betting"`` or ``"window_pool_prediction"``)."""
+        return self._broker.get_contest_kind()
 
-        return isinstance(self._broker, PredictionBroker)
+    @property
+    def is_prediction_mode(self) -> bool:
+        """True when the broker is a PredictionBroker.
+
+        .. deprecated:: Use ``contest_kind`` instead for new code.
+        """
+        return self.contest_kind == "window_pool_prediction"
 
     @property
     def _betting_broker(self) -> "BrokerOperator":
-        """Return broker narrowed to BrokerOperator. Only call when not in prediction mode."""
+        """Return broker narrowed to BrokerOperator. Only call for classic betting."""
         return cast("BrokerOperator", self._broker)
 
     @property
     def _pred_broker(self) -> "PredictionBroker":
-        """Return broker narrowed to PredictionBroker. Only call when in prediction mode."""
+        """Return broker narrowed to PredictionBroker. Only call for prediction mode."""
         return cast("PredictionBroker", self._broker)
 
     @property
@@ -184,11 +190,9 @@ class ExternalAgentAdapter:
         if agent_id in self._agents:
             raise ValueError(f"Agent {agent_id} already connected")
 
-        if self.is_prediction_mode:
-            # PredictionBroker: no accounts or balances
+        if self.contest_kind != "classic_betting":
             balance = "0"
         else:
-            # Classic betting: create account with balance
             broker = self._betting_broker
             balance = initial_balance or broker.initial_balance
             if broker.has_account(agent_id):
@@ -284,8 +288,7 @@ class ExternalAgentAdapter:
         # Update activity timestamp
         state.last_activity_at = datetime.now(timezone.utc)
 
-        # Get current balance from broker (prediction mode has no balance)
-        if self.is_prediction_mode:
+        if self.contest_kind != "classic_betting":
             balance = "0"
         else:
             broker = self._betting_broker
@@ -347,8 +350,7 @@ class ExternalAgentAdapter:
                 state.subscription.subscription_id
             )
 
-        # Delete broker account so agent can rejoin (classic betting only)
-        if not self.is_prediction_mode:
+        if self.contest_kind == "classic_betting":
             await self._betting_broker.delete_account(agent_id)
 
         logger.info("Unregistered external agent: %s", agent_id)
@@ -537,8 +539,7 @@ class ExternalAgentAdapter:
                     f"Reference sequence too stale: {staleness} > {self._max_sequence_staleness}"
                 )
 
-        # Check if betting is open
-        if self._broker._event is None or not self._broker._event.can_bet:
+        if not self._broker.is_accepting():
             raise ValueError("Betting is closed")
 
         # Convert to internal bet request
@@ -552,7 +553,10 @@ class ExternalAgentAdapter:
             else None
         )
 
-        event_id = self._broker._event.event_id
+        event = self._broker._event
+        if event is None:
+            raise ValueError("No active event")
+        event_id = event.event_id
 
         if request.market == "moneyline":
             if request.selection not in ("home", "away"):
@@ -860,7 +864,7 @@ class ExternalAgentAdapter:
         """Build final results for all agents from broker."""
         results = []
 
-        if self.is_prediction_mode:
+        if self.contest_kind == "window_pool_prediction":
             pred_stats = self._pred_broker.get_prediction_statistics()
             for agent_id, pstats in pred_stats.items():
                 agent_state = self._agents.get(agent_id)

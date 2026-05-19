@@ -113,14 +113,25 @@ class Account(BaseModel):
 # =============================================================================
 
 
-class BettingEvent(BaseModel):
-    """Betting event (e.g., a sports game)"""
+class ContestEvent(BaseModel):
+    """Base event shared by all contest types (betting, prediction, etc.)."""
 
     event_id: str
     home_team: str
     away_team: str
     game_time: datetime
     status: EventStatus
+    betting_closed_at: Optional[datetime] = None
+
+    @computed_field
+    def is_accepting(self) -> bool:
+        """True if the contest is accepting submissions."""
+        return self.status in {EventStatus.SCHEDULED, EventStatus.LIVE}
+
+
+class BettingEvent(ContestEvent):
+    """Betting event with odds and probability fields."""
+
     home_probability: Optional[Decimal] = Field(
         default=None,
         ge=0,
@@ -145,9 +156,9 @@ class BettingEvent(BaseModel):
     )
     last_odds_update: Optional[datetime] = None
     current_odds: Optional[str] = None
-    betting_closed_at: Optional[datetime] = None
 
     @computed_field
+    @property
     def can_bet(self) -> bool:
         """True if betting is allowed (status is SCHEDULED or LIVE)."""
         return self.status in {EventStatus.SCHEDULED, EventStatus.LIVE}
@@ -349,6 +360,10 @@ class StatisticsList(BaseModel):
 class BrokerFinalStats(BaseModel):
     """Broker state update payload for tracing."""
 
+    contest_kind: str = Field(
+        default="classic_betting",
+        description="Contest type: 'classic_betting' or 'window_pool_prediction'",
+    )
     accounts_count: int = 0
     bets_count: int = 0
     accounts: Dict[str, Account] = Field(default_factory=dict)
@@ -564,6 +579,7 @@ __all__ = [
     "PredictionOutcome",
     "VALID_STATUS_TRANSITIONS",
     # Models
+    "ContestEvent",
     "Account",
     "Bet",
     "BetExecutedPayload",

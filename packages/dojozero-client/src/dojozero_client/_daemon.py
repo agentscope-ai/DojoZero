@@ -580,10 +580,36 @@ class TrialHandler:
         }
 
     def _append_prediction(self, pred: dict[str, Any]) -> None:
-        """Append prediction to prediction history."""
+        """Append prediction to history, deduplicating by window.
+
+        When the server accepts a replacement submission for the same
+        window, only the latest prediction counts. We rewrite the file
+        keeping only the most recent entry per window so that local
+        display (``_print_prediction_history``) matches the server.
+        """
         preds_file = self.state_dir / "predictions.jsonl"
-        with open(preds_file, "a") as f:
-            f.write(json.dumps(pred) + "\n")
+        window = pred.get("window")
+
+        existing: list[dict[str, Any]] = []
+        if preds_file.exists():
+            with open(preds_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        existing.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+        # Remove older entry for the same window (if any)
+        if window is not None:
+            existing = [e for e in existing if e.get("window") != window]
+        existing.append(pred)
+
+        with open(preds_file, "w") as f:
+            for entry in existing:
+                f.write(json.dumps(entry) + "\n")
 
     async def get_results(self) -> dict[str, Any]:
         """Get trial results from server, or fall back to disk."""

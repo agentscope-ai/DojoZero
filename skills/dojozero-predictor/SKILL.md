@@ -96,11 +96,11 @@ Each contest has 5 windows. The current window is determined by the live game st
 
 | Window | Label    | When                          | Typical Pool Share |
 |--------|----------|-------------------------------|--------------------|
-| 0      | Pre-game | Before tipoff                 | Smallest           |
-| 1      | Q1       | During 1st quarter            | Small              |
+| 0      | Pre-game | Before tipoff                 | Largest            |
+| 1      | Q1       | During 1st quarter            | Large              |
 | 2      | Q2       | During 2nd quarter            | Medium             |
-| 3      | Q3       | During 3rd quarter            | Medium-Large       |
-| 4      | Q4       | During 4th quarter / overtime | Largest            |
+| 3      | Q3       | During 3rd quarter            | Small              |
+| 4      | Q4       | During 4th quarter / overtime | Smallest           |
 
 ### Selections
 
@@ -120,9 +120,9 @@ Each contest has 5 windows. The current window is determined by the live game st
 
 ### Strategy Tips
 
-- **Pre-game (W0)**: Lowest pool, but you can lock in a prediction early based on team matchup analysis
+- **Pre-game (W0)**: Largest pool, but outcome is least certain; lock in early based on matchup analysis
 - **Q1-Q2 (W1-W2)**: Moderate pools; game trends are emerging but can reverse
-- **Q3-Q4 (W3-W4)**: Largest pools; you have the most game data but so does everyone else
+- **Q3-Q4 (W3-W4)**: Smallest pools; you have the most game data but so does everyone else
 - Use `status <contest-id>` to see the current window, score, and elapsed ratio before predicting
 - Use `events <contest-id> -n 10` to understand recent game momentum
 - You can update your prediction in the current window — only the last submission counts

@@ -244,14 +244,11 @@ class TrialManager:
                 metadata=metadata,
             )
 
-            # Ensure broker has event initialized from metadata if missing
-            # This handles cases where broker was restored from checkpoint without GameInitializeEvent
-            # Only BrokerOperator has ensure_event_initialized
-            if (
-                isinstance(broker, BrokerOperator)
-                and broker._event is None
-                and metadata
-            ):
+            # Ensure broker has event initialized from metadata if missing.
+            # This handles cases where broker was restored from checkpoint
+            # without GameInitializeEvent.  Works for both BrokerOperator
+            # and PredictionBroker.
+            if broker._event is None and metadata:
                 event_id = metadata.get("espn_game_id", trial_id)
                 home_team = metadata.get("home_team_name", "")
                 away_team = metadata.get("away_team_name", "")
@@ -363,7 +360,16 @@ class TrialManager:
             if isinstance(broker, PredictionBroker):
                 # Build results from prediction statistics
                 pred_stats = broker.get_prediction_statistics()
-                for agent_id, pstats in pred_stats.items():
+
+                # Iterate union of registered + predicting agents
+                all_agent_ids = set(pred_stats.keys())
+                for aid in broker.agents:
+                    all_agent_ids.add(aid)
+                if gateway_adapter is not None:
+                    for aid in gateway_adapter._agents:
+                        all_agent_ids.add(aid)
+
+                for agent_id in all_agent_ids:
                     display_name = None
                     authenticated = False
                     if gateway_adapter is not None:
@@ -372,15 +378,16 @@ class TrialManager:
                             display_name = agent_state.display_name
                             authenticated = agent_state.authenticated
 
+                    pstats = pred_stats.get(agent_id)
                     agent_results.append(
                         AgentResult(
                             agent_id=agent_id,
                             display_name=display_name,
                             authenticated=authenticated,
-                            final_balance=str(pstats.total_score),
-                            net_profit=str(pstats.total_score),
-                            total_bets=pstats.total_predictions,
-                            win_rate=round(pstats.accuracy, 4),
+                            final_balance=str(pstats.total_score) if pstats else "0",
+                            net_profit=str(pstats.total_score) if pstats else "0",
+                            total_bets=pstats.total_predictions if pstats else 0,
+                            win_rate=round(pstats.accuracy, 4) if pstats else 0.0,
                             roi=0.0,
                         )
                     )

@@ -10,7 +10,7 @@ Hierarchy:
 - Actor.from_dict() -> receives the appropriate TypedDict
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TrialBrokerConfig(BaseModel):
@@ -62,6 +62,14 @@ class TrialBrokerConfig(BaseModel):
             "exactly 5 entries: [pre-game, Q1, Q2, Q3, Q4]."
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_window_pools_length(self) -> "TrialBrokerConfig":
+        if self.window_pools is not None and len(self.window_pools) != 5:
+            raise ValueError(
+                f"window_pools must have exactly 5 entries, got {len(self.window_pools)}"
+            )
+        return self
 
 
 MEMORY_SUMMARY_PROMPT = """\
