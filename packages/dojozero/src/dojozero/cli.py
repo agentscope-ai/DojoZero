@@ -2403,23 +2403,27 @@ async def _serve_command(args: argparse.Namespace) -> int:
         LocalAgentAuthenticator,
     )
 
-    local_auth = None
+    # Always wire up the local authenticator pointing at agent_keys.yaml even when
+    # the file does not exist yet. AgentKeyManager handles missing files on init
+    # and auto-reloads when the file appears (or is updated by `dojo0 agents add`).
+    # Skipping this branch would freeze local_auth=None for the lifetime of the
+    # server, which is silent and easy to miss because GitHub auth keeps
+    # CompositeAuthenticator.is_enabled() returning True.
     agent_keys_path = Path(store_path) / "agent_keys.yaml"
-    if agent_keys_path.exists():
-        local_auth = LocalAgentAuthenticator(config_path=agent_keys_path)
-        LOGGER.info(
-            "Local agent keys loaded (%d keys from %s)",
-            len(local_auth._keys),
-            agent_keys_path,
-        )
+    local_auth = LocalAgentAuthenticator(config_path=agent_keys_path)
+    LOGGER.info(
+        "Local agent authenticator initialized (%d keys, file=%s, exists=%s)",
+        len(local_auth._keys),
+        agent_keys_path,
+        agent_keys_path.exists(),
+    )
 
     authenticator = CompositeAuthenticator(
         local=local_auth,
         github=GitHubAgentAuthenticator(),
     )
     LOGGER.info(
-        "Agent authentication enabled (local=%s, github=enabled)",
-        "enabled" if local_auth else "disabled",
+        "Agent authentication enabled (local=enabled, github=enabled)",
     )
 
     # Build cluster config if Redis cluster URL is provided

@@ -445,12 +445,14 @@ class LocalAgentAuthenticator:
         self._keys: dict[str, AgentIdentity] = keys or {}
         self._key_manager: AgentKeyManager | None = key_manager
 
-        # If config_path provided but no key_manager, create one
-        if config_path and not key_manager:
+        # NOTE: AgentKeyManager defines __bool__ as "has at least one key", so
+        # we cannot use `if key_manager:` here — it would treat an empty (but
+        # valid) manager the same as None. Use `is None` / `is not None`.
+        if config_path is not None and key_manager is None:
             self._key_manager = AgentKeyManager(config_path)
             # Copy keys from manager to local dict
             self._keys.update(self._key_manager.to_identity_dict())
-        elif key_manager:
+        elif key_manager is not None:
             # Use provided key_manager
             self._keys.update(key_manager.to_identity_dict())
 
@@ -461,14 +463,19 @@ class LocalAgentAuthenticator:
         # Check local keys first
         if api_key in self._keys:
             return self._keys[api_key]
-        # If we have a key_manager, check there (may have been updated)
-        if self._key_manager:
+        # Use `is not None` instead of a truthy check: AgentKeyManager defines
+        # __bool__ to mean "has at least one key", so a freshly-initialised
+        # manager pointing at a missing or empty agent_keys.yaml would be
+        # falsy here and we'd skip the auto-reload path entirely. That is the
+        # exact silent failure mode behind the "I added a key with `dojo0
+        # agents add` but the server still says INVALID_TOKEN" reports.
+        if self._key_manager is not None:
             return self._key_manager.get(api_key)
         return None
 
     def is_enabled(self) -> bool:
         """Check if authenticator has any keys configured."""
-        if self._key_manager:
+        if self._key_manager is not None:
             return bool(self._key_manager)
         return len(self._keys) > 0
 
@@ -485,7 +492,7 @@ class LocalAgentAuthenticator:
 
     def reload(self) -> None:
         """Reload keys from file (if using key_manager)."""
-        if self._key_manager:
+        if self._key_manager is not None:
             self._key_manager.reload()
             self._keys.update(self._key_manager.to_identity_dict())
 

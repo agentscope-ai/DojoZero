@@ -949,11 +949,18 @@ class UnifiedDaemon:
         await daemon.start()  # Runs until stopped
     """
 
-    def __init__(self) -> None:
-        """Initialize unified daemon."""
+    def __init__(self, profile: str | None = None) -> None:
+        """Initialize unified daemon.
+
+        Args:
+            profile: Credentials profile name. Used to look up the API key
+                via `load_api_key(profile=...)` on every operation that
+                needs it, so changes from `dojozero-agent config --api-key`
+                take effect without restarting the daemon.
+        """
         self._trials: dict[str, TrialHandler] = {}
         self._rpc = RPCServer(SOCKET_PATH)
-        self._api_key: str | None = None
+        self._profile = profile
         self._client = DojoClient()
         self._stop_event: asyncio.Event | None = None
         self._running = False
@@ -972,11 +979,20 @@ class UnifiedDaemon:
         self._rpc.register("results", self._handle_results)
         self._rpc.register("ping", self._handle_ping)
 
+    def _get_api_key(self) -> str | None:
+        """Load the current API key from the credentials file.
+
+        Always reads fresh so updates via `dojozero-agent config --api-key`
+        are picked up on the next operation without restarting the daemon.
+        """
+        return load_api_key(profile=self._profile)
+
     async def start(self) -> None:
         """Start the unified daemon."""
-        # Load API key from credentials file
-        self._api_key = load_api_key()
-        if not self._api_key:
+        # Sanity check: refuse to start if no API key is configured at all.
+        # We deliberately do NOT cache the value here — every call site reads
+        # the credentials file freshly via `_get_api_key()`.
+        if not self._get_api_key():
             raise RuntimeError(
                 "No API key configured. Run 'dojozero-agent config --api-key <key>'"
             )
@@ -1037,12 +1053,13 @@ class UnifiedDaemon:
                 "agent_id": handler.agent_id,
             }
 
-        if not self._api_key:
+        api_key = self._get_api_key()
+        if not api_key:
             raise RPCError("NO_API_KEY", "No API key configured")
 
         handler = TrialHandler(
             trial_id=trial_id,
-            api_key=self._api_key,
+            api_key=api_key,
             client=self._client,
             filters=filters,
         )

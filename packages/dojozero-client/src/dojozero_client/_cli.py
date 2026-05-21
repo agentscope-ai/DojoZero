@@ -163,11 +163,10 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
 
     async def _run_foreground() -> None:
-        daemon = UnifiedDaemon()
+        daemon = UnifiedDaemon(profile=profile)
         # Start daemon, then auto-join the trial
         daemon._stop_event = asyncio.Event()
-        daemon._api_key = load_api_key(profile=profile)
-        if not daemon._api_key:
+        if not daemon._get_api_key():
             raise RuntimeError("No API key configured")
         daemon._write_pid()
         daemon._setup_signals()
@@ -1030,7 +1029,7 @@ def cmd_daemon_start(args: argparse.Namespace) -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    daemon = UnifiedDaemon()
+    daemon = UnifiedDaemon(profile=profile)
     try:
         asyncio.run(daemon.start())
     except KeyboardInterrupt:
