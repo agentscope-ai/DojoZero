@@ -848,6 +848,11 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             tags: Dict[str, Any] = {
                 "contest.kind": "window_pool_prediction",
                 "broker.kind": "prediction",
+                # Mirror contest.kind under the broker. prefix so that
+                # _extract_tags(span, "broker") includes it when reconstructing
+                # BrokerFinalStats — keeps the model's contest_kind invariant
+                # validator honest end-to-end.
+                "broker.contest_kind": "window_pool_prediction",
                 "broker.window_pools": json.dumps(list(self._window_pools)),
                 "broker.predictions": preds_adapter.dump_json(
                     current_event_predictions

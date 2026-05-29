@@ -1440,6 +1440,9 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
             if change_type == "final_stats":
                 tags["contest.kind"] = "classic_betting"
+                # Mirror under the broker. prefix so reconstructing
+                # BrokerFinalStats via _extract_tags picks up contest_kind.
+                tags["broker.contest_kind"] = "classic_betting"
                 # Emit under new name + legacy name for backward compat
                 for op_name in (
                     "contest.final_stats",
