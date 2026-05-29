@@ -124,8 +124,16 @@ class ContestEvent(BaseModel):
     betting_closed_at: Optional[datetime] = None
 
     @computed_field
+    @property
     def is_accepting(self) -> bool:
-        """True if the contest is accepting submissions."""
+        """True if the contest is accepting submissions.
+
+        This is the single authoritative accessor for "can the event take
+        new agent inputs". Both betting and prediction contests use the same
+        rule: accepting while ``status`` is ``SCHEDULED`` or ``LIVE``.
+        ``BettingEvent.can_bet`` exists for backwards compatibility and
+        delegates here.
+        """
         return self.status in {EventStatus.SCHEDULED, EventStatus.LIVE}
 
 
@@ -160,8 +168,13 @@ class BettingEvent(ContestEvent):
     @computed_field
     @property
     def can_bet(self) -> bool:
-        """True if betting is allowed (status is SCHEDULED or LIVE)."""
-        return self.status in {EventStatus.SCHEDULED, EventStatus.LIVE}
+        """True if betting is allowed.
+
+        Alias for :attr:`ContestEvent.is_accepting` — kept so existing API
+        consumers that read ``can_bet`` keep working, but it delegates so the
+        two fields can never diverge.
+        """
+        return bool(self.is_accepting)
 
 
 # =============================================================================
