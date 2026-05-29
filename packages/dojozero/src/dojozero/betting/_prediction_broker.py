@@ -124,6 +124,10 @@ def _format_rules(window_pools: list[int]) -> str:
         "  - Pre-game (status=SCHEDULED) submissions go to window 0.\n"
         "  - During play, the broker assigns the window from the current period\n"
         "    (1=Q1, 2=Q2, 3=Q3, 4=Q4). Overtime maps to window 4.\n"
+        "  - For sports played in halves (e.g. NCAA basketball) periods are\n"
+        "    1 and 2, so only windows 1 (H1) and 2 (H2) are reachable during\n"
+        "    regulation; the Q3/Q4 labels above are NBA/NFL-oriented and the\n"
+        "    later pools simply go unclaimed.\n"
         "  - You can resubmit in the same window at any time before the event\n"
         "    closes; the latest submission replaces the previous one.\n\n"
         "Strategy:\n"
@@ -800,6 +804,43 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
     # Tracing
     # =========================================================================
 
+    def _current_event_predictions(self) -> Dict[str, Prediction]:
+        """Return predictions belonging to the active event, keyed by id."""
+        if self._event is None:
+            return {}
+        return {
+            pid: p
+            for pid, p in self._predictions.items()
+            if p.event_id == self._event.event_id
+        }
+
+    @staticmethod
+    def _compute_prediction_stats(
+        event_predictions: Dict[str, Prediction],
+    ) -> Dict[str, PredictionStatistics]:
+        """Aggregate per-agent stats from a set of event-scoped predictions."""
+        by_agent: Dict[str, list[Prediction]] = defaultdict(list)
+        for p in event_predictions.values():
+            by_agent[p.agent_id].append(p)
+
+        stats: Dict[str, PredictionStatistics] = {}
+        for agent_id, agent_preds in by_agent.items():
+            total = len(agent_preds)
+            if total == 0:
+                continue
+            correct = sum(1 for p in agent_preds if p.is_correct)
+            accuracy = correct / total
+            total_score = sum(
+                float(p.score) if p.score is not None else 0.0 for p in agent_preds
+            )
+            stats[agent_id] = PredictionStatistics(
+                total_predictions=total,
+                correct_predictions=correct,
+                accuracy=accuracy,
+                total_score=Decimal(str(total_score)),
+            )
+        return stats
+
     async def _log_final_stats(self) -> None:
         """Emit a ``broker.final_stats`` span with prediction statistics.
 
@@ -808,42 +849,8 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         without modification. Account/bet fields are left empty.
         """
         async with self._state_snapshot_lock:
-            current_event_predictions = (
-                {
-                    pid: p
-                    for pid, p in self._predictions.items()
-                    if self._event is None or p.event_id == self._event.event_id
-                }
-                if self._event is not None
-                else {}
-            )
-
-            prediction_stats: Dict[str, PredictionStatistics] = {}
-            agents_seen: set[str] = set()
-            for p in current_event_predictions.values():
-                agents_seen.add(p.agent_id)
-
-            for agent_id in agents_seen:
-                agent_predictions = [
-                    p
-                    for p in current_event_predictions.values()
-                    if p.agent_id == agent_id
-                ]
-                if not agent_predictions:
-                    continue
-                total = len(agent_predictions)
-                correct = sum(1 for p in agent_predictions if p.is_correct)
-                accuracy = correct / total if total > 0 else 0.0
-                total_score = sum(
-                    float(p.score) if p.score is not None else 0.0
-                    for p in agent_predictions
-                )
-                prediction_stats[agent_id] = PredictionStatistics(
-                    total_predictions=total,
-                    correct_predictions=correct,
-                    accuracy=accuracy,
-                    total_score=Decimal(str(total_score)),
-                )
+            current_event_predictions = self._current_event_predictions()
+            prediction_stats = self._compute_prediction_stats(current_event_predictions)
 
             preds_adapter = TypeAdapter(Dict[str, Prediction])
             pred_stats_adapter = TypeAdapter(Dict[str, PredictionStatistics])
@@ -877,36 +884,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
 
     def get_prediction_statistics(self) -> Dict[str, PredictionStatistics]:
         """Return per-agent prediction statistics for the current event."""
-        current_event_predictions = {
-            pid: p
-            for pid, p in self._predictions.items()
-            if self._event is None or p.event_id == self._event.event_id
-        }
-
-        stats: Dict[str, PredictionStatistics] = {}
-        agents_seen: set[str] = set()
-        for p in current_event_predictions.values():
-            agents_seen.add(p.agent_id)
-
-        for agent_id in agents_seen:
-            agent_preds = [
-                p for p in current_event_predictions.values() if p.agent_id == agent_id
-            ]
-            if not agent_preds:
-                continue
-            total = len(agent_preds)
-            correct = sum(1 for p in agent_preds if p.is_correct)
-            accuracy = correct / total if total > 0 else 0.0
-            total_score = sum(
-                float(p.score) if p.score is not None else 0.0 for p in agent_preds
-            )
-            stats[agent_id] = PredictionStatistics(
-                total_predictions=total,
-                correct_predictions=correct,
-                accuracy=accuracy,
-                total_score=Decimal(str(total_score)),
-            )
-        return stats
+        return self._compute_prediction_stats(self._current_event_predictions())
 
     # =========================================================================
     # Agent Tools

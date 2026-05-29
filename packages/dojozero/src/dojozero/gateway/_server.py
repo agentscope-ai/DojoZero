@@ -751,13 +751,16 @@ def create_gateway_app(
     ) -> dict[str, Any]:
         """Health check endpoint."""
         accepting = state.broker.is_accepting()
+        kind = state.broker.get_contest_kind()
 
         return {
             "status": "ok",
             "trial_id": state.trial_id,
-            "mode": "prediction"
-            if state.adapter.is_prediction_mode
-            else "classic_betting",
+            # ``kind`` is the canonical contest identifier (matches
+            # GET /rules); ``mode`` is the legacy short alias kept for
+            # existing clients.
+            "kind": kind,
+            "mode": "prediction" if kind == "window_pool_prediction" else kind,
             "registered_agents": len(state.adapter._agents),
             "accepting": accepting,
         }

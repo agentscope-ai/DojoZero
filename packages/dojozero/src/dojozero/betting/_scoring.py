@@ -41,17 +41,24 @@ def settle_window_predictions(
         window_pools: Prize pool per window (index 0 = pre-game, 1-4 = Q1-Q4).
 
     Returns:
-        The same prediction list with ``is_correct`` and ``score`` filled in.
-        Each correct prediction in window ``w`` receives an equal share of
-        ``window_pools[w]``; incorrect predictions receive 0.
+        New :class:`Prediction` instances with ``is_correct`` and ``score``
+        filled in (same order as the input). Each correct prediction in
+        window ``w`` receives an equal share of ``window_pools[w]``;
+        incorrect predictions earn 0. Input objects are not mutated, so the
+        function stays correct if :class:`Prediction` is ever made frozen.
     """
-    for p in predictions:
-        p.is_correct = _outcome_matches_winner(p.selection, winner)
+    correctness = {
+        p.prediction_id: _outcome_matches_winner(p.selection, winner)
+        for p in predictions
+    }
 
+    scores: dict[str, Decimal] = {}
     correct_by_window: dict[int, list[Prediction]] = defaultdict(list)
     for p in predictions:
-        if p.is_correct:
+        if correctness[p.prediction_id]:
             correct_by_window[p.window].append(p)
+        else:
+            scores[p.prediction_id] = Decimal("0")
 
     for window, correct_preds in correct_by_window.items():
         idx = max(0, min(window, len(window_pools) - 1))
@@ -62,16 +69,19 @@ def settle_window_predictions(
         share = (pool / Decimal(str(len(correct_preds)))).quantize(
             Decimal("0.01"), rounding=ROUND_DOWN
         )
-        distributed = share * len(correct_preds)
-        remainder = pool - distributed
+        remainder = pool - share * len(correct_preds)
         for i, p in enumerate(correct_preds):
-            p.score = share + remainder if i == 0 else share
+            scores[p.prediction_id] = share + remainder if i == 0 else share
 
-    for p in predictions:
-        if not p.is_correct:
-            p.score = Decimal("0")
-
-    return predictions
+    return [
+        p.model_copy(
+            update={
+                "is_correct": correctness[p.prediction_id],
+                "score": scores[p.prediction_id],
+            }
+        )
+        for p in predictions
+    ]
 
 
 __all__ = [
