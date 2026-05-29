@@ -162,7 +162,7 @@ class TrialManager:
         try:
             from dojozero.gateway import create_gateway_app, GatewayState
             from dojozero.gateway._adapter import ExternalAgentAdapter
-            from dojozero.betting import BrokerOperator, PredictionBroker
+            from dojozero.betting import ContestOperator
 
             # Get trial runtime from orchestrator
             runtime = self._orchestrator._trials.get(trial_id)
@@ -193,17 +193,19 @@ class TrialManager:
             hub_id = next(iter(context.data_hubs.keys()))
             data_hub = context.data_hubs[hub_id]
 
-            # Find BrokerOperator or PredictionBroker from running actors
-            broker: BrokerOperator | PredictionBroker | None = None
+            # Find any ContestOperator-implementing actor (BrokerOperator,
+            # PredictionBroker, or any future contest broker). The runtime
+            # narrows mode-specific logic later via isinstance / contest_kind.
+            broker: ContestOperator | None = None
             for actor_runtime in runtime.actors.values():
                 actor = actor_runtime.instance
-                if isinstance(actor, (BrokerOperator, PredictionBroker)):
+                if isinstance(actor, ContestOperator):
                     broker = actor
                     break
 
             if broker is None:
                 self._logger.warning(
-                    "Cannot register gateway: trial '%s' has no BrokerOperator or PredictionBroker",
+                    "Cannot register gateway: trial '%s' has no ContestOperator actor",
                     trial_id,
                 )
                 return False
@@ -321,7 +323,7 @@ class TrialManager:
             True if results were saved successfully, False otherwise
         """
         # Import here to avoid circular imports
-        from dojozero.betting import BrokerOperator, PredictionBroker
+        from dojozero.betting import BrokerOperator, ContestOperator, PredictionBroker
         from dojozero.gateway._models import AgentResult, TrialResultsResponse
 
         try:
@@ -333,17 +335,18 @@ class TrialManager:
                 )
                 return False
 
-            # Find BrokerOperator or PredictionBroker from running actors
-            broker: BrokerOperator | PredictionBroker | None = None
+            # Find any ContestOperator actor; mode-specific result building is
+            # dispatched below via isinstance + get_contest_kind().
+            broker: ContestOperator | None = None
             for actor_runtime in runtime.actors.values():
                 actor = actor_runtime.instance
-                if isinstance(actor, (BrokerOperator, PredictionBroker)):
+                if isinstance(actor, ContestOperator):
                     broker = actor
                     break
 
             if broker is None:
                 self._logger.warning(
-                    "Cannot save results: trial '%s' has no BrokerOperator or PredictionBroker",
+                    "Cannot save results: trial '%s' has no ContestOperator actor",
                     trial_id,
                 )
                 return False
@@ -392,7 +395,7 @@ class TrialManager:
                         )
                     )
                 agent_results.sort(key=lambda r: float(r.final_balance), reverse=True)
-            else:
+            elif isinstance(broker, BrokerOperator):
                 # Classic betting: build results from broker accounts
                 for agent_id in broker._accounts:
                     try:

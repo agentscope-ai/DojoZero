@@ -47,6 +47,7 @@ from dojozero.gateway._models import (
 if TYPE_CHECKING:
     from dojozero.betting._broker import BrokerOperator
     from dojozero.betting._prediction_broker import PredictionBroker
+    from dojozero.betting._protocol import ContestOperator
     from dojozero.data import DataHub
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ class ExternalAgentAdapter:
     def __init__(
         self,
         data_hub: "DataHub",
-        broker: "BrokerOperator | PredictionBroker",
+        broker: "ContestOperator",
         trial_id: str,
         max_sequence_staleness: int = 10,
     ):
@@ -99,7 +100,9 @@ class ExternalAgentAdapter:
 
         Args:
             data_hub: DataHub instance for event subscriptions
-            broker: BrokerOperator or PredictionBroker for trial operations
+            broker: Any :class:`ContestOperator`. Mode-specific operations go
+                through the :attr:`_betting_broker` / :attr:`_pred_broker`
+                guarded narrows.
             trial_id: ID of the trial this adapter serves
             max_sequence_staleness: Max events behind for bet validity
         """

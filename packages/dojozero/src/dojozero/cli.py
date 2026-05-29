@@ -1064,8 +1064,7 @@ async def _start_gateway_server(
     import uvicorn
 
     from dojozero.gateway import create_gateway_app
-    from dojozero.betting import BrokerOperator
-    from dojozero.betting._prediction_broker import PredictionBroker
+    from dojozero.betting import ContestOperator
 
     # TODO: Refactor to use public API instead of accessing private members (_trials, _context).
     # Add orchestrator.get_trial_context(trial_id) method to expose DataHub and BrokerOperator.
@@ -1085,17 +1084,19 @@ async def _start_gateway_server(
     hub_id = next(iter(context.data_hubs.keys()))
     data_hub = context.data_hubs[hub_id]
 
-    # Find BrokerOperator or PredictionBroker from running actors
-    broker: BrokerOperator | PredictionBroker | None = None
+    # Find any ContestOperator (classic betting, prediction, or any future
+    # contest type) from running actors. The gateway dispatches per-mode
+    # behaviour via get_contest_kind() internally.
+    broker: ContestOperator | None = None
     for actor_runtime in runtime.actors.values():
         actor = actor_runtime.instance
-        if isinstance(actor, (BrokerOperator, PredictionBroker)):
+        if isinstance(actor, ContestOperator):
             broker = actor
             break
 
     if broker is None:
         raise DojoZeroCLIError(
-            f"Trial '{trial_id}' has no BrokerOperator or PredictionBroker. "
+            f"Trial '{trial_id}' has no ContestOperator actor. "
             "Gateway requires a trial with betting/prediction functionality."
         )
 

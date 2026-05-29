@@ -43,7 +43,7 @@ from dojozero.gateway._models import (
 from dojozero.gateway._sse import SSEConnection, create_sse_response
 
 if TYPE_CHECKING:
-    from dojozero.betting._broker import BrokerOperator
+    from dojozero.betting._protocol import ContestOperator
     from dojozero.data import DataHub
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class GatewayState:
 
     trial_id: str
     data_hub: "DataHub"
-    broker: "BrokerOperator | PredictionBroker"
+    broker: "ContestOperator"
     adapter: ExternalAgentAdapter
     authenticator: AgentAuthenticator = field(default_factory=NoOpAuthenticator)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -110,7 +110,7 @@ def get_agent_id(
 def create_gateway_app(
     trial_id: str,
     data_hub: "DataHub",
-    broker: "BrokerOperator | PredictionBroker",
+    broker: "ContestOperator",
     metadata: dict[str, Any] | None = None,
     authenticator: AgentAuthenticator | None = None,
 ) -> FastAPI:
@@ -119,7 +119,10 @@ def create_gateway_app(
     Args:
         trial_id: ID of the trial this gateway serves
         data_hub: DataHub instance for event subscriptions
-        broker: BrokerOperator or PredictionBroker for trial operations
+        broker: Any :class:`ContestOperator` (classic betting, prediction, or
+            a future contest type). The gateway dispatches HTTP routes based
+            on ``broker.get_contest_kind()`` and uses ``isinstance`` narrows
+            only for mode-specific operations.
         metadata: Trial metadata
         authenticator: Optional authenticator for API key validation.
             If None, uses NoOpAuthenticator (allows any agent_id).
