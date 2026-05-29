@@ -885,22 +885,31 @@ class ExternalAgentAdapter:
         results = []
 
         if self.contest_kind == "window_pool_prediction":
-            pred_stats = self._pred_broker.get_prediction_statistics()
-            for agent_id, pstats in pred_stats.items():
+            broker = self._pred_broker
+            pred_stats = broker.get_prediction_statistics()
+            # Iterate the union of agents the broker has registered, agents
+            # that submitted at least one prediction, and gateway-registered
+            # external agents. Otherwise registered-but-silent agents drop
+            # off the live leaderboard, which contradicts _save_trial_results.
+            all_agent_ids: set[str] = set(pred_stats.keys())
+            all_agent_ids.update(broker.agents)
+            all_agent_ids.update(self._agents.keys())
+            for agent_id in all_agent_ids:
                 agent_state = self._agents.get(agent_id)
                 display_name = agent_state.display_name if agent_state else None
                 authenticated = (
                     agent_state.authenticated if agent_state is not None else False
                 )
+                pstats = pred_stats.get(agent_id)
                 results.append(
                     AgentResult(
                         agent_id=agent_id,
                         display_name=display_name,
                         authenticated=authenticated,
-                        final_balance=str(pstats.total_score),
-                        net_profit=str(pstats.total_score),
-                        total_bets=pstats.total_predictions,
-                        win_rate=round(pstats.accuracy, 4),
+                        final_balance=str(pstats.total_score) if pstats else "0",
+                        net_profit=str(pstats.total_score) if pstats else "0",
+                        total_bets=pstats.total_predictions if pstats else 0,
+                        win_rate=round(pstats.accuracy, 4) if pstats else 0.0,
                         roi=0.0,
                     )
                 )

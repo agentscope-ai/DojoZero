@@ -291,6 +291,17 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
     home_label = home_tri or home_team or "Home"
     away_label = away_tri or away_team or "Away"
 
+    def _print_game_state_score() -> None:
+        if not game_state:
+            return
+        home_score = game_state.get("home_score", "?")
+        away_score = game_state.get("away_score", "?")
+        period = game_state.get("period", game_state.get("quarter", "?"))
+        clock = game_state.get("clock", game_state.get("time", ""))
+        print(
+            f"Score: {home_label} {home_score} - {away_label} {away_score} (Q{period} {clock})"
+        )
+
     if is_prediction:
         # Show event info for prediction mode
         event_info = state.get("event_info", {})
@@ -309,24 +320,11 @@ def _print_status(state: dict[str, Any], daemon_running: bool) -> None:
                 print(
                     f"Score: {home_label} {h_score} - {away_label} {a_score} ({time_str})"
                 )
-        elif game_state:
-            home_score = game_state.get("home_score", "?")
-            away_score = game_state.get("away_score", "?")
-            period = game_state.get("period", game_state.get("quarter", "?"))
-            clock = game_state.get("clock", game_state.get("time", ""))
-            print(
-                f"Score: {home_label} {home_score} - {away_label} {away_score} (Q{period} {clock})"
-            )
+        else:
+            _print_game_state_score()
     else:
         # Classic betting mode
-        if game_state:
-            home_score = game_state.get("home_score", "?")
-            away_score = game_state.get("away_score", "?")
-            period = game_state.get("period", game_state.get("quarter", "?"))
-            clock = game_state.get("clock", game_state.get("time", ""))
-            print(
-                f"Score: {home_label} {home_score} - {away_label} {away_score} (Q{period} {clock})"
-            )
+        _print_game_state_score()
 
         if odds:
             home_prob = odds.get("home_probability", 0)

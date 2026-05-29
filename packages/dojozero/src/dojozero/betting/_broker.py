@@ -425,7 +425,18 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             return
 
         if self._event is not None:
-            # Event already exists - update team info if needed
+            # Only refresh metadata when the init event belongs to the tracked
+            # event. A different game_id arriving here (double-header, replay
+            # stitching two streams) would otherwise silently overwrite the
+            # current event's teams.
+            if self._event.event_id != event_id:
+                logger.warning(
+                    "BrokerOperator ignoring GameInitializeEvent for "
+                    "event_id=%s while tracking event_id=%s",
+                    event_id,
+                    self._event.event_id,
+                )
+                return
             broker_event = self._event
             broker_event.home_team = home_team_str
             broker_event.away_team = away_team_str

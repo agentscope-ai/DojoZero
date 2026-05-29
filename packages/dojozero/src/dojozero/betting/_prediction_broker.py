@@ -305,6 +305,18 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             return
 
         if self._event is not None:
+            # Only refresh metadata when the init event belongs to the same
+            # event. A different game_id arriving here (double-header, replay
+            # stitching two streams) used to silently overwrite the live
+            # event's teams.
+            if self._event.event_id != event_id:
+                logger.warning(
+                    "PredictionBroker ignoring GameInitializeEvent for "
+                    "event_id=%s while tracking event_id=%s",
+                    event_id,
+                    self._event.event_id,
+                )
+                return
             self._event.home_team = home_team_str
             self._event.away_team = away_team_str
             self._event.game_time = game_time_dt
@@ -728,7 +740,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 {"index": 4, "label": "Q4", "pool": self._window_pools[4]},
             ],
             "selections": ["home_win", "away_win", "even"],
-            "max_predictions_per_window": "unlimited (last submission wins)",
+            "max_predictions_per_window": "1 (replaceable until the window closes)",
             "scoring": (
                 "share_of_window_pool: each correct prediction in a window splits "
                 "that window's pool equally among all correct predictions; "
