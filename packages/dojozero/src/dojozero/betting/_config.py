@@ -71,6 +71,20 @@ class TrialBrokerConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_window_pools_class(self) -> "TrialBrokerConfig":
+        """Reject ``window_pools`` on a non-PredictionBroker config.
+
+        Catches a common mistake at trial-build time instead of letting the
+        field silently no-op when the operator class is ``BrokerOperator``.
+        """
+        if self.window_pools is not None and self.class_name != "PredictionBroker":
+            raise ValueError(
+                f"window_pools is only valid for PredictionBroker, "
+                f"got class_name={self.class_name!r}"
+            )
+        return self
+
 
 MEMORY_SUMMARY_PROMPT = """\
 You are a memory compressor for a sports forecasting AI. Summarize the conversation below into a concise context block under 1500 tokens.

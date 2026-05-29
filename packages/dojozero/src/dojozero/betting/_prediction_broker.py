@@ -585,12 +585,15 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 "Valid options: 'home_win', 'away_win', 'even'"
             )
 
-        resolved_window = self._resolve_window(None)
-
+        # Reject closed/settled events before computing anything else so
+        # we never waste work resolving a window for a submission that
+        # can't land.
         if self._event.status == EventStatus.SETTLED:
             return "prediction_error: Event already settled"
         if self._event.status == EventStatus.CLOSED:
             return "prediction_error: Event closed for predictions"
+
+        resolved_window = self._resolve_window(None)
 
         # If a prediction already exists for this window, remove it so the new
         # submission replaces it (last-write-wins per window).

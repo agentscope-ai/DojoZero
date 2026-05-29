@@ -13,7 +13,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from dojozero.betting._models import (
     AgentInfo,
@@ -135,13 +135,35 @@ class ExternalAgentAdapter:
 
     @property
     def _betting_broker(self) -> "BrokerOperator":
-        """Return broker narrowed to BrokerOperator. Only call for classic betting."""
-        return cast("BrokerOperator", self._broker)
+        """Return broker narrowed to BrokerOperator. Only call for classic betting.
+
+        Raises ``RuntimeError`` if the trial isn't running classic betting so
+        misuse fails fast with a clear message instead of bubbling up as a
+        cryptic ``AttributeError`` from the wrong broker type.
+        """
+        from dojozero.betting._broker import BrokerOperator
+
+        if not isinstance(self._broker, BrokerOperator):
+            raise RuntimeError(
+                "_betting_broker accessed but trial uses "
+                f"{self._broker.get_contest_kind()!r} mode"
+            )
+        return self._broker
 
     @property
     def _pred_broker(self) -> "PredictionBroker":
-        """Return broker narrowed to PredictionBroker. Only call for prediction mode."""
-        return cast("PredictionBroker", self._broker)
+        """Return broker narrowed to PredictionBroker. Only call for prediction mode.
+
+        Raises ``RuntimeError`` if the trial isn't running prediction mode.
+        """
+        from dojozero.betting._prediction_broker import PredictionBroker
+
+        if not isinstance(self._broker, PredictionBroker):
+            raise RuntimeError(
+                "_pred_broker accessed but trial uses "
+                f"{self._broker.get_contest_kind()!r} mode"
+            )
+        return self._broker
 
     @property
     def trial_id(self) -> str:

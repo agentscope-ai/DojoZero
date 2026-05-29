@@ -4,6 +4,7 @@ Extracted from ``_broker.py`` so that consumers can import lightweight data
 contracts without pulling in the full broker operator implementation.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,6 +19,9 @@ from pydantic import (
     field_serializer,
     model_validator,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -381,11 +385,16 @@ class BrokerFinalStats(BaseModel):
 
     Carries fields for both contest types because span tags are reconstructed
     via a single ``model_validate`` dispatch and we don't want to break
-    historical SLS data. New code should construct the typed subclasses
-    :class:`BettingFinalStats` or :class:`PredictionFinalStats` instead so
-    the contest-kind invariant is enforced at the type level; an
-    ``@model_validator`` here documents and enforces the same invariant for
-    direct ``BrokerFinalStats`` usage.
+    historical SLS data — older spans were emitted before ``broker.contest_kind``
+    flowed under the ``broker.`` prefix, so they default to
+    ``contest_kind="classic_betting"`` on reconstruction even when the payload
+    is actually prediction-shaped.
+
+    The base class is therefore lenient: it *infers* the right
+    ``contest_kind`` from which fields are populated and only logs a warning
+    on a true cross-mode mix. New code should construct the typed subclasses
+    :class:`BettingFinalStats` / :class:`PredictionFinalStats` instead — those
+    pin ``contest_kind`` as a ``Literal`` and hard-raise on mixed payloads.
     """
 
     contest_kind: str = Field(
@@ -420,30 +429,41 @@ class BrokerFinalStats(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _enforce_kind_invariant(self) -> "BrokerFinalStats":
-        """Enforce that only the fields matching ``contest_kind`` are populated.
+    def _reconcile_contest_kind(self) -> "BrokerFinalStats":
+        """Infer ``contest_kind`` from which fields are populated.
 
-        Documents the discriminated nature of this model and fails loudly if a
-        producer mixes fields across contest types instead of silently
-        carrying half-empty payloads.
+        Older SLS spans were emitted before ``broker.contest_kind`` was
+        propagated under the ``broker.`` prefix, so the reconstructed default
+        of ``"classic_betting"`` can disagree with a payload that's really
+        prediction-shaped. Rather than refuse to deserialize that history we
+        correct the tag and only warn on a genuine cross-mode mix.
         """
-        if self.contest_kind == "classic_betting":
-            if self.predictions or self.prediction_statistics or self.window_pools:
-                raise ValueError(
-                    "BrokerFinalStats with contest_kind='classic_betting' must "
-                    "not populate prediction fields"
-                )
-        elif self.contest_kind == "window_pool_prediction":
-            if (
-                self.accounts
-                or self.bets
-                or self.estimated_net_values
-                or self.statistics
-            ):
-                raise ValueError(
-                    "BrokerFinalStats with contest_kind='window_pool_prediction' "
-                    "must not populate betting fields"
-                )
+        has_betting = bool(
+            self.accounts or self.bets or self.estimated_net_values or self.statistics
+        )
+        has_prediction = bool(
+            self.predictions or self.prediction_statistics or self.window_pools
+        )
+
+        if has_betting and has_prediction:
+            logger.warning(
+                "BrokerFinalStats payload mixes betting and prediction fields "
+                "(contest_kind=%s); treating as %s based on dominant fields",
+                self.contest_kind,
+                self.contest_kind,
+            )
+        elif (
+            has_prediction
+            and not has_betting
+            and self.contest_kind != "window_pool_prediction"
+        ):
+            self.contest_kind = "window_pool_prediction"
+        elif (
+            has_betting
+            and not has_prediction
+            and self.contest_kind != "classic_betting"
+        ):
+            self.contest_kind = "classic_betting"
         return self
 
 
@@ -451,16 +471,28 @@ class BettingFinalStats(BrokerFinalStats):
     """Typed view for ``classic_betting`` final stats.
 
     Pins ``contest_kind`` so producers can't accidentally mis-tag the payload,
-    and surfaces only the betting-relevant fields in the constructor.
+    and hard-raises if prediction fields leak in.
     """
 
     contest_kind: Literal["classic_betting"] = "classic_betting"
+
+    @model_validator(mode="after")
+    def _forbid_prediction_fields(self) -> "BettingFinalStats":
+        if self.predictions or self.prediction_statistics or self.window_pools:
+            raise ValueError("BettingFinalStats must not populate prediction fields")
+        return self
 
 
 class PredictionFinalStats(BrokerFinalStats):
     """Typed view for ``window_pool_prediction`` final stats."""
 
     contest_kind: Literal["window_pool_prediction"] = "window_pool_prediction"
+
+    @model_validator(mode="after")
+    def _forbid_betting_fields(self) -> "PredictionFinalStats":
+        if self.accounts or self.bets or self.estimated_net_values or self.statistics:
+            raise ValueError("PredictionFinalStats must not populate betting fields")
+        return self
 
 
 # =============================================================================

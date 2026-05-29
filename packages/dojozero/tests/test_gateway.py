@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from dojozero.betting._broker import BrokerOperator
 from dojozero.gateway._models import (
     AgentRegistrationRequest,
     AgentRegistrationResponse,
@@ -225,7 +226,7 @@ class TestExternalAgentAdapter:
     @pytest.fixture
     def mock_broker(self):
         """Create mock BrokerOperator."""
-        broker = MagicMock()
+        broker = MagicMock(spec=BrokerOperator)
         broker.initial_balance = "1000"
         broker.create_account = AsyncMock()
         broker.delete_account = AsyncMock(return_value=True)
@@ -446,7 +447,7 @@ class TestGatewayServer:
     @pytest.fixture
     def mock_broker(self):
         """Create mock BrokerOperator."""
-        broker = MagicMock()
+        broker = MagicMock(spec=BrokerOperator)
         broker.initial_balance = "1000"
         broker.create_account = AsyncMock()
         broker.delete_account = AsyncMock(return_value=True)
@@ -1628,7 +1629,7 @@ class TestTrialResults:
     @pytest.fixture
     def mock_broker(self):
         """Create mock BrokerOperator with accounts."""
-        broker = MagicMock()
+        broker = MagicMock(spec=BrokerOperator)
         broker.initial_balance = "1000"
         broker.create_account = AsyncMock()
         broker.current_event = None
@@ -1790,7 +1791,7 @@ class TestGatewayAuthIntegration:
     @pytest.fixture
     def mock_broker(self):
         """Create mock BrokerOperator."""
-        broker = MagicMock()
+        broker = MagicMock(spec=BrokerOperator)
         broker.initial_balance = "1000"
         broker.current_event = None
         broker._accounts = {}
