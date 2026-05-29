@@ -289,7 +289,7 @@ class PredictionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    selection: str = Field(
+    selection: Literal["home_win", "away_win", "even"] = Field(
         description="Prediction selection: 'home_win', 'away_win', or 'even'"
     )
 

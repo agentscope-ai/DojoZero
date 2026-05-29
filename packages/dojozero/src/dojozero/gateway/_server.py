@@ -500,8 +500,11 @@ def create_gateway_app(
     ) -> None:
         actual = state.broker.get_contest_kind()
         if actual != required_kind:
+            # 405 (Method Not Allowed) is the right shape: the route exists,
+            # but the active contest type doesn't support it. 404 would imply
+            # the route is missing entirely, which confuses HTTP clients.
             raise HTTPException(
-                status_code=404,
+                status_code=405,
                 detail=ErrorResponse(
                     error=ErrorDetail(
                         code=ErrorCodes.BETTING_MODE_ONLY
