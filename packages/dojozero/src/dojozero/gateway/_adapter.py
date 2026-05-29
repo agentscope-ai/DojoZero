@@ -455,7 +455,7 @@ class ExternalAgentAdapter:
 
     def get_current_odds(self) -> CurrentOddsResponse:
         """Get current betting odds from broker."""
-        event = self._broker._event
+        event = self._broker.current_event
         current_sequence = self._data_hub.subscription_manager.global_sequence
 
         if event is None:
@@ -553,7 +553,7 @@ class ExternalAgentAdapter:
             else None
         )
 
-        event = self._broker._event
+        event = self._broker.current_event
         if event is None:
             raise ValueError("No active event")
         event_id = event.event_id
@@ -786,21 +786,19 @@ class ExternalAgentAdapter:
             raise ValueError(f"Agent {agent_id} not registered")
 
         broker = self._pred_broker
-        event = broker._event
+        event = broker.current_event
         if event is None:
             raise ValueError("No active event available")
 
         result = await broker.submit_prediction(agent_id, event.event_id, selection)
-
-        if result.startswith("prediction_error"):
+        # Broker returns the Prediction on success or a "prediction_error: ..."
+        # string for known validation failures. We don't re-query with
+        # get_my_predictions[-1] because that relied on dict insertion order
+        # after delete+insert, which can drift under concurrent load.
+        if isinstance(result, str):
             raise ValueError(result)
 
-        # Find the prediction just submitted
-        preds = await broker.get_my_predictions(agent_id, event.event_id)
-        if not preds:
-            raise ValueError("Prediction submitted but not found")
-
-        pred = preds[-1]
+        pred = result
         self._agents[agent_id].last_activity_at = datetime.now(timezone.utc)
 
         return PredictionResponse(
@@ -821,7 +819,7 @@ class ExternalAgentAdapter:
             raise ValueError(f"Agent {agent_id} not registered")
 
         broker = self._pred_broker
-        event = broker._event
+        event = broker.current_event
         event_id = event.event_id if event is not None else None
         preds = await broker.get_my_predictions(agent_id, event_id)
 

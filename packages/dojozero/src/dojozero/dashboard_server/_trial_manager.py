@@ -248,7 +248,7 @@ class TrialManager:
             # This handles cases where broker was restored from checkpoint
             # without GameInitializeEvent.  Works for both BrokerOperator
             # and PredictionBroker.
-            if broker._event is None and metadata:
+            if broker.current_event is None and metadata:
                 event_id = metadata.get("espn_game_id", trial_id)
                 home_team = metadata.get("home_team_name", "")
                 away_team = metadata.get("away_team_name", "")

@@ -334,7 +334,7 @@ def create_gateway_app(
         state: GatewayState = Depends(get_gateway_state),
     ) -> TrialMetadataResponse:
         """Get trial metadata."""
-        event = state.broker._event
+        event = state.broker.current_event
         can_bet = getattr(event, "can_bet", False) if event else False
 
         return TrialMetadataResponse(

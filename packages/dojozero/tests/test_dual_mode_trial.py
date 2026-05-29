@@ -48,17 +48,17 @@ def mock_betting_broker():
         "description": "Place market or limit bets via the standard betting tools.",
     }
     broker.is_accepting.return_value = True
-    broker._event = MagicMock()
-    broker._event.event_id = "game-123"
-    broker._event.can_bet = True
-    broker._event.home_team = "Lakers"
-    broker._event.away_team = "Celtics"
-    broker._event.game_time = datetime(2026, 5, 20, tzinfo=timezone.utc)
-    broker._event.home_probability = Decimal("0.55")
-    broker._event.away_probability = Decimal("0.45")
-    broker._event.spread_lines = {}
-    broker._event.total_lines = {}
-    broker._event.last_odds_update = None
+    broker.current_event = MagicMock()
+    broker.current_event.event_id = "game-123"
+    broker.current_event.can_bet = True
+    broker.current_event.home_team = "Lakers"
+    broker.current_event.away_team = "Celtics"
+    broker.current_event.game_time = datetime(2026, 5, 20, tzinfo=timezone.utc)
+    broker.current_event.home_probability = Decimal("0.55")
+    broker.current_event.away_probability = Decimal("0.45")
+    broker.current_event.spread_lines = {}
+    broker.current_event.total_lines = {}
+    broker.current_event.last_odds_update = None
     broker._accounts = {}
     broker._bets = {}
     broker._active_bets = {}
@@ -79,12 +79,12 @@ def mock_prediction_broker():
     broker.get_contest_kind.return_value = "window_pool_prediction"
     broker.is_accepting.return_value = False
     broker.agents = set()
-    broker._event = MagicMock()
-    broker._event.event_id = "game-123"
-    broker._event.home_team = "Lakers"
-    broker._event.away_team = "Celtics"
-    broker._event.game_time = datetime(2026, 5, 20, tzinfo=timezone.utc)
-    broker._event.can_bet = False
+    broker.current_event = MagicMock()
+    broker.current_event.event_id = "game-123"
+    broker.current_event.home_team = "Lakers"
+    broker.current_event.away_team = "Celtics"
+    broker.current_event.game_time = datetime(2026, 5, 20, tzinfo=timezone.utc)
+    broker.current_event.can_bet = False
     broker.get_rules.return_value = {
         "kind": "window_pool_prediction",
         "num_windows": 5,

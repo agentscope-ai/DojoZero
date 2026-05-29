@@ -317,6 +317,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """Return ``"classic_betting"``."""
         return "classic_betting"
 
+    @property
+    def current_event(self) -> Optional[BettingEvent]:
+        """Currently tracked betting event, or ``None`` before bootstrap."""
+        return self._event
+
     def is_accepting(self) -> bool:
         """True when the event exists and betting is open."""
         return self._event is not None and self._event.can_bet

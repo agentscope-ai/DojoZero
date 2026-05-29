@@ -565,8 +565,14 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         agent_id: str,
         event_id: str,
         selection: str,
-    ) -> str:
-        """Submit a prediction. Returns ``"prediction_submitted"`` or an error."""
+    ) -> Prediction | str:
+        """Submit a prediction.
+
+        Returns the :class:`Prediction` on success, or a ``"prediction_error: ..."``
+        string for known validation/state errors. Returning the prediction
+        directly lets callers (the gateway adapter) skip a second lookup that
+        previously depended on dict-insertion order.
+        """
         async with self._event_lock:
             return await self._submit_prediction_locked(agent_id, event_id, selection)
 
@@ -575,7 +581,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         agent_id: str,
         event_id: str,
         selection: str,
-    ) -> str:
+    ) -> Prediction | str:
         """Inner submission logic, must be called under ``_event_lock``."""
         if self._event is None or self._event.event_id != event_id:
             return "prediction_error: Invalid event ID"
@@ -652,7 +658,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             resolved_window,
             prediction.elapsed_ratio,
         )
-        return "prediction_submitted"
+        return prediction
 
     async def get_my_predictions(
         self, agent_id: str, event_id: str | None = None
@@ -698,6 +704,11 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
     def get_contest_kind(self) -> str:
         """Return ``"window_pool_prediction"``."""
         return "window_pool_prediction"
+
+    @property
+    def current_event(self) -> Optional[BettingEvent]:
+        """Currently tracked contest event, or ``None`` before bootstrap."""
+        return self._event
 
     def is_accepting(self) -> bool:
         """True when the event exists and is not closed/settled."""
@@ -964,11 +975,11 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                     f"prediction_error: Invalid selection '{selection}'. "
                     f"Must be one of: {', '.join(sorted(_VALID_SELECTIONS))}"
                 )
-            event = target._event  # type: ignore[attr-defined]
+            event = target.current_event
             if event is None:
                 return "prediction_error: No active event available"
             try:
-                return await target.submit_prediction(
+                result = await target.submit_prediction(
                     agent_id, event.event_id, selection
                 )
             except Exception as e:
@@ -978,6 +989,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                     exc_info=True,
                 )
                 return f"prediction_error: Unexpected error - {str(e)}"
+            return "prediction_submitted" if isinstance(result, Prediction) else result
 
         @tool
         async def get_my_predictions() -> str:
@@ -988,7 +1000,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 window, submit_time, elapsed_ratio, is_correct (after settlement),
                 and score (after settlement).
             """
-            event = target._event  # type: ignore[attr-defined]
+            event = target.current_event
             event_id = event.event_id if event is not None else None
             try:
                 preds = await target.get_my_predictions(agent_id, event_id)

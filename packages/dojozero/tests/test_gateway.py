@@ -231,7 +231,7 @@ class TestExternalAgentAdapter:
         broker.delete_account = AsyncMock(return_value=True)
         broker.has_account = MagicMock(return_value=False)
         broker.get_contest_kind = MagicMock(return_value="classic_betting")
-        broker._event = None
+        broker.current_event = None
         broker._accounts = {}
         broker._bets = {}
         broker._active_bets = {}
@@ -390,7 +390,7 @@ class TestExternalAgentAdapter:
         mock_event.total_lines = {}
         mock_event.last_odds_update = datetime.now(timezone.utc)
         mock_event.can_bet = True
-        mock_broker._event = mock_event
+        mock_broker.current_event = mock_event
 
         odds = adapter.get_current_odds()
         assert odds.event_id == "game123"
@@ -452,7 +452,7 @@ class TestGatewayServer:
         broker.delete_account = AsyncMock(return_value=True)
         broker.has_account = MagicMock(return_value=False)
         broker.get_contest_kind = MagicMock(return_value="classic_betting")
-        broker._event = None
+        broker.current_event = None
         broker._accounts = {}
         return broker
 
@@ -1631,7 +1631,7 @@ class TestTrialResults:
         broker = MagicMock()
         broker.initial_balance = "1000"
         broker.create_account = AsyncMock()
-        broker._event = None
+        broker.current_event = None
         # Mock accounts with balances
         broker._accounts = {
             "agent1": MagicMock(balance=Decimal("1200"), is_external=True),
@@ -1792,7 +1792,7 @@ class TestGatewayAuthIntegration:
         """Create mock BrokerOperator."""
         broker = MagicMock()
         broker.initial_balance = "1000"
-        broker._event = None
+        broker.current_event = None
         broker._accounts = {}
         broker.create_account = AsyncMock()
         broker.delete_account = AsyncMock(return_value=True)

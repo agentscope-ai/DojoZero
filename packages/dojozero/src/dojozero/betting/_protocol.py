@@ -23,12 +23,22 @@ class ContestOperator(Protocol):
 
     actor_id: str
     trial_id: str
-    _event: Optional[ContestEvent]
 
     # -- lifecycle ----------------------------------------------------------
 
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
+
+    # -- current event ------------------------------------------------------
+
+    @property
+    def current_event(self) -> Optional[ContestEvent]:
+        """The contest event currently tracked, or ``None`` before bootstrap.
+
+        Replaces direct access to the private ``_event`` attribute so callers
+        don't depend on internal storage layout.
+        """
+        ...
 
     # -- rules & discovery --------------------------------------------------
 
