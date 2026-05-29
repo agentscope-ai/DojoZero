@@ -586,6 +586,9 @@ class TrialHandler:
         window, only the latest prediction counts. We rewrite the file
         keeping only the most recent entry per window so that local
         display (``_print_prediction_history``) matches the server.
+
+        Writes via a temp file + ``os.replace`` so an OS crash mid-write
+        leaves the existing file intact instead of truncating it.
         """
         preds_file = self.state_dir / "predictions.jsonl"
         window = pred.get("window")
@@ -602,14 +605,17 @@ class TrialHandler:
                     except json.JSONDecodeError:
                         continue
 
-        # Remove older entry for the same window (if any)
         if window is not None:
             existing = [e for e in existing if e.get("window") != window]
         existing.append(pred)
 
-        with open(preds_file, "w") as f:
+        tmp_path = preds_file.with_suffix(preds_file.suffix + ".tmp")
+        with open(tmp_path, "w") as f:
             for entry in existing:
                 f.write(json.dumps(entry) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, preds_file)
 
     async def get_results(self) -> dict[str, Any]:
         """Get trial results from server, or fall back to disk."""
@@ -691,7 +697,7 @@ class TrialHandler:
         if not events_file.exists():
             return []
 
-        lines = events_file.read_text().strip().split("\n")
+        lines = events_file.read_text().splitlines()
         events = []
         for line in lines[-count:]:
             if line:
@@ -913,7 +919,7 @@ class TrialHandler:
         uids: set[str] = set()
         events_file = self.state_dir / "events.jsonl"
         if events_file.exists():
-            for line in events_file.read_text().strip().split("\n"):
+            for line in events_file.read_text().splitlines():
                 if line:
                     try:
                         uid = json.loads(line).get("payload", {}).get("uid", "")

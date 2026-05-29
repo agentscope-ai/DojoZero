@@ -22,7 +22,7 @@ import logging
 import re
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional, Sequence, TypedDict
 
@@ -228,7 +228,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             event_id=event_id,
             home_team=home_team,
             away_team=away_team,
-            game_time=game_time or datetime.now(),
+            game_time=game_time or datetime.now(timezone.utc),
             status=EventStatus.SCHEDULED,
             home_probability=None,
             away_probability=None,
@@ -372,7 +372,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 event_id=event_id,
                 home_team=home_team_str,
                 away_team=away_team_str,
-                game_time=game_time_dt or datetime.now(),
+                game_time=game_time_dt or datetime.now(timezone.utc),
                 status=EventStatus.SCHEDULED,
                 home_probability=None,
                 away_probability=None,
@@ -423,6 +423,18 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 away_pts = score.get("away", -2)
                 if home_pts == away_pts:
                     winner = "even"
+        # Final guard: unrecognised winners would raise in _settle_event and the
+        # outer handler swallows the exception, leaving the event stuck at
+        # CLOSED with no settlement and no span emitted. Default to "even" so
+        # the contest still closes out cleanly.
+        if winner not in ("home", "away", "even"):
+            logger.warning(
+                "PredictionBroker event %s has unrecognised winner '%s'; "
+                "defaulting to 'even' to avoid stalling settlement",
+                event_id,
+                winner,
+            )
+            winner = "even"
         await self._settle_event(event_id, winner)
 
     async def _update_event_status(self, event_id: str, status: EventStatus) -> None:
@@ -443,7 +455,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         )
         self._event.status = status
         if status == EventStatus.CLOSED:
-            self._event.betting_closed_at = datetime.now()
+            self._event.betting_closed_at = datetime.now(timezone.utc)
 
     async def _settle_event(self, event_id: str, winner: str) -> None:
         if self._event is None:
@@ -588,19 +600,34 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         already_used = self._submitted_windows[agent_id][event_id]
         if resolved_window in already_used:
             old_id = next(
-                pid
-                for pid, p in self._predictions.items()
-                if p.agent_id == agent_id
-                and p.event_id == event_id
-                and p.window == resolved_window
+                (
+                    pid
+                    for pid, p in self._predictions.items()
+                    if p.agent_id == agent_id
+                    and p.event_id == event_id
+                    and p.window == resolved_window
+                ),
+                None,
             )
-            del self._predictions[old_id]
-            logger.info(
-                "PredictionBroker replaced prediction %s (agent=%s, window=%d)",
-                old_id,
-                agent_id,
-                resolved_window,
-            )
+            if old_id is not None:
+                del self._predictions[old_id]
+                logger.info(
+                    "PredictionBroker replaced prediction %s (agent=%s, window=%d)",
+                    old_id,
+                    agent_id,
+                    resolved_window,
+                )
+            else:
+                # State drift: tracker said this window was used but no matching
+                # prediction exists. Clear the stale entry so the new submission
+                # succeeds instead of raising StopIteration.
+                logger.warning(
+                    "PredictionBroker submitted_windows tracker out of sync "
+                    "with predictions for agent=%s window=%d; reconciling",
+                    agent_id,
+                    resolved_window,
+                )
+                self._submitted_windows[agent_id][event_id].discard(resolved_window)
 
         prediction_id = f"pred_{uuid.uuid4().hex[:12]}"
         prediction = Prediction(
@@ -608,7 +635,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             agent_id=agent_id,
             event_id=event_id,
             selection=prediction_outcome,
-            submit_time=datetime.now(),
+            submit_time=datetime.now(timezone.utc),
             window=resolved_window,
             elapsed_ratio=self._compute_elapsed_ratio(),
             is_correct=None,

@@ -10,7 +10,7 @@ recorded in the same window.
 from __future__ import annotations
 
 from collections import defaultdict
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_DOWN
 
 from ._models import Prediction, PredictionOutcome
 
@@ -55,11 +55,17 @@ def settle_window_predictions(
 
     for window, correct_preds in correct_by_window.items():
         idx = max(0, min(window, len(window_pools) - 1))
-        pool = window_pools[idx]
-        share = Decimal(str(pool)) / Decimal(str(len(correct_preds)))
-        share = share.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        for p in correct_preds:
-            p.score = share
+        pool = Decimal(str(window_pools[idx]))
+        # Round individual shares DOWN to two decimals so we never distribute
+        # more than the pool. Any leftover from the rounding goes to the first
+        # winner so the full pool is still paid out.
+        share = (pool / Decimal(str(len(correct_preds)))).quantize(
+            Decimal("0.01"), rounding=ROUND_DOWN
+        )
+        distributed = share * len(correct_preds)
+        remainder = pool - distributed
+        for i, p in enumerate(correct_preds):
+            p.score = share + remainder if i == 0 else share
 
     for p in predictions:
         if not p.is_correct:

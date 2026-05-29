@@ -44,7 +44,6 @@ from dojozero.gateway._sse import SSEConnection, create_sse_response
 
 if TYPE_CHECKING:
     from dojozero.betting._broker import BrokerOperator
-    from dojozero.betting._prediction_broker import PredictionBroker
     from dojozero.data import DataHub
 
 logger = logging.getLogger(__name__)

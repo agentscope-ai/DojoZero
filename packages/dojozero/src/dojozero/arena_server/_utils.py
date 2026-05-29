@@ -1238,12 +1238,18 @@ def _compute_leaderboard_from_spans(
                 )
             )
 
-    # Determine which field to sort by based on available data
+    # Determine which field to sort by based on available data.
+    # In prediction mode there is no balance/ROI/win-rate, so all betting sort
+    # keys must remap to prediction_score — otherwise the lambdas return 0 for
+    # every entry and the sort is deterministically wrong.
     effective_sort_by = sort_by
-    if sort_by in ["winnings", "win_rate", "roi", "total_bets"] and has_prediction_data:
-        # If prediction data exists and default sort is used, sort by prediction score instead
-        if sort_by == "winnings":  # Default case
-            effective_sort_by = "prediction_score"
+    if has_prediction_data and sort_by in (
+        "winnings",
+        "win_rate",
+        "roi",
+        "total_bets",
+    ):
+        effective_sort_by = "prediction_score"
 
     # Sort by requested field
     sort_key_map: dict[str, Any] = {

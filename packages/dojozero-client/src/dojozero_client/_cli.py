@@ -358,7 +358,7 @@ def _print_bet_history(state_dir: Path) -> None:
     if not bets_file.exists():
         return
 
-    lines = bets_file.read_text().strip().split("\n")
+    lines = bets_file.read_text().splitlines()
     bets = []
     for line in lines:
         if line:
@@ -385,7 +385,7 @@ def _print_prediction_history(state_dir: Path) -> None:
     if not preds_file.exists():
         return
 
-    lines = preds_file.read_text().strip().split("\n")
+    lines = preds_file.read_text().splitlines()
     preds = []
     for line in lines:
         if line:
@@ -426,7 +426,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
             pass
     else:
         # Show last 50 lines
-        lines = log_file.read_text().strip().split("\n")
+        lines = log_file.read_text().splitlines()
         for line in lines[-50:]:
             print(line)
 
@@ -533,7 +533,7 @@ def cmd_predictions(args: argparse.Namespace) -> int:
         print("No predictions")
         return 0
 
-    lines = preds_file.read_text().strip().split("\n")
+    lines = preds_file.read_text().splitlines()
     count = args.count if hasattr(args, "count") and args.count else 20
     for line in lines[-count:]:
         if not line:
@@ -628,7 +628,7 @@ def cmd_events(args: argparse.Namespace) -> int:
             for t in raw_types.split(",")
         }
 
-    lines = events_file.read_text().strip().split("\n")
+    lines = events_file.read_text().splitlines()
     count = args.count if hasattr(args, "count") and args.count else 20
 
     # First pass: discover team tricodes from odds/result events
@@ -700,7 +700,7 @@ def cmd_bets(args: argparse.Namespace) -> int:
         print("No bets")
         return 0
 
-    lines = bets_file.read_text().strip().split("\n")
+    lines = bets_file.read_text().splitlines()
     count = args.count if hasattr(args, "count") and args.count else 20
 
     for line in lines[-count:]:
