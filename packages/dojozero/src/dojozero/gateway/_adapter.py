@@ -455,7 +455,7 @@ class ExternalAgentAdapter:
 
     def get_current_odds(self) -> CurrentOddsResponse:
         """Get current betting odds from broker."""
-        event = self._broker.current_event
+        event = self._betting_broker.current_event
         current_sequence = self._data_hub.subscription_manager.global_sequence
 
         if event is None:

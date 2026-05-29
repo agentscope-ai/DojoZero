@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, TypedDict
 from pydantic import TypeAdapter
 
 from dojozero.betting._models import (
-    BettingEvent,
+    ContestEvent,
     EventStatus,
     Prediction,
     PredictionOutcome,
@@ -151,7 +151,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
     def __init__(self, config: PredictionBrokerConfig, trial_id: str):
         super().__init__(config["actor_id"], trial_id)
 
-        self._event: Optional[BettingEvent] = None
+        self._event: Optional[ContestEvent] = None
         self._event_lock: asyncio.Lock = asyncio.Lock()
 
         # Buffer events that arrive before GameInitializeEvent.
@@ -224,15 +224,12 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         """
         if self._event is not None:
             return False
-        self._event = BettingEvent(
+        self._event = ContestEvent(
             event_id=event_id,
             home_team=home_team,
             away_team=away_team,
             game_time=game_time or datetime.now(timezone.utc),
             status=EventStatus.SCHEDULED,
-            home_probability=None,
-            away_probability=None,
-            last_odds_update=None,
         )
         logger.info(
             "PredictionBroker event initialized from metadata: %s (%s vs %s)",
@@ -309,15 +306,12 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             self._event.game_time = game_time_dt
             return
 
-        self._event = BettingEvent(
+        self._event = ContestEvent(
             event_id=event_id,
             home_team=home_team_str,
             away_team=away_team_str,
             game_time=game_time_dt,
             status=EventStatus.SCHEDULED,
-            home_probability=None,
-            away_probability=None,
-            last_odds_update=None,
         )
         logger.info(
             "PredictionBroker initialized event %s: %s vs %s",
@@ -368,15 +362,12 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                     )
                 except (ValueError, AttributeError):
                     game_time_dt = None
-            self._event = BettingEvent(
+            self._event = ContestEvent(
                 event_id=event_id,
                 home_team=home_team_str,
                 away_team=away_team_str,
                 game_time=game_time_dt or datetime.now(timezone.utc),
                 status=EventStatus.SCHEDULED,
-                home_probability=None,
-                away_probability=None,
-                last_odds_update=None,
             )
             logger.info(
                 "PredictionBroker initialized event %s from game update",
@@ -706,7 +697,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         return "window_pool_prediction"
 
     @property
-    def current_event(self) -> Optional[BettingEvent]:
+    def current_event(self) -> Optional[ContestEvent]:
         """Currently tracked contest event, or ``None`` before bootstrap."""
         return self._event
 
@@ -768,7 +759,9 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
 
     async def load_state(self, state: Dict[str, Any]) -> None:
         if state.get("event") is not None:
-            self._event = BettingEvent.model_validate(state["event"])
+            # Older checkpoints may carry the legacy BettingEvent payload with
+            # odds fields; ContestEvent.model_validate just drops the extras.
+            self._event = ContestEvent.model_validate(state["event"])
         else:
             self._event = None
 
