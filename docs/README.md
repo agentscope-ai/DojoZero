@@ -52,6 +52,7 @@ Optional extras: `uv pip install 'packages/dojozero[alicloud,redis,ray]'`.
 | Document | Description |
 | :--- | :--- |
 | [Single Trial Execution](./single_trial.md) | Run a trial, understand the output, resume from checkpoint |
+| [Scoring Systems](./scoring_systems.md) | Classic betting vs. window-pool prediction contests |
 | [Tracing](./tracing.md) | OpenTelemetry tracing for agent decisions and events |
 | [Arena & UI](./arena.md) | Browser-based timeline for inspecting traces |
 | [Dashboard Server](./dashboard_server.md) | Central service for running and scheduling trials |
