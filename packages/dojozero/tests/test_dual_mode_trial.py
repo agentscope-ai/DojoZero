@@ -236,12 +236,12 @@ class TestDualModeEndpointExclusivity:
     def test_betting_endpoints_blocked_on_prediction(
         self, prediction_client, mock_betting_broker
     ):
-        """Prediction gateway returns 405 for betting-only endpoints."""
+        """Prediction gateway doesn't register betting-only routes (404)."""
         self._register_agent(prediction_client)
 
         # /odds/current should be blocked
         resp = prediction_client.get("/odds/current", headers={"X-Agent-ID": "agent1"})
-        assert resp.status_code == 405
+        assert resp.status_code == 404
 
         # POST /bets should be blocked
         resp = prediction_client.post(
@@ -249,20 +249,20 @@ class TestDualModeEndpointExclusivity:
             json={"market": "moneyline", "selection": "home", "amount": "100"},
             headers={"X-Agent-ID": "agent1"},
         )
-        assert resp.status_code == 405
+        assert resp.status_code == 404
 
         # GET /bets should be blocked
         resp = prediction_client.get("/bets", headers={"X-Agent-ID": "agent1"})
-        assert resp.status_code == 405
+        assert resp.status_code == 404
 
         # GET /balance should be blocked
         resp = prediction_client.get("/balance", headers={"X-Agent-ID": "agent1"})
-        assert resp.status_code == 405
+        assert resp.status_code == 404
 
     def test_prediction_endpoints_blocked_on_betting(
         self, betting_client, mock_betting_broker
     ):
-        """Betting gateway returns 405 for prediction-only endpoints."""
+        """Betting gateway doesn't register prediction-only routes (404)."""
         self._register_agent(betting_client, mock_betting_broker)
 
         # POST /predictions should be blocked
@@ -271,15 +271,15 @@ class TestDualModeEndpointExclusivity:
             json={"selection": "home_win"},
             headers={"X-Agent-ID": "agent1"},
         )
-        assert resp.status_code == 405
+        assert resp.status_code == 404
 
         # GET /predictions should be blocked
         resp = betting_client.get("/predictions", headers={"X-Agent-ID": "agent1"})
-        assert resp.status_code == 405
+        assert resp.status_code == 404
 
         # GET /event/info should be blocked
         resp = betting_client.get("/event/info", headers={"X-Agent-ID": "agent1"})
-        assert resp.status_code == 405
+        assert resp.status_code == 404
 
     def test_betting_endpoints_work_on_betting_gateway(
         self, betting_client, mock_betting_broker

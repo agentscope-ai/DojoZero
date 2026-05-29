@@ -492,186 +492,153 @@ def create_gateway_app(
         )
 
     # =========================================================================
-    # Odds (classic betting only)
+    # Per-contest routes
+    #
+    # Each contest type owns its set of routes; the gateway only registers
+    # the ones that apply to the active broker. Routes that don't apply
+    # simply don't exist on the FastAPI app — clients get a clean 404 from
+    # the router instead of a body-only "mode mismatch" hidden behind a
+    # generic 4xx code, and adding a third contest type later is purely
+    # additive instead of compounding `is_prediction_mode` branches.
     # =========================================================================
 
-    def _require_contest_kind(
-        state: GatewayState, required_kind: str, endpoint: str
-    ) -> None:
-        actual = state.broker.get_contest_kind()
-        if actual != required_kind:
-            # 405 (Method Not Allowed) is the right shape: the route exists,
-            # but the active contest type doesn't support it. 404 would imply
-            # the route is missing entirely, which confuses HTTP clients.
-            raise HTTPException(
-                status_code=405,
-                detail=ErrorResponse(
-                    error=ErrorDetail(
-                        code=ErrorCodes.BETTING_MODE_ONLY
-                        if required_kind == "classic_betting"
-                        else ErrorCodes.PREDICTION_MODE_ONLY,
-                        message=(
-                            f"This trial uses {actual} mode. "
-                            f"{endpoint} is only available in {required_kind} mode."
-                        ),
-                    )
-                ).model_dump(by_alias=True),
-            )
+    contest_kind = broker.get_contest_kind()
 
-    @app.get("/odds/current", response_model=CurrentOddsResponse)
-    async def get_current_odds(
-        agent_id: str = Depends(get_agent_id),
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> CurrentOddsResponse:
-        """Get current betting odds (classic betting only)."""
-        _require_contest_kind(state, "classic_betting", "GET /odds/current")
-        if not state.adapter.is_registered(agent_id):
-            raise HTTPException(status_code=403, detail="Agent not registered")
+    if contest_kind == "classic_betting":
 
-        return state.adapter.get_current_odds()
-
-    # =========================================================================
-    # Betting (classic only)
-    # =========================================================================
-
-    @app.post("/bets", response_model=BetResponse)
-    async def place_bet(
-        request: BetRequest,
-        agent_id: str = Depends(get_agent_id),
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> BetResponse:
-        """Place a bet (classic betting only)."""
-        _require_contest_kind(
-            state, "classic_betting", "POST /bets. Use POST /predictions instead"
-        )
-        try:
-            return await state.adapter.place_bet(agent_id, request)
-        except ValueError as e:
-            error_str = str(e)
-
-            if "stale" in error_str.lower():
-                code = ErrorCodes.STALE_REFERENCE
-                status = 400
-            elif "balance" in error_str.lower():
-                code = ErrorCodes.INSUFFICIENT_BALANCE
-                status = 400
-            elif "closed" in error_str.lower():
-                code = ErrorCodes.BETTING_CLOSED
-                status = 400
-            elif "duplicate" in error_str.lower() or "idempotency" in error_str.lower():
-                code = ErrorCodes.DUPLICATE_BET
-                status = 409
-            elif "not registered" in error_str.lower():
-                code = ErrorCodes.NOT_REGISTERED
-                status = 403
-            else:
-                code = ErrorCodes.BET_REJECTED
-                status = 400
-
-            raise HTTPException(
-                status_code=status,
-                detail=ErrorResponse(
-                    error=ErrorDetail(code=code, message=error_str)
-                ).model_dump(by_alias=True),
-            )
-
-    @app.get("/bets", response_model=BetsListResponse)
-    async def get_bets(
-        agent_id: str = Depends(get_agent_id),
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> BetsListResponse:
-        """Get all bets for the agent (classic betting only)."""
-        _require_contest_kind(
-            state, "classic_betting", "GET /bets. Use GET /predictions instead"
-        )
-        if not state.adapter.is_registered(agent_id):
-            raise HTTPException(status_code=403, detail="Agent not registered")
-
-        return BetsListResponse(bets=state.adapter.get_bets(agent_id))
-
-    @app.get("/balance", response_model=BalanceResponse)
-    async def get_balance(
-        agent_id: str = Depends(get_agent_id),
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> BalanceResponse:
-        """Get agent's balance and holdings (classic betting only)."""
-        _require_contest_kind(state, "classic_betting", "GET /balance")
-        try:
-            return state.adapter.get_balance(agent_id)
-        except ValueError as e:
-            error_str = str(e)
-            if "not registered" in error_str.lower():
+        @app.get("/odds/current", response_model=CurrentOddsResponse)
+        async def get_current_odds(
+            agent_id: str = Depends(get_agent_id),
+            state: GatewayState = Depends(get_gateway_state),
+        ) -> CurrentOddsResponse:
+            """Get current betting odds (classic betting only)."""
+            if not state.adapter.is_registered(agent_id):
                 raise HTTPException(status_code=403, detail="Agent not registered")
-            raise HTTPException(status_code=404, detail=error_str)
+            return state.adapter.get_current_odds()
 
-    # =========================================================================
-    # Predictions (PredictionBroker only)
-    # =========================================================================
+        @app.post("/bets", response_model=BetResponse)
+        async def place_bet(
+            request: BetRequest,
+            agent_id: str = Depends(get_agent_id),
+            state: GatewayState = Depends(get_gateway_state),
+        ) -> BetResponse:
+            """Place a bet (classic betting only)."""
+            try:
+                return await state.adapter.place_bet(agent_id, request)
+            except ValueError as e:
+                error_str = str(e)
 
-    @app.post("/predictions", response_model=PredictionResponse)
-    async def submit_prediction(
-        request: PredictionRequest,
-        agent_id: str = Depends(get_agent_id),
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> PredictionResponse:
-        """Submit a prediction (prediction mode only)."""
-        _require_contest_kind(
-            state, "window_pool_prediction", "POST /predictions. Use POST /bets instead"
-        )
-        try:
-            return await state.adapter.submit_prediction(agent_id, request.selection)
-        except ValueError as e:
-            error_str = str(e)
-            if "not registered" in error_str.lower():
-                code = ErrorCodes.NOT_REGISTERED
-                status = 403
-            elif "closed" in error_str.lower() or "not accepting" in error_str.lower():
-                code = ErrorCodes.PREDICTION_CLOSED
-                status = 400
-            else:
-                code = ErrorCodes.PREDICTION_REJECTED
-                status = 400
+                if "stale" in error_str.lower():
+                    code = ErrorCodes.STALE_REFERENCE
+                    status = 400
+                elif "balance" in error_str.lower():
+                    code = ErrorCodes.INSUFFICIENT_BALANCE
+                    status = 400
+                elif "closed" in error_str.lower():
+                    code = ErrorCodes.BETTING_CLOSED
+                    status = 400
+                elif (
+                    "duplicate" in error_str.lower()
+                    or "idempotency" in error_str.lower()
+                ):
+                    code = ErrorCodes.DUPLICATE_BET
+                    status = 409
+                elif "not registered" in error_str.lower():
+                    code = ErrorCodes.NOT_REGISTERED
+                    status = 403
+                else:
+                    code = ErrorCodes.BET_REJECTED
+                    status = 400
 
-            raise HTTPException(
-                status_code=status,
-                detail=ErrorResponse(
-                    error=ErrorDetail(code=code, message=error_str)
-                ).model_dump(by_alias=True),
-            )
+                raise HTTPException(
+                    status_code=status,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(code=code, message=error_str)
+                    ).model_dump(by_alias=True),
+                )
 
-    @app.get("/predictions", response_model=PredictionsListResponse)
-    async def get_predictions(
-        agent_id: str = Depends(get_agent_id),
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> PredictionsListResponse:
-        """Get all predictions for the agent (prediction mode only)."""
-        _require_contest_kind(
-            state, "window_pool_prediction", "GET /predictions. Use GET /bets instead"
-        )
-        if not state.adapter.is_registered(agent_id):
-            raise HTTPException(status_code=403, detail="Agent not registered")
+        @app.get("/bets", response_model=BetsListResponse)
+        async def get_bets(
+            agent_id: str = Depends(get_agent_id),
+            state: GatewayState = Depends(get_gateway_state),
+        ) -> BetsListResponse:
+            """Get all bets for the agent (classic betting only)."""
+            if not state.adapter.is_registered(agent_id):
+                raise HTTPException(status_code=403, detail="Agent not registered")
+            return BetsListResponse(bets=state.adapter.get_bets(agent_id))
 
-        preds = await state.adapter.get_predictions(agent_id)
-        return PredictionsListResponse(predictions=preds)
+        @app.get("/balance", response_model=BalanceResponse)
+        async def get_balance(
+            agent_id: str = Depends(get_agent_id),
+            state: GatewayState = Depends(get_gateway_state),
+        ) -> BalanceResponse:
+            """Get agent's balance and holdings (classic betting only)."""
+            try:
+                return state.adapter.get_balance(agent_id)
+            except ValueError as e:
+                error_str = str(e)
+                if "not registered" in error_str.lower():
+                    raise HTTPException(status_code=403, detail="Agent not registered")
+                raise HTTPException(status_code=404, detail=error_str)
 
-    @app.get("/event/info", response_model=EventInfoResponse)
-    async def get_event_info(
-        agent_id: str = Depends(get_agent_id),
-        state: GatewayState = Depends(get_gateway_state),
-    ) -> EventInfoResponse:
-        """Get current event info (prediction mode only)."""
-        _require_contest_kind(
-            state,
-            "window_pool_prediction",
-            "GET /event/info. Use GET /odds/current instead",
-        )
-        if not state.adapter.is_registered(agent_id):
-            raise HTTPException(status_code=403, detail="Agent not registered")
+    elif contest_kind == "window_pool_prediction":
 
-        info = await state.adapter.get_event_info()
-        if info is None:
-            raise HTTPException(status_code=404, detail="No active event")
-        return info
+        @app.post("/predictions", response_model=PredictionResponse)
+        async def submit_prediction(
+            request: PredictionRequest,
+            agent_id: str = Depends(get_agent_id),
+            state: GatewayState = Depends(get_gateway_state),
+        ) -> PredictionResponse:
+            """Submit a prediction (prediction mode only)."""
+            try:
+                return await state.adapter.submit_prediction(
+                    agent_id, request.selection
+                )
+            except ValueError as e:
+                error_str = str(e)
+                if "not registered" in error_str.lower():
+                    code = ErrorCodes.NOT_REGISTERED
+                    status = 403
+                elif (
+                    "closed" in error_str.lower()
+                    or "not accepting" in error_str.lower()
+                ):
+                    code = ErrorCodes.PREDICTION_CLOSED
+                    status = 400
+                else:
+                    code = ErrorCodes.PREDICTION_REJECTED
+                    status = 400
+
+                raise HTTPException(
+                    status_code=status,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(code=code, message=error_str)
+                    ).model_dump(by_alias=True),
+                )
+
+        @app.get("/predictions", response_model=PredictionsListResponse)
+        async def get_predictions(
+            agent_id: str = Depends(get_agent_id),
+            state: GatewayState = Depends(get_gateway_state),
+        ) -> PredictionsListResponse:
+            """Get all predictions for the agent (prediction mode only)."""
+            if not state.adapter.is_registered(agent_id):
+                raise HTTPException(status_code=403, detail="Agent not registered")
+            preds = await state.adapter.get_predictions(agent_id)
+            return PredictionsListResponse(predictions=preds)
+
+        @app.get("/event/info", response_model=EventInfoResponse)
+        async def get_event_info(
+            agent_id: str = Depends(get_agent_id),
+            state: GatewayState = Depends(get_gateway_state),
+        ) -> EventInfoResponse:
+            """Get current event info (prediction mode only)."""
+            if not state.adapter.is_registered(agent_id):
+                raise HTTPException(status_code=403, detail="Agent not registered")
+            info = await state.adapter.get_event_info()
+            if info is None:
+                raise HTTPException(status_code=404, detail="No active event")
+            return info
 
     # =========================================================================
     # Agent List
