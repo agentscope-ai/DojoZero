@@ -373,34 +373,42 @@ class TrialManager:
                         all_agent_ids.add(aid)
 
                 for agent_id in all_agent_ids:
-                    display_name = None
-                    authenticated = False
-                    if gateway_adapter is not None:
-                        agent_state = gateway_adapter._agents.get(agent_id)
-                        if agent_state is not None:
-                            display_name = agent_state.display_name
-                            authenticated = agent_state.authenticated
+                    # Guard each agent like the classic-betting branch below so
+                    # one corrupted prediction record doesn't abort the whole
+                    # results write (and lose every other agent's result).
+                    try:
+                        display_name = None
+                        authenticated = False
+                        if gateway_adapter is not None:
+                            agent_state = gateway_adapter._agents.get(agent_id)
+                            if agent_state is not None:
+                                display_name = agent_state.display_name
+                                authenticated = agent_state.authenticated
 
-                    pstats = pred_stats.get(agent_id)
-                    score_str = str(pstats.total_score) if pstats else "0"
-                    accuracy = round(pstats.accuracy, 4) if pstats else 0.0
-                    agent_results.append(
-                        AgentResult(
-                            agent_id=agent_id,
-                            display_name=display_name,
-                            authenticated=authenticated,
-                            # final_balance / net_profit mirror the score so
-                            # back-compat sorts on the betting shape still
-                            # work; new code should read prediction_score.
-                            final_balance=score_str,
-                            net_profit=score_str,
-                            total_bets=pstats.total_predictions if pstats else 0,
-                            win_rate=accuracy,
-                            roi=0.0,
-                            prediction_score=score_str,
-                            accuracy=accuracy,
+                        pstats = pred_stats.get(agent_id)
+                        score_str = str(pstats.total_score) if pstats else "0"
+                        accuracy = round(pstats.accuracy, 4) if pstats else 0.0
+                        agent_results.append(
+                            AgentResult(
+                                agent_id=agent_id,
+                                display_name=display_name,
+                                authenticated=authenticated,
+                                # final_balance / net_profit mirror the score so
+                                # back-compat sorts on the betting shape still
+                                # work; new code should read prediction_score.
+                                final_balance=score_str,
+                                net_profit=score_str,
+                                total_bets=pstats.total_predictions if pstats else 0,
+                                win_rate=accuracy,
+                                roi=0.0,
+                                prediction_score=score_str,
+                                accuracy=accuracy,
+                            )
                         )
-                    )
+                    except Exception as e:
+                        self._logger.warning(
+                            "Failed to get results for agent %s: %s", agent_id, e
+                        )
                 agent_results.sort(key=lambda r: float(r.final_balance), reverse=True)
             elif isinstance(broker, BrokerOperator):
                 # Classic betting: build results from broker accounts
