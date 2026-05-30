@@ -306,6 +306,7 @@ class AgentResult:
     def from_dict(cls, data: dict[str, Any]) -> "AgentResult":
         """Create from API response."""
         pred_score = data.get("predictionScore")
+        accuracy = data.get("accuracy")
         return cls(
             agent_id=data["agentId"],
             final_balance=float(data["finalBalance"]),
@@ -314,7 +315,9 @@ class AgentResult:
             win_rate=data["winRate"],
             roi=data["roi"],
             prediction_score=float(pred_score) if pred_score is not None else None,
-            accuracy=data.get("accuracy"),
+            # accuracy is typed float | None — coerce so we don't silently
+            # pass through ints / strings from a more liberal server payload.
+            accuracy=float(accuracy) if accuracy is not None else None,
         )
 
 
