@@ -390,3 +390,185 @@ class TestDualModeMetadata:
         assert resp.status_code == 200
         data = resp.json()
         assert data["trialId"] == "nba-prediction-game123"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Prediction Routes — HTTP-level coverage
+# ---------------------------------------------------------------------------
+
+
+def _make_prediction(
+    *,
+    prediction_id: str = "pred_test",
+    agent_id: str = "agent1",
+    selection: str = "home_win",
+    window: int = 1,
+):
+    from datetime import datetime, timezone
+
+    from dojozero.betting._models import Prediction, PredictionOutcome
+
+    return Prediction(
+        prediction_id=prediction_id,
+        agent_id=agent_id,
+        event_id="game-123",
+        selection=PredictionOutcome(selection),
+        submit_time=datetime(2026, 5, 30, 20, 0, tzinfo=timezone.utc),
+        window=window,
+        elapsed_ratio=0.25,
+    )
+
+
+class TestPredictionRoutes:
+    """HTTP-level coverage for POST/GET /predictions and GET /event/info."""
+
+    def _register(self, client):
+        resp = client.post("/agents", json={"apiKey": "agent1"})
+        assert resp.status_code == 200
+
+    def test_post_predictions_happy_path(
+        self, prediction_client, mock_prediction_broker
+    ):
+        self._register(prediction_client)
+
+        mock_prediction_broker.submit_prediction = AsyncMock(
+            return_value=_make_prediction()
+        )
+
+        resp = prediction_client.post(
+            "/predictions",
+            json={"selection": "home_win"},
+            headers={"X-Agent-ID": "agent1"},
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["predictionId"] == "pred_test"
+        assert body["selection"] == "home_win"
+        assert body["window"] == 1
+        # The broker received the call exactly once with the agent + event id.
+        mock_prediction_broker.submit_prediction.assert_awaited_once_with(
+            "agent1", "game-123", "home_win"
+        )
+
+    def test_post_predictions_invalid_selection_is_422(
+        self, prediction_client, mock_prediction_broker
+    ):
+        """Pydantic Literal on PredictionRequest.selection rejects junk."""
+        self._register(prediction_client)
+
+        resp = prediction_client.post(
+            "/predictions",
+            json={"selection": "not_a_real_pick"},
+            headers={"X-Agent-ID": "agent1"},
+        )
+
+        assert resp.status_code == 422
+        mock_prediction_broker.submit_prediction.assert_not_called()
+
+    def test_post_predictions_unauthenticated_returns_401(
+        self, prediction_client, mock_prediction_broker
+    ):
+        """No X-Agent-ID header → router rejects the request."""
+        resp = prediction_client.post(
+            "/predictions",
+            json={"selection": "home_win"},
+        )
+
+        assert resp.status_code in (401, 403)
+        mock_prediction_broker.submit_prediction.assert_not_called()
+
+    def test_post_predictions_unregistered_returns_403(
+        self, prediction_client, mock_prediction_broker
+    ):
+        """Header present but the agent never registered with /agents."""
+        resp = prediction_client.post(
+            "/predictions",
+            json={"selection": "home_win"},
+            headers={"X-Agent-ID": "stranger"},
+        )
+
+        assert resp.status_code == 403
+        mock_prediction_broker.submit_prediction.assert_not_called()
+
+    def test_post_predictions_broker_error_returns_400(
+        self, prediction_client, mock_prediction_broker
+    ):
+        """When the broker returns a 'prediction_error:' string, the gateway maps it to 4xx."""
+        self._register(prediction_client)
+
+        mock_prediction_broker.submit_prediction = AsyncMock(
+            return_value="prediction_error: Event closed for predictions"
+        )
+
+        resp = prediction_client.post(
+            "/predictions",
+            json={"selection": "home_win"},
+            headers={"X-Agent-ID": "agent1"},
+        )
+
+        assert resp.status_code == 400
+        body = resp.json()
+        # FastAPI wraps HTTPException(detail=...) as {"detail": <our dict>}.
+        assert body["detail"]["error"]["code"] == "PREDICTION_CLOSED"
+
+    def test_get_predictions_lists_for_agent(
+        self, prediction_client, mock_prediction_broker
+    ):
+        self._register(prediction_client)
+
+        mock_prediction_broker.get_my_predictions = AsyncMock(
+            return_value=[
+                _make_prediction(prediction_id="p0", window=0),
+                _make_prediction(prediction_id="p1", window=1, selection="away_win"),
+            ]
+        )
+
+        resp = prediction_client.get("/predictions", headers={"X-Agent-ID": "agent1"})
+
+        assert resp.status_code == 200
+        ids = [p["predictionId"] for p in resp.json()["predictions"]]
+        assert ids == ["p0", "p1"]
+
+    def test_get_event_info_returns_snapshot(
+        self, prediction_client, mock_prediction_broker
+    ):
+        """The default fixture already returns an event-info dict."""
+        self._register(prediction_client)
+
+        resp = prediction_client.get("/event/info", headers={"X-Agent-ID": "agent1"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["eventId"] == "game-123"
+        assert body["currentWindow"] == 1
+
+    def test_get_event_info_returns_404_when_no_event(
+        self, prediction_client, mock_prediction_broker
+    ):
+        """When the broker has no event yet, the gateway returns 404."""
+        self._register(prediction_client)
+
+        mock_prediction_broker.get_event_info = AsyncMock(return_value=None)
+
+        resp = prediction_client.get("/event/info", headers={"X-Agent-ID": "agent1"})
+
+        assert resp.status_code == 404
+
+    def test_get_rules_returns_contest_descriptor(self, prediction_client):
+        resp = prediction_client.get("/rules")
+        assert resp.status_code == 200
+        data = resp.json()
+        # /rules returns the broker's get_rules() dict verbatim — keys are
+        # snake_case (no Pydantic alias mapping in this path).
+        assert data["kind"] == "window_pool_prediction"
+        assert data["window_pools"] == [5000, 4000, 3000, 2000, 500]
+        assert set(data["selections"]) == {"home_win", "away_win", "even"}
+
+    def test_health_reports_kind_and_mode(self, prediction_client):
+        resp = prediction_client.get("/health")
+        assert resp.status_code == 200
+        body = resp.json()
+        # Both fields are present (kind canonical, mode legacy alias).
+        assert body["kind"] == "window_pool_prediction"
+        assert body["mode"] == "prediction"
