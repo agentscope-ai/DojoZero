@@ -14,6 +14,7 @@ from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     computed_field,
     field_serializer,
@@ -642,7 +643,14 @@ class Prediction(BaseModel):
     Each prediction belongs to one of the five fixed contest windows:
         0 = Pre-game, 1 = Q1, 2 = Q2, 3 = Q3, 4 = Q4.
     Each agent can submit at most one prediction per window per event.
+
+    Frozen so the only way to update ``is_correct`` / ``score`` post-creation
+    is via :meth:`model_copy`, which is what :func:`settle_window_predictions`
+    already does — guarantees no caller can silently mutate a stored
+    prediction in place.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     prediction_id: str
     agent_id: str

@@ -463,9 +463,13 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             self._event.status.value,
             status.value,
         )
-        self._event.status = status
+        # Set betting_closed_at BEFORE flipping status so any reader holding
+        # a current_event reference can't observe CLOSED with the timestamp
+        # still None. (We're under _event_lock, but Pydantic models leak the
+        # live instance through current_event, so the field order matters.)
         if status == EventStatus.CLOSED:
             self._event.betting_closed_at = datetime.now(timezone.utc)
+        self._event.status = status
 
     async def _settle_event(self, event_id: str, winner: str) -> None:
         if self._event is None:
@@ -852,14 +856,18 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 continue
             correct = sum(1 for p in agent_preds if p.is_correct)
             accuracy = correct / total
-            total_score = sum(
-                float(p.score) if p.score is not None else 0.0 for p in agent_preds
+            # Accumulate as Decimal end-to-end. Routing through float (the
+            # previous shape) loses precision on settled scores like
+            # Decimal("1666.66") that are already exact at two decimals.
+            total_score: Decimal = sum(
+                (p.score for p in agent_preds if p.score is not None),
+                start=Decimal("0"),
             )
             stats[agent_id] = PredictionStatistics(
                 total_predictions=total,
                 correct_predictions=correct,
                 accuracy=accuracy,
-                total_score=Decimal(str(total_score)),
+                total_score=total_score,
             )
         return stats
 

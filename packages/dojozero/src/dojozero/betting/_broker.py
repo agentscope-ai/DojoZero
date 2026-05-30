@@ -1111,6 +1111,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             status.value,
         )
 
+        # Set betting_closed_at before flipping status on CLOSED so any
+        # caller reading current_event can't observe CLOSED with the
+        # timestamp still None.
+        if status == EventStatus.CLOSED:
+            betting_event.betting_closed_at = datetime.now(timezone.utc)
+
         betting_event.status = status
 
         if status == EventStatus.LIVE:
@@ -1120,7 +1126,6 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         elif status == EventStatus.CLOSED:
             # Game ended - reject all bets and cancel all pending orders
-            betting_event.betting_closed_at = datetime.now()
             await self._cancel_all_pending_orders(event_id)
 
     async def _settle_event(
