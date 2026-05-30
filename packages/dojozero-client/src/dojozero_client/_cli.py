@@ -492,6 +492,29 @@ def cmd_predict(args: argparse.Namespace) -> int:
         return 1
 
 
+def _format_prediction_row(p: dict[str, Any]) -> str:
+    """Render a single prediction-history row.
+
+    Used by both the live-RPC and on-disk fallback paths so the two stay in
+    sync. Scores come back as Decimal-strings from the server and as floats
+    or strings from predictions.jsonl, so we accept either.
+    """
+    pid = p.get("prediction_id", "?")[:8]
+    sel = p.get("selection", "?")
+    window = p.get("window", "?")
+    correct = p.get("is_correct")
+    score = p.get("score")
+    status_str = ""
+    if correct is not None:
+        status_str = f" {'✓' if correct else '✗'}"
+        if score is not None:
+            try:
+                status_str += f" score={float(score):.1f}"
+            except (TypeError, ValueError):
+                status_str += f" score={score}"
+    return f"  [{pid}] W{window} {sel}{status_str}"
+
+
 def cmd_predictions(args: argparse.Namespace) -> int:
     """Show prediction history."""
     trial_id = getattr(args, "trial_id", None)
@@ -508,17 +531,7 @@ def cmd_predictions(args: argparse.Namespace) -> int:
 
             print(f"Predictions ({len(preds)}):")
             for p in preds:
-                pid = p.get("prediction_id", "?")[:8]
-                sel = p.get("selection", "?")
-                window = p.get("window", "?")
-                correct = p.get("is_correct")
-                score = p.get("score")
-                status_str = ""
-                if correct is not None:
-                    status_str = f" {'✓' if correct else '✗'}"
-                    if score is not None:
-                        status_str += f" score={score:.1f}"
-                print(f"  [{pid}] W{window} {sel}{status_str}")
+                print(_format_prediction_row(p))
             return 0
         except RPCError as e:
             print(f"Error: {e.message}", file=sys.stderr)
@@ -538,19 +551,9 @@ def cmd_predictions(args: argparse.Namespace) -> int:
             continue
         try:
             p = json.loads(line)
-            pid = p.get("prediction_id", "?")[:8]
-            sel = p.get("selection", "?")
-            window = p.get("window", "?")
-            correct = p.get("is_correct")
-            score = p.get("score")
-            status_str = ""
-            if correct is not None:
-                status_str = f" {'✓' if correct else '✗'}"
-                if score is not None:
-                    status_str += f" score={score:.1f}"
-            print(f"  [{pid}] W{window} {sel}{status_str}")
         except json.JSONDecodeError:
             continue
+        print(_format_prediction_row(p))
     return 0
 
 

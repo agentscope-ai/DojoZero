@@ -134,7 +134,7 @@ class Odds:
         )
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class PredictionResult:
     """Result of a prediction submission."""
 
@@ -171,7 +171,7 @@ class PredictionResult:
         )
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class EventInfo:
     """Current event info (prediction mode)."""
 
@@ -205,7 +205,7 @@ class EventInfo:
         )
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class ContestRules:
     """Contest rules for the current trial."""
 

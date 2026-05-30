@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any, cast
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from dojozero.betting._prediction_broker import PredictionBroker
 from dojozero.gateway._adapter import ExternalAgentAdapter
 from dojozero.gateway._auth import AgentAuthenticator, NoOpAuthenticator
 from dojozero.gateway._models import (
@@ -505,6 +504,9 @@ def create_gateway_app(
     # additive instead of compounding `is_prediction_mode` branches.
     # =========================================================================
 
+    # Resolve once at app-build time. The broker is fixed for the gateway's
+    # lifetime — we never hot-swap contest types on a live app — so the
+    # static dispatch is intentional.
     contest_kind = broker.get_contest_kind()
 
     if contest_kind == "classic_betting":
@@ -687,7 +689,10 @@ def create_gateway_app(
         leaderboard: list[dict[str, Any]] = []
 
         if state.broker.get_contest_kind() == "window_pool_prediction":
-            pred_broker = cast(PredictionBroker, state.broker)
+            # Use the adapter's isinstance-guarded narrowing property so a
+            # misconfigured trial raises a clear RuntimeError instead of a
+            # cryptic AttributeError that a bare cast() would let through.
+            pred_broker = state.adapter._pred_broker
             pred_stats = pred_broker.get_prediction_statistics()
 
             all_agent_ids = set(pred_stats.keys())

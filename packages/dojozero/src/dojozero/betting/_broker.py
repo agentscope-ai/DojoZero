@@ -1454,16 +1454,20 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 # Mirror under the broker. prefix so reconstructing
                 # BrokerFinalStats via _extract_tags picks up contest_kind.
                 tags["broker.contest_kind"] = "classic_betting"
-                # Emit under new name + legacy name for backward compat
-                for op_name in (
-                    "contest.final_stats",
-                    f"broker.{change_type}",
+                # Emit under the new name (contest.final_stats) plus the
+                # legacy broker.final_stats name for back-compat. Tag the
+                # legacy alias so SLS queries that aggregate on operation
+                # name can filter it out and avoid double-counting.
+                for op_name, is_legacy in (
+                    ("contest.final_stats", False),
+                    (f"broker.{change_type}", True),
                 ):
+                    span_tags = {**tags, "broker.is_legacy_alias": is_legacy}
                     span = create_span_from_event(
                         trial_id=self.trial_id,
                         actor_id=self.actor_id,
                         operation_name=op_name,
-                        extra_tags=tags,
+                        extra_tags=span_tags,
                     )
                     emit_span(span)
             else:

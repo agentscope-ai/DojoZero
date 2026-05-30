@@ -438,8 +438,9 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         # result is being silently discarded — monitoring should see it.
         if winner not in ("home", "away", "even"):
             logger.error(
-                "PredictionBroker event %s has unrecognised winner '%s'; "
+                "PredictionBroker trial=%s event=%s unrecognised winner '%s'; "
                 "defaulting to 'even' to avoid stalling settlement",
+                self.trial_id,
                 event_id,
                 winner,
             )
@@ -893,13 +894,20 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 ).decode(),
             }
 
-            # Emit under new name; keep legacy name for backward compat
-            for op_name in ("contest.final_stats", "broker.final_stats"):
+            # Emit under the new name (contest.final_stats) plus the legacy
+            # broker.final_stats name for back-compat. Tag the legacy alias
+            # so SLS queries that aggregate on operation name can filter it
+            # out and avoid double-counting.
+            for op_name, is_legacy in (
+                ("contest.final_stats", False),
+                ("broker.final_stats", True),
+            ):
+                span_tags = {**tags, "broker.is_legacy_alias": is_legacy}
                 span = create_span_from_event(
                     trial_id=self.trial_id,
                     actor_id=self.actor_id,
                     operation_name=op_name,
-                    extra_tags=tags,
+                    extra_tags=span_tags,
                 )
                 emit_span(span)
 
