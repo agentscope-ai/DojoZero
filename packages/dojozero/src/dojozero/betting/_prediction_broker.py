@@ -652,7 +652,10 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 )
                 self._submitted_windows[agent_id][event_id].discard(resolved_window)
 
-        prediction_id = f"pred_{uuid.uuid4().hex[:12]}"
+        # Full UUID4 (128 bits) rather than the first 12 hex chars (48 bits).
+        # The dict is keyed by id; a collision would silently overwrite a
+        # settled prediction. Truncation bought nothing.
+        prediction_id = f"pred_{uuid.uuid4().hex}"
         prediction = Prediction(
             prediction_id=prediction_id,
             agent_id=agent_id,

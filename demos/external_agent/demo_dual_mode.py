@@ -28,6 +28,8 @@ from typing import Any
 # dojozero_client (imported later).
 os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
 
+import httpx  # noqa: E402  (must follow NO_PROXY assignment)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -229,8 +231,6 @@ async def main(dashboard_url: str, api_key: str):
     print()
 
     # Step 2: Classify trials by mode (via /health, no registration needed)
-    import httpx
-
     betting_gw = None
     prediction_gw = None
 

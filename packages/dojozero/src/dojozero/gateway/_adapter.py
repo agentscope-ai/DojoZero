@@ -129,14 +129,6 @@ class ExternalAgentAdapter:
         return self._broker.get_contest_kind()
 
     @property
-    def is_prediction_mode(self) -> bool:
-        """True when the broker is a PredictionBroker.
-
-        .. deprecated:: Use ``contest_kind`` instead for new code.
-        """
-        return self.contest_kind == "window_pool_prediction"
-
-    @property
     def _betting_broker(self) -> "BrokerOperator":
         """Return broker narrowed to BrokerOperator. Only call for classic betting.
 
@@ -898,31 +890,42 @@ class ExternalAgentAdapter:
             all_agent_ids.update(broker.agents)
             all_agent_ids.update(self._agents.keys())
             for agent_id in all_agent_ids:
-                agent_state = self._agents.get(agent_id)
-                display_name = agent_state.display_name if agent_state else None
-                authenticated = (
-                    agent_state.authenticated if agent_state is not None else False
-                )
-                pstats = pred_stats.get(agent_id)
-                score_str = str(pstats.total_score) if pstats else "0"
-                accuracy = round(pstats.accuracy, 4) if pstats else 0.0
-                results.append(
-                    AgentResult(
-                        agent_id=agent_id,
-                        display_name=display_name,
-                        authenticated=authenticated,
-                        # Mirror score onto final_balance / net_profit for
-                        # back-compat with the betting-shape leaderboard sort;
-                        # the typed fields below are the authoritative source.
-                        final_balance=score_str,
-                        net_profit=score_str,
-                        total_bets=pstats.total_predictions if pstats else 0,
-                        win_rate=accuracy,
-                        roi=0.0,
-                        prediction_score=score_str,
-                        accuracy=accuracy,
+                # Per-agent try/except so one corrupt record doesn't abort
+                # the whole results write — matches the classic-betting
+                # branch below and _save_trial_results in the trial manager.
+                try:
+                    agent_state = self._agents.get(agent_id)
+                    display_name = agent_state.display_name if agent_state else None
+                    authenticated = (
+                        agent_state.authenticated if agent_state is not None else False
                     )
-                )
+                    pstats = pred_stats.get(agent_id)
+                    score_str = str(pstats.total_score) if pstats else "0"
+                    accuracy = round(pstats.accuracy, 4) if pstats else 0.0
+                    results.append(
+                        AgentResult(
+                            agent_id=agent_id,
+                            display_name=display_name,
+                            authenticated=authenticated,
+                            # Mirror score onto final_balance / net_profit
+                            # for back-compat with the betting-shape
+                            # leaderboard sort; the typed fields below are
+                            # authoritative.
+                            final_balance=score_str,
+                            net_profit=score_str,
+                            total_bets=pstats.total_predictions if pstats else 0,
+                            win_rate=accuracy,
+                            roi=0.0,
+                            prediction_score=score_str,
+                            accuracy=accuracy,
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to build prediction result for agent %s: %s",
+                        agent_id,
+                        e,
+                    )
         else:
             broker = self._betting_broker
             for agent_id in broker._accounts:

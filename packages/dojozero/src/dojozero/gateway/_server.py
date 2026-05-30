@@ -601,13 +601,15 @@ def create_gateway_app(
                 )
             except ValueError as e:
                 error_str = str(e)
-                if "not registered" in error_str.lower():
+                lower = error_str.lower()
+                if "not registered" in lower:
                     code = ErrorCodes.NOT_REGISTERED
                     status = 403
                 elif (
-                    "closed" in error_str.lower()
-                    or "not accepting" in error_str.lower()
+                    "closed" in lower or "not accepting" in lower or "settled" in lower
                 ):
+                    # "settled" covers the broker's "Event already settled"
+                    # path, which is morally CLOSED for clients.
                     code = ErrorCodes.PREDICTION_CLOSED
                     status = 400
                 else:
@@ -663,7 +665,7 @@ def create_gateway_app(
                 if agent_state.last_activity_at
                 else None,
             }
-            if not state.adapter.is_prediction_mode:
+            if state.adapter.contest_kind == "classic_betting":
                 accounts = getattr(state.broker, "_accounts", {})
                 if agent_id in accounts:
                     info["balance"] = str(accounts[agent_id].balance)
@@ -741,7 +743,7 @@ def create_gateway_app(
         return {
             "trial_id": state.trial_id,
             "mode": "prediction"
-            if state.adapter.is_prediction_mode
+            if state.adapter.contest_kind == "window_pool_prediction"
             else "classic_betting",
             "leaderboard": leaderboard,
             "total_agents": len(leaderboard),
