@@ -382,16 +382,23 @@ class TrialManager:
                             authenticated = agent_state.authenticated
 
                     pstats = pred_stats.get(agent_id)
+                    score_str = str(pstats.total_score) if pstats else "0"
+                    accuracy = round(pstats.accuracy, 4) if pstats else 0.0
                     agent_results.append(
                         AgentResult(
                             agent_id=agent_id,
                             display_name=display_name,
                             authenticated=authenticated,
-                            final_balance=str(pstats.total_score) if pstats else "0",
-                            net_profit=str(pstats.total_score) if pstats else "0",
+                            # final_balance / net_profit mirror the score so
+                            # back-compat sorts on the betting shape still
+                            # work; new code should read prediction_score.
+                            final_balance=score_str,
+                            net_profit=score_str,
                             total_bets=pstats.total_predictions if pstats else 0,
-                            win_rate=round(pstats.accuracy, 4) if pstats else 0.0,
+                            win_rate=accuracy,
                             roi=0.0,
+                            prediction_score=score_str,
+                            accuracy=accuracy,
                         )
                     )
                 agent_results.sort(key=lambda r: float(r.final_balance), reverse=True)

@@ -284,7 +284,14 @@ class EventEnvelope:
 
 @dataclass
 class AgentResult:
-    """Final results for a single agent."""
+    """Final results for a single agent.
+
+    Classic betting trials populate ``final_balance`` / ``net_profit`` /
+    ``win_rate`` / ``roi`` with their literal meanings. Prediction trials
+    also populate ``prediction_score`` and ``accuracy``; ``final_balance``
+    mirrors the score in that mode so leaderboards that sort on it keep
+    working, but new client code should consult ``prediction_score``.
+    """
 
     agent_id: str
     final_balance: float
@@ -292,10 +299,13 @@ class AgentResult:
     total_bets: int
     win_rate: float
     roi: float
+    prediction_score: float | None = None
+    accuracy: float | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentResult":
         """Create from API response."""
+        pred_score = data.get("predictionScore")
         return cls(
             agent_id=data["agentId"],
             final_balance=float(data["finalBalance"]),
@@ -303,6 +313,8 @@ class AgentResult:
             total_bets=data["totalBets"],
             win_rate=data["winRate"],
             roi=data["roi"],
+            prediction_score=float(pred_score) if pred_score is not None else None,
+            accuracy=data.get("accuracy"),
         )
 
 

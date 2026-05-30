@@ -15,15 +15,18 @@ pair for the same game, then connects to both simultaneously. It places bets
 on the betting trial and submits predictions on the prediction trial.
 """
 
-import os
-
-os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
-
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from typing import Any
+
+# NO_PROXY must be set before any HTTP client builds its proxy config —
+# import order via ruff/isort puts this after the stdlib imports above,
+# and runtime ordering is still correct because the http clients live in
+# dojozero_client (imported later).
+os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
 
 logging.basicConfig(
     level=logging.INFO,

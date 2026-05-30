@@ -408,7 +408,18 @@ class HeartbeatMessage(BaseModel):
 
 
 class AgentResult(BaseModel):
-    """Final results for a single agent."""
+    """Final results for a single agent.
+
+    Fields are populated based on contest type:
+
+    - Classic betting: ``final_balance``, ``net_profit``, ``total_bets``,
+      ``win_rate``, ``roi`` carry their literal meanings.
+    - Prediction contest: ``prediction_score`` and ``accuracy`` carry the
+      score and per-prediction accuracy. ``final_balance`` / ``net_profit``
+      are kept as a leaderboard-sort key (both equal to the score string)
+      for back-compat with consumers that only know the betting shape;
+      new code should read ``prediction_score`` instead.
+    """
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
@@ -422,6 +433,11 @@ class AgentResult(BaseModel):
     total_bets: int = Field(serialization_alias="totalBets")
     win_rate: float = Field(serialization_alias="winRate")
     roi: float
+    # Prediction-mode fields (None in classic betting).
+    prediction_score: str | None = Field(
+        default=None, serialization_alias="predictionScore"
+    )
+    accuracy: float | None = Field(default=None)
 
 
 class TrialEndedMessage(BaseModel):

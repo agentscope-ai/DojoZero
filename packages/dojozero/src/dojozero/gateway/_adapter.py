@@ -904,16 +904,23 @@ class ExternalAgentAdapter:
                     agent_state.authenticated if agent_state is not None else False
                 )
                 pstats = pred_stats.get(agent_id)
+                score_str = str(pstats.total_score) if pstats else "0"
+                accuracy = round(pstats.accuracy, 4) if pstats else 0.0
                 results.append(
                     AgentResult(
                         agent_id=agent_id,
                         display_name=display_name,
                         authenticated=authenticated,
-                        final_balance=str(pstats.total_score) if pstats else "0",
-                        net_profit=str(pstats.total_score) if pstats else "0",
+                        # Mirror score onto final_balance / net_profit for
+                        # back-compat with the betting-shape leaderboard sort;
+                        # the typed fields below are the authoritative source.
+                        final_balance=score_str,
+                        net_profit=score_str,
                         total_bets=pstats.total_predictions if pstats else 0,
-                        win_rate=round(pstats.accuracy, 4) if pstats else 0.0,
+                        win_rate=accuracy,
                         roi=0.0,
+                        prediction_score=score_str,
+                        accuracy=accuracy,
                     )
                 )
         else:

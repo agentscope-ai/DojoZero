@@ -434,8 +434,10 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         # outer handler swallows the exception, leaving the event stuck at
         # CLOSED with no settlement and no span emitted. Default to "even" so
         # the contest still closes out cleanly.
+        # Logged at ERROR (not WARNING) because this means a real home/away
+        # result is being silently discarded — monitoring should see it.
         if winner not in ("home", "away", "even"):
-            logger.warning(
+            logger.error(
                 "PredictionBroker event %s has unrecognised winner '%s'; "
                 "defaulting to 'even' to avoid stalling settlement",
                 event_id,
@@ -684,31 +686,38 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
 
         Includes status, current window, elapsed ratio, latest period and
         scoreboard (when available) so agents can decide when to submit.
-        """
-        if self._event is None:
-            return None
 
-        info: Dict[str, Any] = {
-            "event_id": self._event.event_id,
-            "home_team": self._event.home_team,
-            "away_team": self._event.away_team,
-            "game_time": self._event.game_time.isoformat()
-            if self._event.game_time
-            else None,
-            "status": self._event.status.value,
-            "current_window": self._resolve_window(None),
-            "elapsed_ratio": round(self._compute_elapsed_ratio(), 4),
-        }
-        if self._recent_game_updates:
-            update = self._recent_game_updates[-1]
-            info["period"] = int(getattr(update, "period", 0) or 0)
-            info["game_clock"] = getattr(update, "game_clock", None)
-            home_stats = getattr(update, "home_team_stats", None)
-            away_stats = getattr(update, "away_team_stats", None)
-            if home_stats is not None:
-                info["home_score"] = getattr(home_stats, "points", None)
-            if away_stats is not None:
-                info["away_score"] = getattr(away_stats, "points", None)
+        Holds ``_event_lock`` so the snapshot can't interleave with an
+        in-flight ``handle_stream_event`` mutating ``_event`` or
+        ``_recent_game_updates`` (no data corruption today thanks to the
+        GIL, but the returned dict can mix fields from two updates without
+        the lock).
+        """
+        async with self._event_lock:
+            if self._event is None:
+                return None
+
+            info: Dict[str, Any] = {
+                "event_id": self._event.event_id,
+                "home_team": self._event.home_team,
+                "away_team": self._event.away_team,
+                "game_time": self._event.game_time.isoformat()
+                if self._event.game_time
+                else None,
+                "status": self._event.status.value,
+                "current_window": self._resolve_window(None),
+                "elapsed_ratio": round(self._compute_elapsed_ratio(), 4),
+            }
+            if self._recent_game_updates:
+                update = self._recent_game_updates[-1]
+                info["period"] = int(getattr(update, "period", 0) or 0)
+                info["game_clock"] = getattr(update, "game_clock", None)
+                home_stats = getattr(update, "home_team_stats", None)
+                away_stats = getattr(update, "away_team_stats", None)
+                if home_stats is not None:
+                    info["home_score"] = getattr(home_stats, "points", None)
+                if away_stats is not None:
+                    info["away_score"] = getattr(away_stats, "points", None)
         return info
 
     def get_contest_kind(self) -> str:
@@ -904,7 +913,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
 
     def agent_tools(
         self, agent_id: str, operator: "PredictionBroker | None" = None
-    ) -> list:
+    ) -> list[Any]:
         """Return tool functions bound to ``agent_id`` for toolkit registration."""
         from dojozero.agents._toolkit import tool  # type: ignore[import-untyped]
 

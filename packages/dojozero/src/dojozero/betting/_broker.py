@@ -2185,7 +2185,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
     # =========================================================================
     def agent_tools(
         self, agent_id: str, operator: "BrokerOperator | None" = None
-    ) -> list:
+    ) -> list[Any]:
         """Return tool functions bound to agent_id for toolkit registration.
 
         Args:
