@@ -4,6 +4,7 @@ Extracted from ``_broker.py`` so that consumers can import lightweight data
 contracts without pulling in the full broker operator implementation.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,7 +12,17 @@ from decimal import Decimal
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, computed_field, field_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_serializer,
+    model_validator,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -68,6 +79,14 @@ class BetType(Enum):
     TOTAL = "TOTAL"  # Over/under total points
 
 
+class PredictionOutcome(Enum):
+    """Discrete prediction outcome for the prediction contest."""
+
+    HOME_WIN = "home_win"
+    AWAY_WIN = "away_win"
+    EVEN = "even"
+
+
 # =============================================================================
 # Account
 # =============================================================================
@@ -105,14 +124,33 @@ class Account(BaseModel):
 # =============================================================================
 
 
-class BettingEvent(BaseModel):
-    """Betting event (e.g., a sports game)"""
+class ContestEvent(BaseModel):
+    """Base event shared by all contest types (betting, prediction, etc.)."""
 
     event_id: str
     home_team: str
     away_team: str
     game_time: datetime
     status: EventStatus
+    betting_closed_at: Optional[datetime] = None
+
+    @computed_field
+    @property
+    def is_accepting(self) -> bool:
+        """True if the contest is accepting submissions.
+
+        This is the single authoritative accessor for "can the event take
+        new agent inputs". Both betting and prediction contests use the same
+        rule: accepting while ``status`` is ``SCHEDULED`` or ``LIVE``.
+        ``BettingEvent.can_bet`` exists for backwards compatibility and
+        delegates here.
+        """
+        return self.status in {EventStatus.SCHEDULED, EventStatus.LIVE}
+
+
+class BettingEvent(ContestEvent):
+    """Betting event with odds and probability fields."""
+
     home_probability: Optional[Decimal] = Field(
         default=None,
         ge=0,
@@ -137,12 +175,17 @@ class BettingEvent(BaseModel):
     )
     last_odds_update: Optional[datetime] = None
     current_odds: Optional[str] = None
-    betting_closed_at: Optional[datetime] = None
 
     @computed_field
+    @property
     def can_bet(self) -> bool:
-        """True if betting is allowed (status is SCHEDULED or LIVE)."""
-        return self.status in {EventStatus.SCHEDULED, EventStatus.LIVE}
+        """True if betting is allowed.
+
+        Alias for :attr:`ContestEvent.is_accepting` — kept so existing API
+        consumers that read ``can_bet`` keep working, but it delegates so the
+        two fields can never diverge.
+        """
+        return bool(self.is_accepting)
 
 
 # =============================================================================
@@ -339,8 +382,26 @@ class StatisticsList(BaseModel):
 
 
 class BrokerFinalStats(BaseModel):
-    """Broker state update payload for tracing."""
+    """Broker state update payload for tracing.
 
+    Carries fields for both contest types because span tags are reconstructed
+    via a single ``model_validate`` dispatch and we don't want to break
+    historical SLS data — older spans were emitted before ``broker.contest_kind``
+    flowed under the ``broker.`` prefix, so they default to
+    ``contest_kind="classic_betting"`` on reconstruction even when the payload
+    is actually prediction-shaped.
+
+    The base class is therefore lenient: it *infers* the right
+    ``contest_kind`` from which fields are populated and only logs a warning
+    on a true cross-mode mix. New code should construct the typed subclasses
+    :class:`BettingFinalStats` / :class:`PredictionFinalStats` instead — those
+    pin ``contest_kind`` as a ``Literal`` and hard-raise on mixed payloads.
+    """
+
+    contest_kind: str = Field(
+        default="classic_betting",
+        description="Contest type: 'classic_betting' or 'window_pool_prediction'",
+    )
     accounts_count: int = 0
     bets_count: int = 0
     accounts: Dict[str, Account] = Field(default_factory=dict)
@@ -353,6 +414,86 @@ class BrokerFinalStats(BaseModel):
     statistics: Dict[str, Statistics] = Field(
         default_factory=dict, description="Statistics for each agent"
     )
+
+    # Prediction contest data (empty when using classic bet mode; populated when
+    # spans are emitted by PredictionBroker instead of BrokerOperator)
+    predictions: Dict[str, "Prediction"] = Field(
+        default_factory=dict, description="All predictions keyed by prediction_id"
+    )
+    prediction_statistics: Dict[str, "PredictionStatistics"] = Field(
+        default_factory=dict,
+        description="Per-agent prediction statistics (agent_id -> PredictionStatistics)",
+    )
+    window_pools: Optional[List[int]] = Field(
+        default=None,
+        description="Pool sizes per window (window 0..4) when prediction mode is active",
+    )
+
+    @model_validator(mode="after")
+    def _reconcile_contest_kind(self) -> "BrokerFinalStats":
+        """Infer ``contest_kind`` from which fields are populated.
+
+        Older SLS spans were emitted before ``broker.contest_kind`` was
+        propagated under the ``broker.`` prefix, so the reconstructed default
+        of ``"classic_betting"`` can disagree with a payload that's really
+        prediction-shaped. Rather than refuse to deserialize that history we
+        correct the tag and only warn on a genuine cross-mode mix.
+        """
+        has_betting = bool(
+            self.accounts or self.bets or self.estimated_net_values or self.statistics
+        )
+        has_prediction = bool(
+            self.predictions or self.prediction_statistics or self.window_pools
+        )
+
+        if has_betting and has_prediction:
+            logger.warning(
+                "BrokerFinalStats payload mixes betting and prediction fields "
+                "(contest_kind=%s); treating as %s based on dominant fields",
+                self.contest_kind,
+                self.contest_kind,
+            )
+        elif (
+            has_prediction
+            and not has_betting
+            and self.contest_kind != "window_pool_prediction"
+        ):
+            self.contest_kind = "window_pool_prediction"
+        elif (
+            has_betting
+            and not has_prediction
+            and self.contest_kind != "classic_betting"
+        ):
+            self.contest_kind = "classic_betting"
+        return self
+
+
+class BettingFinalStats(BrokerFinalStats):
+    """Typed view for ``classic_betting`` final stats.
+
+    Pins ``contest_kind`` so producers can't accidentally mis-tag the payload,
+    and hard-raises if prediction fields leak in.
+    """
+
+    contest_kind: Literal["classic_betting"] = "classic_betting"
+
+    @model_validator(mode="after")
+    def _forbid_prediction_fields(self) -> "BettingFinalStats":
+        if self.predictions or self.prediction_statistics or self.window_pools:
+            raise ValueError("BettingFinalStats must not populate prediction fields")
+        return self
+
+
+class PredictionFinalStats(BrokerFinalStats):
+    """Typed view for ``window_pool_prediction`` final stats."""
+
+    contest_kind: Literal["window_pool_prediction"] = "window_pool_prediction"
+
+    @model_validator(mode="after")
+    def _forbid_betting_fields(self) -> "PredictionFinalStats":
+        if self.accounts or self.bets or self.estimated_net_values or self.statistics:
+            raise ValueError("PredictionFinalStats must not populate betting fields")
+        return self
 
 
 # =============================================================================
@@ -491,6 +632,54 @@ class AgentList(BaseModel):
     )
 
 
+# =============================================================================
+# Prediction Models (ScoringSys)
+# =============================================================================
+
+
+class Prediction(BaseModel):
+    """A discrete prediction submitted by an agent in the prediction contest.
+
+    Each prediction belongs to one of the five fixed contest windows:
+        0 = Pre-game, 1 = Q1, 2 = Q2, 3 = Q3, 4 = Q4.
+    Each agent can submit at most one prediction per window per event.
+
+    Frozen so the only way to update ``is_correct`` / ``score`` post-creation
+    is via :meth:`model_copy`, which is what :func:`settle_window_predictions`
+    already does — guarantees no caller can silently mutate a stored
+    prediction in place.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    prediction_id: str
+    agent_id: str
+    event_id: str
+    selection: PredictionOutcome
+    submit_time: datetime
+    window: int = Field(
+        default=0,
+        ge=0,
+        le=4,
+        description="Contest window when prediction was submitted (0 = pre-game, 1-4 = Q1-Q4)",
+    )
+    elapsed_ratio: float = Field(
+        default=0.0,
+        description="Fraction of game elapsed at submit time (0.0 ~ 1.0)",
+    )
+    is_correct: Optional[bool] = None
+    score: Optional[Decimal] = None
+
+
+class PredictionStatistics(BaseModel):
+    """Per-agent prediction statistics for prediction contests."""
+
+    total_predictions: int = 0
+    correct_predictions: int = 0
+    accuracy: float = 0.0
+    total_score: Decimal = Decimal("0")
+
+
 __all__ = [
     # Enums
     "BetOutcome",
@@ -498,8 +687,10 @@ __all__ = [
     "BetType",
     "EventStatus",
     "OrderType",
+    "PredictionOutcome",
     "VALID_STATUS_TRANSITIONS",
     # Models
+    "ContestEvent",
     "Account",
     "Bet",
     "BetExecutedPayload",
@@ -511,7 +702,11 @@ __all__ = [
     "BettingEvent",
     "BrokerStateUpdate",
     "BrokerFinalStats",
+    "BettingFinalStats",
+    "PredictionFinalStats",
     "Holding",
+    "Prediction",
+    "PredictionStatistics",
     "Statistics",
     "StatisticsList",
     # Agent Message Models

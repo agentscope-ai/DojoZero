@@ -62,7 +62,7 @@ scenario:
 | `scenario.config.espn_game_id` | Target ESPN game/event identifier. |
 | `scenario.config.hub.persistence_file` | JSONL output path for persisted events. |
 | `scenario.config.data_streams` | Data stream definitions and event subscriptions. |
-| `scenario.config.operators` | Operator instances and tool exposure settings. |
+| `scenario.config.operators` | Operator instances and tool exposure settings. See [Scoring Systems](./scoring_systems.md) for the choice between `BrokerOperator` (classic betting) and `PredictionBroker` (window-pool prediction). |
 | `scenario.config.agents` | Agent definitions, including personas, model settings, and subscriptions. |
 
 

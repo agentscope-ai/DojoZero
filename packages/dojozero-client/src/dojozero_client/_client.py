@@ -134,6 +134,101 @@ class Odds:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class PredictionResult:
+    """Result of a prediction submission."""
+
+    prediction_id: str
+    agent_id: str
+    event_id: str
+    selection: str
+    window: int
+    submit_time: datetime
+    elapsed_ratio: float
+    is_correct: bool | None = None
+    score: float | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PredictionResult":
+        """Create from API response."""
+        submit_time_str = data.get("submitTime")
+        submit_time = (
+            datetime.fromisoformat(submit_time_str.replace("Z", "+00:00"))
+            if submit_time_str
+            else datetime.now(timezone.utc)
+        )
+        score_val = data.get("score")
+        return cls(
+            prediction_id=data["predictionId"],
+            agent_id=data["agentId"],
+            event_id=data["eventId"],
+            selection=data["selection"],
+            window=data["window"],
+            submit_time=submit_time,
+            elapsed_ratio=data.get("elapsedRatio", 0.0),
+            is_correct=data.get("isCorrect"),
+            score=float(score_val) if score_val is not None else None,
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class EventInfo:
+    """Current event info (prediction mode)."""
+
+    event_id: str
+    home_team: str
+    away_team: str
+    status: str
+    current_window: int
+    elapsed_ratio: float
+    game_time: str | None = None
+    period: int | None = None
+    game_clock: str | None = None
+    home_score: int | None = None
+    away_score: int | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "EventInfo":
+        """Create from API response."""
+        return cls(
+            event_id=data["eventId"],
+            home_team=data["homeTeam"],
+            away_team=data["awayTeam"],
+            status=data["status"],
+            current_window=data["currentWindow"],
+            elapsed_ratio=data.get("elapsedRatio", 0.0),
+            game_time=data.get("gameTime"),
+            period=data.get("period"),
+            game_clock=data.get("gameClock"),
+            home_score=data.get("homeScore"),
+            away_score=data.get("awayScore"),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class ContestRules:
+    """Contest rules for the current trial."""
+
+    kind: str
+    description: str = ""
+    num_windows: int = 0
+    windows: list[dict[str, Any]] | None = None
+    selections: list[str] | None = None
+    scoring: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ContestRules":
+        """Create from API response."""
+        return cls(
+            kind=data.get("kind", "unknown"),
+            description=data.get("description", ""),
+            num_windows=data.get("num_windows", 0),
+            windows=data.get("windows"),
+            selections=data.get("selections"),
+            scoring=data.get("scoring", ""),
+        )
+
+
 @dataclass
 class TrialMetadata:
     """Trial information."""
@@ -189,7 +284,14 @@ class EventEnvelope:
 
 @dataclass
 class AgentResult:
-    """Final results for a single agent."""
+    """Final results for a single agent.
+
+    Classic betting trials populate ``final_balance`` / ``net_profit`` /
+    ``win_rate`` / ``roi`` with their literal meanings. Prediction trials
+    also populate ``prediction_score`` and ``accuracy``; ``final_balance``
+    mirrors the score in that mode so leaderboards that sort on it keep
+    working, but new client code should consult ``prediction_score``.
+    """
 
     agent_id: str
     final_balance: float
@@ -197,10 +299,14 @@ class AgentResult:
     total_bets: int
     win_rate: float
     roi: float
+    prediction_score: float | None = None
+    accuracy: float | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentResult":
         """Create from API response."""
+        pred_score = data.get("predictionScore")
+        accuracy = data.get("accuracy")
         return cls(
             agent_id=data["agentId"],
             final_balance=float(data["finalBalance"]),
@@ -208,6 +314,10 @@ class AgentResult:
             total_bets=data["totalBets"],
             win_rate=data["winRate"],
             roi=data["roi"],
+            prediction_score=float(pred_score) if pred_score is not None else None,
+            # accuracy is typed float | None — coerce so we don't silently
+            # pass through ints / strings from a more liberal server payload.
+            accuracy=float(accuracy) if accuracy is not None else None,
         )
 
 
@@ -591,6 +701,53 @@ class TrialConnection:
         response = await self._transport.request("GET", "/trial/results")
         return TrialResults.from_dict(response)
 
+    # =========================================================================
+    # Prediction Mode (PredictionBroker)
+    # =========================================================================
+
+    async def get_rules(self) -> ContestRules:
+        """Get contest rules. Works in both betting and prediction mode."""
+        response = await self._transport.request("GET", "/rules")
+        return ContestRules.from_dict(response)
+
+    async def submit_prediction(self, selection: str) -> PredictionResult:
+        """Submit a prediction (prediction mode only).
+
+        Args:
+            selection: Prediction selection ('home_win', 'away_win', or 'even')
+
+        Returns:
+            PredictionResult with submission details
+
+        Raises:
+            PredictionClosedError: If predictions are closed
+            PredictionRejectedError: For other rejection reasons
+        """
+        response = await self._transport.request(
+            "POST",
+            "/predictions",
+            json={"selection": selection},
+        )
+        return PredictionResult.from_dict(response)
+
+    async def get_predictions(self) -> list[PredictionResult]:
+        """Get all predictions for this agent (prediction mode only).
+
+        Returns:
+            List of PredictionResult objects
+        """
+        response = await self._transport.request("GET", "/predictions")
+        return [PredictionResult.from_dict(p) for p in response.get("predictions", [])]
+
+    async def get_event_info(self) -> EventInfo:
+        """Get current event info (prediction mode only).
+
+        Returns:
+            EventInfo with current game state
+        """
+        response = await self._transport.request("GET", "/event/info")
+        return EventInfo.from_dict(response)
+
     async def unregister(self) -> dict[str, Any]:
         """Unregister this agent from the trial server.
 
@@ -888,11 +1045,13 @@ __all__ = [
     "AgentResult",
     "Balance",
     "BetResult",
+    "ContestRules",
     "DojoClient",
     "EventEnvelope",
+    "EventInfo",
     "GatewayInfo",
     "Odds",
-    "PollResult",
+    "PredictionResult",
     "TrialConnection",
     "TrialEndedEvent",
     "TrialMetadata",

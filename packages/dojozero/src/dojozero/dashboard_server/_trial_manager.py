@@ -162,7 +162,7 @@ class TrialManager:
         try:
             from dojozero.gateway import create_gateway_app, GatewayState
             from dojozero.gateway._adapter import ExternalAgentAdapter
-            from dojozero.betting import BrokerOperator
+            from dojozero.betting import ContestOperator
 
             # Get trial runtime from orchestrator
             runtime = self._orchestrator._trials.get(trial_id)
@@ -193,17 +193,19 @@ class TrialManager:
             hub_id = next(iter(context.data_hubs.keys()))
             data_hub = context.data_hubs[hub_id]
 
-            # Find BrokerOperator from running actors
-            broker: BrokerOperator | None = None
+            # Find any ContestOperator-implementing actor (BrokerOperator,
+            # PredictionBroker, or any future contest broker). The runtime
+            # narrows mode-specific logic later via isinstance / contest_kind.
+            broker: ContestOperator | None = None
             for actor_runtime in runtime.actors.values():
                 actor = actor_runtime.instance
-                if isinstance(actor, BrokerOperator):
+                if isinstance(actor, ContestOperator):
                     broker = actor
                     break
 
             if broker is None:
                 self._logger.warning(
-                    "Cannot register gateway: trial '%s' has no BrokerOperator",
+                    "Cannot register gateway: trial '%s' has no ContestOperator actor",
                     trial_id,
                 )
                 return False
@@ -244,9 +246,11 @@ class TrialManager:
                 metadata=metadata,
             )
 
-            # Ensure broker has event initialized from metadata if missing
-            # This handles cases where broker was restored from checkpoint without GameInitializeEvent
-            if broker._event is None and metadata:
+            # Ensure broker has event initialized from metadata if missing.
+            # This handles cases where broker was restored from checkpoint
+            # without GameInitializeEvent.  Works for both BrokerOperator
+            # and PredictionBroker.
+            if broker.current_event is None and metadata:
                 event_id = metadata.get("espn_game_id", trial_id)
                 home_team = metadata.get("home_team_name", "")
                 away_team = metadata.get("away_team_name", "")
@@ -319,7 +323,7 @@ class TrialManager:
             True if results were saved successfully, False otherwise
         """
         # Import here to avoid circular imports
-        from dojozero.betting import BrokerOperator
+        from dojozero.betting import BrokerOperator, ContestOperator, PredictionBroker
         from dojozero.gateway._models import AgentResult, TrialResultsResponse
 
         try:
@@ -331,17 +335,19 @@ class TrialManager:
                 )
                 return False
 
-            # Find BrokerOperator from running actors
-            broker: BrokerOperator | None = None
+            # Find any ContestOperator actor; mode-specific result building is
+            # dispatched below via isinstance + get_contest_kind().
+            broker: ContestOperator | None = None
             for actor_runtime in runtime.actors.values():
                 actor = actor_runtime.instance
-                if isinstance(actor, BrokerOperator):
+                if isinstance(actor, ContestOperator):
                     broker = actor
                     break
 
             if broker is None:
                 self._logger.warning(
-                    "Cannot save results: trial '%s' has no BrokerOperator", trial_id
+                    "Cannot save results: trial '%s' has no ContestOperator actor",
+                    trial_id,
                 )
                 return False
 
@@ -352,50 +358,97 @@ class TrialManager:
                 if gateway_state is not None:
                     gateway_adapter = gateway_state.adapter
 
-            # Build results from broker (same logic as gateway adapter)
             agent_results: list[AgentResult] = []
-            for agent_id in broker._accounts:
-                try:
-                    stats = await broker.get_statistics(agent_id)
-                    account = broker._accounts.get(agent_id)
-                    if account is None:
-                        continue
 
-                    # Get display_name from gateway if agent is currently connected
-                    display_name = None
-                    agent_state = None
-                    if gateway_adapter is not None:
-                        agent_state = gateway_adapter._agents.get(agent_id)
-                        if agent_state is not None:
-                            display_name = agent_state.display_name
+            if isinstance(broker, PredictionBroker):
+                # Build results from prediction statistics
+                pred_stats = broker.get_prediction_statistics()
 
-                    # Use agent_state.authenticated if connected, otherwise fall back
-                    # to account.is_external (persisted) - external agents are
-                    # authenticated by definition since API key is required
-                    if agent_state is not None:
-                        authenticated = agent_state.authenticated
-                    else:
-                        authenticated = account.is_external
+                # Iterate union of registered + predicting agents
+                all_agent_ids = set(pred_stats.keys())
+                for aid in broker.agents:
+                    all_agent_ids.add(aid)
+                if gateway_adapter is not None:
+                    for aid in gateway_adapter._agents:
+                        all_agent_ids.add(aid)
 
-                    agent_results.append(
-                        AgentResult(
-                            agent_id=agent_id,
-                            display_name=display_name,
-                            authenticated=authenticated,
-                            final_balance=str(account.balance),
-                            net_profit=str(stats.net_profit),
-                            total_bets=stats.total_bets,
-                            win_rate=round(stats.win_rate, 4),
-                            roi=round(stats.roi, 4),
+                for agent_id in all_agent_ids:
+                    # Guard each agent like the classic-betting branch below so
+                    # one corrupted prediction record doesn't abort the whole
+                    # results write (and lose every other agent's result).
+                    try:
+                        display_name = None
+                        authenticated = False
+                        if gateway_adapter is not None:
+                            agent_state = gateway_adapter._agents.get(agent_id)
+                            if agent_state is not None:
+                                display_name = agent_state.display_name
+                                authenticated = agent_state.authenticated
+
+                        pstats = pred_stats.get(agent_id)
+                        score_str = str(pstats.total_score) if pstats else "0"
+                        accuracy = round(pstats.accuracy, 4) if pstats else 0.0
+                        agent_results.append(
+                            AgentResult(
+                                agent_id=agent_id,
+                                display_name=display_name,
+                                authenticated=authenticated,
+                                # final_balance / net_profit mirror the score so
+                                # back-compat sorts on the betting shape still
+                                # work; new code should read prediction_score.
+                                final_balance=score_str,
+                                net_profit=score_str,
+                                total_bets=pstats.total_predictions if pstats else 0,
+                                win_rate=accuracy,
+                                roi=0.0,
+                                prediction_score=score_str,
+                                accuracy=accuracy,
+                            )
                         )
-                    )
-                except Exception as e:
-                    self._logger.warning(
-                        "Failed to get results for agent %s: %s", agent_id, e
-                    )
+                    except Exception as e:
+                        self._logger.warning(
+                            "Failed to get results for agent %s: %s", agent_id, e
+                        )
+                agent_results.sort(key=lambda r: float(r.final_balance), reverse=True)
+            elif isinstance(broker, BrokerOperator):
+                # Classic betting: build results from broker accounts
+                for agent_id in broker._accounts:
+                    try:
+                        stats = await broker.get_statistics(agent_id)
+                        account = broker._accounts.get(agent_id)
+                        if account is None:
+                            continue
 
-            # Sort by balance descending
-            agent_results.sort(key=lambda r: float(r.final_balance), reverse=True)
+                        display_name = None
+                        agent_state = None
+                        if gateway_adapter is not None:
+                            agent_state = gateway_adapter._agents.get(agent_id)
+                            if agent_state is not None:
+                                display_name = agent_state.display_name
+
+                        if agent_state is not None:
+                            authenticated = agent_state.authenticated
+                        else:
+                            authenticated = account.is_external
+
+                        agent_results.append(
+                            AgentResult(
+                                agent_id=agent_id,
+                                display_name=display_name,
+                                authenticated=authenticated,
+                                final_balance=str(account.balance),
+                                net_profit=str(stats.net_profit),
+                                total_bets=stats.total_bets,
+                                win_rate=round(stats.win_rate, 4),
+                                roi=round(stats.roi, 4),
+                            )
+                        )
+                    except Exception as e:
+                        self._logger.warning(
+                            "Failed to get results for agent %s: %s", agent_id, e
+                        )
+
+                agent_results.sort(key=lambda r: float(r.final_balance), reverse=True)
 
             # Map phase to status string
             status_map = {
@@ -933,7 +986,7 @@ class TrialManager:
             if runtime is None:
                 return
 
-            # Find broker
+            # Find broker (only BrokerOperator has unsettled bets)
             broker: BrokerOperator | None = None
             for actor_runtime in runtime.actors.values():
                 if isinstance(actor_runtime.instance, BrokerOperator):

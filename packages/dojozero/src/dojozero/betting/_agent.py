@@ -611,19 +611,26 @@ class BettingAgent(AgentBase, Agent[BettingAgentConfig]):
         )
 
     async def register_operators(self, operators: Sequence[Operator]) -> None:
-        """Register operators and auto-register broker tools if available."""
+        """Register operators and auto-register broker tools if available.
+
+        The agent's system prompt is *not* modified here. Contest rules and
+        operator-specific information are obtained at runtime via tools (e.g.
+        ``get_rules`` exposed by :class:`PredictionBroker`) so that internal
+        and external (gateway) agents follow the same discovery flow.
+        """
         all_tools = []
+
         for op in operators:
             self._operator_registry[op.actor_id] = op
             logger.info(
                 "agent '%s' registered operator '%s'", self.actor_id, op.actor_id
             )
+
             agent_tools = getattr(op, "agent_tools", None)
             if callable(agent_tools):
                 tools_result = agent_tools(self.actor_id, operator=op)
                 if inspect.iscoroutine(tools_result):
                     tools_result = await tools_result
-                # After awaiting, tools_result should be a list
                 if isinstance(tools_result, list):
                     all_tools.extend(tools_result)
                     logger.info(

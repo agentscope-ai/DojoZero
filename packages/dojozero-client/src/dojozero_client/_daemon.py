@@ -70,14 +70,23 @@ def _default_current_odds() -> dict[str, Any]:
     return {}
 
 
+def _default_predictions() -> list[dict[str, Any]]:
+    return []
+
+
+def _default_event_info() -> dict[str, Any]:
+    return {}
+
+
 @dataclass
 class DaemonState:
     """Serializable daemon state."""
 
     trial_id: str = ""
     agent_id: str = ""
-    session_key: str = ""  # Session key for secure reconnection/unregistration
+    session_key: str = ""
     status: str = "disconnected"
+    contest_kind: str = "classic_betting"
     balance: float = 0.0
     holdings: list[dict[str, Any]] = field(default_factory=_default_holdings)
     last_event_sequence: int = 0
@@ -90,6 +99,12 @@ class DaemonState:
     game_time: str = ""
     game_state: dict[str, Any] = field(default_factory=_default_game_state)
     current_odds: dict[str, Any] = field(default_factory=_default_current_odds)
+    predictions: list[dict[str, Any]] = field(default_factory=_default_predictions)
+    event_info: dict[str, Any] = field(default_factory=_default_event_info)
+
+    @property
+    def is_prediction_mode(self) -> bool:
+        return self.contest_kind == "window_pool_prediction"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -98,6 +113,7 @@ class DaemonState:
             "agent_id": self.agent_id,
             "session_key": self.session_key,
             "status": self.status,
+            "contest_kind": self.contest_kind,
             "balance": self.balance,
             "holdings": self.holdings,
             "last_event_sequence": self.last_event_sequence,
@@ -110,6 +126,8 @@ class DaemonState:
             "game_time": self.game_time,
             "game_state": self.game_state,
             "current_odds": self.current_odds,
+            "predictions": self.predictions,
+            "event_info": self.event_info,
         }
 
     @classmethod
@@ -120,6 +138,7 @@ class DaemonState:
             agent_id=data.get("agent_id", ""),
             session_key=data.get("session_key", ""),
             status=data.get("status", "disconnected"),
+            contest_kind=data.get("contest_kind", "classic_betting"),
             balance=data.get("balance", 0.0),
             holdings=data.get("holdings", []),
             last_event_sequence=data.get("last_event_sequence", 0),
@@ -132,6 +151,8 @@ class DaemonState:
             game_time=data.get("game_time", ""),
             game_state=data.get("game_state", {}),
             current_odds=data.get("current_odds", {}),
+            predictions=data.get("predictions", []),
+            event_info=data.get("event_info", {}),
         )
 
 
@@ -253,8 +274,36 @@ class TrialHandler:
         if resume_sequence > 0:
             trial.set_resume_sequence(resume_sequence)
 
-        # Initialize state (preserve session key from connection)
-        balance = await trial.get_balance()
+        # Detect contest mode via /rules
+        contest_kind = "classic_betting"
+        try:
+            rules = await trial.get_rules()
+            contest_kind = rules.kind
+            logger.info("Trial %s: contest kind = %s", self.trial_id, contest_kind)
+        except Exception as e:
+            logger.warning(
+                "Trial %s: Failed to fetch rules, assuming classic: %s",
+                self.trial_id,
+                e,
+            )
+
+        is_prediction = contest_kind == "window_pool_prediction"
+
+        # Initialize balance (prediction mode has no balance)
+        balance_val = 0.0
+        holdings_list: list[dict[str, Any]] = []
+        if not is_prediction:
+            balance = await trial.get_balance()
+            balance_val = balance.balance
+            holdings_list = [
+                {
+                    "event_id": h.event_id,
+                    "selection": h.selection,
+                    "bet_type": h.bet_type,
+                    "shares": h.shares,
+                }
+                for h in balance.holdings
+            ]
 
         # Fetch trial metadata (home/away teams, tricodes, sport, game time)
         home_team = ""
@@ -286,18 +335,11 @@ class TrialHandler:
         self._state = DaemonState(
             trial_id=self.trial_id,
             agent_id=trial.agent_id,
-            session_key=trial.session_key,  # Store session key for reconnection
+            session_key=trial.session_key,
             status="connected",
-            balance=balance.balance,
-            holdings=[
-                {
-                    "event_id": h.event_id,
-                    "selection": h.selection,
-                    "bet_type": h.bet_type,
-                    "shares": h.shares,
-                }
-                for h in balance.holdings
-            ],
+            contest_kind=contest_kind,
+            balance=balance_val,
+            holdings=holdings_list,
             last_event_sequence=resume_sequence,
             home_team=home_team,
             away_team=away_team,
@@ -475,6 +517,106 @@ class TrialHandler:
             ],
         }
 
+    # =========================================================================
+    # Prediction Mode Operations
+    # =========================================================================
+
+    async def submit_prediction(self, selection: str) -> dict[str, Any]:
+        """Submit a prediction (prediction mode only)."""
+        if not self._trial:
+            raise RPCError("NOT_CONNECTED", f"Not connected to trial {self.trial_id}")
+
+        result = await self._trial.submit_prediction(selection)
+
+        pred_record = {
+            "prediction_id": result.prediction_id,
+            "selection": result.selection,
+            "window": result.window,
+            "submit_time": result.submit_time.isoformat(),
+            "elapsed_ratio": result.elapsed_ratio,
+            "is_correct": result.is_correct,
+            "score": result.score,
+        }
+        self._append_prediction(pred_record)
+        return pred_record
+
+    async def get_predictions(self) -> list[dict[str, Any]]:
+        """Get predictions for this trial."""
+        if not self._trial:
+            raise RPCError("NOT_CONNECTED", f"Not connected to trial {self.trial_id}")
+
+        preds = await self._trial.get_predictions()
+        return [
+            {
+                "prediction_id": p.prediction_id,
+                "selection": p.selection,
+                "window": p.window,
+                "submit_time": p.submit_time.isoformat(),
+                "elapsed_ratio": p.elapsed_ratio,
+                "is_correct": p.is_correct,
+                "score": p.score,
+            }
+            for p in preds
+        ]
+
+    async def get_event_info(self) -> dict[str, Any]:
+        """Get current event info (prediction mode only)."""
+        if not self._trial:
+            raise RPCError("NOT_CONNECTED", f"Not connected to trial {self.trial_id}")
+
+        info = await self._trial.get_event_info()
+        return {
+            "event_id": info.event_id,
+            "home_team": info.home_team,
+            "away_team": info.away_team,
+            "status": info.status,
+            "current_window": info.current_window,
+            "elapsed_ratio": info.elapsed_ratio,
+            "game_time": info.game_time,
+            "period": info.period,
+            "game_clock": info.game_clock,
+            "home_score": info.home_score,
+            "away_score": info.away_score,
+        }
+
+    def _append_prediction(self, pred: dict[str, Any]) -> None:
+        """Append prediction to history, deduplicating by window.
+
+        When the server accepts a replacement submission for the same
+        window, only the latest prediction counts. We rewrite the file
+        keeping only the most recent entry per window so that local
+        display (``_print_prediction_history``) matches the server.
+
+        Writes via a temp file + ``os.replace`` so an OS crash mid-write
+        leaves the existing file intact instead of truncating it.
+        """
+        preds_file = self.state_dir / "predictions.jsonl"
+        window = pred.get("window")
+
+        existing: list[dict[str, Any]] = []
+        if preds_file.exists():
+            with open(preds_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        existing.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+        if window is not None:
+            existing = [e for e in existing if e.get("window") != window]
+        existing.append(pred)
+
+        tmp_path = preds_file.with_suffix(preds_file.suffix + ".tmp")
+        with open(tmp_path, "w") as f:
+            for entry in existing:
+                f.write(json.dumps(entry) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, preds_file)
+
     async def get_results(self) -> dict[str, Any]:
         """Get trial results from server, or fall back to disk."""
         # Try live results from server
@@ -513,24 +655,40 @@ class TrialHandler:
         )
 
     async def get_status(self) -> dict[str, Any]:
-        """Get current trial status with fresh balance from server."""
-        # Refresh balance from server if connected
+        """Get current trial status with fresh data from server."""
         if self._trial:
-            try:
-                balance = await self._trial.get_balance()
-                self._state.balance = balance.balance
-                self._state.holdings = [
-                    {
-                        "event_id": h.event_id,
-                        "selection": h.selection,
-                        "bet_type": h.bet_type,
-                        "shares": h.shares,
+            if self._state.is_prediction_mode:
+                try:
+                    info = await self._trial.get_event_info()
+                    self._state.event_info = {
+                        "event_id": info.event_id,
+                        "status": info.status,
+                        "current_window": info.current_window,
+                        "elapsed_ratio": info.elapsed_ratio,
+                        "period": info.period,
+                        "game_clock": info.game_clock,
+                        "home_score": info.home_score,
+                        "away_score": info.away_score,
                     }
-                    for h in balance.holdings
-                ]
-                self._save_state()
-            except Exception as e:
-                logger.warning("Failed to refresh balance: %s", e)
+                    self._save_state()
+                except Exception as e:
+                    logger.warning("Failed to refresh event info: %s", e)
+            else:
+                try:
+                    balance = await self._trial.get_balance()
+                    self._state.balance = balance.balance
+                    self._state.holdings = [
+                        {
+                            "event_id": h.event_id,
+                            "selection": h.selection,
+                            "bet_type": h.bet_type,
+                            "shares": h.shares,
+                        }
+                        for h in balance.holdings
+                    ]
+                    self._save_state()
+                except Exception as e:
+                    logger.warning("Failed to refresh balance: %s", e)
         return self._state.to_dict()
 
     def get_events(self, count: int = 20) -> list[dict[str, Any]]:
@@ -539,7 +697,7 @@ class TrialHandler:
         if not events_file.exists():
             return []
 
-        lines = events_file.read_text().strip().split("\n")
+        lines = events_file.read_text().splitlines()
         events = []
         for line in lines[-count:]:
             if line:
@@ -761,7 +919,7 @@ class TrialHandler:
         uids: set[str] = set()
         events_file = self.state_dir / "events.jsonl"
         if events_file.exists():
-            for line in events_file.read_text().strip().split("\n"):
+            for line in events_file.read_text().splitlines():
                 if line:
                     try:
                         uid = json.loads(line).get("payload", {}).get("uid", "")
@@ -797,11 +955,18 @@ class UnifiedDaemon:
         await daemon.start()  # Runs until stopped
     """
 
-    def __init__(self) -> None:
-        """Initialize unified daemon."""
+    def __init__(self, profile: str | None = None) -> None:
+        """Initialize unified daemon.
+
+        Args:
+            profile: Credentials profile name. Used to look up the API key
+                via `load_api_key(profile=...)` on every operation that
+                needs it, so changes from `dojozero-agent config --api-key`
+                take effect without restarting the daemon.
+        """
         self._trials: dict[str, TrialHandler] = {}
         self._rpc = RPCServer(SOCKET_PATH)
-        self._api_key: str | None = None
+        self._profile = profile
         self._client = DojoClient()
         self._stop_event: asyncio.Event | None = None
         self._running = False
@@ -810,6 +975,9 @@ class UnifiedDaemon:
         self._rpc.register("join", self._handle_join)
         self._rpc.register("leave", self._handle_leave)
         self._rpc.register("bet", self._handle_bet)
+        self._rpc.register("predict", self._handle_predict)
+        self._rpc.register("predictions", self._handle_predictions)
+        self._rpc.register("event_info", self._handle_event_info)
         self._rpc.register("status", self._handle_status)
         self._rpc.register("list", self._handle_list)
         self._rpc.register("events", self._handle_events)
@@ -817,11 +985,20 @@ class UnifiedDaemon:
         self._rpc.register("results", self._handle_results)
         self._rpc.register("ping", self._handle_ping)
 
+    def _get_api_key(self) -> str | None:
+        """Load the current API key from the credentials file.
+
+        Always reads fresh so updates via `dojozero-agent config --api-key`
+        are picked up on the next operation without restarting the daemon.
+        """
+        return load_api_key(profile=self._profile)
+
     async def start(self) -> None:
         """Start the unified daemon."""
-        # Load API key from credentials file
-        self._api_key = load_api_key()
-        if not self._api_key:
+        # Sanity check: refuse to start if no API key is configured at all.
+        # We deliberately do NOT cache the value here — every call site reads
+        # the credentials file freshly via `_get_api_key()`.
+        if not self._get_api_key():
             raise RuntimeError(
                 "No API key configured. Run 'dojozero-agent config --api-key <key>'"
             )
@@ -882,12 +1059,13 @@ class UnifiedDaemon:
                 "agent_id": handler.agent_id,
             }
 
-        if not self._api_key:
+        api_key = self._get_api_key()
+        if not api_key:
             raise RPCError("NO_API_KEY", "No API key configured")
 
         handler = TrialHandler(
             trial_id=trial_id,
-            api_key=self._api_key,
+            api_key=api_key,
             client=self._client,
             filters=filters,
         )
@@ -940,22 +1118,42 @@ class UnifiedDaemon:
             total_value=total_value,
         )
 
+    async def _handle_predict(
+        self, trial_id: str | None = None, selection: str = ""
+    ) -> dict[str, Any]:
+        """Submit a prediction."""
+        handler = self._get_handler(trial_id)
+        return await handler.submit_prediction(selection)
+
+    async def _handle_predictions(self, trial_id: str | None = None) -> dict[str, Any]:
+        """Get predictions."""
+        handler = self._get_handler(trial_id)
+        preds = await handler.get_predictions()
+        return {"predictions": preds}
+
+    async def _handle_event_info(self, trial_id: str | None = None) -> dict[str, Any]:
+        """Get event info."""
+        handler = self._get_handler(trial_id)
+        return await handler.get_event_info()
+
     async def _handle_status(self, trial_id: str | None = None) -> dict[str, Any]:
         """Get trial status."""
         handler = self._get_handler(trial_id)
         return await handler.get_status()
 
     async def _handle_list(self) -> dict[str, Any]:
-        """List active trials with fresh balances."""
+        """List active trials with fresh data."""
         trials = {}
         for trial_id, handler in self._trials.items():
-            # get_status() refreshes balance from server
             status = await handler.get_status()
-            trials[trial_id] = {
+            info: dict[str, Any] = {
                 "agent_id": handler.agent_id,
                 "connected": handler.is_connected,
-                "balance": status["balance"],
+                "contest_kind": status.get("contest_kind", "classic_betting"),
             }
+            if status.get("contest_kind") != "window_pool_prediction":
+                info["balance"] = status["balance"]
+            trials[trial_id] = info
         return {"trials": trials}
 
     async def _handle_events(

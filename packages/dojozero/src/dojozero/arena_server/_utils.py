@@ -959,6 +959,8 @@ def _compute_leaderboard_from_spans(
 
     agent_stats: dict[str, _AgentStats] = {}
     agent_bets: dict[str, list[BetRecord]] = {}
+    has_prediction_data = False
+    agent_pred_stats: dict[str, dict[str, Any]] = {}
 
     # Filter to requested trials or use all
     trials_to_process = (
@@ -1067,6 +1069,26 @@ def _compute_leaderboard_from_spans(
                 # Fill is_external/created_at from accounts (one pass)
                 _fill_account_info(typed)
 
+                # Collect prediction stats in the same pass
+                if typed.prediction_statistics:
+                    has_prediction_data = True
+                    for agent_id, pred_stat in typed.prediction_statistics.items():
+                        if agent_id not in agent_pred_stats:
+                            agent_pred_stats[agent_id] = {
+                                "total_score": 0.0,
+                                "total_predictions": 0,
+                                "correct_predictions": 0,
+                            }
+                        agent_pred_stats[agent_id]["total_score"] += float(
+                            pred_stat.total_score
+                        )
+                        agent_pred_stats[agent_id]["total_predictions"] += (
+                            pred_stat.total_predictions
+                        )
+                        agent_pred_stats[agent_id]["correct_predictions"] += (
+                            pred_stat.correct_predictions
+                        )
+
                 if use_date_filter:
                     # Date-filtered: recompute from individual bets
                     # Track per-agent wagered/profit within this trial
@@ -1134,26 +1156,100 @@ def _compute_leaderboard_from_spans(
 
     # Convert to sorted list
     leaderboard: list[LeaderboardEntry] = []
-    for stats in agent_stats.values():
-        win_rate = (stats.wins / stats.total_bets * 100) if stats.total_bets > 0 else 0
-        roi = (
-            (stats.winnings / stats.total_wagered * 100)
-            if stats.total_wagered > 0
-            else 0
-        )
-        sharpe = _compute_sharpe(stats.per_trial_rois)
 
-        leaderboard.append(
-            LeaderboardEntry(
-                agent=stats.agent,
-                winnings=round(stats.winnings, 2),
-                winRate=round(win_rate, 1),
-                totalBets=stats.total_bets,
-                roi=round(roi, 1),
-                sharpe=round(sharpe, 2),
-                createdAt=stats.agent.created_at,
+    # Handle prediction-based leaderboard if available
+    if has_prediction_data:
+        all_agent_ids = set(list(agent_stats.keys()) + list(agent_pred_stats.keys()))
+
+        for agent_id in all_agent_ids:
+            agent_info = None
+
+            # Get agent info from existing stats or create default
+            if agent_id in agent_stats:
+                agent_info = agent_stats[agent_id].agent
+                winnings = agent_stats[agent_id].winnings
+                wins = agent_stats[agent_id].wins
+                total_bets = agent_stats[agent_id].total_bets
+                total_wagered = agent_stats[agent_id].total_wagered
+                per_trial_rois = agent_stats[agent_id].per_trial_rois
+            else:
+                agent_info = agent_info_cache.get(agent_id)
+                if agent_info is None:
+                    agent_info = AgentInfo(agent_id=agent_id, persona=agent_id)
+                winnings = 0.0
+                wins = 0
+                total_bets = 0
+                total_wagered = 0.0
+                per_trial_rois = []
+
+            # Calculate prediction stats
+            pred_score = None
+            accuracy = None
+            if agent_id in agent_pred_stats:
+                stats = agent_pred_stats[agent_id]
+                pred_score = round(stats["total_score"], 2)
+                if stats["total_predictions"] > 0:
+                    accuracy = round(
+                        (stats["correct_predictions"] / stats["total_predictions"])
+                        * 100,
+                        1,
+                    )
+
+            # Calculate traditional stats
+            win_rate = (wins / total_bets * 100) if total_bets > 0 else 0
+            roi = (winnings / total_wagered * 100) if total_wagered > 0 else 0
+            sharpe = _compute_sharpe(per_trial_rois)
+
+            leaderboard.append(
+                LeaderboardEntry(
+                    agent=agent_info,
+                    winnings=round(winnings, 2),
+                    winRate=round(win_rate, 1),
+                    totalBets=total_bets,
+                    roi=round(roi, 1),
+                    sharpe=round(sharpe, 2),
+                    createdAt=agent_info.created_at,
+                    predictionScore=pred_score,
+                    accuracy=accuracy,
+                )
             )
-        )
+    else:
+        # Use traditional betting-based leaderboard
+        for stats in agent_stats.values():
+            win_rate = (
+                (stats.wins / stats.total_bets * 100) if stats.total_bets > 0 else 0
+            )
+            roi = (
+                (stats.winnings / stats.total_wagered * 100)
+                if stats.total_wagered > 0
+                else 0
+            )
+            sharpe = _compute_sharpe(stats.per_trial_rois)
+
+            leaderboard.append(
+                LeaderboardEntry(
+                    agent=stats.agent,
+                    winnings=round(stats.winnings, 2),
+                    winRate=round(win_rate, 1),
+                    totalBets=stats.total_bets,
+                    roi=round(roi, 1),
+                    sharpe=round(sharpe, 2),
+                    createdAt=stats.agent.created_at,
+                )
+            )
+
+    # Determine which field to sort by based on available data.
+    # In prediction mode there is no balance/ROI/win-rate, so all betting sort
+    # keys must remap to prediction_score — otherwise the lambdas return 0 for
+    # every entry and the sort is deterministically wrong.
+    effective_sort_by = sort_by
+    if has_prediction_data and sort_by in (
+        "winnings",
+        "win_rate",
+        "roi",
+        "total_bets",
+    ):
+        effective_sort_by = "prediction_score"
 
     # Sort by requested field
     sort_key_map: dict[str, Any] = {
@@ -1162,8 +1258,12 @@ def _compute_leaderboard_from_spans(
         "roi": lambda x: x.roi,
         "sharpe": lambda x: x.sharpe,
         "total_bets": lambda x: x.total_bets,
+        "prediction_score": lambda x: (
+            x.prediction_score if x.prediction_score is not None else -float("inf")
+        ),
+        "accuracy": lambda x: x.accuracy if x.accuracy is not None else -float("inf"),
     }
-    key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])
+    key_fn = sort_key_map.get(effective_sort_by, sort_key_map["winnings"])
     leaderboard.sort(key=key_fn, reverse=(sort_order != "asc"))
 
     entries = leaderboard[:limit] if limit is not None else leaderboard

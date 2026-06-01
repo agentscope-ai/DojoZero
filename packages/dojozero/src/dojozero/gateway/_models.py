@@ -279,6 +279,68 @@ class BalanceResponse(BaseModel):
 # ============================================================================
 
 
+# ============================================================================
+# Prediction Models (PredictionBroker mode)
+# ============================================================================
+
+
+class PredictionRequest(BaseModel):
+    """Request body for submitting a prediction."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    selection: Literal["home_win", "away_win", "even"] = Field(
+        description="Prediction selection: 'home_win', 'away_win', or 'even'"
+    )
+
+
+class PredictionResponse(BaseModel):
+    """Response for a submitted prediction."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    prediction_id: str = Field(serialization_alias="predictionId")
+    agent_id: str = Field(serialization_alias="agentId")
+    event_id: str = Field(serialization_alias="eventId")
+    selection: str
+    window: int
+    submit_time: datetime = Field(serialization_alias="submitTime")
+    elapsed_ratio: float = Field(serialization_alias="elapsedRatio")
+    is_correct: bool | None = Field(default=None, serialization_alias="isCorrect")
+    score: str | None = None
+
+
+class PredictionsListResponse(BaseModel):
+    """Response for listing agent's predictions."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    predictions: list[PredictionResponse]
+
+
+class EventInfoResponse(BaseModel):
+    """Response for current event info (prediction mode)."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    event_id: str = Field(serialization_alias="eventId")
+    home_team: str = Field(serialization_alias="homeTeam")
+    away_team: str = Field(serialization_alias="awayTeam")
+    game_time: str | None = Field(default=None, serialization_alias="gameTime")
+    status: str
+    current_window: int = Field(serialization_alias="currentWindow")
+    elapsed_ratio: float = Field(serialization_alias="elapsedRatio")
+    period: int | None = None
+    game_clock: str | None = Field(default=None, serialization_alias="gameClock")
+    home_score: int | None = Field(default=None, serialization_alias="homeScore")
+    away_score: int | None = Field(default=None, serialization_alias="awayScore")
+
+
+# ============================================================================
+# Error Models
+# ============================================================================
+
+
 class ErrorDetail(BaseModel):
     """Error detail structure."""
 
@@ -322,6 +384,10 @@ class ErrorCodes:
     INVALID_MARKET = "INVALID_MARKET"
     INVALID_SELECTION = "INVALID_SELECTION"
 
+    # Prediction errors
+    PREDICTION_REJECTED = "PREDICTION_REJECTED"
+    PREDICTION_CLOSED = "PREDICTION_CLOSED"
+
     # Trial errors
     TRIAL_NOT_FOUND = "TRIAL_NOT_FOUND"
     TRIAL_NOT_RUNNING = "TRIAL_NOT_RUNNING"
@@ -342,7 +408,18 @@ class HeartbeatMessage(BaseModel):
 
 
 class AgentResult(BaseModel):
-    """Final results for a single agent."""
+    """Final results for a single agent.
+
+    Fields are populated based on contest type:
+
+    - Classic betting: ``final_balance``, ``net_profit``, ``total_bets``,
+      ``win_rate``, ``roi`` carry their literal meanings.
+    - Prediction contest: ``prediction_score`` and ``accuracy`` carry the
+      score and per-prediction accuracy. ``final_balance`` / ``net_profit``
+      are kept as a leaderboard-sort key (both equal to the score string)
+      for back-compat with consumers that only know the betting shape;
+      new code should read ``prediction_score`` instead.
+    """
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
@@ -356,6 +433,11 @@ class AgentResult(BaseModel):
     total_bets: int = Field(serialization_alias="totalBets")
     win_rate: float = Field(serialization_alias="winRate")
     roi: float
+    # Prediction-mode fields (None in classic betting).
+    prediction_score: str | None = Field(
+        default=None, serialization_alias="predictionScore"
+    )
+    accuracy: float | None = Field(default=None)
 
 
 class TrialEndedMessage(BaseModel):
@@ -408,6 +490,11 @@ __all__ = [
     "BetsListResponse",
     "BalanceResponse",
     "HoldingResponse",
+    # Predictions
+    "PredictionRequest",
+    "PredictionResponse",
+    "PredictionsListResponse",
+    "EventInfoResponse",
     # Errors
     "ErrorCodes",
     "ErrorDetail",
