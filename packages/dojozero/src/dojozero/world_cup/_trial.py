@@ -42,7 +42,10 @@ from dojozero.data.socialmedia._events import SocialMediaEventMixin
 from dojozero.data.websearch._events import WebSearchEventMixin
 from dojozero.data.world_cup._api import DEFAULT_LEAGUE
 from dojozero.data.world_cup._constants import WORLD_CUP_KNOWN_LEAGUES
-from dojozero.data.world_cup._utils import get_game_info_by_id_async
+from dojozero.data.world_cup._utils import (
+    get_game_info_by_id_async,
+    validate_world_cup_league,
+)
 from dojozero.world_cup._agent import BettingAgent
 from dojozero.world_cup._datastream import (
     WorldCupPreGameBettingDataHubDataStream,
@@ -106,12 +109,7 @@ class WorldCupTrialParams(BaseModel):
     @field_validator("league", mode="after")
     @classmethod
     def _validate_league(cls, value: str) -> str:
-        if value not in WORLD_CUP_KNOWN_LEAGUES:
-            raise ValueError(
-                f"Unknown FIFA league code: {value!r}. "
-                f"Expected one of: {sorted(WORLD_CUP_KNOWN_LEAGUES)}"
-            )
-        return value
+        return validate_world_cup_league(value)
 
     @model_validator(mode="after")
     def _validate_operators(self) -> "WorldCupTrialParams":

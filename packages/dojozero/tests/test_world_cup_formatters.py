@@ -84,7 +84,7 @@ class TestFormatLifecycleEvents:
         ev = GameResultEvent(
             game_id="g1",
             sport="world_cup",
-            winner="",
+            winner="even",
             home_score=1,
             away_score=1,
             home_team_name="Ecuador",

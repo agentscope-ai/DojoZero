@@ -326,6 +326,19 @@ class TestSummaryParsing:
         assert sum(isinstance(e, GameInitializeEvent) for e in events_a) == 1
         assert sum(isinstance(e, GameInitializeEvent) for e in events_b) == 0
 
+    def test_repeated_final_summary_emits_result_when_pbp_never_arrives(
+        self, world_cup_store: WorldCupStore, summary_payload: dict[str, Any]
+    ) -> None:
+        first = list(world_cup_store._parse_api_response({"summary": summary_payload}))
+        second = list(world_cup_store._parse_api_response({"summary": summary_payload}))
+
+        assert sum(isinstance(e, GameResultEvent) for e in first) == 0
+        results = [e for e in second if isinstance(e, GameResultEvent)]
+        assert len(results) == 1
+        assert results[0].winner == "home"
+        assert results[0].home_score == 1
+        assert results[0].away_score == 0
+
 
 # =============================================================================
 # Store: plays parsing

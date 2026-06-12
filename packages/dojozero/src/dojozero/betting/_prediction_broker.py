@@ -70,7 +70,7 @@ _SPORT_CLOCK_DEFAULTS: Dict[str, tuple[int, int]] = {
     "worldcup": (2, 45 * 60),
     "soccer": (2, 45 * 60),
 }
-_ELAPSED_CLOCK_SPORTS = {"world_cup", "worldcup", "soccer"}
+_ELAPSED_CLOCK_SPORTS = {"world_cup"}
 
 
 class _ActorIdConfig(TypedDict):

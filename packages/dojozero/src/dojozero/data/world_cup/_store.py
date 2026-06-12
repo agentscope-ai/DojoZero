@@ -438,14 +438,20 @@ class WorldCupStore(DataStore):
             )
             self._state.mark_scores_emitted(game_id, home_score, away_score)
 
-            # Final-state result, only after PBP has run so play events are emitted
-            # before the GameResultEvent. For matches with no PBP yet, GameResultEvent
-            # gets emitted from PBP processing instead.
-            if (
+            pbp_available = self._state.is_pbp_available(game_id)
+            final_summary_seen = self._state.has_final_summary_seen(game_id)
+            should_emit_summary_result = (
                 status_code == self._state.STATUS_FINAL
-                and self._state.is_pbp_available(game_id)
                 and not self._state.has_game_result_emitted(game_id)
-            ):
+                and (pbp_available or final_summary_seen)
+            )
+            if status_code == self._state.STATUS_FINAL:
+                self._state.mark_final_summary_seen(game_id)
+
+            # Prefer PBP-owned result emission so play events precede the final
+            # result. If final summaries repeat and PBP never appears, emit a
+            # summary fallback so the broker still closes.
+            if should_emit_summary_result:
                 winner = (
                     "home"
                     if home_score > away_score

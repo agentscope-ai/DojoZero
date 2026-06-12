@@ -30,19 +30,12 @@ class WorldCupStoreFactory(StoreFactory):
 
         api = WorldCupExternalAPI(league=league)
 
-        if poll_intervals:
-            store = WorldCupStore(
-                store_id=store_id,
-                api=api,
-                poll_intervals=poll_intervals,
-                league=league,
-            )
-        else:
-            store = WorldCupStore(
-                store_id=store_id,
-                api=api,
-                league=league,
-            )
+        store = WorldCupStore(
+            store_id=store_id,
+            api=api,
+            poll_intervals=poll_intervals,
+            league=league,
+        )
 
         store.set_poll_identifier(
             {

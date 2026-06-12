@@ -34,6 +34,7 @@ class GameStateTracker(BaseGameStateTracker):
         self._home_team_id: dict[str, str] = {}
         self._away_team_id: dict[str, str] = {}
         self._winner_side: dict[str, str] = {}
+        self._final_summary_seen: set[str] = set()
         self._home_starters: dict[str, list[dict[str, Any]]] = {}
         self._away_starters: dict[str, list[dict[str, Any]]] = {}
         self._pbp_available: set[str] = set()
@@ -109,6 +110,12 @@ class GameStateTracker(BaseGameStateTracker):
     def get_winner_side(self, game_id: str) -> str:
         return self._winner_side.get(game_id, "")
 
+    def has_final_summary_seen(self, game_id: str) -> bool:
+        return game_id in self._final_summary_seen
+
+    def mark_final_summary_seen(self, game_id: str) -> None:
+        self._final_summary_seen.add(game_id)
+
     def set_starters(
         self,
         game_id: str,
@@ -135,6 +142,7 @@ class GameStateTracker(BaseGameStateTracker):
                 "home_team_id": dict(self._home_team_id),
                 "away_team_id": dict(self._away_team_id),
                 "winner_side": dict(self._winner_side),
+                "final_summary_seen": list(self._final_summary_seen),
                 # Lookup tables and starters are NOT saved — re-fetched on resume.
                 # _seen_play_ids is NOT saved — rebuilt from JSONL on resume.
             }
@@ -148,6 +156,7 @@ class GameStateTracker(BaseGameStateTracker):
         self._home_team_id = dict(data.get("home_team_id", {}))
         self._away_team_id = dict(data.get("away_team_id", {}))
         self._winner_side = dict(data.get("winner_side", {}))
+        self._final_summary_seen = set(data.get("final_summary_seen", []))
 
 
 __all__ = ["GameStateTracker"]
