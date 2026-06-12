@@ -2668,7 +2668,9 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
             event_time = utc_iso_to_local(trial.get("event_time", ""))
             start_time = utc_iso_to_local(trial.get("scheduled_start_time", ""))
             espn_game_id = (
-                metadata.get("espn_game_id", "") or trial.get("event_id", "")
+                metadata.get("espn_game_id", "")
+                or trial.get("game_id", "")
+                or trial.get("event_id", "")
             )[:12]
 
             # Use text-only status for consistent column width
@@ -2679,7 +2681,7 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
             if show_links:
                 _print_trial_links(
                     metadata=metadata,
-                    event_id=trial.get("event_id", ""),
+                    event_id=trial.get("game_id", "") or trial.get("event_id", ""),
                     sport_type=trial.get("sport_type", "nba"),
                     event_time_str=trial.get("event_time", ""),
                 )
@@ -2698,6 +2700,7 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
                     trial.get("metadata", {}), trial.get("scenario_name", "")
                 ),
                 "espn_game_id": trial.get("metadata", {}).get("espn_game_id", "")
+                or trial.get("game_id", "")
                 or trial.get("event_id", ""),
                 "trial_id": trial.get("launched_trial_id", ""),
                 "error": trial.get("error"),
