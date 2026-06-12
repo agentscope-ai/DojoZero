@@ -2124,6 +2124,10 @@ def _get_builder_command(args: argparse.Namespace) -> int:
 
 
 _ENV_TIER_MAP: dict[str, str] = {
+    "client": "client",
+    "external": "client",
+    "external-agent": "client",
+    "external_agents": "client",
     "daily": "daily",
     "testing": "daily",
     "pre": "pre",
@@ -2138,7 +2142,7 @@ def _resolve_env_tier() -> str:
     """Resolve the deployment tier from environment variables.
 
     Checks DOJOZERO_ENV first, then SIGMA_APP_STAGE, then AONE_ENV_SIGN.
-    Returns one of: "daily", "pre", "prod". Defaults to "daily".
+    Returns one of: "client", "daily", "pre", "prod". Defaults to "daily".
     """
     for env_var in ("DOJOZERO_ENV", "SIGMA_APP_STAGE", "AONE_ENV_SIGN"):
         value = os.environ.get(env_var, "").strip().lower()

@@ -279,6 +279,39 @@ class TestTrialSourceYAML:
         personas = {a["persona"] for a in scenario_config["agents"]}
         assert personas == {"degen", "mystic", "pundit", "shark", "sheep", "whale"}
 
+    def test_world_cup_client_yaml_has_no_built_in_agents(self) -> None:
+        from dojozero.cli import _load_trial_source_from_yaml
+
+        repo_root = Path(__file__).parent.parent.parent.parent
+        path = repo_root / "trial_sources" / "client" / "world_cup.yaml"
+        data = _load_trial_source_from_yaml(path)
+        assert data["source_id"] == "world-cup-client-moneyline-source"
+        cfg: dict[str, Any] = dict(data["config"])
+        scenario_config: dict[str, Any] = cfg["scenario_config"]
+        assert scenario_config["league"] == "fifa.world"
+        assert scenario_config["agents"] == []
+        assert scenario_config["operators"][0]["class"] == "BrokerOperator"
+
+    def test_world_cup_prediction_client_yaml_has_no_built_in_agents(self) -> None:
+        from dojozero.cli import _load_trial_source_from_yaml
+
+        repo_root = Path(__file__).parent.parent.parent.parent
+        path = repo_root / "trial_sources" / "client" / "world_cup_prediction.yaml"
+        data = _load_trial_source_from_yaml(path)
+        assert data["source_id"] == "world-cup-client-prediction-source"
+        cfg: dict[str, Any] = dict(data["config"])
+        scenario_config: dict[str, Any] = cfg["scenario_config"]
+        assert scenario_config["league"] == "fifa.world"
+        assert scenario_config["agents"] == []
+        assert scenario_config["operators"][0]["class"] == "PredictionBroker"
+
+    @pytest.mark.parametrize("value", ["client", "external", "external-agent"])
+    def test_client_env_tier_resolves(self, monkeypatch, value: str) -> None:
+        from dojozero.cli import _resolve_env_tier
+
+        monkeypatch.setenv("DOJOZERO_ENV", value)
+        assert _resolve_env_tier() == "client"
+
 
 # =============================================================================
 # Scheduler registration

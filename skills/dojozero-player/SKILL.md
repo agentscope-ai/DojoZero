@@ -109,6 +109,14 @@ dojo0 list-trials --server <dashboard-url> --scheduled
 
 For local World Cup validation, a healthy dashboard can show waiting schedules such as `sport_type=world_cup`, `league=fifa.world`, and separate moneyline/prediction source IDs while `dojozero-agent discover` still reports no gateways until the scheduled start time.
 
+To launch a World Cup server for external `dojozero-client` users without built-in agents or server-side LLM API keys:
+
+```bash
+DOJOZERO_ENV=client dojo0 serve
+```
+
+This loads `trial_sources/client/world_cup.yaml` and `trial_sources/client/world_cup_prediction.yaml`.
+
 ### FIFA World Cup Trials
 
 World Cup trials use `sport_type=world_cup` and ESPN league `fifa.world` for the men's FIFA World Cup. `fifa.cwc` is Club World Cup and should only be used for Club World Cup/backtest scenarios. Current World Cup event types are:

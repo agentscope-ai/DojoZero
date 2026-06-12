@@ -101,8 +101,10 @@ class TestTrialSpecBuild:
             }
         )
 
-    def _base_payload(self, operator: dict[str, Any]) -> dict[str, Any]:
-        return {
+    def _base_payload(
+        self, operator: dict[str, Any], *, include_agents: bool = True
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "espn_game_id": "760415",
             "league": "fifa.world",
             "hub": {
@@ -120,15 +122,17 @@ class TestTrialSpecBuild:
                 {"id": "odds_update_stream", "event_types": ["odds_update"]},
             ],
             "operators": [operator],
-            "agents": [
+        }
+        if include_agents:
+            payload["agents"] = [
                 {
                     "id": "agent",
                     "class": "BettingAgent",
                     "operators": [operator["id"]],
                     "data_streams": ["game_lifecycle_stream", "game_update_stream"],
                 }
-            ],
-        }
+            ]
+        return payload
 
     @pytest.mark.asyncio
     async def test_builds_betting_spec_with_polymarket_store(self, monkeypatch) -> None:
@@ -163,6 +167,40 @@ class TestTrialSpecBuild:
         assert spec.operators[0].actor_cls is BrokerOperator
 
     @pytest.mark.asyncio
+    async def test_builds_betting_spec_without_built_in_agents(
+        self, monkeypatch
+    ) -> None:
+        import dojozero.world_cup._trial as trial_module
+
+        async def fake_game_info(*args: Any, **kwargs: Any) -> GameInfo:
+            return self._game_info()
+
+        monkeypatch.setattr(trial_module, "get_game_info_by_id_async", fake_game_info)
+
+        defn = get_trial_builder_definition("world_cup")
+        spec = await defn.build_async(
+            "trial-1",
+            self._base_payload(
+                {
+                    "id": "betting_broker",
+                    "class": "BrokerOperator",
+                    "initial_balance": "1000.00",
+                    "allowed_tools": ["get_event", "place_market_bet_moneyline"],
+                    "data_streams": [
+                        "game_lifecycle_stream",
+                        "odds_update_stream",
+                        "game_update_stream",
+                    ],
+                },
+                include_agents=False,
+            ),
+        )
+
+        assert spec.agents == ()
+        assert spec.social_board is None
+        assert spec.operators[0].agent_ids == ()
+
+    @pytest.mark.asyncio
     async def test_builds_prediction_spec(self, monkeypatch) -> None:
         import dojozero.world_cup._trial as trial_module
         from dojozero.betting import PredictionBroker
@@ -189,3 +227,33 @@ class TestTrialSpecBuild:
         assert spec.metadata.store_types == ("world_cup", "polymarket")
         assert spec.operators[0].actor_cls is PredictionBroker
         assert spec.operators[0].config["window_pools"] == [5000, 4000, 3000, 2000, 500]
+
+    @pytest.mark.asyncio
+    async def test_builds_prediction_spec_without_built_in_agents(
+        self, monkeypatch
+    ) -> None:
+        import dojozero.world_cup._trial as trial_module
+
+        async def fake_game_info(*args: Any, **kwargs: Any) -> GameInfo:
+            return self._game_info()
+
+        monkeypatch.setattr(trial_module, "get_game_info_by_id_async", fake_game_info)
+
+        defn = get_trial_builder_definition("world_cup")
+        spec = await defn.build_async(
+            "trial-1",
+            self._base_payload(
+                {
+                    "id": "prediction_broker",
+                    "class": "PredictionBroker",
+                    "window_pools": [5000, 4000, 3000, 2000, 500],
+                    "allowed_tools": ["get_rules", "submit_prediction"],
+                    "data_streams": ["game_lifecycle_stream", "game_update_stream"],
+                },
+                include_agents=False,
+            ),
+        )
+
+        assert spec.agents == ()
+        assert spec.social_board is None
+        assert spec.operators[0].agent_ids == ()

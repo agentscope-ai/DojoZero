@@ -328,14 +328,15 @@ async def _build_trial_spec(
             )
         )
 
-    if not params.agents:
-        raise ValueError("No agents specified. At least one BettingAgent is required.")
-
-    agent_specs = build_agent_specs(
-        agents=params.agents,
-        agent_cls=BettingAgent,
-        allowed_class_names={"BettingAgent"},
-        config_cache=config_cache,
+    agent_specs = (
+        build_agent_specs(
+            agents=params.agents,
+            agent_cls=BettingAgent,
+            allowed_class_names={"BettingAgent"},
+            config_cache=config_cache,
+        )
+        if params.agents
+        else []
     )
 
     social_board: OperatorSpec[Any] | None = None
