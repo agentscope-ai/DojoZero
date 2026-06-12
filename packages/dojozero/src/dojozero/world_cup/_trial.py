@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dojozero.core import (
     DataStreamSpec,
@@ -113,6 +113,14 @@ class WorldCupTrialParams(BaseModel):
             )
         return value
 
+    @model_validator(mode="after")
+    def _validate_operators(self) -> "WorldCupTrialParams":
+        if not self.operators:
+            raise ValueError(
+                "No operators specified. At least one BrokerOperator is required."
+            )
+        return self
+
 
 async def _build_trial_spec(
     trial_id: str,
@@ -137,6 +145,7 @@ async def _build_trial_spec(
     season_year = game_info.season_year
     season_type = game_info.season_type
     game_date = params.game_date or game_info.get_game_date_us()
+    operators = params.operators or []
 
     logger.info(
         "World Cup trial '%s': %s vs %s on %s (league=%s)",
@@ -261,10 +270,9 @@ async def _build_trial_spec(
     # Validate all referenced streams exist
     defined_stream_ids = {spec.actor_id for spec in stream_specs}
     referenced_stream_ids: set[str] = set()
-    if params.operators:
-        for op_config in params.operators:
-            if op_config.data_streams:
-                referenced_stream_ids.update(op_config.data_streams)
+    for op_config in operators:
+        if op_config.data_streams:
+            referenced_stream_ids.update(op_config.data_streams)
     if params.agents:
         for agent_dict in params.agents:
             referenced_stream_ids.update(agent_dict.get("data_streams", []) or [])
@@ -273,11 +281,6 @@ async def _build_trial_spec(
         raise ValueError(
             "The following streams are referenced by operators/agents but are "
             f"not defined in YAML: {sorted(missing_streams)}."
-        )
-
-    if not params.operators:
-        raise ValueError(
-            "No operators specified. At least one BrokerOperator is required."
         )
 
     config_cache = load_agent_configs_cached(params.agents) if params.agents else {}
@@ -292,7 +295,7 @@ async def _build_trial_spec(
         "BrokerOperator": BrokerOperator,
         "PredictionBroker": PredictionBroker,
     }
-    for op_config in params.operators:
+    for op_config in operators:
         op_cls = operator_class_map.get(op_config.class_name)
         if op_cls is None:
             raise ValueError(f"Unknown operator class: {op_config.class_name}")

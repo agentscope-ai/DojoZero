@@ -451,7 +451,7 @@ class WorldCupStore(DataStore):
                     if home_score > away_score
                     else "away"
                     if away_score > home_score
-                    else self._state.get_winner_side(game_id)
+                    else self._state.get_winner_side(game_id) or "even"
                 )
                 home_tid = self._state.get_home_team_id(game_id)
                 away_tid = self._state.get_away_team_id(game_id)
@@ -601,7 +601,7 @@ class WorldCupStore(DataStore):
                 if last_home_score > last_away_score
                 else "away"
                 if last_away_score > last_home_score
-                else self._state.get_winner_side(game_id)
+                else self._state.get_winner_side(game_id) or "even"
             )
             home_tid = self._state.get_home_team_id(game_id)
             away_tid = self._state.get_away_team_id(game_id)

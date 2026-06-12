@@ -198,8 +198,6 @@ async def get_game_info_by_id_async(
 
 
 __all__ = [
-    "_build_game_info_from_summary",
-    "_id_from_ref",
     "get_game_info_by_id_async",
     "get_proxy",
     "parse_iso_datetime",

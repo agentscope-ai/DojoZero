@@ -57,7 +57,7 @@ class WorldCupPreGameBettingDataHubDataStream(NBAPreGameBettingDataHubDataStream
 
         search_api: WebSearchAPI | None = None
         game_context: GameContext | None = None
-        espn_api: "ESPNExternalAPI | None" = None
+        espn_api: ESPNExternalAPI | None = None
 
         ws_event_types = config.get("websearch_event_types", [])
         stats_event_types = config.get("stats_event_types", [])

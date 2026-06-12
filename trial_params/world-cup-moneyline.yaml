@@ -2,7 +2,7 @@ scenario:
   name: world_cup
   config:
     espn_game_id: 'your_espn_event_id_here'  # ESPN event ID for the match
-    league: fifa.world  # FIFA league code; see world_cup._trial._KNOWN_LEAGUES
+    league: fifa.world  # FIFA league code; see data.world_cup._constants.WORLD_CUP_KNOWN_LEAGUES
     hub:
       persistence_file: outputs/world_cup_events-{espn_game_id}.jsonl
 

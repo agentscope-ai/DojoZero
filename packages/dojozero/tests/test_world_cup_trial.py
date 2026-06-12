@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 # Force registration via the same import path the CLI uses.
 import dojozero.world_cup  # noqa: F401
+from dojozero.betting import TrialBrokerConfig
 from dojozero.core._registry import get_trial_builder_definition
 from dojozero.data._config import HubConfig
 from dojozero.data._factory import get_store_factory
@@ -34,10 +35,18 @@ class TestParamsValidation:
     def _hub(self) -> HubConfig:
         return HubConfig(persistence_file="outputs/world_cup_events.jsonl")
 
+    def _operators(self) -> list[TrialBrokerConfig]:
+        return [
+            TrialBrokerConfig.model_validate(
+                {"id": "betting_broker", "class": "BrokerOperator"}
+            )
+        ]
+
     def test_minimal_valid_params(self) -> None:
         params = WorldCupTrialParams(
             espn_game_id="760415",
             hub=self._hub(),
+            operators=self._operators(),
         )
         assert params.league == "fifa.world"
         assert params.hub_id == "world_cup_hub"
@@ -57,6 +66,7 @@ class TestParamsValidation:
             espn_game_id="x",
             league=league,
             hub=self._hub(),
+            operators=self._operators(),
         )
         assert params.league == league
 
@@ -66,9 +76,18 @@ class TestParamsValidation:
                 espn_game_id="x",
                 league="nfl",
                 hub=self._hub(),
+                operators=self._operators(),
             )
         # Pydantic wraps our ValueError; the message text must surface.
         assert "Unknown FIFA league code" in str(exc_info.value)
+
+    def test_operators_are_required(self) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            WorldCupTrialParams(
+                espn_game_id="x",
+                hub=self._hub(),
+            )
+        assert "No operators specified" in str(exc_info.value)
 
     def test_example_params_validate(self) -> None:
         defn = get_trial_builder_definition("world_cup")
@@ -79,7 +98,7 @@ class TestParamsValidation:
         # `data_streams` / `operators` / `agents` shapes are validated by the
         # generic config models — only the params model is constructed here.
         WorldCupTrialParams.model_validate(
-            {k: ep[k] for k in ("espn_game_id", "league", "hub")}
+            {k: ep[k] for k in ("espn_game_id", "league", "hub", "operators")}
         )
 
 

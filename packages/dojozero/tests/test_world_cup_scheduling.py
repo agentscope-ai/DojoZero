@@ -181,6 +181,10 @@ class TestWorldCupGameFetcher:
     def test_custom_league(self) -> None:
         assert WorldCupGameFetcher(league="fifa.cwc").league == "fifa.cwc"
 
+    def test_invalid_league_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="Unknown FIFA league code"):
+            WorldCupGameFetcher(league="fifa.world/../../nfl")
+
     def test_parse_scoreboard_maps_status_canonical(self) -> None:
         """A completed CWC final scoreboard fixture should yield status=3."""
         raw = _load("scoreboard_20250713.json")
@@ -238,6 +242,59 @@ class TestWorldCupGameFetcher:
             "game-2025-07-02",
             "game-2025-07-03",
         ]
+
+    @pytest.mark.asyncio
+    async def test_get_game_status_info_returns_matching_game(
+        self, monkeypatch
+    ) -> None:
+        fetcher = WorldCupGameFetcher(league="fifa.cwc")
+        calls: list[str | None] = []
+
+        async def fake_fetch(date: str | None = None) -> list[GameInfo]:
+            calls.append(date)
+            return [
+                GameInfo.model_validate(
+                    {
+                        "gameId": "other",
+                        "sport_type": "world_cup",
+                        "gameStatus": 1,
+                        "gameStatusText": "Scheduled",
+                        "homeTeam": {"displayName": "Home"},
+                        "awayTeam": {"displayName": "Away"},
+                    }
+                ),
+                GameInfo.model_validate(
+                    {
+                        "gameId": "target",
+                        "sport_type": "world_cup",
+                        "gameStatus": 3,
+                        "gameStatusText": "Full Time",
+                        "homeTeam": {"displayName": "Home"},
+                        "awayTeam": {"displayName": "Away"},
+                    }
+                ),
+            ]
+
+        monkeypatch.setattr(fetcher, "fetch_games_for_date", fake_fetch)
+
+        assert await fetcher.get_game_status_info("target", "2025-07-13") == (
+            3,
+            "Full Time",
+        )
+        assert calls == ["2025-07-13"]
+
+    @pytest.mark.asyncio
+    async def test_get_game_status_info_returns_none_when_absent(
+        self, monkeypatch
+    ) -> None:
+        fetcher = WorldCupGameFetcher(league="fifa.cwc")
+
+        async def fake_fetch(date: str | None = None) -> list[GameInfo]:
+            return []
+
+        monkeypatch.setattr(fetcher, "fetch_games_for_date", fake_fetch)
+
+        assert await fetcher.get_game_status_info("missing", "2025-07-13") is None
 
 
 # =============================================================================

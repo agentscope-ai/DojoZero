@@ -609,7 +609,7 @@ class GameStartEvent(GameEvent):
 class GameResultEvent(GameEvent):
     """Game result event with winner and final scores."""
 
-    winner: str = ""  # "home", "away", or "" for tie
+    winner: str = ""  # "home", "away", "even"/"draw", or "" for legacy tie
     home_score: int = 0
     away_score: int = 0
     home_team_name: str = ""

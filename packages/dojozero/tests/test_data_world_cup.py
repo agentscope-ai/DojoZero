@@ -456,6 +456,85 @@ class TestPlaysParsing:
         assert result.home_score == 1
         assert result.away_score == 1
 
+    def test_regulation_draw_result_uses_even_winner(self) -> None:
+        store = WorldCupStore(store_id="draw", league="fifa.cwc")
+        summary = {
+            "header": {
+                "id": "draw-1",
+                "season": {"year": 2026, "type": 2},
+                "competitions": [
+                    {
+                        "id": "draw-1",
+                        "date": "2026-06-18T19:00Z",
+                        "status": {"type": {"name": "STATUS_FULL_TIME"}},
+                        "competitors": [
+                            {
+                                "homeAway": "home",
+                                "score": "0",
+                                "team": {
+                                    "id": "1",
+                                    "displayName": "Home FC",
+                                    "abbreviation": "HOM",
+                                },
+                            },
+                            {
+                                "homeAway": "away",
+                                "score": "0",
+                                "team": {
+                                    "id": "2",
+                                    "displayName": "Away FC",
+                                    "abbreviation": "AWY",
+                                },
+                            },
+                        ],
+                    }
+                ],
+            }
+        }
+        plays = {
+            "eventId": "draw-1",
+            "items": [
+                {
+                    "id": "final",
+                    "type": {
+                        "id": "999",
+                        "text": "End Regular Time",
+                        "type": "end-regular-time",
+                    },
+                    "period": {"number": 2},
+                    "clock": {"displayValue": "FT"},
+                    "homeScore": 0,
+                    "awayScore": 0,
+                    "text": "Match ends, Home FC 0, Away FC 0.",
+                }
+            ],
+        }
+
+        list(store._parse_api_response({"summary": summary}))
+        events = list(store._parse_api_response({"plays": plays}))
+        result = next(e for e in events if isinstance(e, GameResultEvent))
+
+        assert result.winner == "even"
+        assert result.home_score == 0
+        assert result.away_score == 0
+
+    @pytest.mark.asyncio
+    async def test_store_state_round_trip(
+        self,
+        summary_payload: dict[str, Any],
+    ) -> None:
+        store = WorldCupStore(store_id="round_trip", league="fifa.worldq.conmebol")
+        list(store._parse_api_response({"summary": summary_payload}))
+
+        state = await store.save_state()
+        restored = WorldCupStore(store_id="round_trip_restored")
+        await restored.load_state(state)
+
+        assert restored.league == "fifa.worldq.conmebol"
+        assert restored._state.get_current_scores("684665") == (1, 0)
+        assert restored._state.get_home_team_id("684665") == "209"
+        assert restored._state.get_away_team_id("684665") == "202"
+
     def test_scoring_play_carries_player_and_team(
         self,
         world_cup_store: WorldCupStore,

@@ -475,9 +475,17 @@ class ScheduleManager:
         self._nba_fetcher = NBAGameFetcher()
         self._ncaa_fetcher = NCAAGameFetcher()
         self._nfl_fetcher = NFLGameFetcher()
+        self._world_cup_fetchers: dict[str, WorldCupGameFetcher] = {}
 
         # Shared HTTP session for remote submissions (created in start())
         self._http_session: Any = None  # aiohttp.ClientSession
+
+    def _get_world_cup_fetcher(self, league: str) -> WorldCupGameFetcher:
+        fetcher = self._world_cup_fetchers.get(league)
+        if fetcher is None:
+            fetcher = WorldCupGameFetcher(league=league)
+            self._world_cup_fetchers[league] = fetcher
+        return fetcher
 
     @property
     def _scheduled_events(self) -> dict[tuple[str, str], str]:
@@ -708,7 +716,7 @@ class ScheduleManager:
             # League is configured per-source via scenario_config; for the
             # ad-hoc batch path we default to the men's WC.
             league = (scenario_config or {}).get("league", "fifa.world")
-            games = await WorldCupGameFetcher(league=league).fetch_games_for_date(date)
+            games = await self._get_world_cup_fetcher(league).fetch_games_for_date(date)
 
         if not games:
             LOGGER.info("No games found for batch scheduling")
@@ -1021,7 +1029,7 @@ class ScheduleManager:
             elif source.sport_type == "world_cup":
                 # FIFA league code is per-source (e.g. "fifa.world", "fifa.cwc").
                 league = source.config.scenario_config.get("league", "fifa.world")
-                games = await WorldCupGameFetcher(league=league).fetch_games_for_date(
+                games = await self._get_world_cup_fetcher(league).fetch_games_for_date(
                     None
                 )
 
@@ -1892,9 +1900,8 @@ class ScheduleManager:
                 league = (scheduled.metadata or {}).get(
                     "world_cup_league", "fifa.world"
                 )
-                return await WorldCupGameFetcher(league=league).get_game_status_info(
-                    scheduled.game_id,
-                    scheduled.game_date,
+                return await self._get_world_cup_fetcher(league).get_game_status_info(
+                    scheduled.game_id, scheduled.game_date
                 )
             else:
                 LOGGER.warning(

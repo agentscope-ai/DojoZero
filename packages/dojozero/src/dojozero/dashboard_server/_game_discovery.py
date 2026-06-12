@@ -12,6 +12,7 @@ from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data.espn._api import ESPNExternalAPI
 from dojozero.data.nfl._api import NFLExternalAPI
 from dojozero.data.world_cup._constants import SOCCER_STATUS_NAME_MAP
+from dojozero.data.world_cup._utils import validate_world_cup_league
 
 from dojozero.utils import (
     us_game_day_today,
@@ -655,7 +656,7 @@ class WorldCupGameFetcher:
     """
 
     def __init__(self, league: str = "fifa.world") -> None:
-        self.league = league
+        self.league = validate_world_cup_league(league)
 
     def _make_api(self) -> ESPNExternalAPI:
         return ESPNExternalAPI(sport="soccer", league=self.league)
