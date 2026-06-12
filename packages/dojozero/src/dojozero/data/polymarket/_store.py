@@ -57,7 +57,8 @@ class PolymarketStore(DataStore):
             event_emitter: Event emitter for publishing events
             market_url: Optional Polymarket market URL (e.g., "https://polymarket.com/sports/nba/games/week/3/nba-sas-lal-2025-12-10")
             slug: Optional market slug (e.g., "nba-sas-lal-2025-12-10"). If market_url is provided, slug is extracted from it.
-            sport: Sport type for slug construction ("nba" or "nfl"). Defaults to "nba".
+            sport: Sport type for slug construction ("nba", "nfl", or "world_cup").
+                   Defaults to "nba".
         """
         # Set default poll_intervals if not provided
         # Default: pre-game interval (5 minutes = 300 seconds)
@@ -83,8 +84,9 @@ class PolymarketStore(DataStore):
 
         self._market_url = market_url
         self._slug = slug
-        self._sport = sport.lower()  # "nba" or "nfl"
+        self._sport = sport.lower()
         self.sport_type = self._sport  # Expose for DataHub trace context
+        self._sport_slug_prefix = PolymarketAPI.sport_slug_prefix(self._sport)
 
         # Track game status for dynamic polling intervals
         self._game_started: bool = False
@@ -249,9 +251,9 @@ class PolymarketStore(DataStore):
                     identifier["home_tricode"], self._sport
                 )
                 game_date = identifier["game_date"]  # Expected format: YYYY-MM-DD
-                # Use sport prefix (nba or nfl)
+                # Use sport prefix (nba, nfl, world-cup, etc.)
                 params["slug"] = (
-                    f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
+                    f"{self._sport_slug_prefix}-{away_tricode}-{home_tricode}-{game_date}"
                 )
             elif "espn_game_id" in identifier:
                 # Only fetch if we can construct a slug (game_id cannot be used to fetch odds)
@@ -269,7 +271,7 @@ class PolymarketStore(DataStore):
                     )
                     game_date = identifier["game_date"]
                     params["slug"] = (
-                        f"{self._sport}-{away_tricode}-{home_tricode}-{game_date}"
+                        f"{self._sport_slug_prefix}-{away_tricode}-{home_tricode}-{game_date}"
                     )
                     # Store game_id for metadata in the result (not for fetching)
                     params["game_id"] = identifier["espn_game_id"]

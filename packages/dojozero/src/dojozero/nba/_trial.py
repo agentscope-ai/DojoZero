@@ -42,6 +42,8 @@ from dojozero.betting import (
     BettingTrialMetadata,
     BrokerOperator,
     BrokerOperatorConfig,
+    PredictionBroker,
+    PredictionBrokerConfig,
     TrialBrokerConfig,
 )
 from dojozero.agents import SocialBoardActor
@@ -325,13 +327,14 @@ async def _build_trial_spec(
     # Use hierarchical operators config
     operator_class_map = {
         "BrokerOperator": BrokerOperator,
+        "PredictionBroker": PredictionBroker,
     }
     for op_config in params.operators:
         op_cls = operator_class_map.get(op_config.class_name)
         if op_cls is None:
             raise ValueError(f"Unknown operator class: {op_config.class_name}")
 
-        # Create operator config based on class
+        operator_config: BrokerOperatorConfig | PredictionBrokerConfig
         if op_config.class_name == "BrokerOperator":
             broker_config: BrokerOperatorConfig = {
                 "actor_id": op_config.id,
@@ -340,7 +343,16 @@ async def _build_trial_spec(
                 broker_config["initial_balance"] = op_config.initial_balance
             if op_config.allowed_tools:
                 broker_config["allowed_tools"] = op_config.allowed_tools
-            operator_config: BrokerOperatorConfig = broker_config
+            operator_config = broker_config
+        elif op_config.class_name == "PredictionBroker":
+            prediction_config: PredictionBrokerConfig = {
+                "actor_id": op_config.id,
+            }
+            if op_config.allowed_tools:
+                prediction_config["allowed_tools"] = op_config.allowed_tools
+            if op_config.window_pools is not None:
+                prediction_config["window_pools"] = op_config.window_pools
+            operator_config = prediction_config
         else:
             raise ValueError(f"Unsupported operator class: {op_config.class_name}")
 

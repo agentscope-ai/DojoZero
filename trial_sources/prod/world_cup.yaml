@@ -7,4 +7,4 @@ config:
   league: fifa.world
   max_daily_games: 0  # unlimited (up to ~4 matches/day in group stage)
   personas: [degen, mystic, pundit, shark, sheep, whale]
-  llm_config_path: agents/llms/all.yaml
+  llm_config_path: agents/llms/default.yaml

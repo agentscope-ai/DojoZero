@@ -75,6 +75,10 @@ class LeaderboardEntry(BaseModel):
     rank: int = 0
     created_at: str | None = Field(default=None, alias="createdAt")
 
+    # ScoringSys fields (optional, populated when prediction mode is active)
+    prediction_score: float | None = Field(default=None, alias="predictionScore")
+    accuracy: float | None = Field(default=None)
+
 
 # ============================================================================
 # Trial Lifecycle

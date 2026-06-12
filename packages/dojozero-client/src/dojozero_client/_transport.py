@@ -197,6 +197,14 @@ class GatewayTransport:
                 raise InsufficientBalanceError(message, code, details)
             elif code == "BETTING_CLOSED":
                 raise BettingClosedError(message, code, details)
+            elif code == "PREDICTION_CLOSED":
+                from dojozero_client._exceptions import PredictionClosedError
+
+                raise PredictionClosedError(message, code, details)
+            elif code == "PREDICTION_REJECTED":
+                from dojozero_client._exceptions import PredictionRejectedError
+
+                raise PredictionRejectedError(message, code, details)
             else:
                 from dojozero_client._exceptions import BetRejectedError
 

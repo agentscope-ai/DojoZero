@@ -1,5 +1,7 @@
 """Tests for Gateway module."""
 
+import os
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
@@ -8,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from dojozero.betting._broker import BrokerOperator
 from dojozero.gateway._models import (
     AgentRegistrationRequest,
     AgentRegistrationResponse,
@@ -223,12 +226,13 @@ class TestExternalAgentAdapter:
     @pytest.fixture
     def mock_broker(self):
         """Create mock BrokerOperator."""
-        broker = MagicMock()
+        broker = MagicMock(spec=BrokerOperator)
         broker.initial_balance = "1000"
         broker.create_account = AsyncMock()
         broker.delete_account = AsyncMock(return_value=True)
         broker.has_account = MagicMock(return_value=False)
-        broker._event = None
+        broker.get_contest_kind = MagicMock(return_value="classic_betting")
+        broker.current_event = None
         broker._accounts = {}
         broker._bets = {}
         broker._active_bets = {}
@@ -387,7 +391,7 @@ class TestExternalAgentAdapter:
         mock_event.total_lines = {}
         mock_event.last_odds_update = datetime.now(timezone.utc)
         mock_event.can_bet = True
-        mock_broker._event = mock_event
+        mock_broker.current_event = mock_event
 
         odds = adapter.get_current_odds()
         assert odds.event_id == "game123"
@@ -443,12 +447,13 @@ class TestGatewayServer:
     @pytest.fixture
     def mock_broker(self):
         """Create mock BrokerOperator."""
-        broker = MagicMock()
+        broker = MagicMock(spec=BrokerOperator)
         broker.initial_balance = "1000"
         broker.create_account = AsyncMock()
         broker.delete_account = AsyncMock(return_value=True)
         broker.has_account = MagicMock(return_value=False)
-        broker._event = None
+        broker.get_contest_kind = MagicMock(return_value="classic_betting")
+        broker.current_event = None
         broker._accounts = {}
         return broker
 
@@ -895,6 +900,41 @@ agents:
         assert not auth.is_enabled()
         identity = await auth.validate("any-key")
         assert identity is None
+
+    @pytest.mark.asyncio
+    async def test_picks_up_keys_added_after_init(self, tmp_path):
+        """Regression: when the YAML file does not exist at init time, the
+        authenticator must still pick up keys once the file is created and
+        populated (e.g. via `dojo0 agents add`). Previously the dashboard
+        server skipped wiring up a LocalAgentAuthenticator at all in this
+        case, so newly added keys were invisible until restart.
+        """
+        # File deliberately does not exist yet — simulates a fresh workspace
+        # where the user starts the server before adding any agents.
+        keys_file = tmp_path / "agent_keys.yaml"
+        assert not keys_file.exists()
+
+        auth = LocalAgentAuthenticator(config_path=keys_file)
+        assert await auth.validate("sk-agent-late") is None
+
+        # Mimic what `dojo0 agents add` does: write a new entry to the file.
+        keys_file.write_text(
+            "agents:\n"
+            "  sk-agent-late:\n"
+            "    agent_id: late_agent\n"
+            "    display_name: Late Agent\n"
+        )
+        # Make sure the mtime is strictly greater than any value cached at
+        # init (init sees a missing file → _last_mtime=0, so any real mtime
+        # qualifies). We bump it explicitly to keep this test robust against
+        # filesystems with coarse mtime granularity.
+        future = time.time() + 2
+        os.utime(keys_file, (future, future))
+
+        identity = await auth.validate("sk-agent-late")
+        assert identity is not None
+        assert identity.agent_id == "late_agent"
+        assert identity.display_name == "Late Agent"
 
 
 class TestNoOpAuthenticator:
@@ -1589,10 +1629,10 @@ class TestTrialResults:
     @pytest.fixture
     def mock_broker(self):
         """Create mock BrokerOperator with accounts."""
-        broker = MagicMock()
+        broker = MagicMock(spec=BrokerOperator)
         broker.initial_balance = "1000"
         broker.create_account = AsyncMock()
-        broker._event = None
+        broker.current_event = None
         # Mock accounts with balances
         broker._accounts = {
             "agent1": MagicMock(balance=Decimal("1200"), is_external=True),
@@ -1751,9 +1791,9 @@ class TestGatewayAuthIntegration:
     @pytest.fixture
     def mock_broker(self):
         """Create mock BrokerOperator."""
-        broker = MagicMock()
+        broker = MagicMock(spec=BrokerOperator)
         broker.initial_balance = "1000"
-        broker._event = None
+        broker.current_event = None
         broker._accounts = {}
         broker.create_account = AsyncMock()
         broker.delete_account = AsyncMock(return_value=True)

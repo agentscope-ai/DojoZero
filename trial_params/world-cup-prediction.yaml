@@ -1,10 +1,10 @@
 scenario:
   name: world_cup
   config:
-    espn_game_id: 'your_espn_event_id_here'  # ESPN event ID for the match
-    league: fifa.world  # FIFA league code; see world_cup._trial._KNOWN_LEAGUES
+    espn_game_id: 'your_espn_event_id_here'
+    league: fifa.world
     hub:
-      persistence_file: outputs/world_cup_events-{espn_game_id}.jsonl
+      persistence_file: outputs/world_cup_prediction_events-{espn_game_id}.jsonl
 
     data_streams:
     - id: pre_game_insights_stream
@@ -14,14 +14,12 @@ scenario:
       - expert_prediction
       - twitter_top_tweets
 
-    # Match lifecycle
     - id: game_lifecycle_stream
       event_types:
       - game_initialize
       - game_start
       - game_result
 
-    # Live match data
     - id: game_update_stream
       event_types:
       - world_cup_game_update
@@ -30,24 +28,17 @@ scenario:
       event_types:
       - world_cup_play
 
-    - id: odds_update_stream
-      event_types:
-      - odds_update
-
     operators:
-    - id: betting_broker
-      class: BrokerOperator
-      initial_balance: "1000.00"
+    - id: prediction_broker
+      class: PredictionBroker
+      window_pools: [5000, 4000, 3000, 2000, 500]
       allowed_tools:
-      - get_event
-      - get_balance
-      - get_holdings
-      - place_market_bet_moneyline
-      - get_bet_history
-      - get_statistics
+      - get_rules
+      - get_event_info
+      - submit_prediction
+      - get_my_predictions
       data_streams:
       - game_lifecycle_stream
-      - odds_update_stream
       - game_update_stream
 
     agents:
@@ -57,10 +48,9 @@ scenario:
       persona_config_path: agents/personas/pundit.yaml
       llm_config_path: agents/llms/default.yaml
       operators:
-        - betting_broker
+      - prediction_broker
       data_streams:
-        - pre_game_insights_stream
-        - game_update_stream
-        - odds_update_stream
-        - game_lifecycle_stream
-        - play_by_play_stream
+      - pre_game_insights_stream
+      - game_update_stream
+      - game_lifecycle_stream
+      - play_by_play_stream

@@ -5,7 +5,8 @@ description = "DojoZero monorepo workspace"
 requires-python = ">=3.11"
 
 [tool.uv.workspace]
-members = ["packages/dojozero", "packages/dojozero-client"]
+members = ["packages/*"]
+exclude = ["packages/dojozero-agent-runner"]
 
 [tool.uv.sources]
 dojozero = { workspace = true }
@@ -28,7 +29,7 @@ dev = [
     "ray>=2.51.1",
     "python-dotenv>=1.2.1",
     "tavily-python>=0.7.12",
-    "agentscope>=1.0.8",
+    "agentscope>=1.0.8,<2",
     "python-dateutil>=2.8.0",
     "websockets>=15.0.1",
     "plotly>=6.0.0",

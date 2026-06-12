@@ -18,6 +18,7 @@ from dojozero_client._client import (
 from dojozero_client._daemon import (
     DaemonState,
     TrialHandler,
+    UnifiedDaemon,
     _trial_state_dir,
     get_daemon_status,
     is_daemon_running,
@@ -166,6 +167,118 @@ class TestDaemonHelpers:
             with patch("dojozero_client._daemon.PID_FILE", pid_file):
                 result = stop_daemon()
                 assert result is False
+
+
+class TestUnifiedDaemonApiKeyReload:
+    """Regression tests for the cached-api-key bug.
+
+    Previously `UnifiedDaemon.start()` read `load_api_key()` once and stored
+    the result in `self._api_key`, so any later
+    `dojozero-agent config --api-key <new>` was invisible to the running
+    daemon — `_handle_join` kept using the stale value and the server
+    returned 401 INVALID_TOKEN. The fix is to load the key freshly via
+    `_get_api_key()` on every operation that needs it.
+    """
+
+    def test_get_api_key_reads_fresh_each_call(self):
+        """Updating credentials.json must be visible without restart."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cred_file = Path(tmpdir) / "credentials.json"
+            with patch("dojozero_client._credentials.CREDENTIALS_FILE", cred_file):
+                with patch("dojozero_client._credentials.CONFIG_DIR", Path(tmpdir)):
+                    cred_file.write_text(
+                        json.dumps(
+                            {
+                                "default": "default",
+                                "profiles": {"default": {"api_key": "sk-old"}},
+                            }
+                        )
+                    )
+
+                    daemon = UnifiedDaemon()
+                    assert daemon._get_api_key() == "sk-old"
+
+                    cred_file.write_text(
+                        json.dumps(
+                            {
+                                "default": "default",
+                                "profiles": {"default": {"api_key": "sk-new"}},
+                            }
+                        )
+                    )
+
+                    assert daemon._get_api_key() == "sk-new"
+
+    def test_get_api_key_uses_configured_profile(self):
+        """Daemon scoped to a profile must read that profile's key."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cred_file = Path(tmpdir) / "credentials.json"
+            with patch("dojozero_client._credentials.CREDENTIALS_FILE", cred_file):
+                with patch("dojozero_client._credentials.CONFIG_DIR", Path(tmpdir)):
+                    cred_file.write_text(
+                        json.dumps(
+                            {
+                                "default": "default",
+                                "profiles": {
+                                    "default": {"api_key": "sk-default"},
+                                    "alice": {"api_key": "sk-alice"},
+                                },
+                            }
+                        )
+                    )
+
+                    daemon_default = UnifiedDaemon()
+                    daemon_alice = UnifiedDaemon(profile="alice")
+
+                    assert daemon_default._get_api_key() == "sk-default"
+                    assert daemon_alice._get_api_key() == "sk-alice"
+
+    @pytest.mark.asyncio
+    async def test_handle_join_reads_fresh_key(self):
+        """`_handle_join` must use the latest credentials, not a cached snapshot."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cred_file = Path(tmpdir) / "credentials.json"
+            with patch("dojozero_client._credentials.CREDENTIALS_FILE", cred_file):
+                with patch("dojozero_client._credentials.CONFIG_DIR", Path(tmpdir)):
+                    cred_file.write_text(
+                        json.dumps(
+                            {
+                                "default": "default",
+                                "profiles": {"default": {"api_key": "sk-stale"}},
+                            }
+                        )
+                    )
+
+                    daemon = UnifiedDaemon()
+
+                    # Update credentials AFTER the daemon was constructed
+                    cred_file.write_text(
+                        json.dumps(
+                            {
+                                "default": "default",
+                                "profiles": {"default": {"api_key": "sk-fresh"}},
+                            }
+                        )
+                    )
+
+                    captured: dict[str, str] = {}
+
+                    class _FakeHandler:
+                        agent_id = "verified-agent"
+
+                        def __init__(self, **kwargs):
+                            captured.update(kwargs)
+
+                        async def connect(self):
+                            return None
+
+                    with patch(
+                        "dojozero_client._daemon.TrialHandler",
+                        _FakeHandler,
+                    ):
+                        await daemon._handle_join("trial-1")
+
+                    assert captured["api_key"] == "sk-fresh"
 
 
 class TestTrialHandlerGetStatus:

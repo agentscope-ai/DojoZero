@@ -229,6 +229,10 @@ class TestTrialSourceYAML:
         # Schedule defaults flowed from base
         assert cfg["pre_start_hours"] == 2.0
         assert cfg["sync_interval_seconds"] == 3600.0
+        stream_ids = {s["id"] for s in scenario_config["data_streams"]}
+        assert "odds_update_stream" in stream_ids
+        assert scenario_config["operators"][0]["class"] == "BrokerOperator"
+        assert "odds_update_stream" in scenario_config["operators"][0]["data_streams"]
 
     def test_world_cup_prod_yaml_uses_fifa_world(self) -> None:
         from dojozero.cli import _load_trial_source_from_yaml
@@ -242,6 +246,37 @@ class TestTrialSourceYAML:
         # Prod runs the full persona × LLM matrix
         agents = scenario_config["agents"]
         personas = {a["persona"] for a in agents}
+        assert personas == {"degen", "mystic", "pundit", "shark", "sheep", "whale"}
+
+    def test_world_cup_prediction_daily_yaml_loads(self) -> None:
+        from dojozero.cli import _load_trial_source_from_yaml
+
+        repo_root = Path(__file__).parent.parent.parent.parent
+        path = repo_root / "trial_sources" / "daily" / "world_cup_prediction.yaml"
+        data = _load_trial_source_from_yaml(path)
+        assert data["source_id"] == "world-cup-prediction-source"
+        assert data["sport_type"] == "world_cup"
+        cfg: dict[str, Any] = dict(data["config"])
+        scenario_config: dict[str, Any] = cfg["scenario_config"]
+        assert scenario_config["league"] == "fifa.cwc"
+        operators = scenario_config["operators"]
+        assert operators[0]["class"] == "PredictionBroker"
+        assert operators[0]["data_streams"] == [
+            "game_lifecycle_stream",
+            "game_update_stream",
+        ]
+
+    def test_world_cup_prediction_prod_yaml_uses_fifa_world(self) -> None:
+        from dojozero.cli import _load_trial_source_from_yaml
+
+        repo_root = Path(__file__).parent.parent.parent.parent
+        path = repo_root / "trial_sources" / "prod" / "world_cup_prediction.yaml"
+        data = _load_trial_source_from_yaml(path)
+        cfg: dict[str, Any] = dict(data["config"])
+        scenario_config: dict[str, Any] = cfg["scenario_config"]
+        assert scenario_config["league"] == "fifa.world"
+        assert scenario_config["operators"][0]["class"] == "PredictionBroker"
+        personas = {a["persona"] for a in scenario_config["agents"]}
         assert personas == {"degen", "mystic", "pundit", "shark", "sheep", "whale"}
 
 

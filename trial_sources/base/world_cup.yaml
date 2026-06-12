@@ -35,13 +35,9 @@ scenario_config:
     event_types:
     - world_cup_play
 
-  # NOTE: odds_update_stream is intentionally omitted. The 2026 WC has a
-  # tournament-winner event-level market on Polymarket but no game-level
-  # markets yet. Uncomment and add "polymarket" to the world_cup trial's
-  # store_types when game-level WC markets land (expect ~T-7).
-  # - id: odds_update_stream
-  #   event_types:
-  #   - odds_update
+  - id: odds_update_stream
+    event_types:
+    - odds_update
 
   operators:
   - id: betting_broker
@@ -56,6 +52,7 @@ scenario_config:
     - get_statistics
     data_streams:
     - game_lifecycle_stream
+    - odds_update_stream
     - game_update_stream
 
 agent_template:
@@ -65,6 +62,7 @@ agent_template:
   data_streams:
   - pre_game_insights_stream
   - game_update_stream
+  - odds_update_stream
   - game_lifecycle_stream
   - play_by_play_stream
 

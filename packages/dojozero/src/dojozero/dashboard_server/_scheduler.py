@@ -574,16 +574,22 @@ class ScheduleManager:
 
         LOGGER.info("ScheduleManager stopped")
 
-    def _generate_schedule_id(self, sport_type: str, game_id: str) -> str:
+    def _generate_schedule_id(
+        self, sport_type: str, game_id: str, source_id: str | None = None
+    ) -> str:
         """Generate a unique schedule ID.
 
         Args:
             sport_type: Sport type (e.g., "nba", "nfl")
             game_id: Game ID
+            source_id: Optional source ID to distinguish multiple sources
+                scheduling the same game (e.g., betting vs prediction)
 
         Returns:
             Unique schedule ID
         """
+        if source_id:
+            return f"sched-{sport_type}-{game_id}-{source_id}"
         return f"sched-{sport_type}-{game_id}"
 
     async def schedule_trial(
@@ -1127,8 +1133,11 @@ class ScheduleManager:
             if "hub" not in game_config:
                 game_config["hub"] = {}
 
-            # Generate schedule_id early for dedup
-            schedule_id = self._generate_schedule_id(source.sport_type, game.game_id)
+            # Generate schedule_id early for dedup (include source_id so
+            # different sources for the same game get independent schedules)
+            schedule_id = self._generate_schedule_id(
+                source.sport_type, game.game_id, source.source_id
+            )
 
             # NOTE: persistence_file is set at launch time (in _launch_trial)
             # when the trial_id is known, using the canonical path:

@@ -19,13 +19,10 @@ from dojozero.data._config import HubConfig, TrialDataStreamConfig
 from dojozero.data._factory import build_runtime_context
 
 # Import factories to ensure they are registered when this module loads.
-# Polymarket is intentionally registered but NOT added to store_types until
-# 2026 WC game-level markets go live (the tournament-winner market is event-
-# level, not game-level, so it can't be wired through the per-game store yet).
 import dojozero.data.world_cup._factory  # noqa: F401
 import dojozero.data.websearch._factory  # noqa: F401
 import dojozero.data.socialmedia  # noqa: F401
-import dojozero.data.polymarket._factory  # noqa: F401  # TODO: enable when WC game markets exist
+import dojozero.data.polymarket._factory  # noqa: F401
 
 from dojozero.agents import (
     SocialBoardActor,
@@ -37,6 +34,8 @@ from dojozero.betting import (
     BettingTrialMetadata,
     BrokerOperator,
     BrokerOperatorConfig,
+    PredictionBroker,
+    PredictionBrokerConfig,
     TrialBrokerConfig,
 )
 from dojozero.data.socialmedia._events import SocialMediaEventMixin
@@ -111,8 +110,8 @@ class WorldCupTrialParams(BaseModel):
     market_url: str | None = Field(
         default=None,
         description=(
-            "Optional Polymarket URL. Game-level WC markets are not yet live; "
-            "the tournament-winner event-level market is not currently wired."
+            "Optional Polymarket game-market URL. If omitted, the Polymarket "
+            "store attempts to construct a world-cup-{away}-{home}-{date} slug."
         ),
     )
 
@@ -291,19 +290,30 @@ async def _build_trial_spec(
     )
 
     operator_specs: list[OperatorSpec[Any]] = []
-    operator_class_map = {"BrokerOperator": BrokerOperator}
+    operator_class_map = {
+        "BrokerOperator": BrokerOperator,
+        "PredictionBroker": PredictionBroker,
+    }
     for op_config in params.operators:
         op_cls = operator_class_map.get(op_config.class_name)
         if op_cls is None:
             raise ValueError(f"Unknown operator class: {op_config.class_name}")
 
+        operator_config: BrokerOperatorConfig | PredictionBrokerConfig
         if op_config.class_name == "BrokerOperator":
             broker_config: BrokerOperatorConfig = {"actor_id": op_config.id}
             if op_config.initial_balance:
                 broker_config["initial_balance"] = op_config.initial_balance
             if op_config.allowed_tools:
                 broker_config["allowed_tools"] = op_config.allowed_tools
-            operator_config: BrokerOperatorConfig = broker_config
+            operator_config = broker_config
+        elif op_config.class_name == "PredictionBroker":
+            prediction_config: PredictionBrokerConfig = {"actor_id": op_config.id}
+            if op_config.allowed_tools:
+                prediction_config["allowed_tools"] = op_config.allowed_tools
+            if op_config.window_pools is not None:
+                prediction_config["window_pools"] = op_config.window_pools
+            operator_config = prediction_config
         else:
             raise ValueError(f"Unsupported operator class: {op_config.class_name}")
 
@@ -343,7 +353,7 @@ async def _build_trial_spec(
     metadata = BettingTrialMetadata(
         hub_id=hub_id,
         persistence_file=persistence_file,
-        store_types=("world_cup",),  # TODO: add "polymarket" when WC game markets exist
+        store_types=("world_cup", "polymarket"),
         sample="world_cup",
         sport_type="world_cup",
         espn_game_id=params.espn_game_id,
@@ -415,6 +425,10 @@ register_trial_builder(
                 "event_types": ["world_cup_game_update"],
             },
             {
+                "id": "odds_update_stream",
+                "event_types": ["odds_update"],
+            },
+            {
                 "id": "play_by_play_stream",
                 "event_types": ["world_cup_play"],
             },
@@ -427,15 +441,14 @@ register_trial_builder(
                 "allowed_tools": [
                     "get_balance",
                     "get_event",
-                    "place_bet_moneyline",
-                    "cancel_bet",
-                    "get_active_bets",
-                    "get_pending_orders",
+                    "place_market_bet_moneyline",
+                    "get_holdings",
                     "get_bet_history",
                     "get_statistics",
                 ],
                 "data_streams": [
                     "game_lifecycle_stream",
+                    "odds_update_stream",
                     "game_update_stream",
                 ],
             }
@@ -448,6 +461,7 @@ register_trial_builder(
                 "data_streams": [
                     "pre_game_insights_stream",
                     "game_update_stream",
+                    "odds_update_stream",
                     "game_lifecycle_stream",
                     "play_by_play_stream",
                 ],

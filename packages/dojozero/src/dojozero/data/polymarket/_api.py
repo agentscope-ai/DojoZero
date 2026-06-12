@@ -96,7 +96,7 @@ class PolymarketAPI(ExternalAPI):
 
         Args:
             tricode: ESPN team abbreviation (e.g., "GS", "UTAH", "LAL", "LAR")
-            sport: Sport type ("nba" or "nfl") for sport-specific mappings
+            sport: Sport type ("nba", "nfl", or "world_cup") for sport-specific mappings
 
         Returns:
             Polymarket-compatible lowercase code (e.g., "gsw", "uta", "lal", "la")
@@ -120,6 +120,14 @@ class PolymarketAPI(ExternalAPI):
         return tricode.lower()[:3]
 
     @staticmethod
+    def sport_slug_prefix(sport: str) -> str:
+        """Return the sport prefix used in Polymarket event slugs."""
+        sport_lower = sport.lower().strip().replace("_", "-")
+        if sport_lower in {"worldcup", "world-cup", "fifa", "soccer"}:
+            return "world-cup"
+        return sport_lower
+
+    @staticmethod
     def get_event_url(
         away_tricode: str, home_tricode: str, game_date: str, sport: str = "nba"
     ) -> str:
@@ -136,7 +144,8 @@ class PolymarketAPI(ExternalAPI):
         """
         away_code = PolymarketAPI.normalize_tricode(away_tricode, sport)
         home_code = PolymarketAPI.normalize_tricode(home_tricode, sport)
-        slug = f"{sport.lower()}-{away_code}-{home_code}-{game_date}"
+        sport_prefix = PolymarketAPI.sport_slug_prefix(sport)
+        slug = f"{sport_prefix}-{away_code}-{home_code}-{game_date}"
         return f"https://polymarket.com/event/{slug}"
 
     def __init__(self, api_key: str | None = None):
