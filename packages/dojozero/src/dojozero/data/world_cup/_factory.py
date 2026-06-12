@@ -25,8 +25,8 @@ class WorldCupStoreFactory(StoreFactory):
         hub: DataHub,
     ) -> DataStore:
         espn_game_id = metadata.espn_game_id
-        league = getattr(metadata, "world_cup_league", None) or DEFAULT_LEAGUE
-        poll_intervals = getattr(metadata, "world_cup_poll_intervals", None)
+        league = metadata.world_cup_league or DEFAULT_LEAGUE
+        poll_intervals = metadata.world_cup_poll_intervals
 
         api = WorldCupExternalAPI(league=league)
 

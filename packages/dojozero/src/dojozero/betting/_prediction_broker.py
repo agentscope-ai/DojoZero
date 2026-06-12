@@ -115,7 +115,9 @@ def _parse_soccer_clock_to_elapsed_seconds(
     if upper in {"HT", "HALF", "HALFTIME"}:
         return seconds_per_period
     if upper in {"FT", "AET", "PEN", "FINAL"}:
-        return max(2, period) * seconds_per_period
+        fallback_period = 4 if upper == "AET" else 5 if upper == "PEN" else 2
+        terminal_period = period if period > 0 else fallback_period
+        return terminal_period * seconds_per_period
 
     stoppage_match = re.match(r"^\s*(\d{1,3})'\s*(?:\+\s*(\d{1,2})')?\s*$", clock)
     if stoppage_match:
@@ -442,16 +444,28 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
     @staticmethod
     def _extract_score(
         data_event: BaseGameUpdateEvent, *, side: Literal["home", "away"]
-    ) -> Any:
+    ) -> int | None:
+        def _to_int(value: Any) -> int | None:
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
         direct_score = getattr(data_event, f"{side}_score", None)
+        direct = _to_int(direct_score)
+        if direct is not None:
+            return direct
+
         attr = "home_team_stats" if side == "home" else "away_team_stats"
         stats = getattr(data_event, attr, None)
         if stats is not None:
             for field_name in ("points", "score"):
-                value = getattr(stats, field_name, None)
-                if value is not None:
-                    return value
-        return direct_score
+                score = _to_int(getattr(stats, field_name, None))
+                if score is not None:
+                    return score
+        return None
 
     async def _handle_game_start(
         self, data_event: GameStartEvent, event_id: str

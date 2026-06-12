@@ -47,7 +47,11 @@ def _period_label(period: int) -> str:
 def _format_game_initialize(event: GameInitializeEvent) -> str:
     home_team = str(event.home_team)
     away_team = str(event.away_team)
-    time_str = f" at {event.game_time.strftime('%Y-%m-%d %H:%M UTC')}"
+    time_str = (
+        f" at {event.game_time.strftime('%Y-%m-%d %H:%M UTC')}"
+        if event.game_time
+        else ""
+    )
     return f"[Match Initialized] {away_team} @ {home_team}{time_str}"
 
 

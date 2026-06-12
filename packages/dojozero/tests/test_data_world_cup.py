@@ -32,6 +32,7 @@ from dojozero.data.world_cup._api import DEFAULT_LEAGUE
 from dojozero.data.world_cup._utils import (
     _build_game_info_from_summary,
     _id_from_ref,
+    validate_world_cup_league,
 )
 
 
@@ -245,6 +246,11 @@ class TestIdFromRef:
     def test_ignores_query_string(self) -> None:
         assert _id_from_ref({"$ref": "https://x.example/teams/209?foo=bar"}) == "209"
 
+    def test_validates_world_cup_league_codes(self) -> None:
+        assert validate_world_cup_league("fifa.cwc") == "fifa.cwc"
+        with pytest.raises(ValueError, match="Unknown FIFA league code"):
+            validate_world_cup_league("fifa.world/../../nfl")
+
 
 class TestBuildGameInfoFromSummary:
     def test_extracts_team_venue_season(self, summary_payload: dict[str, Any]) -> None:
@@ -349,6 +355,24 @@ class TestPlaysParsing:
         assert sum(isinstance(e, GameStartEvent) for e in second) == 0
         assert sum(isinstance(e, GameResultEvent) for e in second) == 0
 
+    def test_deduped_final_plays_use_current_score_for_pending_result(
+        self,
+        world_cup_store: WorldCupStore,
+        summary_payload: dict[str, Any],
+        plays_payload: dict[str, Any],
+    ) -> None:
+        list(world_cup_store._parse_api_response({"summary": summary_payload}))
+        items = plays_payload["items"]
+        world_cup_store._state.filter_new_plays("684665", items)
+
+        events = list(world_cup_store._parse_api_response({"plays": plays_payload}))
+        results = [e for e in events if isinstance(e, GameResultEvent)]
+
+        assert len(results) == 1
+        assert results[0].winner == "home"
+        assert results[0].home_score == 1
+        assert results[0].away_score == 0
+
     def test_summary_then_plays_emits_correct_game_result(
         self,
         world_cup_store: WorldCupStore,
@@ -367,6 +391,70 @@ class TestPlaysParsing:
         assert r.away_team_name == "Argentina"
         assert r.home_score == 1
         assert r.away_score == 0
+
+    def test_shootout_result_uses_summary_winner_when_scores_are_tied(self) -> None:
+        store = WorldCupStore(store_id="shootout", league="fifa.cwc")
+        summary = {
+            "header": {
+                "id": "pk-1",
+                "season": {"year": 2026, "type": 3},
+                "competitions": [
+                    {
+                        "id": "pk-1",
+                        "date": "2026-07-19T19:00Z",
+                        "status": {"type": {"name": "STATUS_FINAL_PEN"}},
+                        "competitors": [
+                            {
+                                "homeAway": "home",
+                                "score": "1",
+                                "winner": False,
+                                "team": {
+                                    "id": "1",
+                                    "displayName": "Home FC",
+                                    "abbreviation": "HOM",
+                                },
+                            },
+                            {
+                                "homeAway": "away",
+                                "score": "1",
+                                "winner": True,
+                                "team": {
+                                    "id": "2",
+                                    "displayName": "Away FC",
+                                    "abbreviation": "AWY",
+                                },
+                            },
+                        ],
+                    }
+                ],
+            }
+        }
+        plays = {
+            "eventId": "pk-1",
+            "items": [
+                {
+                    "id": "final",
+                    "type": {
+                        "id": "999",
+                        "text": "End Shootout",
+                        "type": "end-shootout",
+                    },
+                    "period": {"number": 5},
+                    "clock": {"displayValue": "PEN"},
+                    "homeScore": 1,
+                    "awayScore": 1,
+                    "text": "Penalty Shootout ends, Home FC 1, Away FC 1.",
+                }
+            ],
+        }
+
+        list(store._parse_api_response({"summary": summary}))
+        events = list(store._parse_api_response({"plays": plays}))
+        result = next(e for e in events if isinstance(e, GameResultEvent))
+
+        assert result.winner == "away"
+        assert result.home_score == 1
+        assert result.away_score == 1
 
     def test_scoring_play_carries_player_and_team(
         self,
@@ -408,6 +496,9 @@ class TestStateTracker:
         # Man City, STATUS_FINAL_AET).
         assert s.status_name_to_code("STATUS_FINAL_AET") == s.STATUS_FINAL
         assert s.status_name_to_code("STATUS_FINAL_PEN") == s.STATUS_FINAL
+        assert s.status_name_to_code("STATUS_POSTPONED") == 4
+        assert s.status_name_to_code("STATUS_CANCELED") == 5
+        assert s.status_name_to_code("STATUS_ABANDONED") == 5
         # Unknown names default to scheduled
         assert s.status_name_to_code("STATUS_NONSENSE") == s.STATUS_SCHEDULED
 

@@ -11,7 +11,7 @@ from typing import Any
 from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data.espn._api import ESPNExternalAPI
 from dojozero.data.nfl._api import NFLExternalAPI
-from dojozero.data.world_cup._state_tracker import _SOCCER_STATUS_NAME_MAP
+from dojozero.data.world_cup._constants import SOCCER_STATUS_NAME_MAP
 
 from dojozero.utils import (
     us_game_day_today,
@@ -627,7 +627,7 @@ def _parse_espn_soccer_scoreboard(data: dict[str, Any]) -> list[GameInfo]:
 
     ESPN's soccer ``status.type.id`` does not match the 1/2/3 convention used
     elsewhere in the scheduler (full time is id 28, AET is 45, …). We map by
-    ``status.type.name`` against ``_SOCCER_STATUS_NAME_MAP``.
+    ``status.type.name`` against ``SOCCER_STATUS_NAME_MAP``.
     """
     scoreboard = data.get("scoreboard", {})
     events = scoreboard.get("events", [])
@@ -639,7 +639,7 @@ def _parse_espn_soccer_scoreboard(data: dict[str, Any]) -> list[GameInfo]:
         # Translate raw ESPN id into the canonical 1/2/3 status.
         comp = (event.get("competitions") or [{}])[0]
         status_name = ((comp.get("status") or {}).get("type") or {}).get("name", "")
-        canonical = _SOCCER_STATUS_NAME_MAP.get(status_name)
+        canonical = SOCCER_STATUS_NAME_MAP.get(status_name)
         if canonical is not None:
             game = game.model_copy(update={"status": canonical})
         games.append(game)
@@ -657,7 +657,7 @@ class WorldCupGameFetcher:
     def __init__(self, league: str = "fifa.world") -> None:
         self.league = league
 
-    def _api(self) -> ESPNExternalAPI:
+    def _make_api(self) -> ESPNExternalAPI:
         return ESPNExternalAPI(sport="soccer", league=self.league)
 
     async def fetch_games_for_date(
@@ -673,7 +673,7 @@ class WorldCupGameFetcher:
         Returns:
             List of GameInfo objects with status codes mapped to 1/2/3.
         """
-        api = self._api()
+        api = self._make_api()
         try:
             auto_date = date is None
             if date is None:
@@ -712,6 +712,26 @@ class WorldCupGameFetcher:
             return []
         finally:
             await api.close()
+
+    async def fetch_games_for_date_range(
+        self,
+        start_date: str,
+        end_date: str,
+    ) -> list[GameInfo]:
+        """Fetch FIFA soccer matches for a date range."""
+        games: list[GameInfo] = []
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+
+        if start > end:
+            start, end = end, start
+
+        current = start
+        while current <= end:
+            games.extend(await self.fetch_games_for_date(current.strftime("%Y-%m-%d")))
+            current += timedelta(days=1)
+
+        return games
 
     async def get_game_status(
         self, game_id: str, game_date: str | None = None

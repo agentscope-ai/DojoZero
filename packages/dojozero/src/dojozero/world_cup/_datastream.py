@@ -8,19 +8,16 @@ search, social media, and stats-fetch behavior is inherited unchanged.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 from dojozero.core import RuntimeContext
 from dojozero.data import DataHub
 from dojozero.data._context import GameContext
+from dojozero.data.espn._api import ESPNExternalAPI
 from dojozero.data.websearch._api import WebSearchAPI
 from dojozero.nba._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
 )
-
-if TYPE_CHECKING:
-    from dojozero.data.espn._api import ESPNExternalAPI
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +45,7 @@ class WorldCupPreGameBettingDataHubDataStream(NBAPreGameBettingDataHubDataStream
     @classmethod
     def from_dict(
         cls,
-        config: NBAPreGameBettingDataHubDataStreamConfig,
+        config: WorldCupPreGameBettingDataHubDataStreamConfig,
         context: RuntimeContext,
     ) -> "WorldCupPreGameBettingDataHubDataStream":
         hub: DataHub | None = None
@@ -86,15 +83,9 @@ class WorldCupPreGameBettingDataHubDataStream(NBAPreGameBettingDataHubDataStream
             search_api = WebSearchAPI()
 
         if stats_event_types:
-            from dojozero.data.espn._api import ESPNExternalAPI as _ESPNExternalAPI
-
-            league_override = config.get("league") if isinstance(config, dict) else None
-            league = (
-                league_override
-                if isinstance(league_override, str) and league_override
-                else "fifa.world"
-            )
-            espn_api = _ESPNExternalAPI(sport="soccer", league=league)
+            league_override = config.get("league")
+            league = league_override if league_override else "fifa.world"
+            espn_api = ESPNExternalAPI(sport="soccer", league=league)
 
         return cls(
             actor_id=config["actor_id"],

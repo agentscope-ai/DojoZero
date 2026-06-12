@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from dojozero.core import (
     DataStreamSpec,
@@ -41,6 +41,7 @@ from dojozero.betting import (
 from dojozero.data.socialmedia._events import SocialMediaEventMixin
 from dojozero.data.websearch._events import WebSearchEventMixin
 from dojozero.data.world_cup._api import DEFAULT_LEAGUE
+from dojozero.data.world_cup._constants import WORLD_CUP_KNOWN_LEAGUES
 from dojozero.data.world_cup._utils import get_game_info_by_id_async
 from dojozero.world_cup._agent import BettingAgent
 from dojozero.world_cup._datastream import (
@@ -49,20 +50,6 @@ from dojozero.world_cup._datastream import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# FIFA league codes the trial builder will accept.
-_KNOWN_LEAGUES: set[str] = {
-    "fifa.world",  # Men's World Cup
-    "fifa.wwc",  # Women's World Cup
-    "fifa.cwc",  # Club World Cup
-    "fifa.worldq.uefa",
-    "fifa.worldq.concacaf",
-    "fifa.worldq.conmebol",
-    "fifa.worldq.afc",
-    "fifa.worldq.caf",
-    "fifa.worldq.ofc",
-}
 
 
 class WorldCupTrialParams(BaseModel):
@@ -76,7 +63,8 @@ class WorldCupTrialParams(BaseModel):
     league: str = Field(
         default=DEFAULT_LEAGUE,
         description=(
-            "FIFA league code. Accepted values: " + ", ".join(sorted(_KNOWN_LEAGUES))
+            "FIFA league code. Accepted values: "
+            + ", ".join(sorted(WORLD_CUP_KNOWN_LEAGUES))
         ),
     )
 
@@ -115,12 +103,15 @@ class WorldCupTrialParams(BaseModel):
         ),
     )
 
-    def model_post_init(self, __context: Any) -> None:
-        if self.league not in _KNOWN_LEAGUES:
+    @field_validator("league", mode="after")
+    @classmethod
+    def _validate_league(cls, value: str) -> str:
+        if value not in WORLD_CUP_KNOWN_LEAGUES:
             raise ValueError(
-                f"Unknown FIFA league code: {self.league!r}. "
-                f"Expected one of: {sorted(_KNOWN_LEAGUES)}"
+                f"Unknown FIFA league code: {value!r}. "
+                f"Expected one of: {sorted(WORLD_CUP_KNOWN_LEAGUES)}"
             )
+        return value
 
 
 async def _build_trial_spec(
@@ -191,9 +182,15 @@ async def _build_trial_spec(
         if away_tricode:
             cfg["away_team_tricode"] = away_tricode
 
+        def _event_type_suffix(cls: type[Any]) -> str:
+            field = getattr(cls, "model_fields", {}).get("event_type")
+            default = getattr(field, "default", "")
+            return default.removeprefix("event.") if isinstance(default, str) else ""
+
         _ws_suffixes = {
-            cls.model_fields["event_type"].default.removeprefix("event.")  # type: ignore[attr-defined]
+            suffix
             for cls in WebSearchEventMixin.__subclasses__()
+            if (suffix := _event_type_suffix(cls))
         }
         websearch_suffixes = [s for s in event_type_suffixes if s in _ws_suffixes]
 
@@ -201,8 +198,9 @@ async def _build_trial_spec(
         stats_suffixes = [s for s in event_type_suffixes if s in _stats_suffixes]
 
         _sm_suffixes = {
-            cls.model_fields["event_type"].default.removeprefix("event.")  # type: ignore[attr-defined]
+            suffix
             for cls in SocialMediaEventMixin.__subclasses__()
+            if (suffix := _event_type_suffix(cls))
         }
         socialmedia_suffixes = [s for s in event_type_suffixes if s in _sm_suffixes]
 

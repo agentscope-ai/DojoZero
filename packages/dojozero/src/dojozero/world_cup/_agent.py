@@ -42,7 +42,6 @@ class BettingAgent(BaseBettingAgent):
             sys_prompt=config.get("sys_prompt", ""),
             model=create_model(llm_config),
             formatter=create_formatter(model_type, model_name),
-            event_formatter=format_event,
         )
 
 

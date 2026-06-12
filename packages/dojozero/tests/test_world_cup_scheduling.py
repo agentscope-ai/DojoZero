@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from dojozero.data._game_info import GameInfo
 from dojozero.data._models import (
     GameInitializeEvent,
     GameResultEvent,
@@ -206,6 +207,37 @@ class TestWorldCupGameFetcher:
         for g in games:
             assert g.status == 1  # canonical SCHEDULED
             assert g.game_time_utc is not None
+
+    @pytest.mark.asyncio
+    async def test_fetch_games_for_date_range_aggregates_days(
+        self, monkeypatch
+    ) -> None:
+        fetcher = WorldCupGameFetcher(league="fifa.cwc")
+        calls: list[str | None] = []
+
+        async def fake_fetch(date: str | None = None) -> list[GameInfo]:
+            calls.append(date)
+            return [
+                GameInfo.model_validate(
+                    {
+                        "gameId": f"game-{date}",
+                        "sport_type": "world_cup",
+                        "homeTeam": {"displayName": "Home"},
+                        "awayTeam": {"displayName": "Away"},
+                    }
+                )
+            ]
+
+        monkeypatch.setattr(fetcher, "fetch_games_for_date", fake_fetch)
+
+        games = await fetcher.fetch_games_for_date_range("2025-07-01", "2025-07-03")
+
+        assert calls == ["2025-07-01", "2025-07-02", "2025-07-03"]
+        assert [g.game_id for g in games] == [
+            "game-2025-07-01",
+            "game-2025-07-02",
+            "game-2025-07-03",
+        ]
 
 
 # =============================================================================

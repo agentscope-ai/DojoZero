@@ -431,6 +431,8 @@ def test_parse_soccer_clock_to_elapsed_seconds() -> None:
     assert _parse_soccer_clock_to_elapsed_seconds("45'+2'", 1, 2700) == 47 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("90'+4'", 2, 2700) == 94 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("HT", 1, 2700) == 45 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("FT", 1, 2700) == 45 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("AET", 1, 2700) == 45 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("", 2, 2700) == 45 * 60
 
 
@@ -474,11 +476,11 @@ async def test_get_event_info_uses_soccer_score_field() -> None:
                 away_score=1,
                 home_team_stats=SoccerTeamMatchStats(
                     team_name="Argentina",
-                    score=2,
+                    score=0,
                 ),
                 away_team_stats=SoccerTeamMatchStats(
                     team_name="France",
-                    score=1,
+                    score=0,
                 ),
             )
         )
@@ -488,6 +490,7 @@ async def test_get_event_info_uses_soccer_score_field() -> None:
     assert info is not None
     assert info["home_team"] == "Argentina"
     assert info["away_team"] == "France"
+    # Direct event scores are authoritative; stats can lag on soccer feeds.
     assert info["home_score"] == 2
     assert info["away_score"] == 1
 

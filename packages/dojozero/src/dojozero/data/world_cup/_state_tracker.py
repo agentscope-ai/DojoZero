@@ -3,36 +3,7 @@
 from typing import Any
 
 from dojozero.data.espn._state_tracker import BaseGameStateTracker
-
-# ESPN soccer status name → status code mapping. The base class map covers
-# generic statuses; soccer adds half/full-time/ET/shootout-specific names.
-# Values follow the base class convention: 1=scheduled, 2=in_progress, 3=final.
-# Mapping verified against live ESPN summary payloads:
-# - STATUS_FULL_TIME      (id 28) — regulation finish
-# - STATUS_FINAL_AET      (id 45) — after extra time
-# - STATUS_FINAL_PEN      — after penalty shootout (Copa America 2024 QF/SF/final)
-# Status names not yet observed in the wild (STATUS_FIRST_HALF/SECOND_HALF/etc.)
-# are included to be safe — they follow ESPN's naming convention across sports.
-_SOCCER_STATUS_NAME_MAP: dict[str, int] = {
-    "STATUS_SCHEDULED": 1,
-    "STATUS_DELAYED": 1,
-    "STATUS_POSTPONED": 1,
-    "STATUS_FIRST_HALF": 2,
-    "STATUS_HALFTIME": 2,
-    "STATUS_SECOND_HALF": 2,
-    "STATUS_IN_PROGRESS": 2,
-    "STATUS_END_PERIOD": 2,
-    "STATUS_EXTRA_TIME": 2,
-    "STATUS_END_EXTRA_TIME": 2,
-    "STATUS_SHOOTOUT": 2,
-    "STATUS_FULL_TIME": 3,
-    "STATUS_FINAL": 3,
-    "STATUS_FINAL_AET": 3,
-    "STATUS_FINAL_PEN": 3,
-    "STATUS_ABANDONED": 3,
-    "STATUS_CANCELED": 3,
-    "STATUS_FORFEIT": 3,
-}
+from dojozero.data.world_cup._constants import SOCCER_STATUS_NAME_MAP
 
 
 class GameStateTracker(BaseGameStateTracker):
@@ -62,6 +33,7 @@ class GameStateTracker(BaseGameStateTracker):
         self._player_name_lookup: dict[str, str] = {}
         self._home_team_id: dict[str, str] = {}
         self._away_team_id: dict[str, str] = {}
+        self._winner_side: dict[str, str] = {}
         self._home_starters: dict[str, list[dict[str, Any]]] = {}
         self._away_starters: dict[str, list[dict[str, Any]]] = {}
         self._pbp_available: set[str] = set()
@@ -69,7 +41,7 @@ class GameStateTracker(BaseGameStateTracker):
 
     def status_name_to_code(self, status_name: str) -> int:
         """Map ESPN soccer status names to status codes."""
-        return _SOCCER_STATUS_NAME_MAP.get(status_name, self.STATUS_SCHEDULED)
+        return SOCCER_STATUS_NAME_MAP.get(status_name, self.STATUS_SCHEDULED)
 
     def is_pbp_available(self, game_id: str) -> bool:
         return game_id in self._pbp_available
@@ -92,6 +64,12 @@ class GameStateTracker(BaseGameStateTracker):
     def update_scores(self, game_id: str, home_score: int, away_score: int) -> None:
         self._current_home_score[game_id] = home_score
         self._current_away_score[game_id] = away_score
+
+    def get_current_scores(self, game_id: str) -> tuple[int, int]:
+        return (
+            self._current_home_score.get(game_id, 0),
+            self._current_away_score.get(game_id, 0),
+        )
 
     # -- Team / player lookup -------------------------------------------------
 
@@ -124,6 +102,13 @@ class GameStateTracker(BaseGameStateTracker):
     def get_away_team_id(self, game_id: str) -> str:
         return self._away_team_id.get(game_id, "")
 
+    def set_winner_side(self, game_id: str, winner_side: str) -> None:
+        if winner_side in {"home", "away"}:
+            self._winner_side[game_id] = winner_side
+
+    def get_winner_side(self, game_id: str) -> str:
+        return self._winner_side.get(game_id, "")
+
     def set_starters(
         self,
         game_id: str,
@@ -149,6 +134,7 @@ class GameStateTracker(BaseGameStateTracker):
                 "current_clock": dict(self._current_clock),
                 "home_team_id": dict(self._home_team_id),
                 "away_team_id": dict(self._away_team_id),
+                "winner_side": dict(self._winner_side),
                 # Lookup tables and starters are NOT saved — re-fetched on resume.
                 # _seen_play_ids is NOT saved — rebuilt from JSONL on resume.
             }
@@ -161,6 +147,7 @@ class GameStateTracker(BaseGameStateTracker):
         self._current_clock = dict(data.get("current_clock", {}))
         self._home_team_id = dict(data.get("home_team_id", {}))
         self._away_team_id = dict(data.get("away_team_id", {}))
+        self._winner_side = dict(data.get("winner_side", {}))
 
 
 __all__ = ["GameStateTracker"]

@@ -278,6 +278,10 @@ class WorldCupStore(DataStore):
             away_tid = str(away_team.get("id", ""))
             if home_tid and away_tid:
                 self._state.set_team_ids(game_id, home_tid, away_tid)
+            if home_competitor.get("winner") is True:
+                self._state.set_winner_side(game_id, "home")
+            elif away_competitor.get("winner") is True:
+                self._state.set_winner_side(game_id, "away")
             for team in (home_team, away_team):
                 tid = str(team.get("id", ""))
                 self._state.update_team_lookup(
@@ -401,9 +405,18 @@ class WorldCupStore(DataStore):
             period = self._state.get_current_period(game_id)
             game_clock = self._state.get_current_clock(game_id)
             if not period and status_code == self._state.STATUS_FINAL:
-                # No PBP yet but match is done: assume 2 halves played.
-                period = 2
-                game_clock = "FT"
+                # No PBP yet but match is done: infer the terminal phase from
+                # ESPN's status name so ET/shootout matches don't look like
+                # regulation finishes.
+                if status_name == "STATUS_FINAL_AET":
+                    period = 4
+                    game_clock = "AET"
+                elif status_name == "STATUS_FINAL_PEN":
+                    period = 5
+                    game_clock = "PEN"
+                else:
+                    period = 2
+                    game_clock = "FT"
 
             events.append(
                 WorldCupGameUpdateEvent(
@@ -438,7 +451,7 @@ class WorldCupStore(DataStore):
                     if home_score > away_score
                     else "away"
                     if away_score > home_score
-                    else ""
+                    else self._state.get_winner_side(game_id)
                 )
                 home_tid = self._state.get_home_team_id(game_id)
                 away_tid = self._state.get_away_team_id(game_id)
@@ -513,8 +526,7 @@ class WorldCupStore(DataStore):
         new_items = self._state.filter_new_plays(game_id, items)
 
         timestamp = datetime.now(timezone.utc)
-        last_home_score = 0
-        last_away_score = 0
+        last_home_score, last_away_score = self._state.get_current_scores(game_id)
         for play in new_items:
             play_id = str(play.get("id", ""))
             type_info = play.get("type", {}) or {}
@@ -545,6 +557,7 @@ class WorldCupStore(DataStore):
             # Track clock progression.
             if period:
                 self._state.update_match_clock(game_id, period, clock_display)
+            self._state.update_scores(game_id, home_score, away_score)
 
             game_timestamp: datetime | None = None
             wallclock = play.get("wallclock")
@@ -588,7 +601,7 @@ class WorldCupStore(DataStore):
                 if last_home_score > last_away_score
                 else "away"
                 if last_away_score > last_home_score
-                else ""
+                else self._state.get_winner_side(game_id)
             )
             home_tid = self._state.get_home_team_id(game_id)
             away_tid = self._state.get_away_team_id(game_id)

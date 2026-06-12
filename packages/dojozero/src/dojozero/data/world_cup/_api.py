@@ -14,6 +14,7 @@ from typing import Any
 
 from dojozero.data._stores import ExternalAPI
 from dojozero.data.espn import ESPNExternalAPI
+from dojozero.data.world_cup._utils import validate_world_cup_league
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +53,10 @@ class WorldCupExternalAPI(ExternalAPI):
             proxy: Optional proxy URL. If None, ESPNExternalAPI reads DOJOZERO_PROXY_URL.
         """
         super().__init__()
-        self.league = league
+        self.league = validate_world_cup_league(league)
         self._api = ESPNExternalAPI(
             sport="soccer",
-            league=league,
+            league=self.league,
             timeout=timeout,
             proxy=proxy,
         )
@@ -78,12 +79,14 @@ class WorldCupExternalAPI(ExternalAPI):
         if endpoint == "boxscore":
             event_id = params.get("game_id") or params.get("event_id")
             if not event_id:
+                logger.warning("World Cup summary fetch requested without event_id")
                 return {"summary": {"eventId": ""}}
             return await self._api.fetch("summary", {"event_id": event_id})
 
         if endpoint == "play_by_play":
             event_id = params.get("game_id") or params.get("event_id")
             if not event_id:
+                logger.warning("World Cup plays fetch requested without event_id")
                 return {"plays": {"items": [], "eventId": ""}}
             return await self._api.fetch("plays", {"event_id": event_id})
 

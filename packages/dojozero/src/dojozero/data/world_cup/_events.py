@@ -21,6 +21,8 @@ from dojozero.data._models import (
 
 # =============================================================================
 # Curated soccer stat models (Pydantic, frozen)
+# These are nested inside Pydantic events, so BaseModel keeps validation and
+# serialization consistent with the event payloads while remaining immutable.
 # =============================================================================
 
 
