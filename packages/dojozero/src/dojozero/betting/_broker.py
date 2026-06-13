@@ -1145,7 +1145,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 f"Cannot settle event with status {betting_event.status.value}, must be CLOSED"
             )
 
-        if winner not in ["home", "away", "even", "draw"]:
+        if winner not in ["home", "away", "even"]:
             raise ValueError(f"Invalid winner: {winner}")
 
         # Validate final_score is present and has required keys (needed for spread/total betting)

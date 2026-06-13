@@ -39,7 +39,9 @@ class WorldCupPreGameBettingDataHubDataStream(NBAPreGameBettingDataHubDataStream
 
     Behavior is identical to the NBA stream; only the sport→(ESPN sport, league)
     mapping is extended for soccer so the optional ESPN stats fetch (when a
-    soccer pregame_stats fetcher is added later) uses the right path.
+    soccer pregame_stats fetcher is added later) uses the right path. If the
+    parent stream grows NBA-specific behavior, split out a sport-neutral base
+    before extending this subclass further.
     """
 
     @classmethod

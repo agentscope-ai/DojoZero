@@ -27,8 +27,8 @@ from dojozero.data.world_cup._events import (
 )
 from dojozero.data.world_cup._state_tracker import GameStateTracker
 from dojozero.data.world_cup._utils import (
-    _build_game_info_from_summary,
-    _id_from_ref,
+    build_game_info_from_summary,
+    id_from_ref,
     parse_iso_datetime,
 )
 
@@ -325,7 +325,7 @@ class WorldCupStore(DataStore):
 
         # Emit GameInitializeEvent once.
         if has_team_data and not self._state.is_game_initialized(game_id):
-            game_info = _build_game_info_from_summary(summary, game_id)
+            game_info = build_game_info_from_summary(summary, game_id)
             if game_info is not None:
                 home = game_info.home_team
                 away = game_info.away_team
@@ -526,8 +526,9 @@ class WorldCupStore(DataStore):
             if home_tid:  # mark we've at least seen team IDs
                 self._state.set_previous_status(game_id, self._state.STATUS_IN_PROGRESS)
 
-        # Detect game end (last play in items) before dedup-filtering so the
-        # signal isn't lost if we already saw all plays.
+        # ESPN returns plays in chronological order; inspect the last raw item
+        # before dedup-filtering so the terminal signal isn't lost if we
+        # already saw all plays.
         game_ended = False
         last_play = items[-1] if items else None
         if isinstance(last_play, dict):
@@ -554,7 +555,7 @@ class WorldCupStore(DataStore):
             scoring_play = bool(play.get("scoringPlay", False))
             score_value = int(play.get("scoreValue", 0) or 0)
 
-            team_id = _id_from_ref(play.get("team"))
+            team_id = id_from_ref(play.get("team"))
             team_tricode = self._state.get_team_tricode(team_id)
 
             # Primary participant (scorer/keeper/etc.) is the first listed.
@@ -562,7 +563,7 @@ class WorldCupStore(DataStore):
             player_name = ""
             participants = play.get("participants", []) or []
             if participants and isinstance(participants[0], dict):
-                player_id = _id_from_ref(participants[0].get("athlete"))
+                player_id = id_from_ref(participants[0].get("athlete"))
                 if player_id:
                     player_name = self._state.get_player_name(player_id)
 

@@ -1110,10 +1110,7 @@ class TestBetSettlement:
         balance = await broker.get_balance(agent.actor_id)
         assert balance == Decimal("900.00")
 
-    @pytest.mark.parametrize("winner", ["even", "draw"])
-    async def test_settle_draw_result_marks_moneyline_bet_lost(
-        self, broker_with_agent, winner
-    ):
+    async def test_settle_draw_result_marks_moneyline_bet_lost(self, broker_with_agent):
         """A tied soccer result should settle home/away moneyline bets as losses."""
         broker, agent = broker_with_agent
 
@@ -1170,7 +1167,7 @@ class TestBetSettlement:
                 payload=GameResultEvent(
                     game_id="draw_event",
                     sport="world_cup",
-                    winner=winner,
+                    winner="even",
                     home_score=0,
                     away_score=0,
                 ),
@@ -1184,9 +1181,8 @@ class TestBetSettlement:
         assert history[0].actual_payout == Decimal("0")
         assert await broker.get_balance(agent.actor_id) == Decimal("900.00")
 
-    @pytest.mark.parametrize("winner", ["even", "draw"])
     async def test_settle_draw_result_marks_home_spread_bet_lost(
-        self, broker_with_agent, winner
+        self, broker_with_agent
     ):
         """A 1-1 soccer draw should not cover a home -0.5 spread."""
         broker, agent = broker_with_agent
@@ -1240,7 +1236,7 @@ class TestBetSettlement:
                 payload=GameResultEvent(
                     game_id="draw_spread_event",
                     sport="world_cup",
-                    winner=winner,
+                    winner="even",
                     home_score=1,
                     away_score=1,
                 ),
@@ -1254,10 +1250,7 @@ class TestBetSettlement:
         assert history[0].actual_payout == Decimal("0")
         assert await broker.get_balance(agent.actor_id) == Decimal("900.00")
 
-    @pytest.mark.parametrize("winner", ["even", "draw"])
-    async def test_settle_draw_result_marks_total_over_bet_won(
-        self, broker_with_agent, winner
-    ):
+    async def test_settle_draw_result_marks_total_over_bet_won(self, broker_with_agent):
         """A 1-1 soccer draw should settle total markets from the final score."""
         broker, agent = broker_with_agent
 
@@ -1310,7 +1303,7 @@ class TestBetSettlement:
                 payload=GameResultEvent(
                     game_id="draw_total_event",
                     sport="world_cup",
-                    winner=winner,
+                    winner="even",
                     home_score=1,
                     away_score=1,
                 ),

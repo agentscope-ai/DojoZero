@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import pytest
 
@@ -437,11 +438,14 @@ def test_parse_clock_to_seconds() -> None:
 def test_parse_soccer_clock_to_elapsed_seconds() -> None:
     assert _parse_soccer_clock_to_elapsed_seconds("45'+2'", 1, 2700) == 47 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("90'+4'", 2, 2700) == 94 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("60:30", 2, 2700) == 60 * 60 + 30
     assert _parse_soccer_clock_to_elapsed_seconds("HT", 1, 2700) == 45 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("FT", 2, 2700) == 90 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("FT", 1, 2700) == 45 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("AET", 1, 2700) == 45 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("FINAL", 0, 2700) == 90 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("", 2, 2700) == 45 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("unknown", 2, 2700) == 45 * 60
 
 
 @pytest.mark.asyncio
@@ -501,6 +505,19 @@ async def test_get_event_info_uses_soccer_score_field() -> None:
     # Direct event scores are authoritative; stats can lag on soccer feeds.
     assert info["home_score"] == 2
     assert info["away_score"] == 1
+
+
+def test_extract_score_falls_back_to_soccer_team_stats_score() -> None:
+    from dojozero.data.world_cup import SoccerTeamMatchStats
+
+    class SoccerStatsOnlyUpdate:
+        home_team_stats = SoccerTeamMatchStats(team_name="Argentina", score=3)
+        away_team_stats = SoccerTeamMatchStats(team_name="France", score=2)
+
+    update = cast(Any, SoccerStatsOnlyUpdate())
+
+    assert PredictionBroker._extract_score(update, side="home") == 3
+    assert PredictionBroker._extract_score(update, side="away") == 2
 
 
 # ---------------------------------------------------------------------------

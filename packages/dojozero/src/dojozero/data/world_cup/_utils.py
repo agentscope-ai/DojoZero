@@ -42,7 +42,7 @@ def validate_world_cup_league(league: str) -> str:
     )
 
 
-def _id_from_ref(obj: dict[str, Any] | None) -> str:
+def id_from_ref(obj: dict[str, Any] | None) -> str:
     """Extract the trailing numeric ID from an ESPN ``$ref`` URL."""
     if not obj:
         return ""
@@ -87,7 +87,7 @@ def _team_dict_from_competitor(competitor: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_game_info_from_summary(
+def build_game_info_from_summary(
     summary: dict[str, Any],
     game_id: str,
 ) -> GameInfo | None:
@@ -159,6 +159,10 @@ def _build_game_info_from_summary(
     return GameInfo.model_validate(game_data)
 
 
+_id_from_ref = id_from_ref
+_build_game_info_from_summary = build_game_info_from_summary
+
+
 async def get_game_info_by_id_async(
     game_id: str,
     league: str = "fifa.world",
@@ -197,11 +201,13 @@ async def get_game_info_by_id_async(
         logger.warning("World Cup summary fetch failed for event %s: %s", game_id, exc)
         return None
 
-    return _build_game_info_from_summary(summary, game_id)
+    return build_game_info_from_summary(summary, game_id)
 
 
 __all__ = [
+    "build_game_info_from_summary",
     "get_game_info_by_id_async",
+    "id_from_ref",
     "parse_iso_datetime",
     "validate_world_cup_league",
 ]
