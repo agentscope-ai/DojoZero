@@ -79,14 +79,22 @@ def _format_game_update(event: WorldCupGameUpdateEvent) -> str:
     away = event.away_team_stats
     period_name = _period_label(event.period)
     clock_str = f" | {event.game_clock}" if event.game_clock else ""
+
+    def team_label(team_name: str, team_tricode: str, side: str) -> str:
+        name = team_name or f"{side} Team"
+        code = f" ({team_tricode})" if team_tricode else ""
+        return f"{name}{code} ({side})"
+
     lines = [
         f"[Match Update] {period_name}{clock_str}",
-        f"{away.team_name} ({away.team_tricode}): {away.score}  "
-        f"shots {away.total_shots}/{away.shots_on_target}  "
-        f"poss {away.possession_pct:.1f}%",
-        f"{home.team_name} ({home.team_tricode}): {home.score}  "
+        f"{team_label(home.team_name, home.team_tricode, 'Home')}: "
+        f"{event.home_score}  "
         f"shots {home.total_shots}/{home.shots_on_target}  "
         f"poss {home.possession_pct:.1f}%",
+        f"{team_label(away.team_name, away.team_tricode, 'Away')}: "
+        f"{event.away_score}  "
+        f"shots {away.total_shots}/{away.shots_on_target}  "
+        f"poss {away.possession_pct:.1f}%",
     ]
     return "\n".join(lines)
 

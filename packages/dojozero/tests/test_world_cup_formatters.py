@@ -123,9 +123,28 @@ class TestFormatGameUpdate:
         out = format_event(ev)
         assert "2H" in out
         assert "90'+4'" in out
-        assert "Ecuador (ECU): 1" in out
-        assert "Argentina (ARG): 0" in out
+        assert "Ecuador (ECU) (Home): 1" in out
+        assert "Argentina (ARG) (Away): 0" in out
+        assert out.index("(Home): 1") < out.index("(Away): 0")
         assert "42.6" in out  # possession pct rendered
+
+    def test_uses_event_scores_and_labels_unknown_teams(self) -> None:
+        ev = WorldCupGameUpdateEvent(
+            game_id="g1",
+            sport="world_cup",
+            period=1,
+            home_score=2,
+            away_score=1,
+            home_team_stats=SoccerTeamMatchStats(score=0),
+            away_team_stats=SoccerTeamMatchStats(score=0),
+            player_stats=SoccerGamePlayerStats(),
+        )
+
+        out = format_event(ev)
+
+        assert "Home Team (Home): 2" in out
+        assert "Away Team (Away): 1" in out
+        assert "(): 0" not in out
 
 
 class TestFormatPlayByPlay:
