@@ -531,10 +531,11 @@ class WorldCupStore(DataStore):
         # before dedup-filtering so the terminal signal isn't lost if we
         # already saw all plays.
         game_ended = False
+        terminal_type_slug = ""
         last_play = items[-1] if items else None
         if isinstance(last_play, dict):
-            type_slug = str((last_play.get("type", {}) or {}).get("type", ""))
-            if type_slug in _GAME_END_TYPE_SLUGS:
+            terminal_type_slug = str((last_play.get("type", {}) or {}).get("type", ""))
+            if terminal_type_slug in _GAME_END_TYPE_SLUGS:
                 game_ended = True
 
         new_items = self._state.filter_new_plays(game_id, items)
@@ -612,12 +613,24 @@ class WorldCupStore(DataStore):
         # Emit GameResultEvent after all play events so the result is the
         # final event in the stream.
         if game_ended and not self._state.has_game_result_emitted(game_id):
+            winner_side = self._state.get_winner_side(game_id)
+            if (
+                last_home_score == last_away_score
+                and terminal_type_slug == "end-shootout"
+                and not winner_side
+            ):
+                logger.warning(
+                    "World Cup shootout ended for game %s before summary winner "
+                    "was known; deferring result emission",
+                    game_id,
+                )
+                return
             winner = (
                 "home"
                 if last_home_score > last_away_score
                 else "away"
                 if last_away_score > last_home_score
-                else self._state.get_winner_side(game_id) or "even"
+                else winner_side or "even"
             )
             home_tid = self._state.get_home_team_id(game_id)
             away_tid = self._state.get_away_team_id(game_id)
@@ -745,6 +758,8 @@ class WorldCupStore(DataStore):
         league = state.get("league")
         if isinstance(league, str):
             self.league = league
+            if isinstance(self._api, WorldCupExternalAPI):
+                self._api = WorldCupExternalAPI(league=self.league)
 
         poll_profile_value = state.get("current_poll_profile")
         if poll_profile_value:

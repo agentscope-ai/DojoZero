@@ -18,6 +18,7 @@ from dojozero.nba._datastream import (
     NBAPreGameBettingDataHubDataStream,
     NBAPreGameBettingDataHubDataStreamConfig,
 )
+from dojozero.data.world_cup._utils import validate_world_cup_league
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,9 @@ class WorldCupPreGameBettingDataHubDataStream(NBAPreGameBettingDataHubDataStream
 
         if stats_event_types:
             league_override = config.get("league")
-            league = league_override if league_override else "fifa.world"
+            league = validate_world_cup_league(
+                league_override if league_override else "fifa.world"
+            )
             espn_api = ESPNExternalAPI(sport="soccer", league=league)
 
         return cls(

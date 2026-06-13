@@ -212,6 +212,20 @@ class TestWorldCupGameFetcher:
             assert g.status == 1  # canonical SCHEDULED
             assert g.game_time_utc is not None
 
+    def test_parse_scoreboard_warns_on_unknown_status(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        raw = _load("scoreboard_20250713.json")
+        raw["events"][0]["competitions"][0]["status"]["type"]["name"] = (
+            "STATUS_NEW_SOCCER_STATE"
+        )
+
+        with caplog.at_level("WARNING"):
+            games = _parse_espn_soccer_scoreboard({"scoreboard": raw})
+
+        assert games[0].status == 28
+        assert "Unrecognised ESPN soccer status name" in caplog.text
+
     @pytest.mark.asyncio
     async def test_fetch_games_for_date_range_aggregates_days(
         self, monkeypatch
@@ -256,6 +270,29 @@ class TestWorldCupGameFetcher:
             "game-2025-07-02",
             "game-2025-07-03",
         ]
+
+    @pytest.mark.asyncio
+    async def test_fetch_games_for_date_range_invalid_date_returns_empty(
+        self, monkeypatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        fetcher = WorldCupGameFetcher(league="fifa.cwc")
+        closed = False
+
+        class FakeApi:
+            async def close(self) -> None:
+                nonlocal closed
+                closed = True
+
+        monkeypatch.setattr(fetcher, "_make_api", lambda: FakeApi())
+
+        with caplog.at_level("ERROR"):
+            games = await fetcher.fetch_games_for_date_range("bad", "2025-07-03")
+
+        assert games == []
+        assert closed is True
+        assert (
+            "Error fetching fifa.cwc games for range bad to 2025-07-03" in caplog.text
+        )
 
     @pytest.mark.asyncio
     async def test_fetch_games_for_date_falls_back_to_tomorrow_when_today_done(

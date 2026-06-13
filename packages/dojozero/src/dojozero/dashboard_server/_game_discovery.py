@@ -643,6 +643,12 @@ def _parse_espn_soccer_scoreboard(data: dict[str, Any]) -> list[GameInfo]:
         canonical = SOCCER_STATUS_NAME_MAP.get(status_name)
         if canonical is not None:
             game = game.model_copy(update={"status": canonical})
+        elif status_name:
+            LOGGER.warning(
+                "Unrecognised ESPN soccer status name %r for game %s",
+                status_name,
+                game.game_id,
+            )
         games.append(game)
     return games
 
@@ -726,15 +732,15 @@ class WorldCupGameFetcher:
     ) -> list[GameInfo]:
         """Fetch FIFA soccer matches for a date range."""
         games: list[GameInfo] = []
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d")
-
-        if start > end:
-            start, end = end, start
-
-        current = start
         api = self._make_api()
         try:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+
+            if start > end:
+                start, end = end, start
+
+            current = start
             while current <= end:
                 games.extend(
                     await self._fetch_games_for_api_date(

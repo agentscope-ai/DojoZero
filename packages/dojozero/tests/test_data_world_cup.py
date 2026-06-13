@@ -19,6 +19,7 @@ from dojozero.data._models import (
     GameInitializeEvent,
     GameResultEvent,
     GameStartEvent,
+    PollProfile,
 )
 from dojozero.data.world_cup import (
     SoccerGamePlayerStats,
@@ -551,6 +552,35 @@ class TestPlaysParsing:
         assert result.home_score == 0
         assert result.away_score == 0
 
+    def test_shootout_plays_before_summary_defers_result_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        store = WorldCupStore(store_id="shootout_no_summary", league="fifa.cwc")
+        plays = {
+            "eventId": "pk-no-summary",
+            "items": [
+                {
+                    "id": "final",
+                    "type": {
+                        "id": "999",
+                        "text": "End Shootout",
+                        "type": "end-shootout",
+                    },
+                    "period": {"number": 5},
+                    "clock": {"displayValue": "PEN"},
+                    "homeScore": 1,
+                    "awayScore": 1,
+                    "text": "Penalty Shootout ends.",
+                }
+            ],
+        }
+
+        with caplog.at_level("WARNING"):
+            events = list(store._parse_api_response({"plays": plays}))
+
+        assert not any(isinstance(e, GameResultEvent) for e in events)
+        assert "before summary winner was known" in caplog.text
+
     @pytest.mark.asyncio
     async def test_store_state_round_trip(
         self,
@@ -558,12 +588,19 @@ class TestPlaysParsing:
     ) -> None:
         store = WorldCupStore(store_id="round_trip", league="fifa.worldq.conmebol")
         list(store._parse_api_response({"summary": summary_payload}))
+        store._current_poll_profile = PollProfile.IN_GAME
 
         state = await store.save_state()
         restored = WorldCupStore(store_id="round_trip_restored")
         await restored.load_state(state)
 
         assert restored.league == "fifa.worldq.conmebol"
+        assert isinstance(restored._api, WorldCupExternalAPI)
+        assert restored._api.league == "fifa.worldq.conmebol"
+        assert restored._current_poll_profile is PollProfile.IN_GAME
+        assert restored.poll_intervals == dict(
+            WorldCupStore._POLL_PROFILES[PollProfile.IN_GAME]
+        )
         assert restored._state.get_current_scores("684665") == (1, 0)
         assert restored._state.get_home_team_id("684665") == "209"
         assert restored._state.get_away_team_id("684665") == "202"

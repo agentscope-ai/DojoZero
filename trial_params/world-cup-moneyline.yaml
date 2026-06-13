@@ -45,6 +45,7 @@ scenario:
       - place_market_bet_moneyline
       - get_bet_history
       - get_statistics
+      # Classic moneyline accepts only home/away; soccer draws settle as losses.
       data_streams:
       - game_lifecycle_stream
       - odds_update_stream

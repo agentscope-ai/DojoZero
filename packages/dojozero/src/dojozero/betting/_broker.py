@@ -2351,6 +2351,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             """Place a market order to bet on which team will win (moneyline). Executes immediately at current probability.
 
             You can bet at any time while the event is SCHEDULED or LIVE.
+            For soccer, a draw settles home/away moneyline bets as losses;
+            there is no draw/even selection in classic betting mode.
 
             Args:
                 amount: Bet amount as string (e.g., "100.00")
@@ -2395,6 +2397,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
             """Place a limit order to bet on which team will win (moneyline). Executes when probability reaches your minimum.
 
             You can bet at any time while the event is SCHEDULED or LIVE.
+            For soccer, a draw settles home/away moneyline bets as losses;
+            there is no draw/even selection in classic betting mode.
 
             Args:
                 amount: Bet amount as string (e.g., "100.00")

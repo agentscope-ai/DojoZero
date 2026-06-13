@@ -11,10 +11,12 @@ from pydantic import ValidationError
 # Force registration via the same import path the CLI uses.
 import dojozero.world_cup  # noqa: F401
 from dojozero.betting import TrialBrokerConfig
+from dojozero.core import RuntimeContext
 from dojozero.core._registry import get_trial_builder_definition
 from dojozero.data._config import HubConfig
 from dojozero.data._factory import get_store_factory
 from dojozero.data._game_info import GameInfo, TeamInfo
+from dojozero.world_cup._datastream import WorldCupPreGameBettingDataHubDataStream
 from dojozero.world_cup._trial import WorldCupTrialParams
 
 
@@ -80,6 +82,17 @@ class TestParamsValidation:
             )
         # Pydantic wraps our ValueError; the message text must surface.
         assert "Unknown FIFA league code" in str(exc_info.value)
+
+    def test_datastream_from_dict_rejects_invalid_league(self) -> None:
+        with pytest.raises(ValueError, match="Unknown FIFA league code"):
+            WorldCupPreGameBettingDataHubDataStream.from_dict(
+                {
+                    "actor_id": "stream",
+                    "stats_event_types": ["pregame_stats"],
+                    "league": "fifa.world/../../nfl",
+                },
+                RuntimeContext(trial_id="trial-1", sport_type="world_cup"),
+            )
 
     def test_operators_are_required(self) -> None:
         with pytest.raises(ValidationError) as exc_info:
