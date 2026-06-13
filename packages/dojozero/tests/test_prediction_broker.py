@@ -442,7 +442,9 @@ def test_parse_soccer_clock_to_elapsed_seconds() -> None:
     assert _parse_soccer_clock_to_elapsed_seconds("HT", 1, 2700) == 45 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("FT", 2, 2700) == 90 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("FT", 1, 2700) == 45 * 60
-    assert _parse_soccer_clock_to_elapsed_seconds("AET", 1, 2700) == 45 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("AET", 1, 2700) == 90 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("AET", 3, 2700) == 90 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("PEN", 4, 2700) == 90 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("FINAL", 0, 2700) == 90 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("", 2, 2700) == 45 * 60
     assert _parse_soccer_clock_to_elapsed_seconds("unknown", 2, 2700) == 45 * 60

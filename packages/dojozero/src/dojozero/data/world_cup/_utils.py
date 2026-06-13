@@ -159,10 +159,6 @@ def build_game_info_from_summary(
     return GameInfo.model_validate(game_data)
 
 
-_id_from_ref = id_from_ref
-_build_game_info_from_summary = build_game_info_from_summary
-
-
 async def get_game_info_by_id_async(
     game_id: str,
     league: str = "fifa.world",

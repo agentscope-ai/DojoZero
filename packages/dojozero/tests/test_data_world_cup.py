@@ -31,8 +31,8 @@ from dojozero.data.world_cup import (
 )
 from dojozero.data.world_cup._api import DEFAULT_LEAGUE
 from dojozero.data.world_cup._utils import (
-    _build_game_info_from_summary,
-    _id_from_ref,
+    build_game_info_from_summary,
+    id_from_ref,
     validate_world_cup_league,
 )
 
@@ -238,14 +238,14 @@ class TestIdFromRef:
         ref = {
             "$ref": "http://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.worldq.conmebol/seasons/2023/athletes/171771?lang=en&region=us"
         }
-        assert _id_from_ref(ref) == "171771"
+        assert id_from_ref(ref) == "171771"
 
     def test_returns_empty_for_missing_ref(self) -> None:
-        assert _id_from_ref({}) == ""
-        assert _id_from_ref(None) == ""
+        assert id_from_ref({}) == ""
+        assert id_from_ref(None) == ""
 
     def test_ignores_query_string(self) -> None:
-        assert _id_from_ref({"$ref": "https://x.example/teams/209?foo=bar"}) == "209"
+        assert id_from_ref({"$ref": "https://x.example/teams/209?foo=bar"}) == "209"
 
     def test_validates_world_cup_league_codes(self) -> None:
         assert validate_world_cup_league("fifa.cwc") == "fifa.cwc"
@@ -261,7 +261,7 @@ class TestIdFromRef:
 
 class TestBuildGameInfoFromSummary:
     def test_extracts_team_venue_season(self, summary_payload: dict[str, Any]) -> None:
-        info = _build_game_info_from_summary(summary_payload, "684665")
+        info = build_game_info_from_summary(summary_payload, "684665")
         assert info is not None
         # Match-specific facts (CONMEBOL Ecuador 1-0 Argentina):
         assert info.home_team.name == "Ecuador"
@@ -280,14 +280,14 @@ class TestBuildGameInfoFromSummary:
         comp["date"] = ""
         payload["header"]["timeValid"] = True
 
-        info = _build_game_info_from_summary(payload, "684665")
+        info = build_game_info_from_summary(payload, "684665")
 
         assert info is not None
         assert info.game_time_utc is None
 
     def test_returns_none_when_competitions_missing(self) -> None:
-        assert _build_game_info_from_summary({}, "684665") is None
-        assert _build_game_info_from_summary({"header": {}}, "684665") is None
+        assert build_game_info_from_summary({}, "684665") is None
+        assert build_game_info_from_summary({"header": {}}, "684665") is None
 
 
 # =============================================================================

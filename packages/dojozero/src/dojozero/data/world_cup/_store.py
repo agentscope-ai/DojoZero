@@ -442,7 +442,8 @@ class WorldCupStore(DataStore):
             final_summary_seen = self._state.has_final_summary_seen(game_id)
             # For summary-only matches, wait for one repeated FINAL summary
             # before emitting the fallback result. That gives the PBP poll in
-            # the same/next cycle a chance to emit terminal plays first.
+            # the same/next cycle a chance to emit terminal plays first. Both
+            # paths share has_game_result_emitted, so only one result can fire.
             should_emit_summary_result = (
                 status_code == self._state.STATUS_FINAL
                 and not self._state.has_game_result_emitted(game_id)
@@ -539,6 +540,8 @@ class WorldCupStore(DataStore):
         new_items = self._state.filter_new_plays(game_id, items)
 
         timestamp = datetime.now(timezone.utc)
+        # Seed from accumulated state so a terminal play that was already
+        # deduped can still emit the correct final score after resume/retry.
         last_home_score, last_away_score = self._state.get_current_scores(game_id)
         for play in new_items:
             play_id = str(play.get("id", ""))

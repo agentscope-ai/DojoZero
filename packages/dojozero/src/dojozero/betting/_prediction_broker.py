@@ -117,7 +117,9 @@ def _parse_soccer_clock_to_elapsed_seconds(
     if upper == "FT":
         return (period if period > 0 else 2) * seconds_per_period
     if upper in {"AET", "PEN", "FINAL"}:
-        return (period if period > 0 else 2) * seconds_per_period
+        # Prediction windows model regulation only; extra time and penalties
+        # are terminal states that should clamp to the final regulation window.
+        return 2 * seconds_per_period
 
     stoppage_match = re.match(r"^\s*(\d{1,3})'\s*(?:\+\s*(\d{1,2})')?\s*$", clock)
     if stoppage_match:
