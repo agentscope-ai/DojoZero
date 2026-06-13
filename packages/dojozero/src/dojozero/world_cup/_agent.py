@@ -1,0 +1,60 @@
+"""Agent implementation for World Cup betting."""
+
+import logging
+from typing import Any
+
+from dojozero.betting import (
+    BettingAgent as BaseBettingAgent,
+    BettingAgentConfig,
+)
+from dojozero.core import RuntimeContext
+from dojozero.world_cup._formatters import format_event
+
+logger = logging.getLogger(__name__)
+
+
+class BettingAgent(BaseBettingAgent):
+    """World Cup–specific BettingAgent with soccer event formatting."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if kwargs.get("event_formatter") is None:
+            kwargs["event_formatter"] = format_event
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def from_dict(
+        cls,
+        config: BettingAgentConfig,
+        context: RuntimeContext,
+    ) -> "BettingAgent":
+        from dojozero.agents import create_formatter, create_model
+
+        actor_id = config["actor_id"]
+        llm_config = config.get("llm", {})
+        if not llm_config:
+            raise ValueError(f"Missing 'llm' config for agent {actor_id}")
+        model_type = llm_config.get("model_type", "openai")
+        model_name = llm_config.get("model_name", "")
+        base_sys_prompt = config.get("sys_prompt", "")
+        identity_prompt = "\n".join(
+            [
+                "[Agent Identity]",
+                f"Your agent id is {actor_id}.",
+            ]
+        )
+        sys_prompt = (
+            f"{base_sys_prompt}\n\n{identity_prompt}"
+            if base_sys_prompt
+            else identity_prompt
+        )
+        return cls(
+            actor_id=actor_id,
+            trial_id=context.trial_id,
+            name=config.get("name", actor_id),
+            sys_prompt=sys_prompt,
+            model=create_model(llm_config),
+            formatter=create_formatter(model_type, model_name),
+        )
+
+
+__all__ = ["BettingAgent", "BettingAgentConfig"]

@@ -1110,6 +1110,212 @@ class TestBetSettlement:
         balance = await broker.get_balance(agent.actor_id)
         assert balance == Decimal("900.00")
 
+    async def test_settle_draw_result_marks_moneyline_bet_lost(self, broker_with_agent):
+        """A tied soccer result should settle home/away moneyline bets as losses."""
+        broker, agent = broker_with_agent
+
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_game_stream",
+                payload=GameInitializeEvent(
+                    game_id="draw_event",
+                    sport="world_cup",
+                    home_team="Home FC",
+                    away_team="Away FC",
+                    game_time=datetime.fromisoformat("2026-06-18T19:00:00"),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_odds_stream",
+                payload=OddsUpdateEvent(
+                    game_id="draw_event",
+                    odds=OddsInfo(
+                        moneyline=MoneylineOdds(
+                            home_probability=0.513,
+                            away_probability=0.476,
+                            home_odds=1.95,
+                            away_odds=2.10,
+                        )
+                    ),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestMoneyline(
+                amount=Decimal("100.00"),
+                selection="home",
+                event_id="draw_event",
+                order_type=OrderType.MARKET,
+            ),
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_game_stream",
+                payload=GameStartEvent(game_id="draw_event", sport="world_cup"),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_results_stream",
+                payload=GameResultEvent(
+                    game_id="draw_event",
+                    sport="world_cup",
+                    winner="even",
+                    home_score=0,
+                    away_score=0,
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+        history = await broker.get_bet_history(agent.actor_id)
+        assert len(history) == 1
+        assert history[0].outcome == BetOutcome.LOSS
+        assert history[0].actual_payout == Decimal("0")
+        assert await broker.get_balance(agent.actor_id) == Decimal("900.00")
+
+    async def test_settle_draw_result_marks_home_spread_bet_lost(
+        self, broker_with_agent
+    ):
+        """A 1-1 soccer draw should not cover a home -0.5 spread."""
+        broker, agent = broker_with_agent
+
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_game_stream",
+                payload=GameInitializeEvent(
+                    game_id="draw_spread_event",
+                    sport="world_cup",
+                    home_team="Home FC",
+                    away_team="Away FC",
+                    game_time=datetime.fromisoformat("2026-06-18T19:00:00"),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_odds_stream",
+                payload=create_odds_event_with_spreads_totals(
+                    game_id="draw_spread_event",
+                    spread_updates=[
+                        {"spread": -0.5, "home_odds": 1.90, "away_odds": 1.90}
+                    ],
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestSpread(
+                amount=Decimal("100.00"),
+                selection="home",
+                event_id="draw_spread_event",
+                order_type=OrderType.MARKET,
+                spread_value=Decimal("-0.5"),
+            ),
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_game_stream",
+                payload=GameStartEvent(game_id="draw_spread_event", sport="world_cup"),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_results_stream",
+                payload=GameResultEvent(
+                    game_id="draw_spread_event",
+                    sport="world_cup",
+                    winner="even",
+                    home_score=1,
+                    away_score=1,
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+        history = await broker.get_bet_history(agent.actor_id)
+        assert len(history) == 1
+        assert history[0].outcome == BetOutcome.LOSS
+        assert history[0].actual_payout == Decimal("0")
+        assert await broker.get_balance(agent.actor_id) == Decimal("900.00")
+
+    async def test_settle_draw_result_marks_total_over_bet_won(self, broker_with_agent):
+        """A 1-1 soccer draw should settle total markets from the final score."""
+        broker, agent = broker_with_agent
+
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_game_stream",
+                payload=GameInitializeEvent(
+                    game_id="draw_total_event",
+                    sport="world_cup",
+                    home_team="Home FC",
+                    away_team="Away FC",
+                    game_time=datetime.fromisoformat("2026-06-18T19:00:00"),
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_odds_stream",
+                payload=create_odds_event_with_spreads_totals(
+                    game_id="draw_total_event",
+                    total_updates=[
+                        {"total": 1.5, "over_odds": 1.90, "under_odds": 1.90}
+                    ],
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+        await broker.place_bet(
+            agent.actor_id,
+            BetRequestTotal(
+                amount=Decimal("100.00"),
+                selection="over",
+                event_id="draw_total_event",
+                order_type=OrderType.MARKET,
+                total_value=Decimal("1.5"),
+            ),
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_game_stream",
+                payload=GameStartEvent(game_id="draw_total_event", sport="world_cup"),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="world_cup_results_stream",
+                payload=GameResultEvent(
+                    game_id="draw_total_event",
+                    sport="world_cup",
+                    winner="even",
+                    home_score=1,
+                    away_score=1,
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+
+        history = await broker.get_bet_history(agent.actor_id)
+        assert len(history) == 1
+        assert history[0].outcome == BetOutcome.WIN
+        assert history[0].actual_payout > Decimal("0")
+
     async def test_pending_orders_remain_active_on_game_start(self, broker_with_agent):
         """Test that pending limit orders remain active when game starts (not cancelled)"""
         broker, agent = broker_with_agent

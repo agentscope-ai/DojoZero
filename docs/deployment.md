@@ -28,10 +28,11 @@ Three containers run separately for NBA (port 8001), NFL (port 8002), and NCAA (
 
 ## Environment Tiers
 
-Trial sources are organized into tiers under `trial_sources/{daily,pre,prod}/`:
+Trial sources are organized into tiers under `trial_sources/{client,daily,pre,prod}/`:
 
 | Tier | `DOJOZERO_ENV` | Personas | Models | Max Games |
 |------|-----------------|----------|--------|-----------|
+| **client** | `client` | none | none | unlimited |
 | **daily** | `daily` | degen only | claude | 1 |
 | **pre** | `pre` | all 6 | all models | 1 |
 | **prod** | `prod` | all 6 | all models | unlimited |
@@ -41,6 +42,14 @@ Set `DOJOZERO_ENV` in `.env` to select the tier:
 ```bash
 # In .env
 DOJOZERO_ENV=prod
+```
+
+Use `client` for external-agent-only servers. This tier launches World Cup
+moneyline and prediction trials with no built-in agents and no pregame websearch
+streams, so server-side LLM/websearch API keys are not required:
+
+```bash
+DOJOZERO_ENV=client dojo0 serve
 ```
 
 Override per-invocation:
@@ -160,9 +169,9 @@ Copy `deploy/.env.template` to `.env` and fill in:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DOJOZERO_ENV` | No | Tier: `daily`, `pre`, or `prod` (default: `daily`) |
-| `DOJOZERO_DASHSCOPE_API_KEY` | Yes | LLM API key for agent reasoning |
-| `DOJOZERO_TAVILY_API_KEY` | Yes | Web search API key |
+| `DOJOZERO_ENV` | No | Tier: `client`, `daily`, `pre`, or `prod` (default: `daily`) |
+| `DOJOZERO_DASHSCOPE_API_KEY` | Yes for built-in-agent tiers | LLM API key for server-side agent reasoning. Not required for `DOJOZERO_ENV=client`. |
+| `DOJOZERO_TAVILY_API_KEY` | Yes for built-in-agent tiers | Web search API key. Not required for `DOJOZERO_ENV=client`. |
 | `ALIBABA_CLOUD_ACCESS_KEY_ID` | Yes | Alibaba Cloud credentials |
 | `ALIBABA_CLOUD_ACCESS_KEY_SECRET` | Yes | Alibaba Cloud credentials |
 | `DOJOZERO_SLS_ENDPOINT` | Yes | SLS endpoint (e.g., `cn-wulanchabu.log.aliyuncs.com`) |

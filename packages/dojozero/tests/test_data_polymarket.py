@@ -6,7 +6,7 @@ Tests cover:
 - Metadata flow from factory to store
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -181,6 +181,22 @@ class TestPolymarketStoreFactory:
 
         assert isinstance(store, PolymarketStore)
         assert store._sport == "nfl"
+
+    def test_create_store_with_world_cup_sport_type(self, factory, mock_hub):
+        """Test that create_store succeeds with sport_type='world_cup'."""
+        metadata = _make_metadata(
+            sport_type="world_cup",
+            espn_game_id="760415",
+            home_tricode="ARG",
+            away_tricode="FRA",
+            game_date="2026-07-19",
+        )
+
+        store = factory.create_store("test_store", metadata, mock_hub)
+
+        assert isinstance(store, PolymarketStore)
+        assert store._sport == "world_cup"
+        assert store._sport_slug_prefix == "world-cup"
 
     def test_create_store_sets_espn_game_id_in_identifier(self, factory, mock_hub):
         """Test that espn_game_id is passed to store identifier."""
@@ -644,6 +660,27 @@ class TestPolymarketStoreInit:
         store = PolymarketStore(store_id="test")
         assert store.poll_intervals.get("odds") == 300.0
 
+    @pytest.mark.asyncio
+    async def test_world_cup_poll_slug_uses_hyphenated_prefix(self):
+        """Test generated World Cup event slugs use the Polymarket prefix."""
+        mock_api = MagicMock()
+        mock_api.fetch = AsyncMock(return_value={})
+        store = PolymarketStore(store_id="test", api=mock_api, sport="world_cup")
+
+        await store._poll_api(
+            identifier={
+                "espn_game_id": "760415",
+                "away_tricode": "FRA",
+                "home_tricode": "ARG",
+                "game_date": "2026-07-19",
+            }
+        )
+
+        mock_api.fetch.assert_awaited_once_with(
+            "odds",
+            {"slug": "world-cup-fra-arg-2026-07-19"},
+        )
+
 
 # =============================================================================
 # Integration Tests
@@ -785,6 +822,13 @@ class TestPolymarketAPIIntegration:
         # Test with special tricode mapping
         url = PolymarketAPI.get_event_url("LAR", "TB", "2025-01-15", "nfl")
         assert url == "https://polymarket.com/event/nfl-la-tb-2025-01-15"
+
+    def test_get_event_url_world_cup(self):
+        """Test World Cup event URL generation."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        url = PolymarketAPI.get_event_url("FRA", "ARG", "2026-07-19", "world_cup")
+        assert url == "https://polymarket.com/event/world-cup-fra-arg-2026-07-19"
 
     @pytest.mark.asyncio
     async def test_get_market_by_slug_returns_data(self):

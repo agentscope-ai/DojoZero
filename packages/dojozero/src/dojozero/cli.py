@@ -46,6 +46,7 @@ DEFAULT_IMPORTS: tuple[str, ...] = (
     "dojozero.nba",
     "dojozero.ncaa",
     "dojozero.nfl",
+    "dojozero.world_cup",
 )
 DEFAULT_STORE_DIRECTORY: str = "./dojozero-store"
 DEFAULT_RUNTIME_PROVIDER: str = "local"
@@ -2123,6 +2124,10 @@ def _get_builder_command(args: argparse.Namespace) -> int:
 
 
 _ENV_TIER_MAP: dict[str, str] = {
+    "client": "client",
+    "external": "client",
+    "external-agent": "client",
+    "external_agents": "client",
     "daily": "daily",
     "testing": "daily",
     "pre": "pre",
@@ -2137,7 +2142,7 @@ def _resolve_env_tier() -> str:
     """Resolve the deployment tier from environment variables.
 
     Checks DOJOZERO_ENV first, then SIGMA_APP_STAGE, then AONE_ENV_SIGN.
-    Returns one of: "daily", "pre", "prod". Defaults to "daily".
+    Returns one of: "client", "daily", "pre", "prod". Defaults to "daily".
     """
     for env_var in ("DOJOZERO_ENV", "SIGMA_APP_STAGE", "AONE_ENV_SIGN"):
         value = os.environ.get(env_var, "").strip().lower()
@@ -2159,6 +2164,9 @@ def _expand_compact_trial_source(
     """
     personas: list[str] | None = config.pop("personas", None)
     llm_config_path: str | None = config.pop("llm_config_path", None)
+    # Optional per-tier overrides that flow into scenario_config rather than
+    # the source-level config. world_cup uses `league` to pick a FIFA code.
+    league_override: str | None = config.pop("league", None)
     if personas is None:
         return  # Already full format
 
@@ -2175,6 +2183,8 @@ def _expand_compact_trial_source(
 
     # Build scenario_config from base
     scenario_config = dict(base["scenario_config"])
+    if league_override is not None:
+        scenario_config["league"] = league_override
     agent_template = base["agent_template"]
 
     # Generate agents from personas × llm_config_path
@@ -2662,7 +2672,9 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
             event_time = utc_iso_to_local(trial.get("event_time", ""))
             start_time = utc_iso_to_local(trial.get("scheduled_start_time", ""))
             espn_game_id = (
-                metadata.get("espn_game_id", "") or trial.get("event_id", "")
+                metadata.get("espn_game_id", "")
+                or trial.get("game_id", "")
+                or trial.get("event_id", "")
             )[:12]
 
             # Use text-only status for consistent column width
@@ -2673,7 +2685,7 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
             if show_links:
                 _print_trial_links(
                     metadata=metadata,
-                    event_id=trial.get("event_id", ""),
+                    event_id=trial.get("game_id", "") or trial.get("event_id", ""),
                     sport_type=trial.get("sport_type", "nba"),
                     event_time_str=trial.get("event_time", ""),
                 )
@@ -2692,6 +2704,7 @@ async def _list_trials_command(args: argparse.Namespace) -> int:
                     trial.get("metadata", {}), trial.get("scenario_name", "")
                 ),
                 "espn_game_id": trial.get("metadata", {}).get("espn_game_id", "")
+                or trial.get("game_id", "")
                 or trial.get("event_id", ""),
                 "trial_id": trial.get("launched_trial_id", ""),
                 "error": trial.get("error"),

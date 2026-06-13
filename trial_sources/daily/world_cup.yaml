@@ -1,0 +1,11 @@
+# World Cup Trial Source — Daily (testing) environment
+# Backtest validation against 2025 FIFA Club World Cup match fixtures.
+# fifa.cwc has 63 completed matches with full ESPN data (boxscore + plays).
+source_id: world-cup-moneyline-source
+sport_type: world_cup
+config:
+  scenario_name: world_cup
+  league: fifa.cwc
+  max_daily_games: 1
+  personas: [pundit]
+  llm_config_path: agents/llms/default.yaml

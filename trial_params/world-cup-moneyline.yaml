@@ -1,0 +1,67 @@
+scenario:
+  name: world_cup
+  config:
+    espn_game_id: 'your_espn_event_id_here'  # ESPN event ID for the match
+    league: fifa.world  # FIFA league code; see data.world_cup._constants.WORLD_CUP_KNOWN_LEAGUES
+    hub:
+      persistence_file: outputs/world_cup_events-{espn_game_id}.jsonl
+
+    data_streams:
+    - id: pre_game_insights_stream
+      event_types:
+      - injury_report
+      - power_ranking
+      - expert_prediction
+      - twitter_top_tweets
+
+    # Match lifecycle
+    - id: game_lifecycle_stream
+      event_types:
+      - game_initialize
+      - game_start
+      - game_result
+
+    # Live match data
+    - id: game_update_stream
+      event_types:
+      - world_cup_game_update
+
+    - id: play_by_play_stream
+      event_types:
+      - world_cup_play
+
+    - id: odds_update_stream
+      event_types:
+      - odds_update
+
+    operators:
+    - id: betting_broker
+      class: BrokerOperator
+      initial_balance: "1000.00"
+      allowed_tools:
+      - get_event
+      - get_balance
+      - get_holdings
+      - place_market_bet_moneyline
+      - get_bet_history
+      - get_statistics
+      # Classic moneyline accepts only home/away; soccer draws settle as losses.
+      data_streams:
+      - game_lifecycle_stream
+      - odds_update_stream
+      - game_update_stream
+
+    agents:
+    - id: pundit_agent
+      persona: pundit
+      class: BettingAgent
+      persona_config_path: agents/personas/pundit.yaml
+      llm_config_path: agents/llms/default.yaml
+      operators:
+        - betting_broker
+      data_streams:
+        - pre_game_insights_stream
+        - game_update_stream
+        - odds_update_stream
+        - game_lifecycle_stream
+        - play_by_play_stream

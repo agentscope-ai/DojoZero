@@ -66,7 +66,11 @@ _SPORT_CLOCK_DEFAULTS: Dict[str, tuple[int, int]] = {
     "nfl": (4, 15 * 60),
     "ncaa": (2, 20 * 60),
     "collegebasketball": (2, 20 * 60),
+    # World Cup prediction windows model regulation. Extra time and shootouts
+    # intentionally clamp to the final window once elapsed time exceeds 90'.
+    "world_cup": (2, 45 * 60),
 }
+_ELAPSED_CLOCK_SPORTS = {"world_cup"}
 
 
 class _ActorIdConfig(TypedDict):
@@ -96,6 +100,40 @@ def _parse_clock_to_seconds(clock: str, default_seconds: int) -> int:
     seconds = int(m.group(2))
     value = minutes * 60 + seconds
     return max(0, min(default_seconds, value))
+
+
+def _parse_soccer_clock_to_elapsed_seconds(
+    clock: str,
+    period: int,
+    seconds_per_period: int,
+) -> int:
+    """Parse ESPN soccer clocks such as ``90'+4'`` as elapsed match seconds."""
+    if not clock:
+        return max(0, period - 1) * seconds_per_period
+
+    upper = clock.upper().strip()
+    if upper in {"HT", "HALF", "HALFTIME"}:
+        return seconds_per_period
+    if upper == "FT":
+        return (period if period > 0 else 2) * seconds_per_period
+    if upper in {"AET", "PEN", "FINAL"}:
+        # Prediction windows model regulation only; extra time and penalties
+        # are terminal states that should clamp to the final regulation window.
+        return 2 * seconds_per_period
+
+    stoppage_match = re.match(r"^\s*(\d{1,3})'\s*(?:\+\s*(\d{1,2})')?\s*$", clock)
+    if stoppage_match:
+        minutes = int(stoppage_match.group(1))
+        added = int(stoppage_match.group(2) or 0)
+        return max(0, (minutes + added) * 60)
+
+    mmss = re.match(r"^\s*(\d{1,3}):(\d{2})\s*$", clock)
+    if mmss:
+        minutes = int(mmss.group(1))
+        seconds = int(mmss.group(2))
+        return max(0, minutes * 60 + seconds)
+
+    return max(0, period - 1) * seconds_per_period
 
 
 def _format_rules(window_pools: list[int]) -> str:
@@ -405,6 +443,32 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             return f"{city} {name}".strip()
         return name or None
 
+    @staticmethod
+    def _extract_score(
+        data_event: BaseGameUpdateEvent, *, side: Literal["home", "away"]
+    ) -> int | None:
+        def _to_int(value: Any) -> int | None:
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        direct_score = getattr(data_event, f"{side}_score", None)
+        direct = _to_int(direct_score)
+        if direct is not None:
+            return direct
+
+        attr = "home_team_stats" if side == "home" else "away_team_stats"
+        stats = getattr(data_event, attr, None)
+        if stats is not None:
+            for field_name in ("points", "score"):
+                score = _to_int(getattr(stats, field_name, None))
+                if score is not None:
+                    return score
+        return None
+
     async def _handle_game_start(
         self, data_event: GameStartEvent, event_id: str
     ) -> None:
@@ -563,11 +627,18 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         if period <= 0 or total <= 0:
             return 0.0
 
-        remaining = _parse_clock_to_seconds(game_clock, seconds_per_period)
-        elapsed_periods = max(0, period - 1)
-        elapsed_seconds = elapsed_periods * seconds_per_period + (
-            seconds_per_period - remaining
-        )
+        if sport in _ELAPSED_CLOCK_SPORTS:
+            elapsed_seconds = _parse_soccer_clock_to_elapsed_seconds(
+                game_clock,
+                period,
+                seconds_per_period,
+            )
+        else:
+            remaining = _parse_clock_to_seconds(game_clock, seconds_per_period)
+            elapsed_periods = max(0, period - 1)
+            elapsed_seconds = elapsed_periods * seconds_per_period + (
+                seconds_per_period - remaining
+            )
         return max(0.0, min(1.0, elapsed_seconds / total))
 
     # =========================================================================
@@ -720,12 +791,8 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 update = self._recent_game_updates[-1]
                 info["period"] = int(getattr(update, "period", 0) or 0)
                 info["game_clock"] = getattr(update, "game_clock", None)
-                home_stats = getattr(update, "home_team_stats", None)
-                away_stats = getattr(update, "away_team_stats", None)
-                if home_stats is not None:
-                    info["home_score"] = getattr(home_stats, "points", None)
-                if away_stats is not None:
-                    info["away_score"] = getattr(away_stats, "points", None)
+                info["home_score"] = self._extract_score(update, side="home")
+                info["away_score"] = self._extract_score(update, side="away")
         return info
 
     def get_contest_kind(self) -> str:

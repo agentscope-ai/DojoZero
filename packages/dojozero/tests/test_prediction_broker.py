@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import pytest
 
@@ -10,6 +11,7 @@ from dojozero.betting._models import EventStatus, Prediction, PredictionOutcome
 from dojozero.betting._prediction_broker import (
     PredictionBroker,
     _parse_clock_to_seconds,
+    _parse_soccer_clock_to_elapsed_seconds,
 )
 from dojozero.core._types import StreamEvent
 from dojozero.data._models import (
@@ -66,6 +68,13 @@ def test_accepts_default_window_pools() -> None:
     rules = broker.get_rules()
     assert rules["window_pools"] == [5000, 4000, 3000, 2000, 500]
     assert rules["kind"] == "window_pool_prediction"
+
+
+@pytest.mark.parametrize("clock", ["AET", "PEN"])
+def test_soccer_terminal_clock_without_period_maps_to_regulation_complete(
+    clock: str,
+) -> None:
+    assert _parse_soccer_clock_to_elapsed_seconds(clock, 0, 45 * 60) == 90 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +433,93 @@ def test_parse_clock_to_seconds() -> None:
     assert _parse_clock_to_seconds("bogus", 720) == 720
     # Values above the period default are clamped to the default.
     assert _parse_clock_to_seconds("99:00", 720) == 720
+
+
+def test_parse_soccer_clock_to_elapsed_seconds() -> None:
+    assert _parse_soccer_clock_to_elapsed_seconds("45'+2'", 1, 2700) == 47 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("90'+4'", 2, 2700) == 94 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("60:30", 2, 2700) == 60 * 60 + 30
+    assert _parse_soccer_clock_to_elapsed_seconds("HT", 1, 2700) == 45 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("FT", 2, 2700) == 90 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("FT", 1, 2700) == 45 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("AET", 1, 2700) == 90 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("AET", 3, 2700) == 90 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("PEN", 4, 2700) == 90 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("FINAL", 0, 2700) == 90 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("", 2, 2700) == 45 * 60
+    assert _parse_soccer_clock_to_elapsed_seconds("unknown", 2, 2700) == 45 * 60
+
+
+@pytest.mark.asyncio
+async def test_compute_elapsed_ratio_world_cup_elapsed_clock() -> None:
+    broker = _broker()
+    init = GameInitializeEvent(
+        game_id="game-1",
+        sport="world_cup",
+        home_team="Argentina",
+        away_team="France",
+    )
+    await broker.handle_stream_event(_envelope(init))
+    await broker.handle_stream_event(
+        _envelope(GameStartEvent(game_id="game-1", sport="world_cup"))
+    )
+    update = BaseGameUpdateEvent(
+        game_id="game-1",
+        sport="world_cup",
+        period=2,
+        game_clock="60'",
+    )
+    await broker.handle_stream_event(_envelope(update))
+
+    assert broker._compute_elapsed_ratio() == pytest.approx(60 / 90, rel=1e-4)
+
+
+@pytest.mark.asyncio
+async def test_get_event_info_uses_soccer_score_field() -> None:
+    from dojozero.data.world_cup import SoccerTeamMatchStats, WorldCupGameUpdateEvent
+
+    broker = _broker()
+    await broker.handle_stream_event(
+        _envelope(
+            WorldCupGameUpdateEvent(
+                game_id="game-1",
+                sport="world_cup",
+                period=2,
+                game_clock="72'",
+                home_score=2,
+                away_score=1,
+                home_team_stats=SoccerTeamMatchStats(
+                    team_name="Argentina",
+                    score=0,
+                ),
+                away_team_stats=SoccerTeamMatchStats(
+                    team_name="France",
+                    score=0,
+                ),
+            )
+        )
+    )
+
+    info = await broker.get_event_info()
+    assert info is not None
+    assert info["home_team"] == "Argentina"
+    assert info["away_team"] == "France"
+    # Direct event scores are authoritative; stats can lag on soccer feeds.
+    assert info["home_score"] == 2
+    assert info["away_score"] == 1
+
+
+def test_extract_score_falls_back_to_soccer_team_stats_score() -> None:
+    from dojozero.data.world_cup import SoccerTeamMatchStats
+
+    class SoccerStatsOnlyUpdate:
+        home_team_stats = SoccerTeamMatchStats(team_name="Argentina", score=3)
+        away_team_stats = SoccerTeamMatchStats(team_name="France", score=2)
+
+    update = cast(Any, SoccerStatsOnlyUpdate())
+
+    assert PredictionBroker._extract_score(update, side="home") == 3
+    assert PredictionBroker._extract_score(update, side="away") == 2
 
 
 # ---------------------------------------------------------------------------

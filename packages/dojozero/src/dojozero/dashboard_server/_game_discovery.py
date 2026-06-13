@@ -1,7 +1,7 @@
 """Game Discovery for DojoZero Dashboard Server.
 
 Provides unified interfaces for fetching game information from
-NBA API and ESPN API (for NFL).
+NBA API and ESPN API (for NFL, NCAA, and FIFA soccer competitions).
 """
 
 import logging
@@ -11,6 +11,8 @@ from typing import Any
 from dojozero.data._game_info import GameInfo, TeamInfo, VenueInfo
 from dojozero.data.espn._api import ESPNExternalAPI
 from dojozero.data.nfl._api import NFLExternalAPI
+from dojozero.data.world_cup._constants import SOCCER_STATUS_NAME_MAP
+from dojozero.data.world_cup._utils import validate_world_cup_league
 
 from dojozero.utils import (
     us_game_day_today,
@@ -102,13 +104,18 @@ def _parse_odds_data(odds_list: list[dict[str, Any]]) -> OddsDataDict:
     """
     if not odds_list:
         return OddsDataDict()
-    o = odds_list[0]
+    o = odds_list[0] or {}
+    if not isinstance(o, dict):
+        return OddsDataDict()
+    provider = o.get("provider") or {}
+    home_odds = o.get("homeTeamOdds") or {}
+    away_odds = o.get("awayTeamOdds") or {}
     return OddsDataDict(
-        provider=o.get("provider", {}).get("name", ""),
+        provider=provider.get("name", ""),
         spread=o.get("spread", 0),
         overUnder=o.get("overUnder", 0),
-        homeMoneyLine=o.get("homeTeamOdds", {}).get("moneyLine", 0),
-        awayMoneyLine=o.get("awayTeamOdds", {}).get("moneyLine", 0),
+        homeMoneyLine=home_odds.get("moneyLine", 0),
+        awayMoneyLine=away_odds.get("moneyLine", 0),
     )
 
 
@@ -615,6 +622,181 @@ class NCAAGameFetcher:
         return None
 
 
+def _parse_espn_soccer_scoreboard(data: dict[str, Any]) -> list[GameInfo]:
+    """Parse ESPN soccer scoreboard, re-mapping status codes to the canonical
+    1=scheduled / 2=in_progress / 3=finished scheme.
+
+    ESPN's soccer ``status.type.id`` does not match the 1/2/3 convention used
+    elsewhere in the scheduler (full time is id 28, AET is 45, …). We map by
+    ``status.type.name`` against ``SOCCER_STATUS_NAME_MAP``.
+    """
+    scoreboard = data.get("scoreboard", {})
+    events = scoreboard.get("events", [])
+    games: list[GameInfo] = []
+    for event in events:
+        game = _parse_espn_event(event, "world_cup")
+        if game is None:
+            continue
+        # Translate raw ESPN id into the canonical 1/2/3 status.
+        comp = (event.get("competitions") or [{}])[0]
+        status_name = ((comp.get("status") or {}).get("type") or {}).get("name", "")
+        canonical = SOCCER_STATUS_NAME_MAP.get(status_name)
+        if canonical is not None:
+            game = game.model_copy(update={"status": canonical})
+        elif status_name:
+            LOGGER.warning(
+                "Unrecognised ESPN soccer status name %r for game %s",
+                status_name,
+                game.game_id,
+            )
+        games.append(game)
+    return games
+
+
+class WorldCupGameFetcher:
+    """Fetches FIFA soccer game information from ESPN API.
+
+    A single fetcher instance is bound to one FIFA league code (e.g.
+    ``fifa.world`` for the men's WC). The scheduler instantiates a fresh
+    fetcher per source so different sources can target different competitions.
+    """
+
+    def __init__(self, league: str = "fifa.world") -> None:
+        self.league = validate_world_cup_league(league)
+
+    def _make_api(self) -> ESPNExternalAPI:
+        return ESPNExternalAPI(sport="soccer", league=self.league)
+
+    async def _fetch_games_for_api_date(
+        self,
+        api: ESPNExternalAPI,
+        date: str,
+    ) -> list[GameInfo]:
+        try:
+            date_str = datetime.strptime(date, "%Y-%m-%d").strftime("%Y%m%d")
+        except ValueError:
+            LOGGER.error("Invalid date format: %s", date)
+            return []
+        data = await api.fetch("scoreboard", {"dates": date_str})
+        return _parse_espn_soccer_scoreboard(data)
+
+    async def fetch_games_for_date(
+        self,
+        date: str | None = None,
+    ) -> list[GameInfo]:
+        """Fetch FIFA soccer matches for a specific date.
+
+        Args:
+            date: Date in YYYY-MM-DD format. If None, uses US today; if all
+                  matches are finished/postponed/cancelled, falls back to US tomorrow.
+
+        Returns:
+            List of GameInfo objects with status codes mapped to 1/2/3.
+        """
+        api = self._make_api()
+        try:
+            auto_date = date is None
+            if date is None:
+                date = us_game_day_today()
+
+            games = await self._fetch_games_for_api_date(api, date)
+            if not auto_date:
+                return games
+
+            has_actionable = any(
+                g.status != 3
+                and "postponed" not in g.status_text.lower()
+                and "canceled" not in g.status_text.lower()
+                and "cancelled" not in g.status_text.lower()
+                for g in games
+            )
+            if has_actionable:
+                return games
+
+            tomorrow = (
+                datetime.strptime(us_game_day_today(), "%Y-%m-%d").date()
+                + timedelta(days=1)
+            ).isoformat()
+            tomorrow_games = await self._fetch_games_for_api_date(api, tomorrow)
+            return tomorrow_games if tomorrow_games else games
+        except Exception as e:
+            LOGGER.error("Error fetching %s games for %s: %s", self.league, date, e)
+            return []
+        finally:
+            await api.close()
+
+    async def fetch_games_for_date_range(
+        self,
+        start_date: str,
+        end_date: str,
+    ) -> list[GameInfo]:
+        """Fetch FIFA soccer matches for a date range."""
+        games: list[GameInfo] = []
+        api = self._make_api()
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+
+            if start > end:
+                start, end = end, start
+
+            current = start
+            while current <= end:
+                games.extend(
+                    await self._fetch_games_for_api_date(
+                        api, current.strftime("%Y-%m-%d")
+                    )
+                )
+                current += timedelta(days=1)
+        except Exception as e:
+            LOGGER.error(
+                "Error fetching %s games for range %s to %s: %s",
+                self.league,
+                start_date,
+                end_date,
+                e,
+            )
+        finally:
+            await api.close()
+
+        return games
+
+    async def get_game_status(
+        self, game_id: str, game_date: str | None = None
+    ) -> int | None:
+        """Return canonical game status (1=scheduled, 2=in_progress, 3=finished, …)."""
+        result = await self.get_game_status_info(game_id, game_date)
+        return result[0] if result else None
+
+    async def get_game_status_info(
+        self, game_id: str, game_date: str | None = None
+    ) -> tuple[int, str] | None:
+        """Return ``(status_code, status_text)`` for the given ESPN event."""
+
+        def _map_status(game: GameInfo) -> tuple[int, str]:
+            status_text = game.status_text.lower()
+            if "postponed" in status_text:
+                return (4, game.status_text)
+            if "canceled" in status_text or "cancelled" in status_text:
+                return (5, game.status_text)
+            return (game.status, game.status_text)
+
+        dates_to_check: list[str | None] = []
+        if game_date:
+            dates_to_check.append(game_date)
+        else:
+            us_today, us_yesterday = us_game_day_today_and_yesterday()
+            dates_to_check.extend([us_today, us_yesterday])
+
+        for date in dates_to_check:
+            games = await self.fetch_games_for_date(date)
+            for g in games:
+                if g.game_id == game_id:
+                    return _map_status(g)
+
+        return None
+
+
 __all__ = [
     "GameInfo",
     "NBAGameFetcher",
@@ -622,4 +804,5 @@ __all__ = [
     "NFLGameFetcher",
     "TeamInfo",
     "VenueInfo",
+    "WorldCupGameFetcher",
 ]
