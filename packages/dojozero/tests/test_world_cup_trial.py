@@ -157,7 +157,9 @@ class TestTrialSpecBuild:
         return payload
 
     @pytest.mark.asyncio
-    async def test_builds_betting_spec_with_polymarket_store(self, monkeypatch) -> None:
+    async def test_builds_betting_spec_without_polymarket_by_default(
+        self, monkeypatch
+    ) -> None:
         import dojozero.world_cup._trial as trial_module
         from dojozero.betting import BrokerOperator
 
@@ -184,9 +186,43 @@ class TestTrialSpecBuild:
             ),
         )
 
-        assert spec.metadata.store_types == ("world_cup", "polymarket")
+        assert spec.metadata.store_types == ("world_cup",)
         assert spec.metadata.world_cup_league == "fifa.world"
         assert spec.operators[0].actor_cls is BrokerOperator
+
+    @pytest.mark.asyncio
+    async def test_builds_betting_spec_with_polymarket_store_when_market_url_set(
+        self, monkeypatch
+    ) -> None:
+        import dojozero.world_cup._trial as trial_module
+
+        async def fake_game_info(*args: Any, **kwargs: Any) -> GameInfo:
+            return self._game_info()
+
+        monkeypatch.setattr(trial_module, "get_game_info_by_id_async", fake_game_info)
+
+        payload = self._base_payload(
+            {
+                "id": "betting_broker",
+                "class": "BrokerOperator",
+                "initial_balance": "1000.00",
+                "allowed_tools": ["get_event", "place_market_bet_moneyline"],
+                "data_streams": [
+                    "game_lifecycle_stream",
+                    "odds_update_stream",
+                    "game_update_stream",
+                ],
+            }
+        )
+        payload["market_url"] = (
+            "https://polymarket.com/event/world-cup-fra-arg-2026-07-19"
+        )
+
+        defn = get_trial_builder_definition("world_cup")
+        spec = await defn.build_async("trial-1", payload)
+
+        assert spec.metadata.store_types == ("world_cup", "polymarket")
+        assert spec.metadata.market_url == payload["market_url"]
 
     @pytest.mark.asyncio
     async def test_builds_betting_spec_without_built_in_agents(
@@ -246,7 +282,7 @@ class TestTrialSpecBuild:
             ),
         )
 
-        assert spec.metadata.store_types == ("world_cup", "polymarket")
+        assert spec.metadata.store_types == ("world_cup",)
         assert spec.operators[0].actor_cls is PredictionBroker
         assert spec.operators[0].config["window_pools"] == [5000, 4000, 3000, 2000, 500]
 

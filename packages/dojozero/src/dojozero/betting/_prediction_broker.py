@@ -66,6 +66,8 @@ _SPORT_CLOCK_DEFAULTS: Dict[str, tuple[int, int]] = {
     "nfl": (4, 15 * 60),
     "ncaa": (2, 20 * 60),
     "collegebasketball": (2, 20 * 60),
+    # World Cup prediction windows model regulation. Extra time and shootouts
+    # intentionally clamp to the final window once elapsed time exceeds 90'.
     "world_cup": (2, 45 * 60),
 }
 _ELAPSED_CLOCK_SPORTS = {"world_cup"}

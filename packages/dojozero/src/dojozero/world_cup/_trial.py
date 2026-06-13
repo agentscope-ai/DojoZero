@@ -104,8 +104,8 @@ class WorldCupTrialParams(BaseModel):
     market_url: str | None = Field(
         default=None,
         description=(
-            "Optional Polymarket game-market URL. If omitted, the Polymarket "
-            "store attempts to construct a world-cup-{away}-{home}-{date} slug."
+            "Optional Polymarket game-market URL. If omitted, Polymarket "
+            "polling stays disabled for this trial."
         ),
     )
 
@@ -345,10 +345,11 @@ async def _build_trial_spec(
             },
         )
 
+    store_types = ("world_cup", "polymarket") if params.market_url else ("world_cup",)
     metadata = BettingTrialMetadata(
         hub_id=hub_id,
         persistence_file=persistence_file,
-        store_types=("world_cup", "polymarket"),
+        store_types=store_types,
         sample="world_cup",
         sport_type="world_cup",
         espn_game_id=params.espn_game_id,

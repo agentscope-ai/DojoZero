@@ -440,6 +440,9 @@ class WorldCupStore(DataStore):
 
             pbp_available = self._state.is_pbp_available(game_id)
             final_summary_seen = self._state.has_final_summary_seen(game_id)
+            # For summary-only matches, wait for one repeated FINAL summary
+            # before emitting the fallback result. That gives the PBP poll in
+            # the same/next cycle a chance to emit terminal plays first.
             should_emit_summary_result = (
                 status_code == self._state.STATUS_FINAL
                 and not self._state.has_game_result_emitted(game_id)
