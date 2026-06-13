@@ -161,6 +161,11 @@ async def _build_trial_spec(
         date_match = re.search(r"(\d{4}-\d{2}-\d{2})", persistence_file)
         if date_match:
             game_date = date_match.group(1)
+    if not game_date:
+        raise ValueError(
+            "Could not determine game_date from params, ESPN game time, or "
+            f"persistence_file={persistence_file!r}."
+        )
 
     hub_id = params.hub_id
     stream_specs: list[

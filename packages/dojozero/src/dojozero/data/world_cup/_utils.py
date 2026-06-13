@@ -148,7 +148,7 @@ def _build_game_info_from_summary(
         "homeTeam": _team_dict_from_competitor(home_competitor),
         "awayTeam": _team_dict_from_competitor(away_competitor),
         "venue": venue_data,
-        "gameTimeUTC": comp.get("date", "") or header.get("timeValid"),
+        "gameTimeUTC": comp.get("date") or None,
         "broadcasts": broadcasts_raw,
         "broadcast": broadcast,
         "neutralSite": bool(comp.get("neutralSite", False)),

@@ -8,6 +8,7 @@ final score Ecuador 1 - Argentina 0). They are deterministic — no network.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -270,6 +271,19 @@ class TestBuildGameInfoFromSummary:
         assert info.venue.name.startswith("Estadio")
         assert info.venue.city == "Quito"
         assert info.season_year == 2023
+
+    def test_missing_date_does_not_use_time_valid_boolean(
+        self, summary_payload: dict[str, Any]
+    ) -> None:
+        payload = deepcopy(summary_payload)
+        comp = payload["header"]["competitions"][0]
+        comp["date"] = ""
+        payload["header"]["timeValid"] = True
+
+        info = _build_game_info_from_summary(payload, "684665")
+
+        assert info is not None
+        assert info.game_time_utc is None
 
     def test_returns_none_when_competitions_missing(self) -> None:
         assert _build_game_info_from_summary({}, "684665") is None

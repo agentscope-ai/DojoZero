@@ -114,10 +114,10 @@ def _parse_soccer_clock_to_elapsed_seconds(
     upper = clock.upper().strip()
     if upper in {"HT", "HALF", "HALFTIME"}:
         return seconds_per_period
-    if upper in {"FT", "AET", "PEN", "FINAL"}:
-        fallback_period = 4 if upper == "AET" else 5 if upper == "PEN" else 2
-        terminal_period = period if period > 0 else fallback_period
-        return terminal_period * seconds_per_period
+    if upper == "FT":
+        return (period if period > 0 else 2) * seconds_per_period
+    if upper in {"AET", "PEN", "FINAL"}:
+        return (period if period > 0 else 2) * seconds_per_period
 
     stoppage_match = re.match(r"^\s*(\d{1,3})'\s*(?:\+\s*(\d{1,2})')?\s*$", clock)
     if stoppage_match:

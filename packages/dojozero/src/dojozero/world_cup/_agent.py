@@ -35,11 +35,23 @@ class BettingAgent(BaseBettingAgent):
             raise ValueError(f"Missing 'llm' config for agent {actor_id}")
         model_type = llm_config.get("model_type", "openai")
         model_name = llm_config.get("model_name", "")
+        base_sys_prompt = config.get("sys_prompt", "")
+        identity_prompt = "\n".join(
+            [
+                "[Agent Identity]",
+                f"Your agent id is {actor_id}.",
+            ]
+        )
+        sys_prompt = (
+            f"{base_sys_prompt}\n\n{identity_prompt}"
+            if base_sys_prompt
+            else identity_prompt
+        )
         return cls(
             actor_id=actor_id,
             trial_id=context.trial_id,
             name=config.get("name", actor_id),
-            sys_prompt=config.get("sys_prompt", ""),
+            sys_prompt=sys_prompt,
             model=create_model(llm_config),
             formatter=create_formatter(model_type, model_name),
         )

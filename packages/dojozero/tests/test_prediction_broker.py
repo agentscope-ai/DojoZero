@@ -69,6 +69,13 @@ def test_accepts_default_window_pools() -> None:
     assert rules["kind"] == "window_pool_prediction"
 
 
+@pytest.mark.parametrize("clock", ["AET", "PEN"])
+def test_soccer_terminal_clock_without_period_maps_to_regulation_complete(
+    clock: str,
+) -> None:
+    assert _parse_soccer_clock_to_elapsed_seconds(clock, 0, 45 * 60) == 90 * 60
+
+
 # ---------------------------------------------------------------------------
 # Event bootstrap & lifecycle
 # ---------------------------------------------------------------------------

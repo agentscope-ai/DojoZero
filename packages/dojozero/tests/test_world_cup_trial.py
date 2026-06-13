@@ -106,22 +106,22 @@ class TestParamsValidation:
 
 
 class TestTrialSpecBuild:
-    def _game_info(self) -> GameInfo:
-        return GameInfo.model_validate(
-            {
-                "game_id": "760415",
-                "sport_type": "world_cup",
-                "game_time_utc": datetime(2026, 7, 19, 19, 0, tzinfo=timezone.utc),
-                "home_team": TeamInfo.model_validate(
-                    {"team_id": "1", "name": "Argentina", "tricode": "ARG"}
-                ),
-                "away_team": TeamInfo.model_validate(
-                    {"team_id": "2", "name": "France", "tricode": "FRA"}
-                ),
-                "season_year": 2026,
-                "season_type": "world",
-            }
-        )
+    def _game_info(self, *, include_time: bool = True) -> GameInfo:
+        payload: dict[str, Any] = {
+            "game_id": "760415",
+            "sport_type": "world_cup",
+            "home_team": TeamInfo.model_validate(
+                {"team_id": "1", "name": "Argentina", "tricode": "ARG"}
+            ),
+            "away_team": TeamInfo.model_validate(
+                {"team_id": "2", "name": "France", "tricode": "FRA"}
+            ),
+            "season_year": 2026,
+            "season_type": "world",
+        }
+        if include_time:
+            payload["game_time_utc"] = datetime(2026, 7, 19, 19, 0, tzinfo=timezone.utc)
+        return GameInfo.model_validate(payload)
 
     def _base_payload(
         self, operator: dict[str, Any], *, include_agents: bool = True
@@ -257,6 +257,57 @@ class TestTrialSpecBuild:
         assert spec.agents == ()
         assert spec.social_board is None
         assert spec.operators[0].agent_ids == ()
+
+    @pytest.mark.asyncio
+    async def test_builds_spec_uses_date_from_persistence_path_when_espn_date_missing(
+        self, monkeypatch
+    ) -> None:
+        import dojozero.world_cup._trial as trial_module
+
+        async def fake_game_info(*args: Any, **kwargs: Any) -> GameInfo:
+            return self._game_info(include_time=False)
+
+        monkeypatch.setattr(trial_module, "get_game_info_by_id_async", fake_game_info)
+
+        payload = self._base_payload(
+            {
+                "id": "betting_broker",
+                "class": "BrokerOperator",
+                "initial_balance": "1000.00",
+            },
+            include_agents=False,
+        )
+        payload["hub"] = {
+            "persistence_file": "outputs/world-cup-2026-07-19/events.jsonl"
+        }
+
+        defn = get_trial_builder_definition("world_cup")
+        spec = await defn.build_async("trial-1", payload)
+
+        assert spec.metadata.game_date == "2026-07-19"
+
+    @pytest.mark.asyncio
+    async def test_builds_spec_rejects_missing_game_date(self, monkeypatch) -> None:
+        import dojozero.world_cup._trial as trial_module
+
+        async def fake_game_info(*args: Any, **kwargs: Any) -> GameInfo:
+            return self._game_info(include_time=False)
+
+        monkeypatch.setattr(trial_module, "get_game_info_by_id_async", fake_game_info)
+
+        payload = self._base_payload(
+            {
+                "id": "betting_broker",
+                "class": "BrokerOperator",
+                "initial_balance": "1000.00",
+            },
+            include_agents=False,
+        )
+        payload["hub"] = {"persistence_file": "outputs/world-cup/events.jsonl"}
+
+        defn = get_trial_builder_definition("world_cup")
+        with pytest.raises(ValueError, match="Could not determine game_date"):
+            await defn.build_async("trial-1", payload)
 
     @pytest.mark.asyncio
     async def test_builds_prediction_spec(self, monkeypatch) -> None:

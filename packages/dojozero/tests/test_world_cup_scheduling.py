@@ -258,6 +258,48 @@ class TestWorldCupGameFetcher:
         ]
 
     @pytest.mark.asyncio
+    async def test_fetch_games_for_date_falls_back_to_tomorrow_when_today_done(
+        self, monkeypatch
+    ) -> None:
+        import dojozero.dashboard_server._game_discovery as discovery
+
+        fetcher = WorldCupGameFetcher(league="fifa.cwc")
+        calls: list[str] = []
+        closed = False
+
+        class FakeApi:
+            async def close(self) -> None:
+                nonlocal closed
+                closed = True
+
+        async def fake_fetch(api_arg: object, date: str) -> list[GameInfo]:
+            calls.append(date)
+            return [
+                GameInfo.model_validate(
+                    {
+                        "gameId": f"game-{date}",
+                        "sport_type": "world_cup",
+                        "gameStatus": 3 if date == "2026-06-13" else 1,
+                        "gameStatusText": (
+                            "Full Time" if date == "2026-06-13" else "Scheduled"
+                        ),
+                        "homeTeam": {"displayName": "Home"},
+                        "awayTeam": {"displayName": "Away"},
+                    }
+                )
+            ]
+
+        monkeypatch.setattr(discovery, "us_game_day_today", lambda: "2026-06-13")
+        monkeypatch.setattr(fetcher, "_make_api", lambda: FakeApi())
+        monkeypatch.setattr(fetcher, "_fetch_games_for_api_date", fake_fetch)
+
+        games = await fetcher.fetch_games_for_date()
+
+        assert calls == ["2026-06-13", "2026-06-14"]
+        assert closed is True
+        assert [g.game_id for g in games] == ["game-2026-06-14"]
+
+    @pytest.mark.asyncio
     async def test_get_game_status_info_returns_matching_game(
         self, monkeypatch
     ) -> None:
