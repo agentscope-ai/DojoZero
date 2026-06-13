@@ -104,6 +104,8 @@ class GameStateTracker(BaseGameStateTracker):
         return self._away_team_id.get(game_id, "")
 
     def set_winner_side(self, game_id: str, winner_side: str) -> None:
+        # Ties are not stored here; result emission falls back to score
+        # comparison and emits ``even`` when neither side is ahead.
         if winner_side in {"home", "away"}:
             self._winner_side[game_id] = winner_side
 

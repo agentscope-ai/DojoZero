@@ -251,6 +251,12 @@ class TestIdFromRef:
         with pytest.raises(ValueError, match="Unknown FIFA league code"):
             validate_world_cup_league("fifa.world/../../nfl")
 
+    def test_allows_future_fifa_league_codes(self) -> None:
+        assert (
+            validate_world_cup_league("fifa.worldq.intercontinental")
+            == "fifa.worldq.intercontinental"
+        )
+
 
 class TestBuildGameInfoFromSummary:
     def test_extracts_team_venue_season(self, summary_payload: dict[str, Any]) -> None:

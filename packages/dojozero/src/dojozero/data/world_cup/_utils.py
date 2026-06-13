@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Any
 
@@ -19,11 +20,6 @@ _ESPN_SOCCER_SUMMARY_URL = (
 )
 
 
-def get_proxy() -> str | None:
-    """Return DOJOZERO_PROXY_URL or None."""
-    return os.getenv("DOJOZERO_PROXY_URL")
-
-
 def parse_iso_datetime(time_str: str) -> datetime:
     """Parse ESPN ISO timestamps; accepts trailing 'Z'."""
     return datetime.fromisoformat(time_str.replace("Z", "+00:00"))
@@ -31,12 +27,19 @@ def parse_iso_datetime(time_str: str) -> datetime:
 
 def validate_world_cup_league(league: str) -> str:
     """Validate a supported FIFA league code before using it in ESPN URLs."""
-    if league not in WORLD_CUP_KNOWN_LEAGUES:
-        raise ValueError(
-            f"Unknown FIFA league code: {league!r}. "
-            f"Expected one of: {sorted(WORLD_CUP_KNOWN_LEAGUES)}"
+    if league in WORLD_CUP_KNOWN_LEAGUES:
+        return league
+    if re.fullmatch(r"fifa\.[a-z0-9_.-]+", league):
+        logger.warning(
+            "Unknown FIFA league code %r; passing through for ESPN compatibility",
+            league,
         )
-    return league
+        return league
+    raise ValueError(
+        f"Unknown FIFA league code: {league!r}. "
+        f"Expected one of: {sorted(WORLD_CUP_KNOWN_LEAGUES)} "
+        "or a future ESPN FIFA code like 'fifa.worldq.intercontinental'."
+    )
 
 
 def _id_from_ref(obj: dict[str, Any] | None) -> str:
@@ -176,7 +179,7 @@ async def get_game_info_by_id_async(
     if not game_id:
         return None
     league = validate_world_cup_league(league)
-    proxy = proxy if proxy is not None else get_proxy()
+    proxy = proxy if proxy is not None else os.getenv("DOJOZERO_PROXY_URL")
     url = _ESPN_SOCCER_SUMMARY_URL.format(league=league)
     timeout_obj = aiohttp.ClientTimeout(total=timeout)
     try:
@@ -199,7 +202,6 @@ async def get_game_info_by_id_async(
 
 __all__ = [
     "get_game_info_by_id_async",
-    "get_proxy",
     "parse_iso_datetime",
     "validate_world_cup_league",
 ]

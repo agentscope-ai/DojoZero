@@ -83,11 +83,14 @@ class TestParamsValidation:
 
     def test_operators_are_required(self) -> None:
         with pytest.raises(ValidationError) as exc_info:
-            WorldCupTrialParams(
-                espn_game_id="x",
-                hub=self._hub(),
+            WorldCupTrialParams.model_validate(
+                {
+                    "espn_game_id": "x",
+                    "hub": self._hub(),
+                }
             )
-        assert "No operators specified" in str(exc_info.value)
+        assert "operators" in str(exc_info.value)
+        assert "Field required" in str(exc_info.value)
 
     def test_example_params_validate(self) -> None:
         defn = get_trial_builder_definition("world_cup")

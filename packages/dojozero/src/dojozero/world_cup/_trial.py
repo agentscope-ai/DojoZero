@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 from dojozero.core import (
     DataStreamSpec,
@@ -91,7 +91,10 @@ class WorldCupTrialParams(BaseModel):
         ),
     )
 
-    operators: list[TrialBrokerConfig] | None = Field(default=None)
+    operators: list[TrialBrokerConfig] = Field(
+        ...,
+        description="Broker operators participating in the trial",
+    )
 
     agents: list[dict[str, Any]] = Field(
         default_factory=list,
@@ -110,14 +113,6 @@ class WorldCupTrialParams(BaseModel):
     @classmethod
     def _validate_league(cls, value: str) -> str:
         return validate_world_cup_league(value)
-
-    @model_validator(mode="after")
-    def _validate_operators(self) -> "WorldCupTrialParams":
-        if not self.operators:
-            raise ValueError(
-                "No operators specified. At least one BrokerOperator is required."
-            )
-        return self
 
 
 async def _build_trial_spec(
@@ -143,7 +138,7 @@ async def _build_trial_spec(
     season_year = game_info.season_year
     season_type = game_info.season_type
     game_date = params.game_date or game_info.get_game_date_us()
-    operators = params.operators or []
+    operators = params.operators
 
     logger.info(
         "World Cup trial '%s': %s vs %s on %s (league=%s)",

@@ -67,8 +67,6 @@ _SPORT_CLOCK_DEFAULTS: Dict[str, tuple[int, int]] = {
     "ncaa": (2, 20 * 60),
     "collegebasketball": (2, 20 * 60),
     "world_cup": (2, 45 * 60),
-    "worldcup": (2, 45 * 60),
-    "soccer": (2, 45 * 60),
 }
 _ELAPSED_CLOCK_SPORTS = {"world_cup"}
 

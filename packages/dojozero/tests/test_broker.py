@@ -1110,7 +1110,10 @@ class TestBetSettlement:
         balance = await broker.get_balance(agent.actor_id)
         assert balance == Decimal("900.00")
 
-    async def test_settle_even_result_marks_moneyline_bet_lost(self, broker_with_agent):
+    @pytest.mark.parametrize("winner", ["even", "draw"])
+    async def test_settle_draw_result_marks_moneyline_bet_lost(
+        self, broker_with_agent, winner
+    ):
         """A tied soccer result should settle home/away moneyline bets as losses."""
         broker, agent = broker_with_agent
 
@@ -1167,7 +1170,7 @@ class TestBetSettlement:
                 payload=GameResultEvent(
                     game_id="draw_event",
                     sport="world_cup",
-                    winner="even",
+                    winner=winner,
                     home_score=0,
                     away_score=0,
                 ),

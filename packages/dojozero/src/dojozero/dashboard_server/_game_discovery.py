@@ -661,6 +661,19 @@ class WorldCupGameFetcher:
     def _make_api(self) -> ESPNExternalAPI:
         return ESPNExternalAPI(sport="soccer", league=self.league)
 
+    async def _fetch_games_for_api_date(
+        self,
+        api: ESPNExternalAPI,
+        date: str,
+    ) -> list[GameInfo]:
+        try:
+            date_str = datetime.strptime(date, "%Y-%m-%d").strftime("%Y%m%d")
+        except ValueError:
+            LOGGER.error("Invalid date format: %s", date)
+            return []
+        data = await api.fetch("scoreboard", {"dates": date_str})
+        return _parse_espn_soccer_scoreboard(data)
+
     async def fetch_games_for_date(
         self,
         date: str | None = None,
@@ -679,14 +692,8 @@ class WorldCupGameFetcher:
             auto_date = date is None
             if date is None:
                 date = us_game_day_today()
-            try:
-                date_str = datetime.strptime(date, "%Y-%m-%d").strftime("%Y%m%d")
-            except ValueError:
-                LOGGER.error("Invalid date format: %s", date)
-                return []
 
-            data = await api.fetch("scoreboard", {"dates": date_str})
-            games = _parse_espn_soccer_scoreboard(data)
+            games = await self._fetch_games_for_api_date(api, date)
             if not auto_date:
                 return games
 
@@ -704,9 +711,7 @@ class WorldCupGameFetcher:
                 datetime.strptime(us_game_day_today(), "%Y-%m-%d").date()
                 + timedelta(days=1)
             ).isoformat()
-            tomorrow_str = datetime.strptime(tomorrow, "%Y-%m-%d").strftime("%Y%m%d")
-            tomorrow_data = await api.fetch("scoreboard", {"dates": tomorrow_str})
-            tomorrow_games = _parse_espn_soccer_scoreboard(tomorrow_data)
+            tomorrow_games = await self._fetch_games_for_api_date(api, tomorrow)
             return tomorrow_games if tomorrow_games else games
         except Exception as e:
             LOGGER.error("Error fetching %s games for %s: %s", self.league, date, e)
@@ -728,9 +733,25 @@ class WorldCupGameFetcher:
             start, end = end, start
 
         current = start
-        while current <= end:
-            games.extend(await self.fetch_games_for_date(current.strftime("%Y-%m-%d")))
-            current += timedelta(days=1)
+        api = self._make_api()
+        try:
+            while current <= end:
+                games.extend(
+                    await self._fetch_games_for_api_date(
+                        api, current.strftime("%Y-%m-%d")
+                    )
+                )
+                current += timedelta(days=1)
+        except Exception as e:
+            LOGGER.error(
+                "Error fetching %s games for range %s to %s: %s",
+                self.league,
+                start_date,
+                end_date,
+                e,
+            )
+        finally:
+            await api.close()
 
         return games
 

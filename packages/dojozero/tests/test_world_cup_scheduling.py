@@ -217,10 +217,18 @@ class TestWorldCupGameFetcher:
         self, monkeypatch
     ) -> None:
         fetcher = WorldCupGameFetcher(league="fifa.cwc")
-        calls: list[str | None] = []
+        calls: list[tuple[object, str]] = []
+        closed = False
 
-        async def fake_fetch(date: str | None = None) -> list[GameInfo]:
-            calls.append(date)
+        class FakeApi:
+            async def close(self) -> None:
+                nonlocal closed
+                closed = True
+
+        fake_api = FakeApi()
+
+        async def fake_fetch(api_arg: object, date: str) -> list[GameInfo]:
+            calls.append((api_arg, date))
             return [
                 GameInfo.model_validate(
                     {
@@ -232,11 +240,17 @@ class TestWorldCupGameFetcher:
                 )
             ]
 
-        monkeypatch.setattr(fetcher, "fetch_games_for_date", fake_fetch)
+        monkeypatch.setattr(fetcher, "_make_api", lambda: fake_api)
+        monkeypatch.setattr(fetcher, "_fetch_games_for_api_date", fake_fetch)
 
         games = await fetcher.fetch_games_for_date_range("2025-07-01", "2025-07-03")
 
-        assert calls == ["2025-07-01", "2025-07-02", "2025-07-03"]
+        assert calls == [
+            (fake_api, "2025-07-01"),
+            (fake_api, "2025-07-02"),
+            (fake_api, "2025-07-03"),
+        ]
+        assert closed is True
         assert [g.game_id for g in games] == [
             "game-2025-07-01",
             "game-2025-07-02",

@@ -497,6 +497,9 @@ class WorldCupStore(DataStore):
             if "/events/" in ref:
                 game_id = ref.split("/events/")[1].split("/", 1)[0]
         if not game_id:
+            logger.warning(
+                "Could not determine game_id from plays payload; dropping batch"
+            )
             return
 
         # GameStart on first observation of plays for this match.
@@ -632,7 +635,24 @@ class WorldCupStore(DataStore):
     # DataStore overrides
     # =========================================================================
 
-    def _parse_api_response(self, data: dict[str, Any]) -> Sequence[DataEvent]:
+    def _refresh_poll_profile(self) -> None:
+        game_id = self._poll_identifier.get("espn_game_id", "")
+        if not game_id:
+            return
+
+        new_profile = self._state.get_poll_profile(game_id)
+        if new_profile == self._current_poll_profile:
+            return
+
+        intervals = self._POLL_PROFILES.get(new_profile)
+        if intervals:
+            for endpoint, interval in intervals.items():
+                self.update_poll_interval(endpoint, interval)
+        self._current_poll_profile = new_profile
+
+    def _parse_api_response(
+        self, data: dict[str, Any], *, refresh_poll_profile: bool = True
+    ) -> Sequence[DataEvent]:
         """Dispatch by top-level key: ``summary`` or ``plays``."""
         events: list[DataEvent] = []
 
@@ -646,16 +666,8 @@ class WorldCupStore(DataStore):
             if isinstance(plays, dict):
                 self._parse_plays(plays, events)
 
-        # Refresh poll profile based on current state.
-        game_id = self._poll_identifier.get("espn_game_id", "")
-        if game_id:
-            new_profile = self._state.get_poll_profile(game_id)
-            if new_profile != self._current_poll_profile:
-                intervals = self._POLL_PROFILES.get(new_profile)
-                if intervals:
-                    for endpoint, interval in intervals.items():
-                        self.update_poll_interval(endpoint, interval)
-                self._current_poll_profile = new_profile
+        if refresh_poll_profile:
+            self._refresh_poll_profile()
 
         return events
 
@@ -677,15 +689,20 @@ class WorldCupStore(DataStore):
         if self._should_poll_endpoint("boxscore"):
             summary_data = await self._api.fetch("summary", {"event_id": espn_game_id})
             if summary_data:
-                events.extend(self._parse_api_response(summary_data))
+                events.extend(
+                    self._parse_api_response(summary_data, refresh_poll_profile=False)
+                )
                 self._record_poll_time("boxscore")
 
         if self._should_poll_endpoint("play_by_play"):
             plays_data = await self._api.fetch("plays", {"event_id": espn_game_id})
             if plays_data:
-                events.extend(self._parse_api_response(plays_data))
+                events.extend(
+                    self._parse_api_response(plays_data, refresh_poll_profile=False)
+                )
                 self._record_poll_time("play_by_play")
 
+        self._refresh_poll_profile()
         return events
 
     # =========================================================================
