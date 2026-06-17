@@ -664,12 +664,12 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         if self._event.status == EventStatus.SCHEDULED:
             return 0
 
+        # LIVE / CLOSED / SETTLED: the window of the latest period reached, or 0
+        # when no period update has arrived (pre-kick, abandoned game, or
+        # missing live data). A settled regulation finish thus reports its real
+        # last window (e.g. 2 for soccer) — not always the final window — which
+        # matches the pools _effective_window_pools awards.
         last_reached = self._last_reached_window()
-        if self._event.status in (EventStatus.CLOSED, EventStatus.SETTLED):
-            # The contest is over: report the last window the game reached
-            # rather than always the final window, so a regulation finish
-            # isn't mislabeled as overtime/extra time.
-            return last_reached if last_reached is not None else NUM_WINDOWS - 1
         return last_reached if last_reached is not None else 0
 
     def _effective_window_pools(self) -> list[int]:

@@ -1820,9 +1820,12 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 return "bet_placed"
 
         except ValueError as e:
-            # Validation rejections (insufficient balance, betting closed,
-            # invalid selection, ...) carry a client-safe reason — surface it so
-            # the gateway can return a legible message instead of "bet_invalid".
+            # Invariant: every ValueError raised in the place_bet call graph is a
+            # first-party validation rejection (insufficient balance, betting
+            # closed, invalid selection, ...), so its message is client-safe and
+            # is surfaced as the rejection reason. If a future change introduces
+            # a ValueError carrying non-client-safe text, give validation a
+            # dedicated exception type and narrow this handler to it.
             logger.warning("Bet rejected for %s: %s", agent_id, e)
             return f"bet_invalid: {e}"
         except Exception as e:
