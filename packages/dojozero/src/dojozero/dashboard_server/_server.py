@@ -1719,6 +1719,14 @@ def create_dashboard_app(
         except ValueError as e:
             return JSONResponse(content={"error": str(e)}, status_code=400)
 
+        # A range needs both bounds; reject a lone start_date/end_date rather
+        # than silently ignoring it and returning today's games.
+        if bool(start_date) != bool(end_date):
+            return JSONResponse(
+                content={"error": "start_date and end_date must be provided together"},
+                status_code=400,
+            )
+
         try:
             if start_date and end_date:
                 games = await fetcher.fetch_games_for_date_range(start_date, end_date)

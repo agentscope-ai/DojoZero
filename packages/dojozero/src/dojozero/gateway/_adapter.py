@@ -635,8 +635,10 @@ class ExternalAgentAdapter:
         # Surface broker-side rejections with their reason (e.g. market not yet
         # priced, insufficient balance) instead of a generic "no bet found".
         # The reason flows through to a specific client error code in the
-        # gateway's place_bet handler (balance/closed/stale/...).
-        if result != "bet_placed":
+        # gateway's place_bet handler (balance/closed/stale/...). Match only the
+        # explicit "bet_invalid[: reason]" contract so a future non-terminal
+        # status isn't misread as a rejection.
+        if result.startswith("bet_invalid"):
             reason = result.split(":", 1)[1].strip() if ":" in result else result
             raise ValueError(reason or "bet rejected")
 

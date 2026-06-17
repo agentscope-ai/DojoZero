@@ -1648,7 +1648,7 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         Returns:
             "bet_placed" - Bet successfully placed (funds locked)
-            "bet_invalid" - Bet rejected due to validation error
+            "bet_invalid: <reason>" - Bet rejected; the reason follows the colon
         """
         try:
             # Validate bet request
