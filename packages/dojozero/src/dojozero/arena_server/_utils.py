@@ -56,6 +56,7 @@ TRIAL_INFO_OPERATION_NAMES = [
     "event.nba_game_update",
     "event.nfl_game_update",
     "event.ncaa_game_update",
+    "event.world_cup_game_update",
 ]
 
 

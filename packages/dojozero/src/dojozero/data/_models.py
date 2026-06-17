@@ -390,6 +390,12 @@ class EventTypes(str, Enum):
     NFL_GAME_UPDATE = "event.nfl_game_update"
 
     # =========================================================================
+    # World Cup (FIFA soccer) Game Events
+    # =========================================================================
+    WORLD_CUP_PLAY = "event.world_cup_play"
+    WORLD_CUP_GAME_UPDATE = "event.world_cup_game_update"
+
+    # =========================================================================
     # Game Insights (web search, sentiment, etc.)
     # =========================================================================
     INJURY_REPORT = "event.injury_report"

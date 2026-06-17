@@ -88,7 +88,7 @@ function FilterBar({ filters, setFilters }) {
       <div style={styles.filterGroup}>
         <span style={styles.filterLabel}>League</span>
         <div style={styles.filterButtons}>
-          {["All", "NBA", "NFL", "NCAA"].map((league) => (
+          {["All", "NBA", "NFL", "NCAA", "WORLD_CUP"].map((league) => (
             <button
               key={league}
               onClick={() => setFilters({ ...filters, league })}
@@ -97,7 +97,7 @@ function FilterBar({ filters, setFilters }) {
                 ...(filters.league === league ? styles.filterBtnActive : {}),
               }}
             >
-              {league}
+              {league === "WORLD_CUP" ? "World Cup" : league}
             </button>
           ))}
         </div>

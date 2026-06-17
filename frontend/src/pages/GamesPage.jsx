@@ -9,6 +9,11 @@ import {
 } from "lucide-react";
 import { useDataSource } from "../hooks/useDataSource.jsx";
 
+// Friendly display labels for league keys that aren't already display-ready
+// (the backend's canonical key is the uppercase sport_type, e.g. "WORLD_CUP").
+const LEAGUE_LABELS = { WORLD_CUP: "World Cup" };
+const leagueLabel = (value) => LEAGUE_LABELS[value] || value;
+
 // Hero Section with newspaper-style live stats
 function HeroSection({ stats }) {
   // Stats from API (snake_case)
@@ -105,6 +110,7 @@ function LiveGamesSection({ liveGames, agentActions }) {
     { value: "NBA", label: "NBA", color: "#C9082A" },
     { value: "NFL", label: "NFL", color: "#013369" },
     { value: "NCAA", label: "NCAA", color: "#2D68C4" },
+    { value: "WORLD_CUP", label: "World Cup", color: "#16A34A" },
   ];
 
   return (
@@ -157,7 +163,7 @@ function LiveGamesSection({ liveGames, agentActions }) {
           ))
         ) : (
           <div style={styles.noGamesMessage}>
-            No live {leagueFilter} games right now
+            No live {leagueFilter === "all" ? "" : leagueLabel(leagueFilter) + " "}games right now
           </div>
         )}
       </div>
@@ -282,7 +288,7 @@ function LiveActionsTicker({ agentActions }) {
 
 function LiveGameCard({ game, index }) {
   const navigate = useNavigate();
-  const leagueColors = { NBA: "#C9082A", NFL: "#013369", NCAA: "#2D68C4" };
+  const leagueColors = { NBA: "#C9082A", NFL: "#013369", NCAA: "#2D68C4", WORLD_CUP: "#16A34A" };
   const leagueColor = leagueColors[game.league] || "#013369";
 
   const handleClick = () => navigate(`/games/${game.id}`);
@@ -313,7 +319,7 @@ function LiveGameCard({ game, index }) {
           ...styles.leagueBadge,
           background: leagueColor,
         }}>
-          {game.league}
+          {leagueLabel(game.league)}
         </div>
         {/* Live badge */}
         <div className="badge badge-live" style={styles.liveBadgeInline}>
@@ -407,6 +413,7 @@ function AllGamesSection({ allGames }) {
     { value: "NBA", label: "NBA" },
     { value: "NFL", label: "NFL" },
     { value: "NCAA", label: "NCAA" },
+    { value: "WORLD_CUP", label: "World Cup" },
   ];
 
   return (
@@ -428,7 +435,7 @@ function AllGamesSection({ allGames }) {
                 {l.value !== "all" && (
                   <span style={{
                     ...styles.leagueIcon,
-                    background: { NBA: "#C9082A", NFL: "#013369", NCAA: "#2D68C4" }[l.value] || "#013369",
+                    background: { NBA: "#C9082A", NFL: "#013369", NCAA: "#2D68C4", WORLD_CUP: "#16A34A" }[l.value] || "#013369",
                   }}>
                     {l.value.charAt(0)}
                   </span>
