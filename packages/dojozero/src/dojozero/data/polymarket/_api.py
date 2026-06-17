@@ -8,6 +8,7 @@ Team abbreviation mappings are sourced from Polymarket's Teams API:
 - NFL teams: https://gamma-api.polymarket.com/teams?league=nfl
 """
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -454,13 +455,14 @@ class PolymarketAPI(ExternalAPI):
         (event slug ordered home-away, with the team code appended). Returns
         ``True``/``False`` for the home/away team, or ``None`` if undeterminable.
 
-        Format verified against Polymarket live slugs as of 2026-06-17; if the
-        format changes, callers fall back to [away, home] ordering and log a
-        warning (see _map_outcomes_to_probabilities).
+        Format verified against Polymarket live slugs as of 2026-06-17. If the
+        format drifts, this returns ``None`` for the affected market, which
+        ``_fetch_world_cup_moneyline_from_markets`` skips — omitting the
+        moneyline (with a warning) rather than inferring a wrong-ordered price.
         """
         parts = market_slug.split("-")
         # Exactly 7 parts (fifwc-<home>-<away>-YYYY-MM-DD-<team>); a different
-        # count means the format drifted — bail so the caller logs + falls back.
+        # count means the format drifted — bail so the caller skips this market.
         if len(parts) != 7 or parts[0] != "fifwc":
             return None
         home_code, away_code, team_code = parts[1], parts[2], parts[-1]
@@ -612,9 +614,10 @@ class PolymarketAPI(ExternalAPI):
         the classic home/away moneyline probabilities; No prices include draws
         and must not be mapped to the opponent.
         """
-        home_market: tuple[str, float] | None = None
-        away_market: tuple[str, float] | None = None
-
+        # Identify the home/away team markets up front (skip the draw market and
+        # any malformed slug), then fetch their Yes prices concurrently — the
+        # per-market lookups are independent round-trips on the odds-poll path.
+        team_slugs: list[tuple[bool, str]] = []
         for market in markets:
             market_slug = market.slug
             if not market_slug:
@@ -627,7 +630,15 @@ class PolymarketAPI(ExternalAPI):
                     event_slug,
                 )
                 continue
-            fetched = await self._fetch_yes_probability_from_slug(market_slug)
+            team_slugs.append((team_is_home, market_slug))
+
+        prices = await asyncio.gather(
+            *(self._fetch_yes_probability_from_slug(slug) for _, slug in team_slugs)
+        )
+
+        home_market: tuple[str, float] | None = None
+        away_market: tuple[str, float] | None = None
+        for (team_is_home, _market_slug), fetched in zip(team_slugs, prices):
             if fetched is None:
                 continue
             if team_is_home:

@@ -848,20 +848,26 @@ class TestPolymarketSlugAndOdds:
 
         api = PolymarketAPI()
         markets = [
-            MarketData(
-                id="home-market",
-                slug="fifwc-aut-jor-2026-06-17-aut",
-                sportsMarketType="moneyline",
+            MarketData.model_validate(
+                {
+                    "id": "home-market",
+                    "slug": "fifwc-aut-jor-2026-06-17-aut",
+                    "sportsMarketType": "moneyline",
+                }
             ),
-            MarketData(
-                id="draw-market",
-                slug="fifwc-aut-jor-2026-06-17-draw",
-                sportsMarketType="moneyline",
+            MarketData.model_validate(
+                {
+                    "id": "draw-market",
+                    "slug": "fifwc-aut-jor-2026-06-17-draw",
+                    "sportsMarketType": "moneyline",
+                }
             ),
-            MarketData(
-                id="away-market",
-                slug="fifwc-aut-jor-2026-06-17-jor",
-                sportsMarketType="moneyline",
+            MarketData.model_validate(
+                {
+                    "id": "away-market",
+                    "slug": "fifwc-aut-jor-2026-06-17-jor",
+                    "sportsMarketType": "moneyline",
+                }
             ),
         ]
         payloads = {
