@@ -393,17 +393,51 @@ class PolymarketAPI(ExternalAPI):
             under_prob = prices[1]
             return over_prob, under_prob
         else:
-            # For moneyline/spreads: outcomes order is [Away, Home]
-            # prices[0] = away_probability, prices[1] = home_probability
             if len(outcomes) != 2:
                 logger.warning(
                     f"Expected 2 outcomes for {market_type} market {slug}, got {len(outcomes)}: {outcomes}"
                 )
                 return None
 
+            # Soccer (a 3-way result) exposes a binary "Will <team> win?" Yes/No
+            # market per team rather than a single [Away, Home] market. Map
+            # Yes/No to home/away by which team the market is about, otherwise
+            # the home team's win price is assigned to `away` (inverted odds).
+            normalized = [o.strip().lower() for o in outcomes]
+            if set(normalized) == {"yes", "no"}:
+                yes_prob = prices[normalized.index("yes")]
+                no_prob = prices[normalized.index("no")]
+                team_is_home = self._market_team_is_home(slug)
+                if team_is_home is True:
+                    return yes_prob, no_prob  # home team wins == Yes
+                if team_is_home is False:
+                    return no_prob, yes_prob  # away team wins == Yes
+                # Unknown team/order: fall back to the documented [Away, Home].
+                return prices[1], prices[0]
+
+            # Standard [Away, Home] market (e.g. NBA/NFL team-name outcomes):
+            # prices[0] = away_probability, prices[1] = home_probability.
             away_prob = prices[0]
             home_prob = prices[1]
             return home_prob, away_prob
+
+    @staticmethod
+    def _market_team_is_home(market_slug: str) -> bool | None:
+        """Whether a soccer per-team market is about the home team.
+
+        World Cup market slugs look like ``fifwc-<home>-<away>-<YYYY>-<MM>-<DD>-<team>``
+        (event slug ordered home-away, with the team code appended). Returns
+        ``True``/``False`` for the home/away team, or ``None`` if undeterminable.
+        """
+        parts = market_slug.split("-")
+        if len(parts) < 7 or parts[0] != "fifwc":
+            return None
+        home_code, away_code, team_code = parts[1], parts[2], parts[-1]
+        if team_code == home_code:
+            return True
+        if team_code == away_code:
+            return False
+        return None
 
     async def _fetch_odds_from_slug(
         self, slug: str, market_type: str | None = None

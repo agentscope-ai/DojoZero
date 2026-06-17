@@ -849,6 +849,55 @@ class TestPolymarketAPIIntegration:
         url = PolymarketAPI.get_event_url("FRA", "ARG", "2026-07-19", "world_cup")
         assert url == "https://polymarket.com/event/fifwc-arg-fra-2026-07-19"
 
+    def test_market_team_is_home_world_cup(self):
+        """World Cup per-team market slugs resolve home vs away."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        # fifwc-<home>-<away>-<date>-<team>
+        assert (
+            PolymarketAPI._market_team_is_home("fifwc-aut-jor-2026-06-17-aut") is True
+        )
+        assert (
+            PolymarketAPI._market_team_is_home("fifwc-aut-jor-2026-06-17-jor") is False
+        )
+        assert PolymarketAPI._market_team_is_home("nba-lal-bos-2025-01-25") is None
+
+    def test_map_soccer_yes_no_to_home_away(self):
+        """Soccer 'Will <team> win?' Yes/No markets map to home/away correctly
+        (the home team's win price must not land on `away`)."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        api = PolymarketAPI()
+        # Home-team market (Austria@home): Yes=0.865 -> home; No=0.135 -> away.
+        res = api._map_outcomes_to_probabilities(
+            ["Yes", "No"], [0.865, 0.135], "moneyline", "fifwc-aut-jor-2026-06-17-aut"
+        )
+        assert res is not None
+        home, away = res
+        assert home == pytest.approx(0.865)
+        assert away == pytest.approx(0.135)
+        # Away-team market (Jordan@away): Yes=0.10 -> away; No=0.90 -> home.
+        res2 = api._map_outcomes_to_probabilities(
+            ["Yes", "No"], [0.10, 0.90], "moneyline", "fifwc-aut-jor-2026-06-17-jor"
+        )
+        assert res2 is not None
+        home2, away2 = res2
+        assert away2 == pytest.approx(0.10)
+        assert home2 == pytest.approx(0.90)
+
+    def test_map_nba_team_outcomes_unchanged(self):
+        """NBA team-name outcomes keep the [Away, Home] ordering."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        api = PolymarketAPI()
+        res = api._map_outcomes_to_probabilities(
+            ["Lakers", "Celtics"], [0.4, 0.6], "moneyline", "nba-lal-bos-2025-01-25"
+        )
+        assert res is not None
+        home, away = res
+        assert home == pytest.approx(0.6)
+        assert away == pytest.approx(0.4)
+
     @pytest.mark.asyncio
     async def test_get_market_by_slug_returns_data(self):
         """Test that get_market_by_slug returns market data for known slugs.
