@@ -124,8 +124,30 @@ class PolymarketAPI(ExternalAPI):
         """Return the sport prefix used in Polymarket event slugs."""
         sport_lower = sport.lower().strip().replace("_", "-")
         if sport_lower in {"worldcup", "world-cup", "fifa", "soccer"}:
-            return "world-cup"
+            # Polymarket uses the "fifwc" prefix for FIFA World Cup soccer
+            # markets (e.g. "fifwc-aut-jor-2026-06-17"), not "world-cup".
+            return "fifwc"
         return sport_lower
+
+    @staticmethod
+    def event_slug(
+        away_tricode: str, home_tricode: str, game_date: str, sport: str = "nba"
+    ) -> str:
+        """Build the Polymarket event slug for a game.
+
+        US sports (NBA/NFL) order the slug away-home (e.g. "nba-lal-bos-..."),
+        while Polymarket's FIFA World Cup soccer markets order it home-away
+        (e.g. "fifwc-aut-jor-..." for Jordan @ Austria).
+        """
+        away_code = PolymarketAPI.normalize_tricode(away_tricode, sport)
+        home_code = PolymarketAPI.normalize_tricode(home_tricode, sport)
+        sport_prefix = PolymarketAPI.sport_slug_prefix(sport)
+        teams = (
+            f"{home_code}-{away_code}"
+            if sport_prefix == "fifwc"
+            else f"{away_code}-{home_code}"
+        )
+        return f"{sport_prefix}-{teams}-{game_date}"
 
     @staticmethod
     def get_event_url(
@@ -137,15 +159,12 @@ class PolymarketAPI(ExternalAPI):
             away_tricode: Away team ESPN tricode (e.g., "LAL", "LAR")
             home_tricode: Home team ESPN tricode (e.g., "BOS", "SEA")
             game_date: Game date in YYYY-MM-DD format
-            sport: Sport type ("nba" or "nfl")
+            sport: Sport type ("nba", "nfl", or "world_cup")
 
         Returns:
-            Polymarket event URL (e.g., "https://polymarket.com/event/nba-lal-bos-2025-01-25")
+            Polymarket event URL (e.g., "https://polymarket.com/event/nba-lal-bos-2025-01-25").
         """
-        away_code = PolymarketAPI.normalize_tricode(away_tricode, sport)
-        home_code = PolymarketAPI.normalize_tricode(home_tricode, sport)
-        sport_prefix = PolymarketAPI.sport_slug_prefix(sport)
-        slug = f"{sport_prefix}-{away_code}-{home_code}-{game_date}"
+        slug = PolymarketAPI.event_slug(away_tricode, home_tricode, game_date, sport)
         return f"https://polymarket.com/event/{slug}"
 
     def __init__(self, api_key: str | None = None):

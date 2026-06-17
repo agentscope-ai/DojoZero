@@ -196,7 +196,7 @@ class TestPolymarketStoreFactory:
 
         assert isinstance(store, PolymarketStore)
         assert store._sport == "world_cup"
-        assert store._sport_slug_prefix == "world-cup"
+        assert store._sport_slug_prefix == "fifwc"
 
     def test_create_store_sets_espn_game_id_in_identifier(self, factory, mock_hub):
         """Test that espn_game_id is passed to store identifier."""
@@ -661,8 +661,8 @@ class TestPolymarketStoreInit:
         assert store.poll_intervals.get("odds") == 300.0
 
     @pytest.mark.asyncio
-    async def test_world_cup_poll_slug_uses_hyphenated_prefix(self):
-        """Test generated World Cup event slugs use the Polymarket prefix."""
+    async def test_world_cup_poll_slug_uses_fifwc_prefix(self):
+        """World Cup poll slugs use Polymarket's 'fifwc' prefix and home-away order."""
         mock_api = MagicMock()
         mock_api.fetch = AsyncMock(return_value={})
         store = PolymarketStore(store_id="test", api=mock_api, sport="world_cup")
@@ -678,8 +678,27 @@ class TestPolymarketStoreInit:
 
         mock_api.fetch.assert_awaited_once_with(
             "odds",
-            {"slug": "world-cup-fra-arg-2026-07-19"},
+            {"slug": "fifwc-arg-fra-2026-07-19"},
         )
+
+    @pytest.mark.asyncio
+    async def test_world_cup_poll_with_market_url_passes_slug(self):
+        """A market_url (event slug) is passed as `slug`, so multi-market events
+        (soccer home/draw/away) route to fetch_odds_from_event instead of the
+        market-slug endpoint that 404s on an event slug."""
+        mock_api = MagicMock()
+        mock_api.fetch = AsyncMock(return_value={})
+        store = PolymarketStore(
+            store_id="test",
+            api=mock_api,
+            sport="world_cup",
+            market_url="https://polymarket.com/event/fifwc-aut-jor-2026-06-17",
+        )
+
+        await store._poll_api(identifier={"espn_game_id": "760431"})
+
+        passed = mock_api.fetch.await_args.args[1]
+        assert passed.get("slug") == "fifwc-aut-jor-2026-06-17"
 
 
 # =============================================================================
@@ -828,7 +847,7 @@ class TestPolymarketAPIIntegration:
         from dojozero.data.polymarket._api import PolymarketAPI
 
         url = PolymarketAPI.get_event_url("FRA", "ARG", "2026-07-19", "world_cup")
-        assert url == "https://polymarket.com/event/world-cup-fra-arg-2026-07-19"
+        assert url == "https://polymarket.com/event/fifwc-arg-fra-2026-07-19"
 
     @pytest.mark.asyncio
     async def test_get_market_by_slug_returns_data(self):
