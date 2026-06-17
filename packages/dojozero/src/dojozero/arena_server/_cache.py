@@ -62,7 +62,7 @@ class CacheConfig:
 from dojozero.arena_server._config import ArenaServerConfig  # noqa: E402
 
 DEFAULT_CACHE_CONFIG = CacheConfig()
-CACHEABLE_LEAGUES: frozenset[str] = frozenset({"NBA", "NFL"})
+CACHEABLE_LEAGUES: frozenset[str] = frozenset({"NBA", "NFL", "WORLD_CUP"})
 LEADERBOARD_PERIODS: tuple[str, ...] = ("7d", "14d", "30d")
 
 
@@ -102,7 +102,7 @@ class LandingPageCache:
     - leaderboard: Agent rankings (global + per-league)
     - agent_actions: Recent agent actions (global + per-league)
 
-    Per-league caches are maintained for CACHEABLE_LEAGUES (NBA, NFL).
+    Per-league caches are maintained for CACHEABLE_LEAGUES.
 
     Note: No lock is needed because BackgroundRefresher is the single writer
     and Python's GIL ensures atomic reference assignments.
