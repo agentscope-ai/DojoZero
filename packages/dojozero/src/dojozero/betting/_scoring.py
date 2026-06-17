@@ -38,7 +38,10 @@ def settle_window_predictions(
     Args:
         predictions: All predictions for the event.
         winner: Game result -- "home", "away", or anything else for "even".
-        window_pools: Prize pool per window (index 0 = pre-game, 1-4 = Q1-Q4).
+        window_pools: Prize pool per window (index 0 = pre-game, 1-4 = the
+            periods of play). The broker may fold unreached windows' pools into
+            the last reached window before calling this, so the full pool stays
+            winnable; this function just splits whatever pools it is given.
 
     Returns:
         New :class:`Prediction` instances with ``is_correct`` and ``score``

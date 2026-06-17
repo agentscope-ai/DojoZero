@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
@@ -45,10 +46,12 @@ def _game_init() -> GameInitializeEvent:
     )
 
 
-def _game_update(period: int, game_clock: str = "06:00") -> BaseGameUpdateEvent:
+def _game_update(
+    period: int, game_clock: str = "06:00", sport: str = "nba"
+) -> BaseGameUpdateEvent:
     return BaseGameUpdateEvent(
         game_id="game-1",
-        sport="nba",
+        sport=sport,
         period=period,
         game_clock=game_clock,
         game_time_utc=datetime(2026, 5, 30, 20, 0, tzinfo=timezone.utc).isoformat(),
@@ -350,6 +353,114 @@ async def test_settles_with_no_predictions_safely() -> None:
 
     assert broker.current_event is not None
     assert broker.current_event.status == EventStatus.SETTLED
+
+
+@pytest.mark.asyncio
+async def test_settlement_folds_unreached_window_pools_into_last_reached() -> None:
+    """A regulation soccer match (no extra time) reaches only windows 0-2, so
+    the unreached extra-time pools (windows 3-4) must fold into window 2 — the
+    full configured prize stays winnable instead of being silently dropped."""
+    broker = _broker()  # pools [5000, 4000, 3000, 2000, 500]
+    await broker.handle_stream_event(_envelope(_game_init()))
+
+    # One sole correct prediction in each reachable regulation window.
+    await broker.submit_prediction("alice", "game-1", "home_win")  # window 0 (pre)
+    await broker.handle_stream_event(
+        _envelope(GameStartEvent(game_id="game-1", sport="world_cup"))
+    )
+    await broker.handle_stream_event(
+        _envelope(_game_update(period=1, sport="world_cup"))
+    )
+    await broker.submit_prediction("bob", "game-1", "home_win")  # window 1 (1st half)
+    await broker.handle_stream_event(
+        _envelope(_game_update(period=2, sport="world_cup", game_clock="FT"))
+    )
+    await broker.submit_prediction("carol", "game-1", "home_win")  # window 2 (2nd half)
+
+    # Regulation finish: the latest period reached is 2.
+    await broker.handle_stream_event(
+        _envelope(
+            GameResultEvent(
+                game_id="game-1",
+                sport="world_cup",
+                winner="home",
+                home_score=2,
+                away_score=1,
+            )
+        )
+    )
+
+    alice = (await broker.get_my_predictions("alice", "game-1"))[0]
+    bob = (await broker.get_my_predictions("bob", "game-1"))[0]
+    carol = (await broker.get_my_predictions("carol", "game-1"))[0]
+    assert (alice.window, bob.window, carol.window) == (0, 1, 2)
+    assert alice.is_correct and bob.is_correct and carol.is_correct
+    assert alice.score == Decimal("5000")
+    assert bob.score == Decimal("4000")
+    # window 2 absorbs the unreached extra-time pools: 3000 + 2000 + 500.
+    assert carol.score == Decimal("5500")
+    # Full configured prize (14500) is awarded — nothing wasted.
+    total = sum((p.score or Decimal(0) for p in (alice, bob, carol)), Decimal(0))
+    assert total == Decimal("14500")
+
+
+@pytest.mark.asyncio
+async def test_settlement_does_not_fold_when_final_window_reached() -> None:
+    """A match that reaches the final window (e.g. soccer extra time) awards
+    pools exactly as configured — no folding."""
+    broker = _broker()  # pools [5000, 4000, 3000, 2000, 500]
+    await broker.handle_stream_event(_envelope(_game_init()))
+    await broker.handle_stream_event(
+        _envelope(GameStartEvent(game_id="game-1", sport="world_cup"))
+    )
+    await broker.handle_stream_event(
+        _envelope(_game_update(period=4, sport="world_cup", game_clock="AET"))
+    )
+    await broker.submit_prediction("alice", "game-1", "home_win")  # window 4
+    await broker.handle_stream_event(
+        _envelope(
+            GameResultEvent(
+                game_id="game-1",
+                sport="world_cup",
+                winner="home",
+                home_score=2,
+                away_score=1,
+            )
+        )
+    )
+    alice = (await broker.get_my_predictions("alice", "game-1"))[0]
+    assert alice.window == 4
+    assert alice.is_correct
+    assert alice.score == Decimal("500")  # final-window pool, unfolded
+
+
+@pytest.mark.asyncio
+async def test_settled_event_info_reports_last_reached_window() -> None:
+    """After a regulation soccer match settles, current_window is the 2nd-half
+    window (2), not the final extra-time window (4)."""
+    broker = _broker()
+    await broker.handle_stream_event(_envelope(_game_init()))
+    await broker.handle_stream_event(
+        _envelope(GameStartEvent(game_id="game-1", sport="world_cup"))
+    )
+    await broker.handle_stream_event(
+        _envelope(_game_update(period=2, sport="world_cup", game_clock="FT"))
+    )
+    await broker.handle_stream_event(
+        _envelope(
+            GameResultEvent(
+                game_id="game-1",
+                sport="world_cup",
+                winner="home",
+                home_score=2,
+                away_score=1,
+            )
+        )
+    )
+    info = await broker.get_event_info()
+    assert info is not None
+    assert info["status"] == EventStatus.SETTLED.value
+    assert info["current_window"] == 2
 
 
 # ---------------------------------------------------------------------------

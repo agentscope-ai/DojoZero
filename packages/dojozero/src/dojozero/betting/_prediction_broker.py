@@ -187,15 +187,20 @@ def _format_rules(window_pools: list[int], labels: list[str]) -> str:
         "  - During play, the broker assigns the window from the current period\n"
         "    (period 1 -> window 1, period 2 -> window 2, ...). Periods beyond\n"
         "    regulation (overtime / extra time) map to the final window.\n"
-        "  - Sports with fewer periods (e.g. soccer or NCAA basketball, two\n"
-        "    halves) only reach the lower windows during regulation, so later\n"
-        "    pools may go unclaimed.\n"
+        "  - If the match ends before reaching a window (e.g. a soccer match\n"
+        "    with no extra time stops at the 2nd-half window), that window's\n"
+        "    prize rolls into the last window the match reached, so the full\n"
+        "    pool is always winnable.\n"
         "  - You can resubmit in the same window at any time before the event\n"
         "    closes; the latest submission replaces the previous one.\n\n"
         "Strategy:\n"
-        "  - Earlier windows pay more, but the outcome is less certain.\n"
-        "  - The final window has a much smaller pool because by then the result\n"
-        "    is typically clear.\n"
+        "  - Among the configured pools, earlier windows pay more but the\n"
+        "    outcome is less certain; the final configured window is smallest\n"
+        "    because by then the result is usually clear.\n"
+        "  - Folding can override that shape: if the match ends before the final\n"
+        "    window, the unreached pools roll into the last window it reached, so\n"
+        "    for shorter sports (e.g. regulation soccer) that window can pay the\n"
+        "    most while also being the most certain.\n"
         "  - Contrarian correct picks (when few agents pick your side) earn a\n"
         "    larger share of the pool.\n"
     )
@@ -580,7 +585,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         ]
         if predictions_for_event:
             settled = settle_window_predictions(
-                predictions_for_event, winner, self._window_pools
+                predictions_for_event, winner, self._effective_window_pools()
             )
             for p in settled:
                 self._predictions[p.prediction_id] = p
@@ -603,14 +608,32 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
     # Window / elapsed-ratio computation
     # =========================================================================
 
+    def _last_reached_window(self) -> Optional[int]:
+        """Window index for the latest period the game has reached.
+
+        Derived from the most recent game update's period (window ``N`` =
+        period ``N``, capped at the final window). Returns ``None`` when no
+        game update with a valid period has been seen yet (pre-game or missing
+        live data).
+        """
+        if not self._recent_game_updates:
+            return None
+        period = int(getattr(self._recent_game_updates[-1], "period", 0) or 0)
+        if period <= 0:
+            return None
+        return min(period, NUM_WINDOWS - 1)
+
     def _resolve_window(self, requested_window: Optional[int]) -> int:
         """Resolve which contest window applies to a submission.
 
         ``requested_window`` is the value supplied by the agent. If it is
         ``None`` (the default), we infer from event status:
             - SCHEDULED -> 0 (pre-game)
-            - LIVE      -> max(1, period from latest game update), capped at 4
-            - CLOSED/SETTLED -> 4 (last regulation window)
+            - LIVE      -> period from latest game update, capped at the final
+              window (0 before the first update)
+            - CLOSED/SETTLED -> the last window the game actually reached
+              (e.g. window 2 for a regulation soccer match), not always the
+              final window
         Explicit values 0-4 are clamped to that range and returned as-is;
         anything else is rejected by the caller.
         """
@@ -621,15 +644,37 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             return 0
         if self._event.status == EventStatus.SCHEDULED:
             return 0
+
+        last_reached = self._last_reached_window()
         if self._event.status in (EventStatus.CLOSED, EventStatus.SETTLED):
-            return NUM_WINDOWS - 1
-        if not self._recent_game_updates:
-            return 0
-        update = self._recent_game_updates[-1]
-        period = int(getattr(update, "period", 0) or 0)
-        if period <= 0:
-            return 0
-        return min(period, NUM_WINDOWS - 1)
+            # The contest is over: report the last window the game reached
+            # rather than always the final window, so a regulation finish
+            # isn't mislabeled as overtime/extra time.
+            return last_reached if last_reached is not None else NUM_WINDOWS - 1
+        return last_reached if last_reached is not None else 0
+
+    def _effective_window_pools(self) -> list[int]:
+        """Window pools with unreached windows' prize folded into the last
+        window the game actually reached.
+
+        The five-window model assumes four periods of play. When a match ends
+        with fewer periods (e.g. a soccer match with no extra time reaches only
+        the two half windows), the higher windows are never reachable and their
+        prize would otherwise go unawarded. Folding rolls that prize into the
+        last reached window so the full configured pool stays winnable. Matches
+        that do reach the final window (regulation NBA/NFL, soccer extra time)
+        are unaffected.
+        """
+        pools = list(self._window_pools)
+        last_reached = self._last_reached_window()
+        if last_reached is None or last_reached >= NUM_WINDOWS - 1:
+            return pools
+        carried = sum(pools[last_reached + 1 :])
+        if carried:
+            pools[last_reached] += carried
+            for w in range(last_reached + 1, NUM_WINDOWS):
+                pools[w] = 0
+        return pools
 
     def _compute_elapsed_ratio(self) -> float:
         """Compute game progress in [0.0, 1.0] from the latest game update."""
