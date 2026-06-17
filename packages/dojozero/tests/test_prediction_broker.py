@@ -500,6 +500,39 @@ async def test_resolve_window_caps_overtime_at_q4() -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_game_update_self_heals_scheduled_to_live() -> None:
+    """A live game update (period >= 1) promotes SCHEDULED -> LIVE even when the
+    one-time GameStartEvent was missed (mid-game join / resume / dropped event),
+    so a submission lands in the live window rather than pre-game."""
+    broker = _broker()
+    await broker.handle_stream_event(_envelope(_game_init()))
+    assert broker.current_event is not None
+    assert broker.current_event.status == EventStatus.SCHEDULED
+
+    # No GameStartEvent — straight to a live 2nd-half update.
+    await broker.handle_stream_event(
+        _envelope(_game_update(period=2, sport="world_cup"))
+    )
+    assert broker.current_event.status == EventStatus.LIVE
+
+    result = await broker.submit_prediction("alice", "game-1", "home_win")
+    assert isinstance(result, Prediction)
+    assert result.window == 2  # 2nd half — not pre-game (window 0)
+
+
+@pytest.mark.asyncio
+async def test_pregame_update_does_not_self_heal_to_live() -> None:
+    """A period-0 (pre-game) update must NOT flip the event to LIVE."""
+    broker = _broker()
+    await broker.handle_stream_event(_envelope(_game_init()))
+    await broker.handle_stream_event(
+        _envelope(_game_update(period=0, sport="world_cup"))
+    )
+    assert broker.current_event is not None
+    assert broker.current_event.status == EventStatus.SCHEDULED
+
+
+@pytest.mark.asyncio
 async def test_compute_elapsed_ratio_nba_quarters() -> None:
     broker = _broker()
     await broker.handle_stream_event(_envelope(_game_init()))

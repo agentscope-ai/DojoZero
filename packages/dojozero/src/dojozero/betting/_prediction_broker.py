@@ -464,6 +464,21 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             )
             await self._apply_pending_status_events(event_id)
 
+        # Self-heal the live transition: a game update with a real period means
+        # play is under way. The GameStartEvent is a one-time signal (the store
+        # emits it only on the first play observation), so a trial that joins
+        # mid-game — e.g. after a restart/resume, or if the start event is
+        # dropped — would otherwise stay SCHEDULED forever. Promote
+        # SCHEDULED -> LIVE here so submissions land in the period's window and
+        # the elapsed ratio advances, instead of being recorded as pre-game.
+        if (
+            self._event is not None
+            and self._event.event_id == event_id
+            and self._event.status == EventStatus.SCHEDULED
+            and int(getattr(data_event, "period", 0) or 0) >= 1
+        ):
+            await self._update_event_status(event_id, EventStatus.LIVE)
+
     @staticmethod
     def _extract_team_name(
         data_event: BaseGameUpdateEvent, *, side: Literal["home", "away"]
