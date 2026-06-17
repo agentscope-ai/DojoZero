@@ -274,7 +274,9 @@ async def _launch_backtest_trial(
 
     from dojozero.data import BacktestCoordinator, DataHub
 
-    builder_name = spec.metadata.get("builder_name")
+    # builder_name is canonically a TrialSpec field (set by the registry / the
+    # submit handler); fall back to metadata for older specs that stored it there.
+    builder_name = spec.builder_name or spec.metadata.get("builder_name")
     if not builder_name:
         raise OrchestratorError("builder_name is required in metadata for backtest")
     builder_name = str(builder_name)
@@ -1008,6 +1010,10 @@ def create_dashboard_app(
             # a different machine — see issue #223).
             event_file: Path | None = None
             backtest_source = "local"
+            # Only assigned on the SLS-materialization path below; initialize
+            # here so the local/cache/OSS paths don't hit UnboundLocalError when
+            # it is read for lineage metadata (effective_run_id/materialized_at).
+            materialize_result = None
             if source_record is not None:
                 source_persistence_file = source_record.spec.metadata.get(
                     "persistence_file"
