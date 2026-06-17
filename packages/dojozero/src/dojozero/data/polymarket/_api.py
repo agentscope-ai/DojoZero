@@ -436,6 +436,10 @@ class PolymarketAPI(ExternalAPI):
         World Cup market slugs look like ``fifwc-<home>-<away>-<YYYY>-<MM>-<DD>-<team>``
         (event slug ordered home-away, with the team code appended). Returns
         ``True``/``False`` for the home/away team, or ``None`` if undeterminable.
+
+        Format verified against Polymarket live slugs as of 2026-06-17; if the
+        format changes, callers fall back to [away, home] ordering and log a
+        warning (see _map_outcomes_to_probabilities).
         """
         parts = market_slug.split("-")
         if len(parts) < 7 or parts[0] != "fifwc":

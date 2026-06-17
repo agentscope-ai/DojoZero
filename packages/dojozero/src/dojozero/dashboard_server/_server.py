@@ -1727,6 +1727,24 @@ def create_dashboard_app(
                 status_code=400,
             )
 
+        # Validate provided dates up front so a malformed value returns a clean
+        # 400 rather than surfacing as a 500 from the upstream fetch.
+        from datetime import date as _date
+
+        for field_name, value in (
+            ("date", date),
+            ("start_date", start_date),
+            ("end_date", end_date),
+        ):
+            if value:
+                try:
+                    _date.fromisoformat(value)
+                except ValueError:
+                    return JSONResponse(
+                        content={"error": f"{field_name} must be in YYYY-MM-DD format"},
+                        status_code=400,
+                    )
+
         try:
             if start_date and end_date:
                 games = await fetcher.fetch_games_for_date_range(start_date, end_date)
@@ -1747,10 +1765,12 @@ def create_dashboard_app(
                         "games": [g.to_dict() for g in games],
                     }
                 )
-        except Exception as e:
-            LOGGER.error("Error fetching World Cup games: %s", e)
+        except Exception:
+            # Log full detail server-side; return a generic message so internal
+            # paths / library errors aren't leaked to callers.
+            LOGGER.exception("Error fetching World Cup games")
             return JSONResponse(
-                content={"error": str(e)},
+                content={"error": "Failed to fetch World Cup games"},
                 status_code=500,
             )
 

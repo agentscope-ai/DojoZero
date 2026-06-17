@@ -42,6 +42,19 @@ def test_partial_date_range_returns_400(client, params):
     assert "start_date and end_date" in resp.json()["error"]
 
 
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"date": "not-a-date"},
+        {"start_date": "2026-13-99", "end_date": "2026-06-30"},
+    ],
+)
+def test_malformed_date_returns_400(client, params):
+    resp = client.get("/api/games/world_cup", params=params)
+    assert resp.status_code == 400
+    assert "YYYY-MM-DD" in resp.json()["error"]
+
+
 def test_upstream_fetch_error_returns_500(client):
     with patch(_FETCHER) as fetcher_cls:
         inst = fetcher_cls.return_value
