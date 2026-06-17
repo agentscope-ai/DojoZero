@@ -1647,6 +1647,8 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """Place a new bet (synchronous confirmation).
 
         Returns:
+            A status string (informal protocol the gateway adapter parses via
+            ``startswith("bet_invalid")`` / ``split(":", 1)``):
             "bet_placed" - Bet successfully placed (funds locked)
             "bet_invalid: <reason>" - Bet rejected; the reason follows the colon
         """

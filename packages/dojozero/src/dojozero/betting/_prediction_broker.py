@@ -683,6 +683,9 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         last reached window so the full configured pool stays winnable. Matches
         that do reach the final window (regulation NBA/NFL, soccer extra time)
         are unaffected.
+
+        Settlement-time only: get_rules() intentionally advertises the
+        configured (pre-fold) pools (see ``pools_are_pre_fold``).
         """
         pools = list(self._window_pools)
         last_reached = self._last_reached_window()

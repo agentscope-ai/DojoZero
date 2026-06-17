@@ -476,6 +476,22 @@ async def test_settlement_without_game_updates_leaves_pools_unmodified() -> None
 
 
 @pytest.mark.asyncio
+async def test_period_zero_update_does_not_fold() -> None:
+    """A period-0 (pre-kick) update keeps _last_reached_window at None, so
+    last_reached can never be 0 and pools are not folded into window 0."""
+    broker = _broker()
+    await broker.handle_stream_event(_envelope(_game_init()))
+    await broker.handle_stream_event(
+        _envelope(GameStartEvent(game_id="game-1", sport="world_cup"))
+    )
+    await broker.handle_stream_event(
+        _envelope(_game_update(period=0, sport="world_cup"))
+    )
+    assert broker._last_reached_window() is None
+    assert broker._effective_window_pools() == [5000, 4000, 3000, 2000, 500]
+
+
+@pytest.mark.asyncio
 async def test_settled_event_info_reports_last_reached_window() -> None:
     """After a regulation soccer match settles, current_window is the 2nd-half
     window (2), not the final extra-time window (4)."""

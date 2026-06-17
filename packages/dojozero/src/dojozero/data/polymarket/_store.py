@@ -235,8 +235,10 @@ class PolymarketStore(DataStore):
         # `market_url`, and a slug routes to fetch_odds_from_event, which
         # resolves multi-market events (e.g. soccer's home/draw/away sub-markets).
         # market_url alone routes to the market-slug endpoint, which 404s on an
-        # event slug. self._slug is derived from market_url at init, so pass both
-        # (slug first) and only fall back to constructing one from game info.
+        # event slug. self._slug is derived from market_url at init, so pass
+        # both: the slug is the primary lookup and market_url stays as a
+        # fallback fetch() can use if the slug resolves no markets. Only
+        # construct a slug from game info when neither was provided.
         if self._slug:
             params["slug"] = self._slug
         if self._market_url:

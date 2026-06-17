@@ -1704,7 +1704,11 @@ def create_dashboard_app(
 
     @app.get("/api/games/world_cup")
     async def list_world_cup_games(
-        date: str | None = Query(None, description="Date in YYYY-MM-DD format"),
+        # aliased to "date" so the query param matches /api/games/{nba,nfl}
+        # while the local name avoids shadowing the `datetime` module.
+        date_str: str | None = Query(
+            None, alias="date", description="Date in YYYY-MM-DD format"
+        ),
         start_date: str | None = Query(None, description="Start date for range"),
         end_date: str | None = Query(None, description="End date for range"),
         league: str = Query(
@@ -1729,11 +1733,9 @@ def create_dashboard_app(
             )
 
         # Validate provided dates up front so a malformed value returns a clean
-        # 400 rather than surfacing as a 500 from the upstream fetch. (datetime
-        # is module-imported as date.fromisoformat; the `date` param shadows the
-        # name locally, so reference it via the module.)
+        # 400 rather than surfacing as a 500 from the upstream fetch.
         for field_name, value in (
-            ("date", date),
+            ("date", date_str),
             ("start_date", start_date),
             ("end_date", end_date),
         ):
@@ -1758,11 +1760,11 @@ def create_dashboard_app(
                     }
                 )
             else:
-                games = await fetcher.fetch_games_for_date(date)
+                games = await fetcher.fetch_games_for_date(date_str)
                 return JSONResponse(
                     content={
                         "league": fetcher.league,
-                        "date": date or "today",
+                        "date": date_str or "today",
                         "games": [g.to_dict() for g in games],
                     }
                 )
