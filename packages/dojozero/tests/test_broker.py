@@ -394,6 +394,50 @@ class TestEventManagement:
         # After settlement, event is no longer available (status is SETTLED)
         assert event is None
 
+    async def test_odds_update_after_settlement_is_skipped(self, initialized_event):
+        """A late odds update on a settled event is skipped, not raised.
+
+        Previously a post-final-whistle odds poll reached _update_probabilities
+        and raised "Cannot update probabilities for SETTLED event".
+        """
+        broker, event_id = initialized_event
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="s",
+                payload=GameStartEvent(game_id=event_id),
+                emitted_at=datetime.now(),
+            )
+        )
+        await broker.handle_stream_event(
+            StreamEvent(
+                stream_id="s",
+                payload=GameResultEvent(
+                    game_id=event_id, winner="home", home_score=110, away_score=105
+                ),
+                emitted_at=datetime.now(),
+            )
+        )
+        assert broker._event is not None
+        assert not broker._event.is_accepting  # CLOSED/SETTLED
+        home_before = broker._event.home_probability
+
+        # A late odds update must be skipped, not raise.
+        late_odds = OddsUpdateEvent(
+            game_id=event_id,
+            odds=OddsInfo(
+                moneyline=MoneylineOdds(
+                    home_probability=0.9,
+                    away_probability=0.1,
+                    home_odds=1.11,
+                    away_odds=10.0,
+                )
+            ),
+        )
+        await broker._handle_odds_update(late_odds, event_id)  # must not raise
+
+        # Probabilities are unchanged — the update was skipped.
+        assert broker._event.home_probability == home_before
+
     async def test_get_available_event(self, broker):
         """Test getting the current event accepting bets"""
         # Create event
@@ -726,7 +770,8 @@ class TestBetPlacement:
             ),
         )
 
-        assert result == "bet_invalid"
+        assert result.startswith("bet_invalid")
+        assert "Insufficient balance" in result
 
         # Balance should be unchanged
         balance = await broker.get_balance(agent.actor_id)
@@ -802,7 +847,8 @@ class TestBetPlacement:
             ),
         )
 
-        assert result == "bet_invalid"
+        assert result.startswith("bet_invalid")
+        assert "not accepting bets" in result
 
     async def test_cancel_pending_bet(self, broker_with_agent):
         """Test cancelling a pending limit order"""

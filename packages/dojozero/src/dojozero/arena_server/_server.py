@@ -29,7 +29,7 @@ Filtering:
 
     Supported endpoints: /api/landing, /api/stats, /api/games, /api/leaderboard, /api/agent-actions
 
-    Per-league results are cached separately for leagues in CACHEABLE_LEAGUES (NBA, NFL).
+    Per-league results are cached separately for leagues in CACHEABLE_LEAGUES.
     To add a new league, update CACHEABLE_LEAGUES in the code.
 
 Configuration:

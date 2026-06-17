@@ -635,6 +635,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         # Only process probabilities if we have team info (either from existing event or pending GameUpdateEvent)
         if self._event is not None:
+            # Skip odds updates once the contest is closed/settled: a late odds
+            # poll (e.g. after the final whistle) has nothing to update — bets
+            # are locked — and would otherwise raise.
+            if not self._event.is_accepting:
+                logger.debug(
+                    "Skipping odds update for %s event %s (betting closed)",
+                    self._event.status.value,
+                    event_id,
+                )
+                return
             # Event exists - update probabilities (supports partial updates)
             logger.info(
                 "Updating probabilities: event_id=%s, home_probability=%s, away_probability=%s, spreads=%d, totals=%d",
@@ -1637,8 +1647,10 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
         """Place a new bet (synchronous confirmation).
 
         Returns:
+            A status string (informal protocol the gateway adapter parses via
+            ``startswith("bet_invalid")`` / ``split(":", 1)``):
             "bet_placed" - Bet successfully placed (funds locked)
-            "bet_invalid" - Bet rejected due to validation error
+            "bet_invalid: <reason>" - Bet rejected; the reason follows the colon
         """
         try:
             # Validate bet request
@@ -1807,9 +1819,20 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 await self._log_accounts_and_bets_status("bet_placed")
                 return "bet_placed"
 
-        except (ValueError, Exception) as e:
+        except ValueError as e:
+            # Invariant: every ValueError raised in the place_bet call graph is a
+            # first-party validation rejection (insufficient balance, betting
+            # closed, invalid selection, ...), so its message is client-safe and
+            # is surfaced as the rejection reason. If a future change introduces
+            # a ValueError carrying non-client-safe text, give validation a
+            # dedicated exception type and narrow this handler to it.
+            logger.warning("Bet rejected for %s: %s", agent_id, e)
+            return f"bet_invalid: {e}"
+        except Exception as e:
+            # Unexpected internal error: log full detail server-side but return a
+            # generic reason so internal messages don't leak to external clients.
             logger.error("Bet rejected for %s: %s", agent_id, e, exc_info=True)
-            return "bet_invalid"
+            return "bet_invalid: bet rejected"
 
     async def _match_bet(self, bet: Bet, execution_probability: Decimal) -> None:
         """Execute a bet at specified probability (asynchronous notification).

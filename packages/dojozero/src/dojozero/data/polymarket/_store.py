@@ -231,51 +231,48 @@ class PolymarketStore(DataStore):
         # Poll odds endpoint (for OddsUpdateEvent)
         params: dict[str, Any] = {}
 
-        # Use market_url or slug if available (from initialization)
+        # Prefer the event slug: PolymarketAPI.fetch() tries `slug` before
+        # `market_url`, and a slug routes to fetch_odds_from_event, which
+        # resolves multi-market events (e.g. soccer's home/draw/away sub-markets).
+        # market_url alone routes to the market-slug endpoint, which 404s on an
+        # event slug. self._slug is derived from market_url at init, so pass
+        # both: the slug is the primary lookup and market_url stays as a
+        # fallback fetch() can use if the slug resolves no markets. Only
+        # construct a slug from game info when neither was provided.
+        if self._slug:
+            params["slug"] = self._slug
         if self._market_url:
             params["market_url"] = self._market_url
-        elif self._slug:
-            params["slug"] = self._slug
-        elif identifier:
+        if not params and identifier:
             # Try to construct slug from game info
             if (
                 "away_tricode" in identifier
                 and "home_tricode" in identifier
                 and "game_date" in identifier
             ):
-                # Normalize ESPN tricodes to Polymarket format
-                away_tricode = PolymarketAPI.normalize_tricode(
-                    identifier["away_tricode"], self._sport
-                )
-                home_tricode = PolymarketAPI.normalize_tricode(
-                    identifier["home_tricode"], self._sport
-                )
-                game_date = identifier["game_date"]  # Expected format: YYYY-MM-DD
-                # Use sport prefix (nba, nfl, world-cup, etc.)
-                params["slug"] = (
-                    f"{self._sport_slug_prefix}-{away_tricode}-{home_tricode}-{game_date}"
+                # Build the slug (handles per-sport prefix and team order).
+                params["slug"] = PolymarketAPI.event_slug(
+                    identifier["away_tricode"],
+                    identifier["home_tricode"],
+                    identifier["game_date"],
+                    self._sport,
                 )
             elif "espn_game_id" in identifier:
-                # Only fetch if we can construct a slug (game_id cannot be used to fetch odds)
-                # Try to construct slug if we have the required info
+                # Only fetch if we can construct a slug (a game_id alone can't).
                 if (
                     "away_tricode" in identifier
                     and "home_tricode" in identifier
                     and "game_date" in identifier
                 ):
-                    away_tricode = PolymarketAPI.normalize_tricode(
-                        identifier["away_tricode"], self._sport
-                    )
-                    home_tricode = PolymarketAPI.normalize_tricode(
-                        identifier["home_tricode"], self._sport
-                    )
-                    game_date = identifier["game_date"]
-                    params["slug"] = (
-                        f"{self._sport_slug_prefix}-{away_tricode}-{home_tricode}-{game_date}"
+                    params["slug"] = PolymarketAPI.event_slug(
+                        identifier["away_tricode"],
+                        identifier["home_tricode"],
+                        identifier["game_date"],
+                        self._sport,
                     )
                     # Store game_id for metadata in the result (not for fetching)
                     params["game_id"] = identifier["espn_game_id"]
-                # If we can't construct a slug, don't set any params (will skip fetching)
+                # If we can't construct a slug, don't set any params (skip fetching)
 
         # Fetch odds from API
         all_odds = await self._api.fetch("odds", params if params else None)

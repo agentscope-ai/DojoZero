@@ -11,6 +11,7 @@ Refactored from core/_dashboard_server.py to separate server code from core abst
 """
 
 import asyncio
+import datetime
 import logging
 import os
 import platform
@@ -1698,6 +1699,83 @@ def create_dashboard_app(
             LOGGER.error("Error fetching NFL games: %s", e)
             return JSONResponse(
                 content={"error": str(e)},
+                status_code=500,
+            )
+
+    @app.get("/api/games/world_cup")
+    async def list_world_cup_games(
+        # aliased to "date" so the query param matches /api/games/{nba,nfl}
+        # while the local name avoids shadowing the `datetime` module.
+        date_str: str | None = Query(
+            None, alias="date", description="Date in YYYY-MM-DD format"
+        ),
+        start_date: str | None = Query(None, description="Start date for range"),
+        end_date: str | None = Query(None, description="End date for range"),
+        league: str = Query(
+            "fifa.world",
+            description="FIFA league code (e.g. fifa.world, fifa.wwc, fifa.cwc)",
+        ),
+    ) -> JSONResponse:
+        """List FIFA World Cup (soccer) games for a date or date range."""
+        # Imported lazily (like the nba/nfl handlers) so the ESPN/game-discovery
+        # module isn't pulled in at dashboard-app construction time.
+        from ._game_discovery import WorldCupGameFetcher
+
+        try:
+            fetcher = WorldCupGameFetcher(league=league)
+        except ValueError as e:
+            return JSONResponse(content={"error": str(e)}, status_code=400)
+
+        # A range needs both bounds; reject a lone start_date/end_date rather
+        # than silently ignoring it and returning today's games.
+        if bool(start_date) != bool(end_date):
+            return JSONResponse(
+                content={"error": "start_date and end_date must be provided together"},
+                status_code=400,
+            )
+
+        # Validate provided dates up front so a malformed value returns a clean
+        # 400 rather than surfacing as a 500 from the upstream fetch.
+        for field_name, value in (
+            ("date", date_str),
+            ("start_date", start_date),
+            ("end_date", end_date),
+        ):
+            if value:
+                try:
+                    datetime.date.fromisoformat(value)
+                except ValueError:
+                    return JSONResponse(
+                        content={"error": f"{field_name} must be in YYYY-MM-DD format"},
+                        status_code=400,
+                    )
+
+        try:
+            if start_date and end_date:
+                games = await fetcher.fetch_games_for_date_range(start_date, end_date)
+                return JSONResponse(
+                    content={
+                        "league": fetcher.league,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "games": [g.to_dict() for g in games],
+                    }
+                )
+            else:
+                games = await fetcher.fetch_games_for_date(date_str)
+                return JSONResponse(
+                    content={
+                        "league": fetcher.league,
+                        "date": date_str or "today",
+                        "games": [g.to_dict() for g in games],
+                    }
+                )
+        except Exception:
+            # Log full detail server-side; return a generic message so internal
+            # paths / library errors aren't leaked to callers.
+            LOGGER.exception("Error fetching World Cup games")
+            return JSONResponse(
+                content={"error": "Failed to fetch World Cup games"},
                 status_code=500,
             )
 

@@ -2389,7 +2389,9 @@ async def _serve_command(args: argparse.Namespace) -> int:
     LOGGER.info("Trial API: http://%s:%d/api/trials", host, port)
     LOGGER.info("Trial Source API: http://%s:%d/api/trial-sources", host, port)
     LOGGER.info("Scheduled Trials API: http://%s:%d/api/scheduled-trials", host, port)
-    LOGGER.info("Game Discovery API: http://%s:%d/api/games/{nba,nfl}", host, port)
+    LOGGER.info(
+        "Game Discovery API: http://%s:%d/api/games/{nba,nfl,world_cup}", host, port
+    )
     LOGGER.info("Store path: %s", store_path)
     if initial_trial_sources:
         LOGGER.info("Initial trial sources: %d", len(initial_trial_sources))

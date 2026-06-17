@@ -509,7 +509,20 @@ class ExternalAgentAdapter:
             spread_lines=spread_lines,
             total_lines=total_lines,
             last_update=event.last_odds_update,
-            betting_open=event.can_bet,  # type: ignore[arg-type]
+            # Betting is only truly open when the agent can actually place a
+            # bet — i.e. the window is open AND at least one market is priced.
+            # Advertising "open" on an unpriced market invites doomed bets.
+            betting_open=bool(
+                event.can_bet
+                and (
+                    (
+                        event.home_probability is not None
+                        and event.away_probability is not None
+                    )
+                    or bool(event.spread_lines)
+                    or bool(event.total_lines)
+                )
+            ),
             sequence=current_sequence,
         )
 
@@ -618,6 +631,18 @@ class ExternalAgentAdapter:
 
         # Place bet through broker
         result = await self._betting_broker.place_bet(agent_id, bet_request)
+
+        # Surface broker-side rejections with their reason (e.g. market not yet
+        # priced, insufficient balance) instead of a generic "no bet found".
+        # The reason flows through to a specific client error code in the
+        # gateway's place_bet handler (balance/closed/stale/...). Match only the
+        # explicit "bet_invalid[: reason]" contract so a future non-terminal
+        # status isn't misread as a rejection.
+        if result.startswith("bet_invalid"):
+            reason = (
+                result.split(":", 1)[1].strip() if ":" in result else "bet rejected"
+            )
+            raise ValueError(reason or "bet rejected")
 
         # Get the bet that was just placed
         # The broker returns a status string, we need to find the actual bet
