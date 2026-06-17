@@ -3,7 +3,8 @@
 This operator implements a standalone prediction contest, decoupled from
 the classic betting :class:`BrokerOperator`. It tracks the lifecycle of a
 single sports event and lets agents submit discrete win/lose/even
-predictions in five fixed windows (pre-game and Q1-Q4). Each agent may
+predictions in five fixed windows (pre-game plus one per period of play;
+window labels are sport-specific). Each agent may
 submit at most one prediction per window per event. After the event
 settles, every correct prediction in window ``w`` shares
 ``window_pools[w]`` evenly with the other correct predictions in that
@@ -73,6 +74,29 @@ _SPORT_CLOCK_DEFAULTS: Dict[str, tuple[int, int]] = {
 _ELAPSED_CLOCK_SPORTS = {"world_cup"}
 
 
+# Per-sport display labels for the five prediction windows (index 0 = pre-game,
+# then one label per regulation/overtime period). The window math is period-based
+# and sport-agnostic — only these labels differ by sport. Unknown sports fall back
+# to generic "Period N".
+_SPORT_WINDOW_LABELS: Dict[str, list[str]] = {
+    "nba": ["Pre-game", "Q1", "Q2", "Q3", "Q4"],
+    "nfl": ["Pre-game", "Q1", "Q2", "Q3", "Q4"],
+    "ncaa": ["Pre-game", "1st Half", "2nd Half", "OT1", "OT2"],
+    "collegebasketball": ["Pre-game", "1st Half", "2nd Half", "OT1", "OT2"],
+    "world_cup": ["Pre-game", "1st Half", "2nd Half", "Extra Time 1", "Extra Time 2"],
+}
+_DEFAULT_WINDOW_LABELS = ["Pre-game", "Period 1", "Period 2", "Period 3", "Period 4"]
+
+
+def _window_labels(sport_type: str) -> list[str]:
+    """Return the five window display labels for ``sport_type``.
+
+    Falls back to generic period labels for unknown/empty sports.
+    """
+    key = sport_type.strip().lower()
+    return _SPORT_WINDOW_LABELS.get(key, _DEFAULT_WINDOW_LABELS)
+
+
 class _ActorIdConfig(TypedDict):
     actor_id: str
 
@@ -136,14 +160,14 @@ def _parse_soccer_clock_to_elapsed_seconds(
     return max(0, period - 1) * seconds_per_period
 
 
-def _format_rules(window_pools: list[int]) -> str:
-    """Render the contest rules as a human-readable string for agents."""
+def _format_rules(window_pools: list[int], labels: list[str]) -> str:
+    """Render the contest rules as a human-readable string for agents.
+
+    ``labels`` are the sport-specific window names (see :func:`_window_labels`).
+    """
     pool_lines = [
-        f"  - Window 0 (Pre-game): {window_pools[0]}",
-        f"  - Window 1 (Q1):       {window_pools[1]}",
-        f"  - Window 2 (Q2):       {window_pools[2]}",
-        f"  - Window 3 (Q3):       {window_pools[3]}",
-        f"  - Window 4 (Q4):       {window_pools[4]}",
+        f"  - Window {i} ({labels[i]}): {window_pools[i]}"
+        for i in range(len(window_pools))
     ]
     pools_block = "\n".join(pool_lines)
     return (
@@ -161,17 +185,17 @@ def _format_rules(window_pools: list[int]) -> str:
         "Window assignment:\n"
         "  - Pre-game (status=SCHEDULED) submissions go to window 0.\n"
         "  - During play, the broker assigns the window from the current period\n"
-        "    (1=Q1, 2=Q2, 3=Q3, 4=Q4). Overtime maps to window 4.\n"
-        "  - For sports played in halves (e.g. NCAA basketball) periods are\n"
-        "    1 and 2, so only windows 1 (H1) and 2 (H2) are reachable during\n"
-        "    regulation; the Q3/Q4 labels above are NBA/NFL-oriented and the\n"
-        "    later pools simply go unclaimed.\n"
+        "    (period 1 -> window 1, period 2 -> window 2, ...). Periods beyond\n"
+        "    regulation (overtime / extra time) map to the final window.\n"
+        "  - Sports with fewer periods (e.g. soccer or NCAA basketball, two\n"
+        "    halves) only reach the lower windows during regulation, so later\n"
+        "    pools may go unclaimed.\n"
         "  - You can resubmit in the same window at any time before the event\n"
         "    closes; the latest submission replaces the previous one.\n\n"
         "Strategy:\n"
         "  - Earlier windows pay more, but the outcome is less certain.\n"
-        "  - Window 4 has a much smaller pool because by Q4 the result is\n"
-        "    typically clear.\n"
+        "  - The final window has a much smaller pool because by then the result\n"
+        "    is typically clear.\n"
         "  - Contrarian correct picks (when few agents pick your side) earn a\n"
         "    larger share of the pool.\n"
     )
@@ -190,8 +214,14 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
     tools to registered agents.
     """
 
-    def __init__(self, config: PredictionBrokerConfig, trial_id: str):
-        super().__init__(config["actor_id"], trial_id)
+    def __init__(
+        self,
+        config: PredictionBrokerConfig,
+        trial_id: str,
+        *,
+        sport_type: str = "",
+    ):
+        super().__init__(config["actor_id"], trial_id, sport_type=sport_type)
 
         self._event: Optional[ContestEvent] = None
         self._event_lock: asyncio.Lock = asyncio.Lock()
@@ -228,7 +258,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
     def from_dict(
         cls, config: PredictionBrokerConfig, context: RuntimeContext
     ) -> "PredictionBroker":
-        return cls(config, context.trial_id)
+        return cls(config, context.trial_id, sport_type=context.sport_type)
 
     async def start(self) -> None:
         logger.info(
@@ -812,16 +842,14 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
 
     def get_rules(self) -> Dict[str, Any]:
         """Return the prediction contest rules (used by tools and gateway)."""
+        labels = _window_labels(self.sport_type)
         return {
             "kind": "window_pool_prediction",
             "num_windows": NUM_WINDOWS,
             "window_pools": list(self._window_pools),
             "windows": [
-                {"index": 0, "label": "Pre-game", "pool": self._window_pools[0]},
-                {"index": 1, "label": "Q1", "pool": self._window_pools[1]},
-                {"index": 2, "label": "Q2", "pool": self._window_pools[2]},
-                {"index": 3, "label": "Q3", "pool": self._window_pools[3]},
-                {"index": 4, "label": "Q4", "pool": self._window_pools[4]},
+                {"index": i, "label": labels[i], "pool": self._window_pools[i]}
+                for i in range(NUM_WINDOWS)
             ],
             "selections": ["home_win", "away_win", "even"],
             "max_predictions_per_window": "1 (replaceable until the window closes)",
@@ -830,7 +858,7 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 "that window's pool equally among all correct predictions; "
                 "incorrect predictions earn 0."
             ),
-            "description": _format_rules(self._window_pools),
+            "description": _format_rules(self._window_pools, labels),
         }
 
     # =========================================================================
@@ -1046,7 +1074,8 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
             """Submit a prediction for the current event.
 
             The broker automatically assigns the prediction to the current
-            contest window based on live game state (0 = pre-game, 1-4 = Q1-Q4).
+            contest window based on live game state (0 = pre-game, 1-4 = the
+            periods of play; see get_rules for sport-specific window labels).
             If you submit again in the same window, the new prediction replaces
             the previous one.
 

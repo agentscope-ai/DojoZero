@@ -22,11 +22,13 @@ from dojozero.data._models import (
 )
 
 
-def _broker(*, window_pools: list[int] | None = None) -> PredictionBroker:
+def _broker(
+    *, window_pools: list[int] | None = None, sport_type: str = ""
+) -> PredictionBroker:
     config = {"actor_id": "prediction_broker", "trial_id": "trial-1"}
     if window_pools is not None:
         config["window_pools"] = window_pools  # type: ignore[assignment]
-    return PredictionBroker(config, "trial-1")  # type: ignore[arg-type]
+    return PredictionBroker(config, "trial-1", sport_type=sport_type)  # type: ignore[arg-type]
 
 
 def _envelope(payload):  # type: ignore[no-untyped-def]
@@ -68,6 +70,32 @@ def test_accepts_default_window_pools() -> None:
     rules = broker.get_rules()
     assert rules["window_pools"] == [5000, 4000, 3000, 2000, 500]
     assert rules["kind"] == "window_pool_prediction"
+
+
+def test_window_labels_are_sport_specific_for_soccer() -> None:
+    rules = _broker(sport_type="world_cup").get_rules()
+    labels = [w["label"] for w in rules["windows"]]
+    assert labels == [
+        "Pre-game",
+        "1st Half",
+        "2nd Half",
+        "Extra Time 1",
+        "Extra Time 2",
+    ]
+    # The human-readable description must not advertise basketball quarters.
+    assert "Q1" not in rules["description"]
+
+
+def test_window_labels_are_quarters_for_nba() -> None:
+    rules = _broker(sport_type="nba").get_rules()
+    labels = [w["label"] for w in rules["windows"]]
+    assert labels == ["Pre-game", "Q1", "Q2", "Q3", "Q4"]
+
+
+def test_window_labels_fall_back_to_generic_periods() -> None:
+    rules = _broker(sport_type="").get_rules()
+    labels = [w["label"] for w in rules["windows"]]
+    assert labels == ["Pre-game", "Period 1", "Period 2", "Period 3", "Period 4"]
 
 
 @pytest.mark.parametrize("clock", ["AET", "PEN"])
