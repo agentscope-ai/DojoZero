@@ -1819,6 +1819,22 @@ class ScheduleManager:
                     scheduled.error = f"Invalid config: {e}"
                     self._persist()
                     return
+                except (FileNotFoundError, IsADirectoryError) as e:
+                    # A config file referenced by the source (llm_config_path /
+                    # persona_config_path) is missing. This is an operator
+                    # config issue, not a crash — skip with a clear warning
+                    # instead of a noisy traceback from the generic handler.
+                    scheduled.phase = ScheduledTrialPhase.FAILED
+                    scheduled.error = f"Missing config file: {e}"
+                    self._persist()
+                    LOGGER.warning(
+                        "Skipping scheduled trial %s: missing config file (%s). "
+                        "Check llm_config_path / persona_config_path in the "
+                        "source config.",
+                        scheduled.schedule_id,
+                        e,
+                    )
+                    return
                 await self._trial_manager.submit(spec)
 
             # Register trial ownership in peer registry

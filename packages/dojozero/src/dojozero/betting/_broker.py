@@ -1807,9 +1807,11 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 await self._log_accounts_and_bets_status("bet_placed")
                 return "bet_placed"
 
-        except (ValueError, Exception) as e:
+        except Exception as e:
             logger.error("Bet rejected for %s: %s", agent_id, e, exc_info=True)
-            return "bet_invalid"
+            # Propagate the reason so the gateway can surface it to the client
+            # instead of an opaque "bet_invalid".
+            return f"bet_invalid: {e}"
 
     async def _match_bet(self, bet: Bet, execution_probability: Decimal) -> None:
         """Execute a bet at specified probability (asynchronous notification).

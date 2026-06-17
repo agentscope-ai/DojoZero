@@ -726,7 +726,8 @@ class TestBetPlacement:
             ),
         )
 
-        assert result == "bet_invalid"
+        assert result.startswith("bet_invalid")
+        assert "Insufficient balance" in result
 
         # Balance should be unchanged
         balance = await broker.get_balance(agent.actor_id)
@@ -802,7 +803,8 @@ class TestBetPlacement:
             ),
         )
 
-        assert result == "bet_invalid"
+        assert result.startswith("bet_invalid")
+        assert "not accepting bets" in result
 
     async def test_cancel_pending_bet(self, broker_with_agent):
         """Test cancelling a pending limit order"""

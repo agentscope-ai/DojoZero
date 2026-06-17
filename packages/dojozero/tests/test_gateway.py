@@ -4,6 +4,7 @@ import os
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -264,6 +265,60 @@ class TestExternalAgentAdapter:
         mock_broker.create_account.assert_called_once_with(
             "agent1", Decimal("500"), is_external=True
         )
+
+    @staticmethod
+    def _make_event(
+        *,
+        event_id="evt1",
+        can_bet=True,
+        home_probability=None,
+        away_probability=None,
+        spread_lines=None,
+        total_lines=None,
+    ):
+        """Build a minimal betting event for odds/bet adapter tests."""
+        return SimpleNamespace(
+            event_id=event_id,
+            can_bet=can_bet,
+            home_probability=home_probability,
+            away_probability=away_probability,
+            spread_lines=spread_lines or {},
+            total_lines=total_lines or {},
+            last_odds_update=None,
+        )
+
+    def test_betting_open_false_when_unpriced(self, adapter, mock_broker):
+        """betting_open is False when the window is open but no market is priced."""
+        mock_broker.current_event = self._make_event(can_bet=True)
+        odds = adapter.get_current_odds()
+        assert odds.betting_open is False
+        assert odds.home_probability is None
+
+    def test_betting_open_true_when_moneyline_priced(self, adapter, mock_broker):
+        """betting_open is True once moneyline odds are present."""
+        mock_broker.current_event = self._make_event(
+            can_bet=True, home_probability=0.55, away_probability=0.45
+        )
+        odds = adapter.get_current_odds()
+        assert odds.betting_open is True
+        assert odds.home_probability == pytest.approx(0.55)
+
+    @pytest.mark.asyncio
+    async def test_place_bet_surfaces_rejection_reason(self, adapter, mock_broker):
+        """A broker rejection reason is surfaced instead of a generic error."""
+        await adapter.register_agent(agent_id="agent1")
+        mock_broker.is_accepting = MagicMock(return_value=True)
+        mock_broker.current_event = self._make_event(
+            can_bet=True, home_probability=0.55, away_probability=0.45
+        )
+        mock_broker.place_bet = AsyncMock(
+            return_value="bet_invalid: Insufficient balance: requested 100"
+        )
+        request = BetRequest(
+            market="moneyline", selection="home", amount="100", orderType="market"
+        )
+        with pytest.raises(ValueError, match="Insufficient balance"):
+            await adapter.place_bet("agent1", request)
 
     @pytest.mark.asyncio
     async def test_register_duplicate_agent(self, adapter):

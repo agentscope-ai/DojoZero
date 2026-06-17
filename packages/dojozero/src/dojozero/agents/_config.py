@@ -122,8 +122,14 @@ def load_persona_config(config_path: str | Path) -> PersonaConfig:
         Parsed PersonaConfig dictionary
     """
     path = Path(config_path)
-    with path.open("r", encoding="utf-8") as f:
-        data: dict[str, Any] = yaml.safe_load(f)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data: dict[str, Any] = yaml.safe_load(f)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Persona config file not found: {path}. Check the persona_config_path "
+            "referenced by your agent or trial-source config."
+        ) from e
 
     return PersonaConfig(sys_prompt=data.get("sys_prompt", ""))
 
@@ -156,8 +162,14 @@ def load_llm_file_config(config_path: str | Path) -> LLMFileConfig:
         Parsed LLMFileConfig dictionary with llm as a list of LLMConfig
     """
     path = Path(config_path)
-    with path.open("r", encoding="utf-8") as f:
-        data: dict[str, Any] = yaml.safe_load(f)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data: dict[str, Any] = yaml.safe_load(f)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"LLM config file not found: {path}. Check the llm_config_path "
+            "referenced by your agent or trial-source config."
+        ) from e
 
     llm_configs: list[LLMConfig] = []
 

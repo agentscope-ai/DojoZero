@@ -155,6 +155,20 @@ class TestLLMCredentialFilter:
 class TestLLMConfigLoading:
     """Test that all LLM configs can be loaded and parsed correctly."""
 
+    def test_missing_llm_config_raises_clear_error(self, tmp_path: Path):
+        """A missing LLM config file reports the path and the offending field."""
+        missing = tmp_path / "does_not_exist.yaml"
+        with pytest.raises(FileNotFoundError, match="llm_config_path") as exc:
+            load_llm_file_config(missing)
+        assert str(missing) in str(exc.value)
+
+    def test_missing_persona_config_raises_clear_error(self, tmp_path: Path):
+        """A missing persona config file reports the path and the offending field."""
+        missing = tmp_path / "missing_persona.yaml"
+        with pytest.raises(FileNotFoundError, match="persona_config_path") as exc:
+            load_persona_config(missing)
+        assert str(missing) in str(exc.value)
+
     @pytest.mark.parametrize(
         "llm_path",
         get_all_llm_files(),

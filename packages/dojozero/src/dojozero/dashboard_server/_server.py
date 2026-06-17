@@ -1701,6 +1701,51 @@ def create_dashboard_app(
                 status_code=500,
             )
 
+    @app.get("/api/games/world_cup")
+    async def list_world_cup_games(
+        date: str | None = Query(None, description="Date in YYYY-MM-DD format"),
+        start_date: str | None = Query(None, description="Start date for range"),
+        end_date: str | None = Query(None, description="End date for range"),
+        league: str = Query(
+            "fifa.world",
+            description="FIFA league code (e.g. fifa.world, fifa.wwc, fifa.cwc)",
+        ),
+    ) -> JSONResponse:
+        """List FIFA World Cup (soccer) games for a date or date range."""
+        from ._game_discovery import WorldCupGameFetcher
+
+        try:
+            fetcher = WorldCupGameFetcher(league=league)
+        except ValueError as e:
+            return JSONResponse(content={"error": str(e)}, status_code=400)
+
+        try:
+            if start_date and end_date:
+                games = await fetcher.fetch_games_for_date_range(start_date, end_date)
+                return JSONResponse(
+                    content={
+                        "league": fetcher.league,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "games": [g.to_dict() for g in games],
+                    }
+                )
+            else:
+                games = await fetcher.fetch_games_for_date(date)
+                return JSONResponse(
+                    content={
+                        "league": fetcher.league,
+                        "date": date or "today",
+                        "games": [g.to_dict() for g in games],
+                    }
+                )
+        except Exception as e:
+            LOGGER.error("Error fetching World Cup games: %s", e)
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=500,
+            )
+
     # -------------------------------------------------------------------------
     # Trial Source Endpoints
     # -------------------------------------------------------------------------
