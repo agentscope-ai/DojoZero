@@ -167,11 +167,11 @@ def _format_rules(window_pools: list[int], labels: list[str]) -> str:
 
     ``labels`` are the sport-specific window names (see :func:`_window_labels`).
     """
-    # window_pools and labels are both NUM_WINDOWS long; bound the loop by the
-    # shorter to stay safe even if a caller passes a mismatched length.
+    # Both window_pools (validated at broker init) and labels are NUM_WINDOWS
+    # long; index by NUM_WINDOWS so a mismatch fails loudly rather than being
+    # silently truncated.
     pool_lines = [
-        f"  - Window {i} ({labels[i]}): {window_pools[i]}"
-        for i in range(min(len(window_pools), len(labels)))
+        f"  - Window {i} ({labels[i]}): {window_pools[i]}" for i in range(NUM_WINDOWS)
     ]
     pools_block = "\n".join(pool_lines)
     return (

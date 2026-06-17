@@ -431,9 +431,12 @@ class PolymarketAPI(ExternalAPI):
                 # Couldn't resolve the team from the slug (unexpected format) —
                 # warn and fall back to the documented [Away, Home] order.
                 logger.warning(
-                    "Could not resolve home/away from Yes/No market slug %r; "
-                    "falling back to [away, home] ordering",
+                    "Could not resolve home/away from Yes/No market slug %r "
+                    "(%d hyphen-separated parts; expected the verified "
+                    "fifwc-<home>-<away>-YYYY-MM-DD-<team> shape) — slug format "
+                    "may have drifted; falling back to [away, home] ordering",
                     slug,
+                    len(slug.split("-")),
                 )
                 return prices[1], prices[0]
 

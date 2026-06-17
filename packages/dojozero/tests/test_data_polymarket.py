@@ -698,7 +698,13 @@ class TestPolymarketStoreInit:
         await store._poll_api(identifier={"espn_game_id": "760431"})
 
         passed = mock_api.fetch.await_args.args[1]
+        # Both keys are passed: slug is the primary lookup, market_url stays as
+        # a fallback fetch() can use if the slug resolves no markets.
         assert passed.get("slug") == "fifwc-aut-jor-2026-06-17"
+        assert (
+            passed.get("market_url")
+            == "https://polymarket.com/event/fifwc-aut-jor-2026-06-17"
+        )
 
 
 # =============================================================================
