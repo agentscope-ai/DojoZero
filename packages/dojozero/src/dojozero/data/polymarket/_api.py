@@ -142,6 +142,8 @@ class PolymarketAPI(ExternalAPI):
         away_code = PolymarketAPI.normalize_tricode(away_tricode, sport)
         home_code = PolymarketAPI.normalize_tricode(home_tricode, sport)
         sport_prefix = PolymarketAPI.sport_slug_prefix(sport)
+        # "fifwc" is the soccer/World Cup prefix, which Polymarket orders
+        # home-away; US sports keep the away-home order.
         teams = (
             f"{home_code}-{away_code}"
             if sport_prefix == "fifwc"

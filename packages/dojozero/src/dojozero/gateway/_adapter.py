@@ -639,7 +639,9 @@ class ExternalAgentAdapter:
         # explicit "bet_invalid[: reason]" contract so a future non-terminal
         # status isn't misread as a rejection.
         if result.startswith("bet_invalid"):
-            reason = result.split(":", 1)[1].strip() if ":" in result else result
+            reason = (
+                result.split(":", 1)[1].strip() if ":" in result else "bet rejected"
+            )
             raise ValueError(reason or "bet rejected")
 
         # Get the bet that was just placed

@@ -78,7 +78,7 @@ _ELAPSED_CLOCK_SPORTS = {"world_cup"}
 # then one label per regulation/overtime period). The window math is period-based
 # and sport-agnostic — only these labels differ by sport. Unknown sports fall back
 # to generic "Period N".
-_SPORT_WINDOW_LABELS: Dict[str, list[str]] = {
+_SPORT_WINDOW_LABELS: dict[str, list[str]] = {
     "nba": ["Pre-game", "Q1", "Q2", "Q3", "Q4"],
     "nfl": ["Pre-game", "Q1", "Q2", "Q3", "Q4"],
     "ncaa": ["Pre-game", "1st Half", "2nd Half", "OT1", "OT2"],
@@ -165,9 +165,11 @@ def _format_rules(window_pools: list[int], labels: list[str]) -> str:
 
     ``labels`` are the sport-specific window names (see :func:`_window_labels`).
     """
+    # window_pools and labels are both NUM_WINDOWS long; bound the loop by the
+    # shorter to stay safe even if a caller passes a mismatched length.
     pool_lines = [
         f"  - Window {i} ({labels[i]}): {window_pools[i]}"
-        for i in range(len(window_pools))
+        for i in range(min(len(window_pools), len(labels)))
     ]
     pools_block = "\n".join(pool_lines)
     return (
@@ -682,6 +684,8 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
         """
         pools = list(self._window_pools)
         last_reached = self._last_reached_window()
+        # No reached window yet — e.g. the event settles before any period
+        # update arrives (game abandoned at kickoff). Award pools unmodified.
         if last_reached is None or last_reached >= NUM_WINDOWS - 1:
             return pools
         carried = sum(pools[last_reached + 1 :])
