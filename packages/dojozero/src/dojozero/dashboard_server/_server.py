@@ -1717,6 +1717,8 @@ def create_dashboard_app(
         ),
     ) -> JSONResponse:
         """List FIFA World Cup (soccer) games for a date or date range."""
+        # Imported lazily (like the nba/nfl handlers) so the ESPN/game-discovery
+        # module isn't pulled in at dashboard-app construction time.
         from ._game_discovery import WorldCupGameFetcher
 
         try:

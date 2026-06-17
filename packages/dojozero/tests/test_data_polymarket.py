@@ -786,6 +786,88 @@ class TestMetadataFlow:
 # =============================================================================
 
 
+class TestPolymarketSlugAndOdds:
+    """Pure-logic tests for Polymarket slug building and Yes/No odds mapping.
+
+    These make no network calls (unlike TestPolymarketAPIIntegration), so they
+    run in the default suite and guard the World Cup slug/odds-inversion fix.
+    """
+
+    def test_get_event_url_world_cup(self):
+        """World Cup event URL uses the fifwc prefix and home-away order."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        url = PolymarketAPI.get_event_url("FRA", "ARG", "2026-07-19", "world_cup")
+        assert url == "https://polymarket.com/event/fifwc-arg-fra-2026-07-19"
+
+    def test_market_team_is_home_world_cup(self):
+        """World Cup per-team market slugs resolve home vs away."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        # fifwc-<home>-<away>-<date>-<team>
+        assert (
+            PolymarketAPI._market_team_is_home("fifwc-aut-jor-2026-06-17-aut") is True
+        )
+        assert (
+            PolymarketAPI._market_team_is_home("fifwc-aut-jor-2026-06-17-jor") is False
+        )
+        assert PolymarketAPI._market_team_is_home("nba-lal-bos-2025-01-25") is None
+
+    def test_map_soccer_yes_no_to_home_away(self):
+        """Soccer 'Will <team> win?' Yes/No markets map to home/away correctly
+        (the home team's win price must not land on `away`)."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        api = PolymarketAPI()
+        # Home-team market (Austria@home): Yes=0.865 -> home; No=0.135 -> away.
+        res = api._map_outcomes_to_probabilities(
+            ["Yes", "No"], [0.865, 0.135], "moneyline", "fifwc-aut-jor-2026-06-17-aut"
+        )
+        assert res is not None
+        home, away = res
+        assert home == pytest.approx(0.865)
+        assert away == pytest.approx(0.135)
+        # Away-team market (Jordan@away): Yes=0.10 -> away; No=0.90 -> home.
+        res2 = api._map_outcomes_to_probabilities(
+            ["Yes", "No"], [0.10, 0.90], "moneyline", "fifwc-aut-jor-2026-06-17-jor"
+        )
+        assert res2 is not None
+        home2, away2 = res2
+        assert away2 == pytest.approx(0.10)
+        assert home2 == pytest.approx(0.90)
+
+    def test_map_nba_team_outcomes_unchanged(self):
+        """NBA team-name outcomes keep the [Away, Home] ordering."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        api = PolymarketAPI()
+        res = api._map_outcomes_to_probabilities(
+            ["Lakers", "Celtics"], [0.4, 0.6], "moneyline", "nba-lal-bos-2025-01-25"
+        )
+        assert res is not None
+        home, away = res
+        assert home == pytest.approx(0.6)
+        assert away == pytest.approx(0.4)
+
+    def test_map_soccer_yes_no_unparseable_slug_falls_back_and_warns(self, caplog):
+        """A Yes/No market whose slug can't be parsed falls back to the
+        documented [away, home] ordering and logs a warning (so a Polymarket
+        slug-format drift is detectable rather than silently inverting odds)."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        api = PolymarketAPI()
+        with caplog.at_level("WARNING", logger="dojozero.data.polymarket._api"):
+            res = api._map_outcomes_to_probabilities(
+                ["Yes", "No"], [0.7, 0.3], "moneyline", "weird-unexpected-slug"
+            )
+        assert res is not None
+        home, away = res
+        # Fallback ordering: home = prices[1], away = prices[0].
+        assert home == pytest.approx(0.3)
+        assert away == pytest.approx(0.7)
+        assert any("Could not resolve home/away" in r.message for r in caplog.records)
+
+
 @pytest.mark.integration
 class TestPolymarketAPIIntegration:
     """Integration tests for Polymarket API.
@@ -847,62 +929,6 @@ class TestPolymarketAPIIntegration:
         # Test with special tricode mapping
         url = PolymarketAPI.get_event_url("LAR", "TB", "2025-01-15", "nfl")
         assert url == "https://polymarket.com/event/nfl-la-tb-2025-01-15"
-
-    def test_get_event_url_world_cup(self):
-        """Test World Cup event URL generation."""
-        from dojozero.data.polymarket._api import PolymarketAPI
-
-        url = PolymarketAPI.get_event_url("FRA", "ARG", "2026-07-19", "world_cup")
-        assert url == "https://polymarket.com/event/fifwc-arg-fra-2026-07-19"
-
-    def test_market_team_is_home_world_cup(self):
-        """World Cup per-team market slugs resolve home vs away."""
-        from dojozero.data.polymarket._api import PolymarketAPI
-
-        # fifwc-<home>-<away>-<date>-<team>
-        assert (
-            PolymarketAPI._market_team_is_home("fifwc-aut-jor-2026-06-17-aut") is True
-        )
-        assert (
-            PolymarketAPI._market_team_is_home("fifwc-aut-jor-2026-06-17-jor") is False
-        )
-        assert PolymarketAPI._market_team_is_home("nba-lal-bos-2025-01-25") is None
-
-    def test_map_soccer_yes_no_to_home_away(self):
-        """Soccer 'Will <team> win?' Yes/No markets map to home/away correctly
-        (the home team's win price must not land on `away`)."""
-        from dojozero.data.polymarket._api import PolymarketAPI
-
-        api = PolymarketAPI()
-        # Home-team market (Austria@home): Yes=0.865 -> home; No=0.135 -> away.
-        res = api._map_outcomes_to_probabilities(
-            ["Yes", "No"], [0.865, 0.135], "moneyline", "fifwc-aut-jor-2026-06-17-aut"
-        )
-        assert res is not None
-        home, away = res
-        assert home == pytest.approx(0.865)
-        assert away == pytest.approx(0.135)
-        # Away-team market (Jordan@away): Yes=0.10 -> away; No=0.90 -> home.
-        res2 = api._map_outcomes_to_probabilities(
-            ["Yes", "No"], [0.10, 0.90], "moneyline", "fifwc-aut-jor-2026-06-17-jor"
-        )
-        assert res2 is not None
-        home2, away2 = res2
-        assert away2 == pytest.approx(0.10)
-        assert home2 == pytest.approx(0.90)
-
-    def test_map_nba_team_outcomes_unchanged(self):
-        """NBA team-name outcomes keep the [Away, Home] ordering."""
-        from dojozero.data.polymarket._api import PolymarketAPI
-
-        api = PolymarketAPI()
-        res = api._map_outcomes_to_probabilities(
-            ["Lakers", "Celtics"], [0.4, 0.6], "moneyline", "nba-lal-bos-2025-01-25"
-        )
-        assert res is not None
-        home, away = res
-        assert home == pytest.approx(0.6)
-        assert away == pytest.approx(0.4)
 
     @pytest.mark.asyncio
     async def test_get_market_by_slug_returns_data(self):
