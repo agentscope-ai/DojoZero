@@ -8,11 +8,7 @@ import {
   Clock,
 } from "lucide-react";
 import { useDataSource } from "../hooks/useDataSource.jsx";
-
-// Friendly display labels for league keys that aren't already display-ready
-// (the backend's canonical key is the uppercase sport_type, e.g. "WORLD_CUP").
-const LEAGUE_LABELS = { WORLD_CUP: "World Cup" };
-const leagueLabel = (value) => LEAGUE_LABELS[value] || value;
+import { leagueLabel } from "../leagues.js";
 
 // Hero Section with newspaper-style live stats
 function HeroSection({ stats }) {

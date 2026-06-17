@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Trophy, TrendingUp } from "lucide-react";
 import { useDataSource } from "../hooks/useDataSource";
 import AgentAvatar, { getAgentDisplayName } from "../components/AgentAvatar";
+import { leagueLabel } from "../leagues.js";
 
 // Podium Display for top 3
 function PodiumSection({ leaderboardData }) {
@@ -97,7 +98,7 @@ function FilterBar({ filters, setFilters }) {
                 ...(filters.league === league ? styles.filterBtnActive : {}),
               }}
             >
-              {league === "WORLD_CUP" ? "World Cup" : league}
+              {leagueLabel(league)}
             </button>
           ))}
         </div>
