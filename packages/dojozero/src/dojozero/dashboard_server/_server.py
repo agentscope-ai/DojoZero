@@ -1029,7 +1029,6 @@ def create_dashboard_app(
                 event_file = trials_cache_path(
                     state.output_dir, source_trial_id, run_id
                 )
-                materialize_result = None
                 if event_file.is_symlink() and not event_file.exists():
                     # Dangling symlink — remove so we can write a real file
                     event_file.unlink()
