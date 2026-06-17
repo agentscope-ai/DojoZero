@@ -447,6 +447,35 @@ async def test_settlement_does_not_fold_when_final_window_reached() -> None:
 
 
 @pytest.mark.asyncio
+async def test_settlement_without_game_updates_leaves_pools_unmodified() -> None:
+    """If a GameResultEvent arrives before any period update, _last_reached_window
+    is None and pools are awarded unmodified (no fold)."""
+    broker = _broker()  # pools [5000, 4000, 3000, 2000, 500]
+    await broker.handle_stream_event(_envelope(_game_init()))
+    await broker.submit_prediction("alice", "game-1", "home_win")  # window 0 (pre)
+    await broker.handle_stream_event(
+        _envelope(GameStartEvent(game_id="game-1", sport="world_cup"))
+    )
+    # No BaseGameUpdateEvent -> _recent_game_updates stays empty.
+    await broker.handle_stream_event(
+        _envelope(
+            GameResultEvent(
+                game_id="game-1",
+                sport="world_cup",
+                winner="home",
+                home_score=1,
+                away_score=0,
+            )
+        )
+    )
+    alice = (await broker.get_my_predictions("alice", "game-1"))[0]
+    assert alice.window == 0
+    assert alice.is_correct
+    # Unmodified window-0 pool — no extra-time pools folded in.
+    assert alice.score == Decimal("5000")
+
+
+@pytest.mark.asyncio
 async def test_settled_event_info_reports_last_reached_window() -> None:
     """After a regulation soccer match settles, current_window is the 2nd-half
     window (2), not the final extra-time window (4)."""

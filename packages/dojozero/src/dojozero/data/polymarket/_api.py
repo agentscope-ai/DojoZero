@@ -120,14 +120,27 @@ class PolymarketAPI(ExternalAPI):
         return tricode.lower()[:3]
 
     @staticmethod
+    def _is_soccer(sport: str) -> bool:
+        """True for FIFA World Cup soccer sport identifiers.
+
+        Single source of truth for soccer detection so the slug prefix and the
+        home-away team ordering can't drift apart.
+        """
+        return sport.lower().strip().replace("_", "-") in {
+            "worldcup",
+            "world-cup",
+            "fifa",
+            "soccer",
+        }
+
+    @staticmethod
     def sport_slug_prefix(sport: str) -> str:
         """Return the sport prefix used in Polymarket event slugs."""
-        sport_lower = sport.lower().strip().replace("_", "-")
-        if sport_lower in {"worldcup", "world-cup", "fifa", "soccer"}:
+        if PolymarketAPI._is_soccer(sport):
             # Polymarket uses the "fifwc" prefix for FIFA World Cup soccer
             # markets (e.g. "fifwc-aut-jor-2026-06-17"), not "world-cup".
             return "fifwc"
-        return sport_lower
+        return sport.lower().strip().replace("_", "-")
 
     @staticmethod
     def event_slug(
@@ -142,11 +155,12 @@ class PolymarketAPI(ExternalAPI):
         away_code = PolymarketAPI.normalize_tricode(away_tricode, sport)
         home_code = PolymarketAPI.normalize_tricode(home_tricode, sport)
         sport_prefix = PolymarketAPI.sport_slug_prefix(sport)
-        # "fifwc" is the soccer/World Cup prefix, which Polymarket orders
-        # home-away; US sports keep the away-home order.
+        # Polymarket orders World Cup soccer slugs home-away; US sports keep the
+        # away-home order. Key off the sport (not the prefix string) so the two
+        # stay coupled to a single soccer check.
         teams = (
             f"{home_code}-{away_code}"
-            if sport_prefix == "fifwc"
+            if PolymarketAPI._is_soccer(sport)
             else f"{away_code}-{home_code}"
         )
         return f"{sport_prefix}-{teams}-{game_date}"
@@ -442,7 +456,9 @@ class PolymarketAPI(ExternalAPI):
         warning (see _map_outcomes_to_probabilities).
         """
         parts = market_slug.split("-")
-        if len(parts) < 7 or parts[0] != "fifwc":
+        # Exactly 7 parts (fifwc-<home>-<away>-YYYY-MM-DD-<team>); a different
+        # count means the format drifted — bail so the caller logs + falls back.
+        if len(parts) != 7 or parts[0] != "fifwc":
             return None
         home_code, away_code, team_code = parts[1], parts[2], parts[-1]
         if team_code == home_code:

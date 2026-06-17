@@ -1817,11 +1817,17 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
                 await self._log_accounts_and_bets_status("bet_placed")
                 return "bet_placed"
 
-        except Exception as e:
-            logger.error("Bet rejected for %s: %s", agent_id, e, exc_info=True)
-            # Propagate the reason so the gateway can surface it to the client
-            # instead of an opaque "bet_invalid".
+        except ValueError as e:
+            # Validation rejections (insufficient balance, betting closed,
+            # invalid selection, ...) carry a client-safe reason — surface it so
+            # the gateway can return a legible message instead of "bet_invalid".
+            logger.warning("Bet rejected for %s: %s", agent_id, e)
             return f"bet_invalid: {e}"
+        except Exception as e:
+            # Unexpected internal error: log full detail server-side but return a
+            # generic reason so internal messages don't leak to external clients.
+            logger.error("Bet rejected for %s: %s", agent_id, e, exc_info=True)
+            return "bet_invalid: bet rejected"
 
     async def _match_bet(self, bet: Bet, execution_probability: Decimal) -> None:
         """Execute a bet at specified probability (asynchronous notification).

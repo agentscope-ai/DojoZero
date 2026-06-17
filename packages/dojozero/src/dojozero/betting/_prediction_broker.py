@@ -81,6 +81,8 @@ _ELAPSED_CLOCK_SPORTS = {"world_cup"}
 _SPORT_WINDOW_LABELS: dict[str, list[str]] = {
     "nba": ["Pre-game", "Q1", "Q2", "Q3", "Q4"],
     "nfl": ["Pre-game", "Q1", "Q2", "Q3", "Q4"],
+    # "ncaa" here is college basketball (two halves). A 4-quarter NCAA football
+    # path would need its own key with quarter labels.
     "ncaa": ["Pre-game", "1st Half", "2nd Half", "OT1", "OT2"],
     "collegebasketball": ["Pre-game", "1st Half", "2nd Half", "OT1", "OT2"],
     "world_cup": ["Pre-game", "1st Half", "2nd Half", "Extra Time 1", "Extra Time 2"],

@@ -11,6 +11,7 @@ Refactored from core/_dashboard_server.py to separate server code from core abst
 """
 
 import asyncio
+import datetime
 import logging
 import os
 import platform
@@ -1728,9 +1729,9 @@ def create_dashboard_app(
             )
 
         # Validate provided dates up front so a malformed value returns a clean
-        # 400 rather than surfacing as a 500 from the upstream fetch.
-        from datetime import date as _date
-
+        # 400 rather than surfacing as a 500 from the upstream fetch. (datetime
+        # is module-imported as date.fromisoformat; the `date` param shadows the
+        # name locally, so reference it via the module.)
         for field_name, value in (
             ("date", date),
             ("start_date", start_date),
@@ -1738,7 +1739,7 @@ def create_dashboard_app(
         ):
             if value:
                 try:
-                    _date.fromisoformat(value)
+                    datetime.date.fromisoformat(value)
                 except ValueError:
                     return JSONResponse(
                         content={"error": f"{field_name} must be in YYYY-MM-DD format"},
