@@ -415,36 +415,36 @@ class PolymarketAPI(ExternalAPI):
                 )
                 return None
 
-            # Soccer (a 3-way result) exposes a binary "Will <team> win?" Yes/No
-            # market per team rather than a single [Away, Home] market. Map
-            # Yes/No to home/away by which team the market is about, otherwise
-            # the home team's win price is assigned to `away` (inverted odds).
             normalized = [o.strip().lower() for o in outcomes]
             if set(normalized) == {"yes", "no"}:
-                yes_prob = prices[normalized.index("yes")]
-                no_prob = prices[normalized.index("no")]
-                team_is_home = self._market_team_is_home(slug)
-                if team_is_home is True:
-                    return yes_prob, no_prob  # home team wins == Yes
-                if team_is_home is False:
-                    return no_prob, yes_prob  # away team wins == Yes
-                # Couldn't resolve the team from the slug (unexpected format) —
-                # warn and fall back to the documented [Away, Home] order.
+                # A binary "Will <team> win?" soccer market cannot supply a
+                # two-sided moneyline on its own: "No" includes draws and is
+                # therefore not the opponent's win probability. World Cup event
+                # moneylines are assembled from the two teams' Yes prices in
+                # _fetch_world_cup_moneyline_from_markets().
                 logger.warning(
-                    "Could not resolve home/away from Yes/No market slug %r "
-                    "(%d hyphen-separated parts; expected the verified "
-                    "fifwc-<home>-<away>-YYYY-MM-DD-<team> shape) — slug format "
-                    "may have drifted; falling back to [away, home] ordering",
+                    "Cannot map single Yes/No market %r to home/away "
+                    "moneyline probabilities; use event-level World Cup "
+                    "moneyline assembly instead",
                     slug,
-                    len(slug.split("-")),
                 )
-                return prices[1], prices[0]
+                return None
 
             # Standard [Away, Home] market (e.g. NBA/NFL team-name outcomes):
             # prices[0] = away_probability, prices[1] = home_probability.
             away_prob = prices[0]
             home_prob = prices[1]
             return home_prob, away_prob
+
+    @staticmethod
+    def _yes_probability(outcomes: list[str], prices: list[float]) -> float | None:
+        """Return the Yes price from a binary Yes/No market, if present."""
+        if len(outcomes) != len(prices) or len(outcomes) != 2:
+            return None
+        normalized = [o.strip().lower() for o in outcomes]
+        if set(normalized) != {"yes", "no"}:
+            return None
+        return prices[normalized.index("yes")]
 
     @staticmethod
     def _market_team_is_home(market_slug: str) -> bool | None:
@@ -564,6 +564,100 @@ class PolymarketAPI(ExternalAPI):
                 away_probability=away_prob,
             )
 
+    async def _fetch_yes_probability_from_slug(
+        self,
+        slug: str,
+    ) -> tuple[str, float] | None:
+        """Fetch a binary Yes/No market and return ``(market_id, yes_price)``."""
+        try:
+            market_dict = await self.get_market_by_slug(slug)
+            market = MarketData.model_validate(market_dict)
+        except aiohttp.ClientError as e:
+            logger.error("Failed to fetch Yes/No market data for slug %s: %s", slug, e)
+            return None
+        except Exception as e:
+            logger.error(
+                "Unexpected error fetching Yes/No market data for slug %s: %s",
+                slug,
+                e,
+            )
+            return None
+
+        parsed = self._parse_outcomes_and_prices(market.outcomes, market.outcomePrices)
+        if parsed is None:
+            logger.warning(
+                "Could not parse Yes/No outcomes/prices for market %s: "
+                "outcomes=%s, outcomePrices=%s",
+                slug,
+                market.outcomes,
+                market.outcomePrices,
+            )
+            return None
+
+        yes_prob = self._yes_probability(*parsed)
+        if yes_prob is None:
+            logger.warning("Market %s is not a binary Yes/No market", slug)
+            return None
+        return market.id, yes_prob
+
+    async def _fetch_world_cup_moneyline_from_markets(
+        self,
+        event_slug: str,
+        markets: list[MarketData],
+    ) -> MarketOddsData | None:
+        """Build World Cup home/away moneyline from team Yes prices.
+
+        Polymarket FIFA soccer events expose one "Will <team> win?" Yes/No
+        market per outcome. Only the home and away teams' Yes prices represent
+        the classic home/away moneyline probabilities; No prices include draws
+        and must not be mapped to the opponent.
+        """
+        home_market: tuple[str, float] | None = None
+        away_market: tuple[str, float] | None = None
+
+        for market in markets:
+            market_slug = market.slug
+            if not market_slug:
+                continue
+            team_is_home = self._market_team_is_home(market_slug)
+            if team_is_home is None:
+                logger.debug(
+                    "Skipping non-team World Cup moneyline market %s for event %s",
+                    market_slug,
+                    event_slug,
+                )
+                continue
+            fetched = await self._fetch_yes_probability_from_slug(market_slug)
+            if fetched is None:
+                continue
+            if team_is_home:
+                home_market = fetched
+            else:
+                away_market = fetched
+
+        if home_market is None or away_market is None:
+            logger.warning(
+                "Incomplete World Cup moneyline markets for %s: home_present=%s, "
+                "away_present=%s; omitting moneyline",
+                event_slug,
+                home_market is not None,
+                away_market is not None,
+            )
+            return None
+
+        home_market_id, home_prob = home_market
+        away_market_id, away_prob = away_market
+        return MarketOddsData(
+            market_id=f"{home_market_id}:{away_market_id}",
+            slug=event_slug,
+            market_type="moneyline",
+            line=None,
+            home_odds=1.0 / home_prob if home_prob > 0 else 1.0,
+            away_odds=1.0 / away_prob if away_prob > 0 else 1.0,
+            home_probability=home_prob,
+            away_probability=away_prob,
+        )
+
     async def fetch_odds_from_market(
         self,
         market_url: str | None = None,
@@ -642,6 +736,14 @@ class PolymarketAPI(ExternalAPI):
             # For moneyline, there's usually only one market, so return a single MarketOddsData
             # For spreads and totals, there can be multiple markets (different lines), so return a list
             if market_type == "moneyline":
+                if slug.startswith("fifwc-"):
+                    odds_data = await self._fetch_world_cup_moneyline_from_markets(
+                        slug, type_markets
+                    )
+                    if odds_data:
+                        result[market_type] = odds_data
+                    continue
+
                 # Take the first (and usually only) moneyline market
                 market = type_markets[0]
                 market_slug = market.slug

@@ -813,28 +813,103 @@ class TestPolymarketSlugAndOdds:
         )
         assert PolymarketAPI._market_team_is_home("nba-lal-bos-2025-01-25") is None
 
-    def test_map_soccer_yes_no_to_home_away(self):
-        """Soccer 'Will <team> win?' Yes/No markets map to home/away correctly
-        (the home team's win price must not land on `away`)."""
+    def test_soccer_yes_no_market_does_not_map_no_to_opponent(self):
+        """A single soccer Yes/No team market cannot produce both sides.
+
+        "No home wins" includes draws, so it is not the away team's win price.
+        """
         from dojozero.data.polymarket._api import PolymarketAPI
 
         api = PolymarketAPI()
-        # Home-team market (Austria@home): Yes=0.865 -> home; No=0.135 -> away.
-        res = api._map_outcomes_to_probabilities(
-            ["Yes", "No"], [0.865, 0.135], "moneyline", "fifwc-aut-jor-2026-06-17-aut"
+        assert (
+            api._map_outcomes_to_probabilities(
+                ["Yes", "No"],
+                [0.865, 0.135],
+                "moneyline",
+                "fifwc-aut-jor-2026-06-17-aut",
+            )
+            is None
         )
-        assert res is not None
-        home, away = res
-        assert home == pytest.approx(0.865)
-        assert away == pytest.approx(0.135)
-        # Away-team market (Jordan@away): Yes=0.10 -> away; No=0.90 -> home.
-        res2 = api._map_outcomes_to_probabilities(
-            ["Yes", "No"], [0.10, 0.90], "moneyline", "fifwc-aut-jor-2026-06-17-jor"
+        assert (
+            api._map_outcomes_to_probabilities(
+                ["Yes", "No"],
+                [0.10, 0.90],
+                "moneyline",
+                "fifwc-aut-jor-2026-06-17-jor",
+            )
+            is None
         )
-        assert res2 is not None
-        home2, away2 = res2
-        assert away2 == pytest.approx(0.10)
-        assert home2 == pytest.approx(0.90)
+
+    @pytest.mark.asyncio
+    async def test_fetch_world_cup_moneyline_combines_team_yes_prices(self):
+        """World Cup moneyline uses home/away Yes prices, not either No price."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+        from dojozero.data.polymarket._models import MarketData, MarketOddsData
+
+        api = PolymarketAPI()
+        markets = [
+            MarketData(
+                id="home-market",
+                slug="fifwc-aut-jor-2026-06-17-aut",
+                sportsMarketType="moneyline",
+            ),
+            MarketData(
+                id="draw-market",
+                slug="fifwc-aut-jor-2026-06-17-draw",
+                sportsMarketType="moneyline",
+            ),
+            MarketData(
+                id="away-market",
+                slug="fifwc-aut-jor-2026-06-17-jor",
+                sportsMarketType="moneyline",
+            ),
+        ]
+        payloads = {
+            "fifwc-aut-jor-2026-06-17-aut": {
+                "id": "home-market",
+                "slug": "fifwc-aut-jor-2026-06-17-aut",
+                "sportsMarketType": "moneyline",
+                "outcomes": '["Yes", "No"]',
+                "outcomePrices": '["0.865", "0.135"]',
+            },
+            "fifwc-aut-jor-2026-06-17-draw": {
+                "id": "draw-market",
+                "slug": "fifwc-aut-jor-2026-06-17-draw",
+                "sportsMarketType": "moneyline",
+                "outcomes": '["Yes", "No"]',
+                "outcomePrices": '["0.035", "0.965"]',
+            },
+            "fifwc-aut-jor-2026-06-17-jor": {
+                "id": "away-market",
+                "slug": "fifwc-aut-jor-2026-06-17-jor",
+                "sportsMarketType": "moneyline",
+                "outcomes": '["Yes", "No"]',
+                "outcomePrices": '["0.10", "0.90"]',
+            },
+        }
+        api.get_event_markets = AsyncMock(return_value=markets)  # type: ignore[method-assign]
+        api.get_market_by_slug = AsyncMock(side_effect=lambda slug: payloads[slug])  # type: ignore[method-assign]
+
+        result = await api.fetch_odds_from_event("fifwc-aut-jor-2026-06-17")
+
+        moneyline = result["moneyline"]
+        assert isinstance(moneyline, MarketOddsData)
+        assert moneyline.home_probability == pytest.approx(0.865)
+        assert moneyline.away_probability == pytest.approx(0.10)
+        assert moneyline.home_odds == pytest.approx(1 / 0.865)
+        assert moneyline.away_odds == pytest.approx(1 / 0.10)
+
+    def test_map_soccer_yes_no_drift_returns_none(self):
+        """Unexpected soccer Yes/No slugs should fail closed, not infer odds."""
+        from dojozero.data.polymarket._api import PolymarketAPI
+
+        api = PolymarketAPI()
+        assert (
+            api._map_outcomes_to_probabilities(
+                ["Yes", "No"], [0.5, 0.5], "moneyline", "fifwc-format-changed"
+            )
+            is None
+        )
 
     def test_map_nba_team_outcomes_unchanged(self):
         """NBA team-name outcomes keep the [Away, Home] ordering."""
@@ -848,24 +923,6 @@ class TestPolymarketSlugAndOdds:
         home, away = res
         assert home == pytest.approx(0.6)
         assert away == pytest.approx(0.4)
-
-    def test_map_soccer_yes_no_unparseable_slug_falls_back_and_warns(self, caplog):
-        """A Yes/No market whose slug can't be parsed falls back to the
-        documented [away, home] ordering and logs a warning (so a Polymarket
-        slug-format drift is detectable rather than silently inverting odds)."""
-        from dojozero.data.polymarket._api import PolymarketAPI
-
-        api = PolymarketAPI()
-        with caplog.at_level("WARNING", logger="dojozero.data.polymarket._api"):
-            res = api._map_outcomes_to_probabilities(
-                ["Yes", "No"], [0.7, 0.3], "moneyline", "weird-unexpected-slug"
-            )
-        assert res is not None
-        home, away = res
-        # Fallback ordering: home = prices[1], away = prices[0].
-        assert home == pytest.approx(0.3)
-        assert away == pytest.approx(0.7)
-        assert any("Could not resolve home/away" in r.message for r in caplog.records)
 
 
 @pytest.mark.integration
