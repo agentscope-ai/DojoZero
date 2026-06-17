@@ -635,6 +635,16 @@ class BrokerOperator(OperatorBase, Operator[BrokerOperatorConfig]):
 
         # Only process probabilities if we have team info (either from existing event or pending GameUpdateEvent)
         if self._event is not None:
+            # Skip odds updates once the contest is closed/settled: a late odds
+            # poll (e.g. after the final whistle) has nothing to update — bets
+            # are locked — and would otherwise raise.
+            if not self._event.is_accepting:
+                logger.debug(
+                    "Skipping odds update for %s event %s (betting closed)",
+                    self._event.status.value,
+                    event_id,
+                )
+                return
             # Event exists - update probabilities (supports partial updates)
             logger.info(
                 "Updating probabilities: event_id=%s, home_probability=%s, away_probability=%s, spreads=%d, totals=%d",
