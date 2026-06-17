@@ -231,7 +231,8 @@ class PolymarketStore(DataStore):
         # Poll odds endpoint (for OddsUpdateEvent)
         params: dict[str, Any] = {}
 
-        # Prefer the event slug: it routes to fetch_odds_from_event, which
+        # Prefer the event slug: PolymarketAPI.fetch() tries `slug` before
+        # `market_url`, and a slug routes to fetch_odds_from_event, which
         # resolves multi-market events (e.g. soccer's home/draw/away sub-markets).
         # market_url alone routes to the market-slug endpoint, which 404s on an
         # event slug. self._slug is derived from market_url at init, so pass both

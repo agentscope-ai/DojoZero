@@ -922,6 +922,11 @@ class PredictionBroker(OperatorBase, Operator[PredictionBrokerConfig]):
                 "that window's pool equally among all correct predictions; "
                 "incorrect predictions earn 0."
             ),
+            # window_pools/windows are the configured (pre-fold) amounts. If the
+            # match ends before reaching a window, that window's pool folds into
+            # the last reached window at settlement, so an actual payout can
+            # exceed the advertised pool.
+            "pools_are_pre_fold": True,
             "description": _format_rules(self._window_pools, labels),
         }
 

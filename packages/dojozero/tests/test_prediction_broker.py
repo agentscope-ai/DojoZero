@@ -101,6 +101,18 @@ def test_window_labels_fall_back_to_generic_periods() -> None:
     assert labels == ["Pre-game", "Period 1", "Period 2", "Period 3", "Period 4"]
 
 
+def test_get_rules_advertises_pre_fold_pools() -> None:
+    """get_rules() reports the configured (pre-fold) pools and flags that they
+    can fold at settlement. The settled payout can exceed the advertised pool —
+    e.g. window 2 advertises 3000 here but settles at 5500 for a regulation
+    soccer match (see test_settlement_folds_unreached_window_pools_into_last_reached).
+    """
+    rules = _broker().get_rules()
+    assert rules["window_pools"] == [5000, 4000, 3000, 2000, 500]
+    assert rules["windows"][2]["pool"] == 3000  # configured / pre-fold
+    assert rules["pools_are_pre_fold"] is True
+
+
 @pytest.mark.parametrize("clock", ["AET", "PEN"])
 def test_soccer_terminal_clock_without_period_maps_to_regulation_complete(
     clock: str,

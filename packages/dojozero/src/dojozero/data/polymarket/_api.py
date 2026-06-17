@@ -414,7 +414,13 @@ class PolymarketAPI(ExternalAPI):
                     return yes_prob, no_prob  # home team wins == Yes
                 if team_is_home is False:
                     return no_prob, yes_prob  # away team wins == Yes
-                # Unknown team/order: fall back to the documented [Away, Home].
+                # Couldn't resolve the team from the slug (unexpected format) —
+                # warn and fall back to the documented [Away, Home] order.
+                logger.warning(
+                    "Could not resolve home/away from Yes/No market slug %r; "
+                    "falling back to [away, home] ordering",
+                    slug,
+                )
                 return prices[1], prices[0]
 
             # Standard [Away, Home] market (e.g. NBA/NFL team-name outcomes):
