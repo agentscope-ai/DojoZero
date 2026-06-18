@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback, createContext, useContext } from "react";
 
 import { arenaHttpBase } from "../arenaEnv.js";
+import { buildLeaderboardEndpoint } from "../leaderboardApi.js";
 
 const API_URL = arenaHttpBase();
 const STATS_REFRESH_MS = Number(import.meta.env.VITE_STATS_REFRESH_MS || 10000);
@@ -80,12 +81,12 @@ export function DataSourceProvider({ children }) {
   }, [fetchFromApi]);
 
   // Fetch leaderboard data
-  const fetchLeaderboard = useCallback(async () => {
+  const fetchLeaderboard = useCallback(async (filters = {}) => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const data = await fetchFromApi("/api/leaderboard");
+      const data = await fetchFromApi(buildLeaderboardEndpoint(filters));
       setLeaderboard(data.leaderboard || []);
     } catch (err) {
       console.error("Failed to fetch leaderboard:", err);
@@ -119,8 +120,7 @@ export function DataSourceProvider({ children }) {
   // Initial data fetch on mount
   useEffect(() => {
     fetchLandingData();
-    fetchLeaderboard();
-  }, [fetchLandingData, fetchLeaderboard]);
+  }, [fetchLandingData]);
 
   // Periodic refresh for core data
   useEffect(() => {
@@ -164,6 +164,7 @@ export function DataSourceProvider({ children }) {
 
     // Actions
     refresh: fetchLandingData,
+    refreshLeaderboard: fetchLeaderboard,
     errorMessage: error ? `Error loading data: ${error}` : null,
   };
 

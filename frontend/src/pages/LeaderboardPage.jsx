@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Trophy, TrendingUp } from "lucide-react";
 import { useDataSource } from "../hooks/useDataSource";
 import AgentAvatar, { getAgentDisplayName } from "../components/AgentAvatar";
+import { leagueLabel } from "../leagues.js";
 
 // Podium Display for top 3
 function PodiumSection({ leaderboardData }) {
@@ -88,7 +89,7 @@ function FilterBar({ filters, setFilters }) {
       <div style={styles.filterGroup}>
         <span style={styles.filterLabel}>League</span>
         <div style={styles.filterButtons}>
-          {["All", "NBA", "NFL", "NCAA"].map((league) => (
+          {["All", "NBA", "NFL", "NCAA", "WORLD_CUP"].map((league) => (
             <button
               key={league}
               onClick={() => setFilters({ ...filters, league })}
@@ -97,7 +98,7 @@ function FilterBar({ filters, setFilters }) {
                 ...(filters.league === league ? styles.filterBtnActive : {}),
               }}
             >
-              {league}
+              {leagueLabel(league)}
             </button>
           ))}
         </div>
@@ -304,13 +305,18 @@ function AgentDetailPanel({ agent }) {
 }
 
 export default function LeaderboardPage() {
-  const { leaderboard, isLoading, error } = useDataSource();
+  const { leaderboard, isLoading, error, refreshLeaderboard } = useDataSource();
   const [filters, setFilters] = useState({
     league: "All",
     betType: "All",
     time: "7d",
   });
   const [selectedAgent, setSelectedAgent] = useState(null);
+
+  useEffect(() => {
+    refreshLeaderboard({ league: filters.league, time: filters.time });
+    setSelectedAgent(null);
+  }, [filters.league, filters.time, refreshLeaderboard]);
 
   if (isLoading) {
     return (

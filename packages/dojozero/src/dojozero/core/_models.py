@@ -284,9 +284,11 @@ _SPORT_UNIFY_MAP: dict[str, str] = {
     "nba_play": "play",
     "nfl_play": "play",
     "ncaa_play": "play",
+    "world_cup_play": "play",
     "nba_game_update": "game_update",
     "nfl_game_update": "game_update",
     "ncaa_game_update": "game_update",
+    "world_cup_game_update": "game_update",
 }
 
 
