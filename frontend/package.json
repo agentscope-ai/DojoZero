@@ -10,6 +10,7 @@
     "dev:live-remote": "VITE_USE_MOCK_DATA=false VITE_API_URL=http://your-server:3001 vite",
     "build": "vite build",
     "build:live": "VITE_USE_MOCK_DATA=false vite build",
+    "test:leaderboard": "node --test src/leaderboardApi.test.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },

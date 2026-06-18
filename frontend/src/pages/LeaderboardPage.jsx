@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Trophy, TrendingUp } from "lucide-react";
 import { useDataSource } from "../hooks/useDataSource";
@@ -305,13 +305,18 @@ function AgentDetailPanel({ agent }) {
 }
 
 export default function LeaderboardPage() {
-  const { leaderboard, isLoading, error } = useDataSource();
+  const { leaderboard, isLoading, error, refreshLeaderboard } = useDataSource();
   const [filters, setFilters] = useState({
     league: "All",
     betType: "All",
     time: "7d",
   });
   const [selectedAgent, setSelectedAgent] = useState(null);
+
+  useEffect(() => {
+    refreshLeaderboard({ league: filters.league, time: filters.time });
+    setSelectedAgent(null);
+  }, [filters.league, filters.time, refreshLeaderboard]);
 
   if (isLoading) {
     return (
