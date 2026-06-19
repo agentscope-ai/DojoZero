@@ -53,7 +53,7 @@ config:
       persona: degen
       class: BettingAgent
       persona_config_path: agents/personas/degen.yaml
-      llm_config_path: agents/llms/default.yaml
+      llm_config_path: agents/llms/all.yaml
       operators: [prediction_broker]
       data_streams:
       - pre_game_insights_stream
@@ -64,7 +64,7 @@ config:
       persona: mystic
       class: BettingAgent
       persona_config_path: agents/personas/mystic.yaml
-      llm_config_path: agents/llms/default.yaml
+      llm_config_path: agents/llms/all.yaml
       operators: [prediction_broker]
       data_streams:
       - pre_game_insights_stream
@@ -75,7 +75,7 @@ config:
       persona: pundit
       class: BettingAgent
       persona_config_path: agents/personas/pundit.yaml
-      llm_config_path: agents/llms/default.yaml
+      llm_config_path: agents/llms/all.yaml
       operators: [prediction_broker]
       data_streams:
       - pre_game_insights_stream
@@ -86,7 +86,7 @@ config:
       persona: shark
       class: BettingAgent
       persona_config_path: agents/personas/shark.yaml
-      llm_config_path: agents/llms/default.yaml
+      llm_config_path: agents/llms/all.yaml
       operators: [prediction_broker]
       data_streams:
       - pre_game_insights_stream
@@ -97,7 +97,7 @@ config:
       persona: sheep
       class: BettingAgent
       persona_config_path: agents/personas/sheep.yaml
-      llm_config_path: agents/llms/default.yaml
+      llm_config_path: agents/llms/all.yaml
       operators: [prediction_broker]
       data_streams:
       - pre_game_insights_stream
@@ -108,7 +108,7 @@ config:
       persona: whale
       class: BettingAgent
       persona_config_path: agents/personas/whale.yaml
-      llm_config_path: agents/llms/default.yaml
+      llm_config_path: agents/llms/all.yaml
       operators: [prediction_broker]
       data_streams:
       - pre_game_insights_stream
