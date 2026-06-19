@@ -1,0 +1,11 @@
+# World Cup Trial Source — Pre-prod environment
+# Full agent matrix (all personas × all models), up to 2 games.
+# Lower-volume canary of the prod config against the live 2026 FIFA Men's WC.
+source_id: world-cup-moneyline-source
+sport_type: world_cup
+config:
+  scenario_name: world_cup
+  league: fifa.world
+  max_daily_games: 2
+  personas: [degen, mystic, pundit, shark, sheep, whale]
+  llm_config_path: agents/llms/default.yaml
