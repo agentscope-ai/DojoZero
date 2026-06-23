@@ -32,6 +32,7 @@ from dojozero.arena_server._utils import (
     _extract_trial_info_from_spans,
     _filter_trials_by_league,
     TRIAL_INFO_OPERATION_NAMES,
+    trial_id_for_span_grouping,
 )
 from dojozero.core._tracing import SpanData, TraceReader, create_trace_reader
 from dojozero.betting import AgentInfo
@@ -315,7 +316,7 @@ class SyncService:
         # 3. Group spans by trial_id, tracking which trials got new spans
         trials_with_new_spans: set[str] = set()
         for span in all_spans:
-            trial_id = span.trace_id
+            trial_id = trial_id_for_span_grouping(span)
             if trial_id not in self._spans_by_trial:
                 self._spans_by_trial[trial_id] = []
             self._spans_by_trial[trial_id].append(span)
@@ -434,7 +435,10 @@ class SyncService:
 
         # Games (global + per-league)
         games = await _extract_games_from_trials(
-            self.trace_reader, trial_ids, self._temp_cache
+            self.trace_reader,
+            trial_ids,
+            self._temp_cache,
+            spans_by_trial=self._spans_by_trial,
         )
         self._temp_cache.set_games(games, league=None)
 
@@ -443,7 +447,10 @@ class SyncService:
                 self.trace_reader, trial_ids, league, self._temp_cache
             )
             league_games = await _extract_games_from_trials(
-                self.trace_reader, filtered_ids, self._temp_cache
+                self.trace_reader,
+                filtered_ids,
+                self._temp_cache,
+                spans_by_trial=self._spans_by_trial,
             )
             self._temp_cache.set_games(league_games, league=league)
 
