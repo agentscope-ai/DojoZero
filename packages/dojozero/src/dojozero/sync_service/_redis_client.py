@@ -123,7 +123,12 @@ class RedisClient:
         try:
             import redis.asyncio as redis
 
-            self._client = redis.from_url(url, decode_responses=True)
+            self._client = redis.from_url(
+                url,
+                decode_responses=True,
+                socket_connect_timeout=40,
+                socket_timeout=40,
+            )
             await self._client.ping()
             self._connected = True
 
