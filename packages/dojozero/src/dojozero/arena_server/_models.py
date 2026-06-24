@@ -42,6 +42,7 @@ class AgentProfileStats(BaseModel):
     win_rate: float = Field(default=0.0, serialization_alias="winRate")
     total_bets: int = Field(default=0, serialization_alias="totalBets")
     roi: float = 0.0
+    sharpe: float = 0.0
 
 
 class AgentProfileResponse(BaseModel):

@@ -159,3 +159,36 @@ def test_all_leaderboard_can_split_market_and_prediction_modes() -> None:
         ]
     finally:
         _server._server_state = None
+
+
+def test_agent_profile_returns_sharpe_from_market_leaderboard() -> None:
+    cache = LandingPageCache()
+    cache.set_leaderboard(
+        [
+            LeaderboardEntry(
+                agent=AgentInfo(agent_id="market-agent", persona="market"),
+                winnings=50,
+                winRate=60,
+                totalBets=8,
+                roi=10,
+                sharpe=1.23,
+            ),
+        ]
+    )
+    _server._server_state = ArenaServerState(
+        trace_reader=object(),  # type: ignore[arg-type]
+        cache=cache,
+        refresher=object(),  # type: ignore[arg-type]
+    )
+
+    app = FastAPI()
+    register_rest_endpoints(app)
+    client = TestClient(app)
+
+    try:
+        response = client.get("/api/agent/market-agent/profile")
+        assert response.status_code == 200
+        stats = response.json()["stats"]
+        assert stats["sharpe"] == 1.23
+    finally:
+        _server._server_state = None

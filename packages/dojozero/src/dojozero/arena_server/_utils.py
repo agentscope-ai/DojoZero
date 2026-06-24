@@ -1349,6 +1349,7 @@ def _compute_agent_profile(
             win_rate=entry.win_rate,
             total_bets=entry.total_bets,
             roi=entry.roi,
+            sharpe=entry.sharpe,
         )
         # Use the agent from leaderboard (has is_external/created_at filled)
         agent_info = entry.agent
