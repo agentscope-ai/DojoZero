@@ -1407,6 +1407,22 @@ def _compute_replay_meta(
 
     current_period: int = 1  # Default period
 
+    def _coerce_period(raw_period: Any) -> int:
+        if isinstance(raw_period, str):
+            label_periods = {"1H": 1, "2H": 2, "ET1": 3, "ET2": 4, "PEN": 5}
+            label_period = label_periods.get(raw_period.strip().upper())
+            if label_period is not None:
+                return label_period
+
+        try:
+            period = int(raw_period)
+        except (TypeError, ValueError):
+            return current_period
+
+        if period <= 0:
+            return max(current_period, 1)
+        return period
+
     for item_index, item in enumerate(items):
         category = item.get("category", "")
         data = item.get("data", {})
@@ -1432,8 +1448,8 @@ def _compute_replay_meta(
 
             # Get period from play data
             period = data.get("period")
-            if period is not None and isinstance(period, int):
-                current_period = period
+            if period is not None:
+                current_period = _coerce_period(period)
 
             # Track period stats
             if current_period not in period_play_counts:
