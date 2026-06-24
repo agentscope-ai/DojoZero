@@ -116,6 +116,27 @@ def _trial_counts_as_live_for_arena(trial_info: dict[str, Any]) -> bool:
     )
 
 
+def _detect_contest_kind(spans: list[SpanData]) -> str:
+    """Classify a trial's contest type from its broker registration span.
+
+    A trial registers exactly one broker at start-up (one of the first spans):
+    ``prediction_broker`` runs the window-pool prediction contest, while
+    ``betting_broker`` runs the moneyline betting contest. World Cup games are
+    run as both, so the landing dedup uses this to prefer the prediction trial.
+
+    Returns "prediction", "betting", or "" if no broker span is present.
+    """
+    for span in spans:
+        if span.operation_name != "operator.registered":
+            continue
+        actor = span.tags.get("actor.id", "") if span.tags else ""
+        if "prediction_broker" in actor:
+            return "prediction"
+        if "betting_broker" in actor:
+            return "betting"
+    return ""
+
+
 def trial_id_for_span_grouping(span: SpanData) -> str:
     """Return the stable trial key used to bucket spans for Arena aggregation.
 
@@ -474,8 +495,11 @@ async def _extract_games_from_trials(
 
         phase = trial_info["phase"]
         metadata = dict(trial_info.get("metadata") or {})
+        contest_kind = ""
         if spans_by_trial is not None:
-            _overlay_live_scores_from_spans(metadata, spans_by_trial.get(trial_id, []))
+            trial_spans = spans_by_trial.get(trial_id, [])
+            _overlay_live_scores_from_spans(metadata, trial_spans)
+            contest_kind = _detect_contest_kind(trial_spans)
         # Normalize league to uppercase for frontend compatibility
         league = metadata.get("sport_type", "NBA").upper()
 
@@ -562,6 +586,7 @@ async def _extract_games_from_trials(
         game_card = GameCardData(
             id=trial_id,
             league=league,
+            contest_kind=contest_kind,
             home_team=home_team,
             away_team=away_team,
             home_score=metadata.get("home_score", 0),

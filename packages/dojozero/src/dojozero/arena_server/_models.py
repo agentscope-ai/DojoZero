@@ -89,6 +89,11 @@ class GameCardData(BaseModel):
 
     id: str
     league: str = ""
+    # Contest type for sports run as multiple trials per match (e.g. World Cup
+    # runs both a window-pool "prediction" trial and a moneyline "betting"
+    # trial). Empty when unknown / not applicable. Used by the landing dedup to
+    # prefer the prediction trial. See _detect_contest_kind.
+    contest_kind: str = Field(default="", serialization_alias="contestKind")
     home_team: TeamIdentity = Field(
         default_factory=TeamIdentity,
         serialization_alias="homeTeam",
