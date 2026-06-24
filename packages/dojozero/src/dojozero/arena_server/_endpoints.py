@@ -385,9 +385,13 @@ def register_rest_endpoints(app: FastAPI) -> None:
             default=None,
             description="Agent type filter: 'built_in' or 'external'.",
         ),
+        mode: str | None = Query(
+            default=None,
+            description="Leaderboard mode filter: 'market' or 'prediction'.",
+        ),
         sort_by: str = Query(
             default="winnings",
-            description="Sort field: 'winnings', 'win_rate', 'roi', 'total_bets'.",
+            description="Sort field: 'winnings', 'win_rate', 'roi', 'total_bets', 'sharpe', 'prediction_score', 'accuracy', 'total_predictions'.",
         ),
         sort_order: str = Query(
             default="desc",
@@ -413,6 +417,12 @@ def register_rest_endpoints(app: FastAPI) -> None:
                     "error": f"Invalid period '{period}'. Must be one of: {', '.join(sorted(valid_periods))}"
                 },
             )
+        valid_modes = {None, "market", "prediction"}
+        if mode not in valid_modes:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid mode. Must be one of: market, prediction."},
+            )
 
         # All paths now read from pre-computed cache
         effective_period = period if period != "all" else None
@@ -437,16 +447,62 @@ def register_rest_endpoints(app: FastAPI) -> None:
         elif agent_type == "built_in":
             leaderboard = [e for e in leaderboard if not e.agent.is_external]
 
-        # 2. Sort (cached path is already sorted by winnings desc; re-sort only when needed)
-        if sort_by != "winnings" or sort_order != "desc":
+        # Mode split: agents are shared across sports, so an agent can have both
+        # betting PnL (market) and a prediction score. Filter by *activity* rather
+        # than mutual exclusion so a top bettor that also predicted still shows on
+        # the market board (with winnings) and on the prediction board (with score).
+        if mode == "prediction":
+            leaderboard = [e for e in leaderboard if e.prediction_score is not None]
+        elif mode == "market":
+            leaderboard = [
+                e for e in leaderboard if e.total_bets > 0 or e.winnings != 0
+            ]
+
+        # 2. Sort (prediction-mode rows use ScoringSys metrics, not betting PnL)
+        has_prediction_data = any(e.prediction_score is not None for e in leaderboard)
+        is_world_cup_view = league is not None and league.upper() == "WORLD_CUP"
+        is_prediction_view = mode == "prediction" or is_world_cup_view
+        effective_sort_by = sort_by
+        if (
+            is_prediction_view
+            and has_prediction_data
+            and sort_by
+            in (
+                "winnings",
+                "win_rate",
+                "roi",
+                "total_bets",
+                "sharpe",
+            )
+        ):
+            effective_sort_by = "prediction_score"
+
+        if (
+            sort_by != "winnings"
+            or sort_order != "desc"
+            or effective_sort_by != sort_by
+        ):
             sort_key_map = {
                 "winnings": lambda x: x.winnings,
                 "win_rate": lambda x: x.win_rate,
                 "roi": lambda x: x.roi,
                 "sharpe": lambda x: x.sharpe,
                 "total_bets": lambda x: x.total_bets,
+                "prediction_score": lambda x: (
+                    x.prediction_score
+                    if x.prediction_score is not None
+                    else -float("inf")
+                ),
+                "accuracy": lambda x: (
+                    x.accuracy if x.accuracy is not None else -float("inf")
+                ),
+                "total_predictions": lambda x: (
+                    x.total_predictions
+                    if x.total_predictions is not None
+                    else x.total_bets
+                ),
             }
-            key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])
+            key_fn = sort_key_map.get(effective_sort_by, sort_key_map["winnings"])
             leaderboard = sorted(leaderboard, key=key_fn, reverse=(sort_order != "asc"))
 
         # 3. Limit

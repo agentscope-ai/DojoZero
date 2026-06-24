@@ -1211,9 +1211,11 @@ def _compute_leaderboard_from_spans(
             # Calculate prediction stats
             pred_score = None
             accuracy = None
+            total_predictions = None
             if agent_id in agent_pred_stats:
                 stats = agent_pred_stats[agent_id]
                 pred_score = round(stats["total_score"], 2)
+                total_predictions = stats["total_predictions"]
                 if stats["total_predictions"] > 0:
                     accuracy = round(
                         (stats["correct_predictions"] / stats["total_predictions"])
@@ -1237,6 +1239,7 @@ def _compute_leaderboard_from_spans(
                     createdAt=agent_info.created_at,
                     predictionScore=pred_score,
                     accuracy=accuracy,
+                    totalPredictions=total_predictions,
                 )
             )
     else:
@@ -1274,6 +1277,7 @@ def _compute_leaderboard_from_spans(
         "win_rate",
         "roi",
         "total_bets",
+        "sharpe",
     ):
         effective_sort_by = "prediction_score"
 
@@ -1288,6 +1292,9 @@ def _compute_leaderboard_from_spans(
             x.prediction_score if x.prediction_score is not None else -float("inf")
         ),
         "accuracy": lambda x: x.accuracy if x.accuracy is not None else -float("inf"),
+        "total_predictions": lambda x: (
+            x.total_predictions if x.total_predictions is not None else x.total_bets
+        ),
     }
     key_fn = sort_key_map.get(effective_sort_by, sort_key_map["winnings"])
     leaderboard.sort(key=key_fn, reverse=(sort_order != "asc"))

@@ -78,6 +78,7 @@ class LeaderboardEntry(BaseModel):
     # ScoringSys fields (optional, populated when prediction mode is active)
     prediction_score: float | None = Field(default=None, alias="predictionScore")
     accuracy: float | None = Field(default=None)
+    total_predictions: int | None = Field(default=None, alias="totalPredictions")
 
 
 # ============================================================================

@@ -82,6 +82,7 @@ class _TraceReader:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         limit: int = 500,
+        sport_type: str | None = None,
     ) -> list[str]:
         return [TRIAL_ID]
 
