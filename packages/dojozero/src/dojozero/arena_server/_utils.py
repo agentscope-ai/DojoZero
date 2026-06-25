@@ -61,7 +61,7 @@ TRIAL_INFO_OPERATION_NAMES = [
 ]
 
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class BrokerStatsAggregate:
     """Aggregate broker stats used by landing page summary cards."""
 
@@ -130,15 +130,28 @@ def _trial_counts_as_live_for_arena(trial_info: dict[str, Any]) -> bool:
 
 
 def _detect_contest_kind(spans: list[SpanData]) -> str:
-    """Classify a trial's contest type from its broker registration span.
+    """Classify a trial's contest type: "prediction", "betting", or "".
 
-    A trial registers exactly one broker at start-up (one of the first spans):
-    ``prediction_broker`` runs the window-pool prediction contest, while
-    ``betting_broker`` runs the moneyline betting contest. World Cup games are
-    run as both, so the landing dedup uses this to prefer the prediction trial.
+    World Cup games run as both a window-pool prediction trial and a moneyline
+    betting trial, so the landing dedup uses this to prefer the prediction one.
 
-    Returns "prediction", "betting", or "" if no broker span is present.
+    Primary signal is the ``broker.final_stats`` span's ``contest_kind``
+    (``window_pool_prediction`` vs ``classic_betting``): it is in
+    ``ARENA_RENDERED_OPERATIONS``, so it survives the dev-mode span whitelist.
+    For trials still in progress (no final_stats yet) we fall back to the broker
+    ``operator.registered`` span.
     """
+    for span in spans:
+        if span.operation_name != "broker.final_stats" or not span.tags:
+            continue
+        kind = str(
+            span.tags.get("broker.contest_kind") or span.tags.get("contest_kind") or ""
+        ).lower()
+        if "prediction" in kind:
+            return "prediction"
+        if kind:  # classic_betting / any other broker-shaped contest
+            return "betting"
+
     for span in spans:
         if span.operation_name != "operator.registered":
             continue
@@ -981,105 +994,6 @@ async def _compute_broker_stats(
         has_betting_data=has_betting_data,
         has_prediction_data=has_prediction_data,
     )
-
-
-async def _compute_total_wagered(
-    trace_reader: TraceReader,
-    trial_ids: list[str],
-    spans_by_trial: dict[str, list[SpanData]] | None = None,
-) -> float:
-    """Compute total wagered amount from broker.final_stats spans.
-
-    Args:
-        trace_reader: Trace reader for fetching spans
-        trial_ids: List of trial IDs to process
-        spans_by_trial: Optional pre-fetched spans grouped by trial_id
-
-    Returns:
-        Total wagered amount across all trials
-    """
-    total_wagered = 0.0
-
-    for trial_id in trial_ids:
-        try:
-            # Use pre-fetched spans if available, otherwise query
-            if spans_by_trial is not None:
-                spans = spans_by_trial.get(trial_id, [])
-                # Filter to broker.final_stats spans
-                final_stats_spans = [
-                    s for s in spans if s.operation_name == "broker.final_stats"
-                ]
-            else:
-                final_stats_spans = await trace_reader.get_spans(
-                    trial_id,
-                    operation_names=["broker.final_stats"],
-                )
-
-            # Extract total_wagered from BrokerFinalStats
-            for span in final_stats_spans:
-                typed = deserialize_span(span)
-                if isinstance(typed, BrokerFinalStats):
-                    for stats in typed.statistics.values():
-                        total_wagered += float(stats.total_wagered)
-
-        except Exception as e:
-            LOGGER.warning(
-                "Failed to get broker.final_stats for trial '%s': %s",
-                trial_id,
-                e,
-            )
-            continue
-
-    return total_wagered
-
-
-async def _compute_total_bet_counts(
-    trace_reader: TraceReader,
-    trial_ids: list[str],
-    spans_by_trial: dict[str, list[SpanData]] | None = None,
-) -> int:
-    """Compute total bet counts from broker.final_stats spans.
-
-    Args:
-        trace_reader: Trace reader for fetching spans
-        trial_ids: List of trial IDs to process
-        spans_by_trial: Optional pre-fetched spans grouped by trial_id
-
-    Returns:
-        Total bet counts across all trials
-    """
-    total_bet_counts = 0
-
-    for trial_id in trial_ids:
-        try:
-            # Use pre-fetched spans if available, otherwise query
-            if spans_by_trial is not None:
-                spans = spans_by_trial.get(trial_id, [])
-                # Filter to broker.final_stats spans
-                final_stats_spans = [
-                    s for s in spans if s.operation_name == "broker.final_stats"
-                ]
-            else:
-                final_stats_spans = await trace_reader.get_spans(
-                    trial_id,
-                    operation_names=["broker.final_stats"],
-                )
-
-            # Extract bets_count from BrokerFinalStats
-            for span in final_stats_spans:
-                typed = deserialize_span(span)
-                if isinstance(typed, BrokerFinalStats):
-                    total_bet_counts += typed.bets_count
-
-        except Exception as e:
-            LOGGER.warning(
-                "Failed to get broker.final_stats for trial '%s': %s",
-                trial_id,
-                e,
-            )
-            continue
-
-    return total_bet_counts
 
 
 @dataclass

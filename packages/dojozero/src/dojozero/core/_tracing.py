@@ -759,14 +759,18 @@ class SLSTraceReader:
         # `field:"value"` (search-side filter) on it. Apply the filter in the SQL part
         # after `|` instead — SQL filters do not require an index.
         if sport_type:
-            sport_lower = sport_type.lower()
-            sport_upper = sport_type.upper()
-            if sport_lower == sport_upper:
-                sql_where = f" WHERE trial_sport_type = '{sport_lower}'"
-            else:
-                sql_where = (
-                    f" WHERE trial_sport_type IN ('{sport_lower}', '{sport_upper}')"
+            # Allowlist before interpolating into SQL: trial_sport_type is not
+            # indexed, so it is filtered in the SQL part (no parameter binding
+            # available there). Restricting to known sports keeps the f-string
+            # injection-safe regardless of the (protocol-typed ``str``) caller.
+            sport_lower = sport_type.strip().lower()
+            if sport_lower not in {"nba", "nfl", "ncaa", "world_cup"}:
+                raise ValueError(
+                    f"Unsupported sport_type for list_trials: {sport_type!r}"
                 )
+            sql_where = (
+                f" WHERE trial_sport_type IN ('{sport_lower}', '{sport_lower.upper()}')"
+            )
         else:
             sql_where = ""
         query = (

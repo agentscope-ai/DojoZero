@@ -459,6 +459,12 @@ class SyncService:
             )
             return self._filter_trials_by_date(ids, trial_metadata, start_date=cutoff)
 
+        # The per-league filtered id list is identical for stats, games,
+        # leaderboard, and agent actions within a sync cycle — compute it once.
+        league_trial_ids: dict[str, list[str]] = {
+            league: await _league_trial_ids(league) for league in CACHEABLE_LEAGUES
+        }
+
         # Stats (global + per-league)
         stats = await _compute_stats(
             self.trace_reader, trial_ids, self._temp_cache, self._spans_by_trial
@@ -466,7 +472,7 @@ class SyncService:
         self._temp_cache.set_stats(stats, league=None)
 
         for league in CACHEABLE_LEAGUES:
-            filtered_ids = await _league_trial_ids(league)
+            filtered_ids = league_trial_ids[league]
             league_stats = await _compute_stats(
                 self.trace_reader, filtered_ids, self._temp_cache, self._spans_by_trial
             )
@@ -488,7 +494,7 @@ class SyncService:
         self._temp_cache.set_games(games, league=None)
 
         for league in CACHEABLE_LEAGUES:
-            filtered_ids = await _league_trial_ids(league)
+            filtered_ids = league_trial_ids[league]
             league_games = await _extract_games_from_trials(
                 self.trace_reader,
                 filtered_ids,
@@ -516,7 +522,7 @@ class SyncService:
         self._temp_cache.set_agent_bets_index(result.agent_bets_index)
 
         for league in CACHEABLE_LEAGUES:
-            league_ids = await _league_trial_ids(league)
+            league_ids = league_trial_ids[league]
             league_result = _compute_leaderboard_from_spans(
                 self._spans_by_trial, agent_info_cache, league_ids
             )
@@ -572,7 +578,7 @@ class SyncService:
         self._temp_cache.set_agent_actions(actions, league=None)
 
         for league in CACHEABLE_LEAGUES:
-            league_ids = await _league_trial_ids(league)
+            league_ids = league_trial_ids[league]
             league_actions = _extract_agent_actions_from_spans(
                 self._spans_by_trial,
                 agent_info_cache,
