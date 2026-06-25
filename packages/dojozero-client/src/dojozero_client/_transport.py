@@ -62,18 +62,28 @@ class GatewayTransport:
         self,
         base_url: str,
         timeout: float = 30.0,
+        agentid_client: Any = None,
+        agentid_audience: str | None = None,
     ):
         """Initialize transport.
 
         Args:
             base_url: Gateway base URL (e.g., "http://localhost:8080")
             timeout: Request timeout in seconds
+            agentid_client: Optional ModelScope AgentID client
+                (``agent_id_client_sdk.Client``). When set, each request carries
+                a fresh ``Authorization: Bearer <jwt>`` from it (the SDK caches
+                and refreshes tokens) instead of the X-Agent-ID header.
+            agentid_audience: Audience (hub ``client_id``) to request tokens for.
+                If None, the AgentID client's own default audience is used.
         """
         self.base_url = base_url.rstrip("/")
         self.agent_id: str | None = None
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
         self._last_event_id: str | None = None
+        self._agentid_client = agentid_client
+        self._agentid_audience = agentid_audience
 
     def set_agent_id(self, agent_id: str) -> None:
         """Set agent ID after registration.
@@ -112,10 +122,21 @@ class GatewayTransport:
             self._client = None
 
     def _auth_headers(self) -> dict[str, str]:
-        """Get authentication headers."""
+        """Get authentication headers (X-Agent-ID fallback)."""
         if self.agent_id:
             return {"X-Agent-ID": self.agent_id}
         return {}
+
+    async def _auth_headers_async(self) -> dict[str, str]:
+        """Per-request auth headers.
+
+        With an AgentID client configured, fetch a fresh Bearer token (cached /
+        refreshed by the SDK). Otherwise fall back to the X-Agent-ID header.
+        """
+        if self._agentid_client is not None:
+            token = await self._agentid_client.get_token(self._agentid_audience)
+            return {"Authorization": f"Bearer {token}"}
+        return self._auth_headers()
 
     def _get_client(self) -> httpx.AsyncClient:
         """Get the HTTP client, raising if not initialized."""
@@ -145,6 +166,7 @@ class GatewayTransport:
             Various DojoClientError subclasses based on response
         """
         client = self._get_client()
+        headers = await self._auth_headers_async()
 
         try:
             response = await client.request(
@@ -152,6 +174,7 @@ class GatewayTransport:
                 url=path,
                 json=json,
                 params=params,
+                headers=headers,
             )
         except httpx.ConnectError as e:
             raise ConnectionError(f"Failed to connect to gateway: {e}") from e
@@ -224,7 +247,7 @@ class GatewayTransport:
             StreamDisconnectedError: If stream disconnects unexpectedly
         """
         client = self._get_client()
-        headers = self._auth_headers().copy()
+        headers = (await self._auth_headers_async()).copy()
         headers["Accept"] = "text/event-stream"
 
         # Include Last-Event-ID for reconnection

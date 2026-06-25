@@ -160,7 +160,11 @@ class TrialManager:
             return False
 
         try:
-            from dojozero.gateway import create_gateway_app, GatewayState
+            from dojozero.gateway import (
+                agentid_verifier_from_env,
+                create_gateway_app,
+                GatewayState,
+            )
             from dojozero.gateway._adapter import ExternalAgentAdapter
             from dojozero.betting import ContestOperator
 
@@ -221,6 +225,11 @@ class TrialManager:
             ):  # Dataclass instance
                 metadata = asdict(spec.metadata)
 
+            # ModelScope AgentID verifier (None when unconfigured / SDK absent).
+            # Built here because this path constructs GatewayState manually
+            # below (lifespan doesn't run for in-process routing).
+            agentid_verifier = agentid_verifier_from_env()
+
             # Create gateway app (note: lifespan won't run since we're not using uvicorn)
             app = create_gateway_app(
                 trial_id=trial_id,
@@ -228,6 +237,7 @@ class TrialManager:
                 broker=broker,
                 metadata=metadata,
                 authenticator=self._authenticator,
+                agentid_verifier=agentid_verifier,
             )
 
             # Create adapter and state manually since lifespan doesn't run for in-process routing
@@ -243,6 +253,7 @@ class TrialManager:
                 broker=broker,
                 adapter=adapter,
                 authenticator=self._authenticator or NoOpAuthenticator(),
+                agentid_verifier=agentid_verifier,
                 metadata=metadata,
             )
 

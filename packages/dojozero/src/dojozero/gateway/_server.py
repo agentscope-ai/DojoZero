@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from dojozero.gateway._adapter import ExternalAgentAdapter
+from dojozero.gateway._agentid import agentid_verifier_from_env, verify_bearer
 from dojozero.gateway._auth import AgentAuthenticator, NoOpAuthenticator
 from dojozero.gateway._models import (
     AgentReconnectRequest,
@@ -57,6 +58,11 @@ class GatewayState:
     broker: "ContestOperator"
     adapter: ExternalAgentAdapter
     authenticator: AgentAuthenticator = field(default_factory=NoOpAuthenticator)
+    # Optional ModelScope AgentID verifier (agent_id_service_sdk.Verifier).
+    # When set, Bearer JWTs are cryptographically verified and the token's
+    # ``sub`` is the authoritative agent_id. ``Any`` to avoid importing the
+    # optional SDK at module load.
+    agentid_verifier: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -68,39 +74,41 @@ def get_gateway_state(request: Request) -> GatewayState:
     return state
 
 
-def get_agent_id(
+async def get_agent_id(
     x_agent_id: str | None = Header(default=None, alias="X-Agent-ID"),
     authorization: str | None = Header(default=None),
+    state: GatewayState = Depends(get_gateway_state),
 ) -> str:
-    """Extract agent ID from request headers.
+    """Resolve the caller's agent_id for per-request authorization.
 
-    Phase 1-2: Simple X-Agent-ID header
-    Phase 3: JWT token validation (TODO)
-
-    Args:
-        x_agent_id: Agent ID from X-Agent-ID header
-        authorization: Bearer token (future JWT support)
-
-    Returns:
-        Agent ID string
+    When a ModelScope AgentID verifier is configured, a cryptographically
+    verified ``Authorization: Bearer`` token is REQUIRED and its ``sub`` is the
+    identity — the unverified ``X-Agent-ID`` header is NOT accepted (honoring it
+    would let any caller impersonate a registered agent). When no verifier is
+    configured, the legacy ``X-Agent-ID`` header is used (dev / pre-AgentID).
 
     Raises:
-        HTTPException: If no agent ID provided
+        HTTPException: 401 when the required token is missing/invalid, or no
+            identity is provided.
     """
+    verifier = state.agentid_verifier
+    if verifier is not None:
+        # AgentID enabled: a verified Bearer token is the ONLY accepted identity.
+        # verify_bearer rejects a missing/non-Bearer header, so the unverified
+        # X-Agent-ID header can't be used to impersonate a registered agent.
+        verified = await verify_bearer(verifier, authorization)
+        return verified.agent_id
+
+    # No verifier configured → legacy X-Agent-ID header auth.
     if x_agent_id:
         return x_agent_id
-
-    # TODO Phase 3: Extract from JWT
-    if authorization and authorization.startswith("Bearer "):
-        # For now, just require X-Agent-ID
-        pass
 
     raise HTTPException(
         status_code=401,
         detail=ErrorResponse(
             error=ErrorDetail(
                 code=ErrorCodes.AUTH_REQUIRED,
-                message="X-Agent-ID header required",
+                message="Authentication required: provide an X-Agent-ID header",
             )
         ).model_dump(by_alias=True),
     )
@@ -112,6 +120,7 @@ def create_gateway_app(
     broker: "ContestOperator",
     metadata: dict[str, Any] | None = None,
     authenticator: AgentAuthenticator | None = None,
+    agentid_verifier: Any = None,
 ) -> FastAPI:
     """Create the Agent Gateway FastAPI application.
 
@@ -132,6 +141,15 @@ def create_gateway_app(
     # Use NoOpAuthenticator if none provided (backwards compatible)
     auth = authenticator or NoOpAuthenticator()
 
+    # AgentID verifier: use the injected one, else build from env. The builder
+    # returns None when AgentID isn't configured or the optional SDK isn't
+    # installed, so this is safe (and a no-op) when unconfigured.
+    verifier = (
+        agentid_verifier
+        if agentid_verifier is not None
+        else agentid_verifier_from_env()
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage gateway lifecycle."""
@@ -147,12 +165,19 @@ def create_gateway_app(
             broker=broker,
             adapter=adapter,
             authenticator=auth,
+            agentid_verifier=verifier,
             metadata=metadata or {},
         )
 
         app.state.gateway_state = state
         auth_status = "enabled" if auth.is_enabled() else "disabled"
-        logger.info("Gateway started for trial %s (auth: %s)", trial_id, auth_status)
+        agentid_status = "enabled" if verifier is not None else "disabled"
+        logger.info(
+            "Gateway started for trial %s (api_key auth: %s, agentid: %s)",
+            trial_id,
+            auth_status,
+            agentid_status,
+        )
 
         yield
 
@@ -181,19 +206,51 @@ def create_gateway_app(
     @app.post("/agents", response_model=AgentRegistrationResponse)
     async def register_agent(
         request: AgentRegistrationRequest,
+        authorization: str | None = Header(default=None),
         state: GatewayState = Depends(get_gateway_state),
     ) -> AgentRegistrationResponse:
         """Register an external agent for this trial.
 
-        API key is required. Agent identity (agent_id, display_name) is derived
-        from the verified identity in agent_keys.yaml.
-
-        Use 'dojo0 agents add' to register agents and get API keys.
+        Identity comes from either a verified AgentID Bearer token (a ModelScope
+        JWT whose ``sub`` is the agent_id) or, failing that, a validated API key
+        whose identity is defined in agent_keys.yaml.
         """
         # Convert initial_balance to string if it's a float
         initial_balance: str | None = None
         if request.initial_balance is not None:
             initial_balance = str(request.initial_balance)
+
+        # AgentID path: identity from the verified ModelScope JWT.
+        verifier = state.agentid_verifier
+        if (
+            verifier is not None
+            and authorization
+            and authorization.startswith("Bearer ")
+        ):
+            verified = await verify_bearer(verifier, authorization)
+            logger.info(
+                "Agent authenticated via AgentID: agent_id=%s", verified.agent_id
+            )
+            try:
+                return await state.adapter.register_agent(
+                    agent_id=verified.agent_id,
+                    initial_balance=initial_balance,
+                    display_name=verified.agent_name or None,
+                    authenticated=True,
+                )
+            except ValueError as e:
+                error_msg = str(e)
+                if "already" in error_msg.lower():
+                    raise HTTPException(
+                        status_code=409,
+                        detail=ErrorResponse(
+                            error=ErrorDetail(
+                                code=ErrorCodes.ALREADY_REGISTERED,
+                                message=error_msg,
+                            )
+                        ).model_dump(by_alias=True),
+                    )
+                raise HTTPException(status_code=400, detail=error_msg)
 
         # Validate API key and get identity
         identity = await state.authenticator.validate(request.api_key)
@@ -245,13 +302,53 @@ def create_gateway_app(
     @app.post("/agents/reconnect", response_model=AgentRegistrationResponse)
     async def reconnect_agent(
         request: AgentReconnectRequest,
+        authorization: str | None = Header(default=None),
         state: GatewayState = Depends(get_gateway_state),
     ) -> AgentRegistrationResponse:
-        """Reconnect an existing agent using API key and session key.
+        """Reconnect an existing agent using its identity + session key.
 
-        Requires both the API key (for identity verification) and the session key
-        (returned during original registration) to prove ownership of the session.
+        Identity comes from either a verified AgentID Bearer token (a ModelScope
+        JWT) or a validated API key. The session key (returned during original
+        registration) proves ownership of the session.
         """
+        # AgentID path: identity from the verified ModelScope JWT.
+        verifier = state.agentid_verifier
+        if (
+            verifier is not None
+            and authorization
+            and authorization.startswith("Bearer ")
+        ):
+            verified = await verify_bearer(verifier, authorization)
+            try:
+                return await state.adapter.reconnect_agent(
+                    agent_id=verified.agent_id,
+                    session_key=request.session_key,
+                    display_name=verified.agent_name or None,
+                )
+            except ValueError as e:
+                error_msg = str(e)
+                if "not registered" in error_msg.lower():
+                    raise HTTPException(
+                        status_code=404,
+                        detail=ErrorResponse(
+                            error=ErrorDetail(
+                                code=ErrorCodes.NOT_REGISTERED,
+                                message=error_msg,
+                            )
+                        ).model_dump(by_alias=True),
+                    )
+                if "session key" in error_msg.lower():
+                    raise HTTPException(
+                        status_code=403,
+                        detail=ErrorResponse(
+                            error=ErrorDetail(
+                                code=ErrorCodes.SESSION_KEY_INVALID,
+                                message=error_msg,
+                            )
+                        ).model_dump(by_alias=True),
+                    )
+                raise HTTPException(status_code=400, detail=error_msg)
+
         # Validate API key and get identity
         identity = await state.authenticator.validate(request.api_key)
         if identity is None:
