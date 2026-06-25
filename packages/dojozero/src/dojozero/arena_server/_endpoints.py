@@ -237,7 +237,11 @@ def register_rest_endpoints(app: FastAPI) -> None:
             superbowl_game = next(
                 (g for g in all_games if SUPER_BOWL_GAME_ID in g.id), None
             )
-            if superbowl_game and superbowl_game not in live_games:
+            if (
+                superbowl_game
+                and superbowl_game.status == "live"
+                and superbowl_game not in live_games
+            ):
                 live_games = [superbowl_game] + list(live_games)
 
         # only for mock test
