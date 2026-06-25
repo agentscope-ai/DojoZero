@@ -38,6 +38,49 @@ def _prediction_final_stats_span() -> SpanData:
     )
 
 
+def _zero_bet_betting_final_stats_span() -> SpanData:
+    """A classic_betting trial where no agent placed a bet (no stats/bets)."""
+    return SpanData(
+        trace_id="betting-trial",
+        span_id="betting-final",
+        operation_name="broker.final_stats",
+        start_time=1_000_000,
+        duration=0,
+        tags={
+            "broker.contest_kind": "classic_betting",
+            "broker.bets_count": 0,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_zero_bet_betting_trial_counts_as_betting_mode() -> None:
+    # A zero-bet betting trial aggregated with a prediction trial must yield
+    # mode="mixed" — the betting contest is detected by contest_kind, not by
+    # bet activity (which is zero).
+    cache = LandingPageCache()
+    cache.set_trial_info(
+        "betting-trial",
+        {"phase": "completed", "metadata": {"sport_type": "WORLD_CUP"}},
+    )
+    cache.set_trial_info(
+        "prediction-trial",
+        {"phase": "completed", "metadata": {"sport_type": "WORLD_CUP"}},
+    )
+
+    stats = await _compute_stats(
+        object(),  # type: ignore[arg-type]
+        ["betting-trial", "prediction-trial"],
+        cache,
+        {
+            "betting-trial": [_zero_bet_betting_final_stats_span()],
+            "prediction-trial": [_prediction_final_stats_span()],
+        },
+    )
+
+    assert stats.mode == "mixed"
+
+
 @pytest.mark.asyncio
 async def test_world_cup_stats_use_prediction_totals() -> None:
     cache = LandingPageCache()

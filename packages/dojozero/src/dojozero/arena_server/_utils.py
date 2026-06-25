@@ -975,7 +975,15 @@ async def _compute_broker_stats(
                 if not isinstance(typed, BrokerFinalStats):
                     continue
 
-                if typed.statistics or typed.bets_count:
+                # Symmetric with the prediction check below: use contest_kind as
+                # a signal, not just activity counts, so a betting trial where
+                # nobody bet (statistics={}, bets_count=0) is still detected as
+                # betting and not misclassified as prediction-only.
+                if (
+                    typed.statistics
+                    or typed.bets_count
+                    or typed.contest_kind == "classic_betting"
+                ):
                     has_betting_data = True
                 for stats in typed.statistics.values():
                     total_wagered += float(stats.total_wagered)
