@@ -55,6 +55,7 @@ async def test_world_cup_stats_use_prediction_totals() -> None:
 
     assert stats.games_played == 1
     assert stats.wagered_today == 0
-    assert stats.bet_counts == 3
+    # bet_counts is betting-only; the 3 predictions surface via prediction_count.
+    assert stats.bet_counts == 0
     assert stats.prediction_count == 3
     assert stats.prediction_points == pytest.approx(15.25)

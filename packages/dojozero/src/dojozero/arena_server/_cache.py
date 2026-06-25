@@ -43,7 +43,9 @@ class CacheConfig:
     trials_lookback_days: int = 365
     # Per-league lookback override (in days). League name uppercase.
     # Used to filter per-league cached views (leaderboard/games/stats/agent_actions).
-    # MUST be <= trials_lookback_days; otherwise SLS fetch won't cover the window.
+    # May exceed trials_lookback_days: the SLS fetch window auto-expands to
+    # max(trials_lookback_days, max(league_lookback_days.values())) in _sync, so a
+    # larger per-league window is still fully covered.
     league_lookback_days: dict[str, int] = field(
         default_factory=lambda: {"NBA": 90, "NFL": 365}
     )

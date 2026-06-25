@@ -461,6 +461,12 @@ class SyncService:
 
         # The per-league filtered id list is identical for stats, games,
         # leaderboard, and agent actions within a sync cycle — compute it once.
+        #
+        # Kept sequential on purpose (do NOT asyncio.gather): every league filters
+        # the same trial_ids and _filter_trials_by_league caches trial_info in the
+        # shared _temp_cache. The first league warms that cache so the rest hit it
+        # in-memory; parallelizing would race cold-cache misses and re-fetch the
+        # same trial_info concurrently.
         league_trial_ids: dict[str, list[str]] = {
             league: await _league_trial_ids(league) for league in CACHEABLE_LEAGUES
         }

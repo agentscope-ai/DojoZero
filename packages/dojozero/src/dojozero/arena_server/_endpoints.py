@@ -503,7 +503,7 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 "total_predictions": lambda x: (
                     x.total_predictions
                     if x.total_predictions is not None
-                    else x.total_bets
+                    else -float("inf")
                 ),
             }
             key_fn = sort_key_map.get(effective_sort_by, sort_key_map["winnings"])

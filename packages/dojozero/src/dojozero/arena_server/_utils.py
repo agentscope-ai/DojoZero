@@ -60,6 +60,11 @@ TRIAL_INFO_OPERATION_NAMES = [
     "event.world_cup_game_update",
 ]
 
+# World Cup half/extra-time/penalty period labels mapped to ordinal period ids.
+# Module-level constant so it is not rebuilt on every _coerce_period call in
+# replay-heavy paths.
+_PERIOD_LABELS = {"1H": 1, "2H": 2, "ET1": 3, "ET2": 4, "PEN": 5}
+
 
 @dataclass(slots=True, frozen=True)
 class BrokerStatsAggregate:
@@ -140,27 +145,33 @@ def _detect_contest_kind(spans: list[SpanData]) -> str:
     ``ARENA_RENDERED_OPERATIONS``, so it survives the dev-mode span whitelist.
     For trials still in progress (no final_stats yet) we fall back to the broker
     ``operator.registered`` span.
-    """
-    for span in spans:
-        if span.operation_name != "broker.final_stats" or not span.tags:
-            continue
-        kind = str(
-            span.tags.get("broker.contest_kind") or span.tags.get("contest_kind") or ""
-        ).lower()
-        if "prediction" in kind:
-            return "prediction"
-        if kind:  # classic_betting / any other broker-shaped contest
-            return "betting"
 
+    Single pass: ``broker.final_stats`` is authoritative and returns immediately,
+    while ``operator.registered`` is only recorded as a fallback (span order is
+    not guaranteed, so a later final_stats must still win over an earlier
+    registration).
+    """
+    fallback = ""
     for span in spans:
-        if span.operation_name != "operator.registered":
+        if not span.tags:
             continue
-        actor = span.tags.get("actor.id", "") if span.tags else ""
-        if "prediction_broker" in actor:
-            return "prediction"
-        if "betting_broker" in actor:
-            return "betting"
-    return ""
+        if span.operation_name == "broker.final_stats":
+            kind = str(
+                span.tags.get("broker.contest_kind")
+                or span.tags.get("contest_kind")
+                or ""
+            ).lower()
+            if "prediction" in kind:
+                return "prediction"
+            if kind:  # classic_betting / any other broker-shaped contest
+                return "betting"
+        elif span.operation_name == "operator.registered" and not fallback:
+            actor = span.tags.get("actor.id", "")
+            if "prediction_broker" in actor:
+                fallback = "prediction"
+            elif "betting_broker" in actor:
+                fallback = "betting"
+    return fallback
 
 
 def trial_id_for_span_grouping(span: SpanData) -> str:
@@ -903,7 +914,10 @@ async def _compute_stats(
 
     broker_stats = await _compute_broker_stats(trace_reader, trial_ids, spans_by_trial)
     wagered_today = broker_stats.total_wagered
-    bet_counts = broker_stats.betting_count + broker_stats.prediction_count
+    # bet_counts is betting-only; predictions are exposed separately via
+    # prediction_count so a pure-prediction (e.g. World Cup) trial reads as
+    # 0 bets rather than conflating wagers with predictions.
+    bet_counts = broker_stats.betting_count
     mode: Literal["betting", "prediction", "mixed"] = "betting"
     if broker_stats.has_prediction_data and broker_stats.has_betting_data:
         mode = "mixed"
@@ -1387,7 +1401,7 @@ def _compute_leaderboard_from_spans(
         ),
         "accuracy": lambda x: x.accuracy if x.accuracy is not None else -float("inf"),
         "total_predictions": lambda x: (
-            x.total_predictions if x.total_predictions is not None else x.total_bets
+            x.total_predictions if x.total_predictions is not None else -float("inf")
         ),
     }
     key_fn = sort_key_map.get(effective_sort_by, sort_key_map["winnings"])
@@ -1536,8 +1550,7 @@ def _compute_replay_meta(
 
     def _coerce_period(raw_period: Any) -> int:
         if isinstance(raw_period, str):
-            label_periods = {"1H": 1, "2H": 2, "ET1": 3, "ET2": 4, "PEN": 5}
-            label_period = label_periods.get(raw_period.strip().upper())
+            label_period = _PERIOD_LABELS.get(raw_period.strip().upper())
             if label_period is not None:
                 return label_period
 
