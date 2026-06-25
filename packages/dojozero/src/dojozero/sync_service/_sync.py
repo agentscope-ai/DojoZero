@@ -627,6 +627,10 @@ class SyncService:
             meta = info.get("metadata", {})
             gd = meta.get("game_date", "")
             if not gd:
+                # By design: a trial with no game_date cannot be placed in a
+                # date-windowed view (per-league lookback / period boards), so it
+                # is excluded here. Such trials still appear on the global board,
+                # which applies no date filter.
                 continue
             if start_date and gd < start_date:
                 continue

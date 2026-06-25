@@ -194,6 +194,69 @@ def test_agent_profile_returns_sharpe_from_market_leaderboard() -> None:
         _server._server_state = None
 
 
+def test_world_cup_market_mode_keeps_requested_betting_sort() -> None:
+    # Agents carry both winnings and a prediction_score (shared across modes).
+    # With mode=market the caller explicitly wants the betting view, so the
+    # betting sort key must NOT be remapped to prediction_score.
+    cache = LandingPageCache()
+    cache.set_leaderboard(
+        [
+            LeaderboardEntry(
+                agent=AgentInfo(agent_id="high-winnings", persona="a"),
+                winnings=100,
+                winRate=60,
+                totalBets=10,
+                roi=10,
+                sharpe=1.0,
+                predictionScore=10,
+                accuracy=50,
+                totalPredictions=2,
+            ),
+            LeaderboardEntry(
+                agent=AgentInfo(agent_id="high-score", persona="b"),
+                winnings=50,
+                winRate=55,
+                totalBets=8,
+                roi=5,
+                sharpe=0.5,
+                predictionScore=99,
+                accuracy=90,
+                totalPredictions=9,
+            ),
+        ],
+        league="world_cup",
+    )
+    _server._server_state = ArenaServerState(
+        trace_reader=object(),  # type: ignore[arg-type]
+        cache=cache,
+        refresher=object(),  # type: ignore[arg-type]
+    )
+
+    app = FastAPI()
+    register_rest_endpoints(app)
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            "/api/leaderboard",
+            params={
+                "league": "WORLD_CUP",
+                "mode": "market",
+                "sort_by": "winnings",
+                "sort_order": "desc",
+            },
+        )
+        assert response.status_code == 200
+        rows = response.json()["leaderboard"]
+        # Sorted by winnings (100 > 50), NOT by prediction_score (99 > 10).
+        assert [r["agent"]["agent_id"] for r in rows] == [
+            "high-winnings",
+            "high-score",
+        ]
+    finally:
+        _server._server_state = None
+
+
 def test_leaderboard_rejects_invalid_sort_params() -> None:
     cache = LandingPageCache()
     cache.set_leaderboard([])

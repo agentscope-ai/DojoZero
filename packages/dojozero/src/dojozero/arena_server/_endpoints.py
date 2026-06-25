@@ -490,7 +490,12 @@ def register_rest_endpoints(app: FastAPI) -> None:
         # 2. Sort (prediction-mode rows use ScoringSys metrics, not betting PnL)
         has_prediction_data = any(e.prediction_score is not None for e in leaderboard)
         is_world_cup_view = league is not None and league.upper() == "WORLD_CUP"
-        is_prediction_view = mode == "prediction" or is_world_cup_view
+        # mode="market" is an explicit betting view: never remap its sort to
+        # prediction_score, even for World Cup. Only an unspecified mode falls
+        # back to the league's default (prediction) view.
+        is_prediction_view = mode == "prediction" or (
+            is_world_cup_view and mode is None
+        )
         effective_sort_by = sort_by
         if (
             is_prediction_view
