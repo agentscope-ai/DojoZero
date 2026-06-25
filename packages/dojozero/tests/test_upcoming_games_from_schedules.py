@@ -102,3 +102,48 @@ def test_league_filter_and_sort_order() -> None:
     ]  # league-filtered and sorted by kickoff
     nfl = _build_upcoming_games_from_schedules(schedules, league="NFL")
     assert [g.id for g in nfl] == ["nfl-game-nfl1-upcoming"]
+
+
+def test_sort_uses_real_kickoff_across_timezone_offsets() -> None:
+    # Two future kickoffs expressed in different offsets. The earlier *instant*
+    # has the later wall-clock string (so a naive ISO-string sort would order
+    # them wrong), proving the sort compares actual kickoff time.
+    now = datetime.now(timezone.utc)
+    tz_plus10 = timezone(timedelta(hours=10))
+    earlier = (now + timedelta(hours=2)).astimezone(tz_plus10).isoformat()
+    later = (now + timedelta(hours=4)).astimezone(timezone.utc).isoformat()
+    assert earlier > later  # lexicographically reversed vs chronological order
+
+    games = _build_upcoming_games_from_schedules(
+        [
+            _sched("earlier", "world_cup", earlier),
+            _sched("later", "world_cup", later),
+        ]
+    )
+    assert [g.id for g in games] == [
+        "world_cup-game-earlier-upcoming",
+        "world_cup-game-later-upcoming",
+    ]
+
+
+def test_contest_kind_is_set_on_upcoming_cards() -> None:
+    future = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
+
+    pred = _build_upcoming_games_from_schedules(
+        [_sched("p1", "world_cup", future, source_id="world-cup-prediction-source")]
+    )
+    assert pred[0].contest_kind == "prediction"
+
+    bet = _build_upcoming_games_from_schedules(
+        [_sched("b1", "world_cup", future, source_id="world-cup-betting-source")]
+    )
+    assert bet[0].contest_kind == "betting"
+
+    # Dedup prefers the prediction trial, so the surviving card is prediction.
+    deduped = _build_upcoming_games_from_schedules(
+        [
+            _sched("d1", "world_cup", future, source_id="world-cup-betting-source"),
+            _sched("d1", "world_cup", future, source_id="world-cup-prediction-source"),
+        ]
+    )
+    assert deduped[0].contest_kind == "prediction"

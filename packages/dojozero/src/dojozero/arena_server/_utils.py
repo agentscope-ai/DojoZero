@@ -584,10 +584,14 @@ def _build_upcoming_games_from_schedules(
             quarter="",
             clock="",
             bets=[],
+            contest_kind="prediction" if is_prediction else "betting",
         )
         stored_is_prediction[game_key] = is_prediction
 
-    return sorted(by_game.values(), key=lambda g: g.date)
+    # Sort by actual kickoff time, not the ISO string: aware datetimes with
+    # non-UTC offsets (e.g. World Cup local kickoffs) do not order correctly
+    # lexicographically.
+    return sorted(by_game.values(), key=lambda g: datetime.fromisoformat(g.date))
 
 
 async def _extract_games_from_trials(
@@ -1375,21 +1379,12 @@ def _compute_leaderboard_from_spans(
                 )
             )
 
-    # Determine which field to sort by based on available data.
-    # In prediction mode there is no balance/ROI/win-rate, so all betting sort
-    # keys must remap to prediction_score — otherwise the lambdas return 0 for
-    # every entry and the sort is deterministically wrong.
-    effective_sort_by = sort_by
-    if has_prediction_data and sort_by in (
-        "winnings",
-        "win_rate",
-        "roi",
-        "total_bets",
-        "sharpe",
-    ):
-        effective_sort_by = "prediction_score"
-
-    # Sort by requested field
+    # Sort by the requested field only. The prediction-view remap (betting sort
+    # keys -> prediction_score for WORLD_CUP / mode=prediction) is intentionally
+    # NOT applied here: the cache stores a neutral, request-sorted baseline and the
+    # serving layer (_endpoints.get_leaderboard) owns the view-specific remap, so
+    # the two cannot diverge. Remapping at this layer also wrongly reordered the
+    # mixed global board by prediction_score and buried pure-bettor agents.
     sort_key_map: dict[str, Any] = {
         "winnings": lambda x: x.winnings,
         "win_rate": lambda x: x.win_rate,
@@ -1404,7 +1399,7 @@ def _compute_leaderboard_from_spans(
             x.total_predictions if x.total_predictions is not None else -float("inf")
         ),
     }
-    key_fn = sort_key_map.get(effective_sort_by, sort_key_map["winnings"])
+    key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])
     leaderboard.sort(key=key_fn, reverse=(sort_order != "asc"))
 
     entries = leaderboard[:limit] if limit is not None else leaderboard
