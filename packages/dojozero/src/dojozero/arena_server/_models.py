@@ -76,11 +76,16 @@ class StatsResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
+    mode: Literal["betting", "prediction", "mixed"] = "betting"
     games_played: int = Field(default=0, serialization_alias="gamesPlayed")
     live_now: int = Field(default=0, serialization_alias="liveNow")
     wagered_today: int = Field(default=0, serialization_alias="wageredToday")
     total_agents: int = Field(default=0, serialization_alias="totalAgents")
     bet_counts: int = Field(default=0, serialization_alias="betCounts")
+    prediction_count: int = Field(default=0, serialization_alias="predictionCount")
+    prediction_points: float = Field(
+        default=0.0, serialization_alias="predictionPoints"
+    )
 
 
 class GameCardData(BaseModel):

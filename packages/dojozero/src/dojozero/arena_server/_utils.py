@@ -60,6 +60,18 @@ TRIAL_INFO_OPERATION_NAMES = [
 ]
 
 
+@dataclass(frozen=True)
+class BrokerStatsAggregate:
+    """Aggregate broker stats used by landing page summary cards."""
+
+    total_wagered: float = 0.0
+    betting_count: int = 0
+    prediction_count: int = 0
+    prediction_points: float = 0.0
+    has_betting_data: bool = False
+    has_prediction_data: bool = False
+
+
 def _build_arena_rendered_operations() -> list[str]:
     """Enumerate every operation name that arena actually renders.
 
@@ -781,25 +793,98 @@ async def _compute_stats(
         elif _trial_counts_as_live_for_arena(trial_info):
             live_now += 1
 
-    # Calculate total wagered from broker.final_stats spans
-    wagered_today = await _compute_total_wagered(
-        trace_reader, trial_ids, spans_by_trial
-    )
-
-    # Calculate total bet counts from broker.final_stats spans
-    bet_counts = await _compute_total_bet_counts(
-        trace_reader, trial_ids, spans_by_trial
-    )
+    broker_stats = await _compute_broker_stats(trace_reader, trial_ids, spans_by_trial)
+    wagered_today = broker_stats.total_wagered
+    bet_counts = broker_stats.betting_count + broker_stats.prediction_count
+    mode: Literal["betting", "prediction", "mixed"] = "betting"
+    if broker_stats.has_prediction_data and broker_stats.has_betting_data:
+        mode = "mixed"
+    elif broker_stats.has_prediction_data:
+        mode = "prediction"
 
     # Get total agents from cache
     total_agents = cache.get_total_agents() if cache else 0
 
     return StatsResponse(
+        mode=mode,
         games_played=games_played,
         live_now=live_now,
         wagered_today=int(wagered_today),
         total_agents=total_agents,
         bet_counts=bet_counts,
+        prediction_count=broker_stats.prediction_count,
+        prediction_points=broker_stats.prediction_points,
+    )
+
+
+async def _compute_broker_stats(
+    trace_reader: TraceReader,
+    trial_ids: list[str],
+    spans_by_trial: dict[str, list[SpanData]] | None = None,
+) -> BrokerStatsAggregate:
+    """Compute betting and prediction stats from broker.final_stats spans."""
+
+    total_wagered = 0.0
+    betting_count = 0
+    prediction_count = 0
+    prediction_points = 0.0
+    has_betting_data = False
+    has_prediction_data = False
+
+    for trial_id in trial_ids:
+        try:
+            if spans_by_trial is not None:
+                spans = spans_by_trial.get(trial_id, [])
+                final_stats_spans = [
+                    s for s in spans if s.operation_name == "broker.final_stats"
+                ]
+            else:
+                final_stats_spans = await trace_reader.get_spans(
+                    trial_id,
+                    operation_names=["broker.final_stats"],
+                )
+
+            for span in final_stats_spans:
+                typed = deserialize_span(span)
+                if not isinstance(typed, BrokerFinalStats):
+                    continue
+
+                if typed.statistics or typed.bets_count:
+                    has_betting_data = True
+                for stats in typed.statistics.values():
+                    total_wagered += float(stats.total_wagered)
+                betting_count += typed.bets_count
+
+                if (
+                    typed.prediction_statistics
+                    or typed.predictions
+                    or typed.window_pools
+                    or typed.contest_kind == "window_pool_prediction"
+                ):
+                    has_prediction_data = True
+
+                if typed.prediction_statistics:
+                    for pred_stat in typed.prediction_statistics.values():
+                        prediction_count += pred_stat.total_predictions
+                        prediction_points += float(pred_stat.total_score)
+                elif typed.predictions:
+                    prediction_count += len(typed.predictions)
+
+        except Exception as e:
+            LOGGER.warning(
+                "Failed to get broker.final_stats for trial '%s': %s",
+                trial_id,
+                e,
+            )
+            continue
+
+    return BrokerStatsAggregate(
+        total_wagered=total_wagered,
+        betting_count=betting_count,
+        prediction_count=prediction_count,
+        prediction_points=prediction_points,
+        has_betting_data=has_betting_data,
+        has_prediction_data=has_prediction_data,
     )
 
 
