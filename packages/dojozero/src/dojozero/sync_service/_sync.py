@@ -534,6 +534,15 @@ class SyncService:
             )
             self._temp_cache.set_leaderboard(league_result.leaderboard, league=league)
 
+        # Per-league id sets, reused for intersecting the period boards below.
+        # Using the same pre-computed `league_trial_ids` as the all-time board
+        # keeps both consistent: the period board applies the identical league
+        # filter *and* per-league lookback cutoff, instead of re-deriving league
+        # membership from a cache-only sport_type check.
+        league_id_sets = {
+            league: set(league_trial_ids[league]) for league in CACHEABLE_LEAGUES
+        }
+
         # Period leaderboards (7d/14d/30d) — global + per-league
         period_days = {"7d": 7, "14d": 14, "30d": 30}
         now = datetime.now(timezone.utc)
@@ -557,9 +566,7 @@ class SyncService:
             )
             for league in CACHEABLE_LEAGUES:
                 league_period_ids = [
-                    tid
-                    for tid in period_trial_ids
-                    if self._trial_matches_league(tid, league)
+                    tid for tid in period_trial_ids if tid in league_id_sets[league]
                 ]
                 lp_result = _compute_leaderboard_from_spans(
                     self._spans_by_trial,
@@ -593,17 +600,6 @@ class SyncService:
                 max_trials=self.config.agent_actions_max_trials,
             )
             self._temp_cache.set_agent_actions(league_actions, league=league)
-
-    def _trial_matches_league(self, trial_id: str, league: str) -> bool:
-        """Check if a trial matches a specific league."""
-        if self._temp_cache is None:
-            return False
-        trial_info = self._temp_cache.get_trial_info(trial_id)
-        if trial_info is None:
-            return False
-        metadata = trial_info.get("metadata", {})
-        trial_league = metadata.get("sport_type", "")
-        return trial_league.upper() == league.upper()
 
     @staticmethod
     def _filter_trials_by_date(

@@ -192,3 +192,35 @@ def test_agent_profile_returns_sharpe_from_market_leaderboard() -> None:
         assert stats["sharpe"] == 1.23
     finally:
         _server._server_state = None
+
+
+def test_leaderboard_rejects_invalid_sort_params() -> None:
+    cache = LandingPageCache()
+    cache.set_leaderboard([])
+    _server._server_state = ArenaServerState(
+        trace_reader=object(),  # type: ignore[arg-type]
+        cache=cache,
+        refresher=object(),  # type: ignore[arg-type]
+    )
+
+    app = FastAPI()
+    register_rest_endpoints(app)
+    client = TestClient(app)
+
+    try:
+        # Typo'd sort_by must 400 (not silently fall back to winnings).
+        bad_sort = client.get(
+            "/api/leaderboard", params={"sort_by": "prediciton_score"}
+        )
+        assert bad_sort.status_code == 400
+
+        bad_order = client.get("/api/leaderboard", params={"sort_order": "downward"})
+        assert bad_order.status_code == 400
+
+        ok = client.get(
+            "/api/leaderboard",
+            params={"sort_by": "prediction_score", "sort_order": "asc"},
+        )
+        assert ok.status_code == 200
+    finally:
+        _server._server_state = None

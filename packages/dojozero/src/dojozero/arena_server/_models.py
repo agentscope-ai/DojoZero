@@ -76,7 +76,9 @@ class StatsResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
-    mode: Literal["betting", "prediction", "mixed"] = "betting"
+    mode: Literal["betting", "prediction", "mixed"] = Field(
+        default="betting", serialization_alias="mode"
+    )
     games_played: int = Field(default=0, serialization_alias="gamesPlayed")
     live_now: int = Field(default=0, serialization_alias="liveNow")
     wagered_today: int = Field(default=0, serialization_alias="wageredToday")

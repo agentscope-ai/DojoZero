@@ -427,6 +427,31 @@ def register_rest_endpoints(app: FastAPI) -> None:
                 status_code=400,
                 content={"error": "Invalid mode. Must be one of: market, prediction."},
             )
+        valid_sort_by = {
+            "winnings",
+            "win_rate",
+            "roi",
+            "total_bets",
+            "sharpe",
+            "prediction_score",
+            "accuracy",
+            "total_predictions",
+        }
+        if sort_by not in valid_sort_by:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": f"Invalid sort_by '{sort_by}'. Must be one of: {', '.join(sorted(valid_sort_by))}"
+                },
+            )
+        valid_sort_orders = {"asc", "desc"}
+        if sort_order not in valid_sort_orders:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": f"Invalid sort_order '{sort_order}'. Must be one of: asc, desc"
+                },
+            )
 
         # All paths now read from pre-computed cache
         effective_period = period if period != "all" else None
