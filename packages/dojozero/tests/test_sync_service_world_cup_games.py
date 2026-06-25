@@ -107,6 +107,13 @@ class _TraceReader:
         return None
 
 
+class _NoopRedisClient:
+    """Minimal redis stand-in: writes are no-ops, schedules are empty."""
+
+    async def get_schedules(self) -> list[dict[str, object]]:
+        return []
+
+
 class _NoopRedisSyncService(SyncService):
     async def _write_to_redis(self, trial_ids: list[str], sync_time: datetime) -> None:
         return None
@@ -118,7 +125,7 @@ async def test_sync_once_buckets_sls_spans_by_dojozero_trial_id() -> None:
         trace_reader=_TraceReader(
             [_trial_started_span(), _world_cup_update_span(), _trial_stopped_span()]
         ),
-        redis_client=object(),  # type: ignore[arg-type]
+        redis_client=_NoopRedisClient(),  # type: ignore[arg-type]
     )
 
     await service._sync_once(is_initial=True)
@@ -133,7 +140,7 @@ async def test_sync_once_buckets_sls_spans_by_dojozero_trial_id() -> None:
 async def test_refresh_aggregated_data_overlays_world_cup_scores_from_spans() -> None:
     service = _NoopRedisSyncService(
         trace_reader=_TraceReader([]),
-        redis_client=object(),  # type: ignore[arg-type]
+        redis_client=_NoopRedisClient(),  # type: ignore[arg-type]
     )
     service._temp_cache = LandingPageCache()
     service._temp_cache.set_trial_info(

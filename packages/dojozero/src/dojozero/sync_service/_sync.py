@@ -25,6 +25,7 @@ from dojozero.arena_server._cache import (
     LandingPageCache,
 )
 from dojozero.arena_server._utils import (
+    _build_upcoming_games_from_schedules,
     _compute_leaderboard_from_spans,
     _compute_stats,
     _extract_agent_actions_from_spans,
@@ -471,12 +472,18 @@ class SyncService:
             )
             self._temp_cache.set_stats(league_stats, league=league)
 
-        # Games (global + per-league)
+        # Games (global + per-league). Upcoming games come from the dashboard
+        # schedule (future games have no spans yet), so merge them in here.
+        schedules = await self.redis_client.get_schedules()
+
         games = await _extract_games_from_trials(
             self.trace_reader,
             trial_ids,
             self._temp_cache,
             spans_by_trial=self._spans_by_trial,
+        )
+        games = games.model_copy(
+            update={"upcoming_games": _build_upcoming_games_from_schedules(schedules)}
         )
         self._temp_cache.set_games(games, league=None)
 
@@ -487,6 +494,13 @@ class SyncService:
                 filtered_ids,
                 self._temp_cache,
                 spans_by_trial=self._spans_by_trial,
+            )
+            league_games = league_games.model_copy(
+                update={
+                    "upcoming_games": _build_upcoming_games_from_schedules(
+                        schedules, league=league
+                    )
+                }
             )
             self._temp_cache.set_games(league_games, league=league)
 

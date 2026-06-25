@@ -4,6 +4,7 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -469,6 +470,100 @@ def _overlay_live_scores_from_spans(
     for key in ("home_score", "away_score", "period", "game_clock"):
         if key in sm:
             metadata[key] = sm[key]
+
+
+_TEAM_LOGO_BY_LEAGUE: dict[str, str] = {
+    "NBA": "https://a.espncdn.com/i/teamlogos/nba/500/{code}.png",
+    "NFL": "https://a.espncdn.com/i/teamlogos/nfl/500/{code}.png",
+    "WORLD_CUP": "https://a.espncdn.com/i/teamlogos/countries/500/{code}.png",
+}
+
+
+def _upcoming_logo_url(league: str, tricode: str) -> str:
+    """Build an ESPN logo URL from a team tricode (World Cup uses country codes)."""
+    template = _TEAM_LOGO_BY_LEAGUE.get(league.upper())
+    code = (tricode or "").strip().lower()
+    if not template or not code:
+        return ""
+    return template.format(code=code)
+
+
+def _build_upcoming_games_from_schedules(
+    schedules: list[dict[str, Any]],
+    league: str | None = None,
+) -> list[GameCardData]:
+    """Build upcoming game cards from dashboard schedule entries.
+
+    The dashboard scheduler stores future games (``phase == "waiting"``) with
+    team metadata before any trial runs, so this is the source for "upcoming"
+    cards on the landing page. Each match is scheduled as two trials (betting +
+    prediction); we de-duplicate by ESPN game id, preferring the prediction
+    entry to stay consistent with the contest the landing dedup surfaces. Only
+    schedules whose kickoff is still in the future are returned, sorted by time.
+    """
+    league_filter = league.upper() if league else None
+    now = datetime.now(timezone.utc)
+    by_game: dict[str, GameCardData] = {}
+    stored_is_prediction: dict[str, bool] = {}
+
+    for sched in schedules:
+        if sched.get("phase") != "waiting":
+            continue
+
+        sport_type = str(sched.get("sport_type") or "")
+        league_code = sport_type.upper()
+        if league_filter and league_code != league_filter:
+            continue
+
+        try:
+            event_time = datetime.fromisoformat(str(sched.get("event_time") or ""))
+        except ValueError:
+            continue
+        if event_time.tzinfo is None:
+            event_time = event_time.replace(tzinfo=timezone.utc)
+        if event_time <= now:
+            continue
+
+        game_id = str(sched.get("game_id") or "")
+        if not game_id:
+            continue
+        game_key = f"{league_code}:{game_id}"
+
+        meta = sched.get("metadata") or {}
+        source_id = str(meta.get("source_id") or sched.get("scenario_name") or "")
+        is_prediction = "prediction" in source_id.lower()
+        if game_key in by_game and (
+            not is_prediction or stored_is_prediction[game_key]
+        ):
+            continue
+
+        home_tricode = str(meta.get("home_tricode") or "")
+        away_tricode = str(meta.get("away_tricode") or "")
+        home_team = TeamIdentity(
+            name=str(meta.get("home_team") or home_tricode),
+            tricode=home_tricode,
+            logo_url=_upcoming_logo_url(league_code, home_tricode),
+        )
+        away_team = TeamIdentity(
+            name=str(meta.get("away_team") or away_tricode),
+            tricode=away_tricode,
+            logo_url=_upcoming_logo_url(league_code, away_tricode),
+        )
+
+        by_game[game_key] = GameCardData(
+            id=f"{sport_type}-game-{game_id}-upcoming",
+            league=league_code,
+            home_team=home_team,
+            away_team=away_team,
+            status="upcoming",
+            date=event_time.isoformat(),
+            quarter="",
+            clock="",
+            bets=[],
+        )
+        stored_is_prediction[game_key] = is_prediction
+
+    return sorted(by_game.values(), key=lambda g: g.date)
 
 
 async def _extract_games_from_trials(
