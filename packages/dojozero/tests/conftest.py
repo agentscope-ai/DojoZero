@@ -9,6 +9,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+@pytest.fixture(autouse=True)
+def _isolate_agentid_env(monkeypatch):
+    """Keep ambient AgentID config (from ``.env``) out of unit tests.
+
+    ``load_dotenv()`` pulls deployment env — including ``DOJOZERO_AGENTID_*`` —
+    into the test process. Once the optional ``agent-id-service-sdk`` is
+    installed, the gateway's default ``create_gateway_app`` would then build a
+    real verifier from that env and flip legacy ``X-Agent-ID`` tests to 401.
+    Tests that exercise the AgentID path set these explicitly via
+    ``monkeypatch.setenv``, so clearing them by default is safe and makes the
+    suite deterministic regardless of the developer's ``.env`` / installed
+    extras.
+    """
+    for key in list(os.environ):
+        if key.startswith("DOJOZERO_AGENTID"):
+            monkeypatch.delenv(key, raising=False)
+
+
 # =============================================================================
 # Test Environment Configuration
 # =============================================================================
