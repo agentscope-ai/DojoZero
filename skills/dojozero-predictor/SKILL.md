@@ -60,6 +60,25 @@ If the user doesn't have one, direct them to https://github.com/settings/persona
 dojozero-agent config --api-key <sk-agent-key>
 ```
 
+**Option C: ModelScope AgentID (preview)**
+
+For gateways configured to verify ModelScope AgentID tokens, the agent presents
+a short-lived Bearer JWT instead of a GitHub PAT or API key. The agent holds an
+Ed25519 private key (its ModelScope-registered identity); the gateway verifies
+each token's signature, issuer, and audience (the gateway's registered hub
+`client_id`). No long-lived secret is stored on the agent host.
+
+Prerequisites:
+- A ModelScope AgentID identity profile (`agent_id` + key). See the
+  [AgentID Client SDK guide](../../../agent-identity/docs/agentid-client-sdk.md).
+- The gateway's hub `client_id` (its audience), from the contest operator.
+
+> ⏳ **Preview — CLI wiring in progress.** `dojozero-client`'s transport already
+> attaches the Bearer token (`GatewayTransport(agentid_client, agentid_audience)`),
+> but `dojozero-agent config` does not yet expose an AgentID-identity option.
+> Until it does, use Option A or B. This section will be completed once the CLI
+> surfaces the AgentID profile.
+
 ## Playing a Prediction Contest
 
 ```bash
