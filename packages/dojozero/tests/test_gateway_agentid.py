@@ -344,3 +344,16 @@ def test_register_with_verifier_accepts_valid_bearer():
         )
     assert r.status_code == 200
     assert r.json()["agentId"] == _SUB
+
+
+def test_reconnect_with_verifier_rejects_apikey_fallthrough():
+    """reconnect: verifier set + no Bearer + api_key → 401 (no api-key bypass)."""
+    from fastapi.testclient import TestClient
+
+    verifier, _ = _real_verifier_with_local_key()
+    with TestClient(_gateway_app_with_verifier(verifier)) as client:
+        r = client.post(
+            "/agents/reconnect",
+            json={"apiKey": "leaked-key", "sessionKey": "whatever"},
+        )
+    assert r.status_code == 401
