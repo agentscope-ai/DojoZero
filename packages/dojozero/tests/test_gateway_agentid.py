@@ -287,3 +287,60 @@ def test_http_legacy_x_agent_id_without_verifier():
     resp = _whoami(None, {"X-Agent-ID": "legacy"})
     assert resp.status_code == 200
     assert resp.json()["agent_id"] == "legacy"
+
+
+# ---------------------------------------------------------------------------
+# POST /agents (register) AgentID path — the real route via TestClient.
+# Covers the security fix: with a verifier configured, a missing Bearer must NOT
+# fall through to api-key auth (a leaked api_key would otherwise bypass AgentID).
+# ---------------------------------------------------------------------------
+
+
+def _gateway_app_with_verifier(verifier):
+    """Real gateway app (mock broker) with an AgentID verifier configured."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dojozero.betting import BrokerOperator
+    from dojozero.gateway import create_gateway_app
+
+    broker = MagicMock(spec=BrokerOperator)
+    broker.initial_balance = "1000"
+    broker.create_account = AsyncMock()
+    broker.has_account = MagicMock(return_value=False)
+    broker.get_contest_kind = MagicMock(return_value="classic_betting")
+    broker.current_event = None
+    broker._accounts = {}
+    return create_gateway_app(
+        trial_id="t",
+        data_hub=MagicMock(),
+        broker=broker,
+        metadata={"sport_type": "nba"},
+        agentid_verifier=verifier,
+    )
+
+
+def test_register_with_verifier_rejects_apikey_fallthrough():
+    """Verifier set + no Bearer + a non-empty api_key → 401 (no api-key bypass)."""
+    from fastapi.testclient import TestClient
+
+    verifier, _ = _real_verifier_with_local_key()
+    with TestClient(_gateway_app_with_verifier(verifier)) as client:
+        r = client.post(
+            "/agents", json={"apiKey": "leaked-key", "initialBalance": "1000"}
+        )
+    assert r.status_code == 401
+
+
+def test_register_with_verifier_accepts_valid_bearer():
+    """Verifier set + valid Bearer → 200, registered as the token's sub."""
+    from fastapi.testclient import TestClient
+
+    verifier, key = _real_verifier_with_local_key()
+    with TestClient(_gateway_app_with_verifier(verifier)) as client:
+        r = client.post(
+            "/agents",
+            headers={"Authorization": f"Bearer {_sign(key)}"},
+            json={"apiKey": "", "initialBalance": "1000"},
+        )
+    assert r.status_code == 200
+    assert r.json()["agentId"] == _SUB

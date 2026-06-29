@@ -19,14 +19,17 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 
 from dojozero.gateway._models import ErrorCodes, ErrorDetail, ErrorResponse
 
 if TYPE_CHECKING:
-    from agent_id_service_sdk import Verifier  # pyright: ignore[reportMissingImports]
+    from agent_id_service_sdk import (  # pyright: ignore[reportMissingImports]
+        VerifiedAgent,
+        Verifier,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,22 @@ def _json_env(name: str) -> dict | None:
     except json.JSONDecodeError:
         logger.warning("%s is not valid JSON; ignoring", name)
         return None
-    return value if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        logger.warning("%s is valid JSON but not an object; ignoring", name)
+        return None
+    return value
+
+
+def _int_env(name: str, default: int) -> int:
+    """Parse an int env var; fall back to ``default`` with a warning on garbage."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("%s is not an integer (%r); using %d", name, raw, default)
+        return default
 
 
 def agentid_verifier_from_env() -> "Verifier | None":
@@ -99,8 +117,8 @@ def agentid_verifier_from_env() -> "Verifier | None":
         )
         return None
 
-    cache_ttl = int(os.environ.get("DOJOZERO_AGENTID_CACHE_TTL_SECONDS", "3600"))
-    clock_skew = int(os.environ.get("DOJOZERO_AGENTID_CLOCK_SKEW_SECONDS", "30"))
+    cache_ttl = _int_env("DOJOZERO_AGENTID_CACHE_TTL_SECONDS", 3600)
+    clock_skew = _int_env("DOJOZERO_AGENTID_CLOCK_SKEW_SECONDS", 30)
     jwks_urls = _json_env("DOJOZERO_AGENTID_JWKS_URLS")
     provider_urls = _json_env("DOJOZERO_AGENTID_PROVIDER_URLS")
 
@@ -123,7 +141,7 @@ def agentid_verifier_from_env() -> "Verifier | None":
     return verifier
 
 
-async def verify_bearer(verifier, authorization: str | None):
+async def verify_bearer(verifier: Any, authorization: str | None) -> "VerifiedAgent":
     """Verify an ``Authorization: Bearer <jwt>`` header via the AgentID verifier.
 
     Returns the ``VerifiedAgent``. Raises ``HTTPException(401)`` when the header
@@ -141,15 +159,21 @@ async def verify_bearer(verifier, authorization: str | None):
                 )
             ).model_dump(by_alias=True),
         )
+    # ``Verifier.verify()`` takes the FULL Authorization header (it strips the
+    # "Bearer "/"DPoP " scheme itself) — confirmed live against pre-prod. Do not
+    # strip the prefix here.
     try:
         return await verifier.verify(authorization)
     except Exception as exc:  # noqa: BLE001 — any verify failure → 401
+        # Log details server-side; return a generic message so SDK internals
+        # (JWKS URL, issuer, crypto specifics) don't leak to the caller.
+        logger.warning("AgentID token verification failed: %s", exc)
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(
                 error=ErrorDetail(
                     code=ErrorCodes.INVALID_TOKEN,
-                    message=f"AgentID token verification failed: {exc}",
+                    message="AgentID token verification failed",
                 )
             ).model_dump(by_alias=True),
         )

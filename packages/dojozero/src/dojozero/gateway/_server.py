@@ -222,11 +222,11 @@ def create_gateway_app(
 
         # AgentID path: identity from the verified ModelScope JWT.
         verifier = state.agentid_verifier
-        if (
-            verifier is not None
-            and authorization
-            and authorization.startswith("Bearer ")
-        ):
+        if verifier is not None:
+            # AgentID configured → a verified Bearer is REQUIRED. verify_bearer
+            # rejects a missing/non-Bearer header, so there is no api-key
+            # fall-through (a leaked api_key must not bypass AgentID). Mirrors
+            # get_agent_id.
             verified = await verify_bearer(verifier, authorization)
             logger.info(
                 "Agent authenticated via AgentID: agent_id=%s", verified.agent_id
@@ -313,11 +313,11 @@ def create_gateway_app(
         """
         # AgentID path: identity from the verified ModelScope JWT.
         verifier = state.agentid_verifier
-        if (
-            verifier is not None
-            and authorization
-            and authorization.startswith("Bearer ")
-        ):
+        if verifier is not None:
+            # AgentID configured → a verified Bearer is REQUIRED. verify_bearer
+            # rejects a missing/non-Bearer header, so there is no api-key
+            # fall-through (a leaked api_key must not bypass AgentID). Mirrors
+            # get_agent_id.
             verified = await verify_bearer(verifier, authorization)
             try:
                 return await state.adapter.reconnect_agent(
