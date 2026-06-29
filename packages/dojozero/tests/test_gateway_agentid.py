@@ -342,3 +342,58 @@ def test_reconnect_with_verifier_rejects_apikey_fallthrough():
             json={"apiKey": "leaked-key", "sessionKey": "whatever"},
         )
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# DELETE /agents/{agent_id} (unregister) AgentID path — the real route.
+# Covers the fix: with a verifier configured, unregister requires a verified
+# Bearer whose identity matches the target. The path agent_id alone is an
+# unauthenticated, attacker-controllable impersonation surface on a destructive
+# endpoint, so it must not authorize the delete by itself.
+# ---------------------------------------------------------------------------
+
+
+def test_unregister_with_verifier_requires_bearer():
+    """Verifier set + no Bearer → 401 (the path agent_id can't authorize a delete)."""
+    from fastapi.testclient import TestClient
+
+    verifier, _ = _real_verifier_with_local_key()
+    with TestClient(_gateway_app_with_verifier(verifier)) as client:
+        r = client.request("DELETE", f"/agents/{_SUB}", json={"sessionKey": "x"})
+    assert r.status_code == 401
+
+
+def test_unregister_with_verifier_rejects_mismatched_agent():
+    """Valid Bearer for A but DELETE B in the path → 403 (no cross-agent delete)."""
+    from fastapi.testclient import TestClient
+
+    verifier, key = _real_verifier_with_local_key()
+    with TestClient(_gateway_app_with_verifier(verifier)) as client:
+        r = client.request(
+            "DELETE",
+            "/agents/someone-else",
+            headers={"Authorization": f"Bearer {_sign(key)}"},
+            json={"sessionKey": "x"},
+        )
+    assert r.status_code == 403
+
+
+def test_unregister_with_verifier_allows_self():
+    """Bearer matching the path + correct session key → 200 (legitimate self-delete)."""
+    from fastapi.testclient import TestClient
+
+    verifier, key = _real_verifier_with_local_key()
+    bearer = {"Authorization": f"Bearer {_sign(key)}"}
+    with TestClient(_gateway_app_with_verifier(verifier)) as client:
+        reg = client.post(
+            "/agents", headers=bearer, json={"apiKey": "", "initialBalance": "1000"}
+        )
+        assert reg.status_code == 200
+        session_key = reg.json()["sessionKey"]
+        r = client.request(
+            "DELETE",
+            f"/agents/{_SUB}",
+            headers=bearer,
+            json={"sessionKey": session_key},
+        )
+    assert r.status_code == 200

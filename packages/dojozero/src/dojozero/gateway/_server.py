@@ -328,8 +328,11 @@ def create_gateway_app(
             except ValueError as e:
                 error_msg = str(e)
                 if "not registered" in error_msg.lower():
+                    # 403 NOT_REGISTERED is the house convention (every other
+                    # endpoint + the client's 403 -> NotRegisteredError mapping);
+                    # 404 here would surface as a generic ConnectionError client-side.
                     raise HTTPException(
-                        status_code=404,
+                        status_code=403,
                         detail=ErrorResponse(
                             error=ErrorDetail(
                                 code=ErrorCodes.NOT_REGISTERED,
@@ -375,8 +378,11 @@ def create_gateway_app(
         except ValueError as e:
             error_msg = str(e)
             if "not registered" in error_msg.lower():
+                # 403 NOT_REGISTERED matches the rest of the API + the client's
+                # 403 -> NotRegisteredError mapping (404 would become a generic
+                # ConnectionError client-side).
                 raise HTTPException(
-                    status_code=404,
+                    status_code=403,
                     detail=ErrorResponse(
                         error=ErrorDetail(
                             code=ErrorCodes.NOT_REGISTERED,
@@ -400,12 +406,31 @@ def create_gateway_app(
     async def unregister_agent(
         agent_id: str,
         request: AgentUnregisterRequest,
+        authorization: str | None = Header(default=None),
         state: GatewayState = Depends(get_gateway_state),
     ) -> dict[str, str]:
         """Unregister an external agent.
 
         Requires the session key (returned during registration) to prove ownership.
+        When AgentID is configured, also requires a verified Bearer whose identity
+        matches the target — a caller may only unregister itself, never an arbitrary
+        path ``agent_id`` (mirrors ``get_agent_id`` rejecting unverified identity;
+        without this, the path param is an unauthenticated impersonation surface on
+        a destructive endpoint).
         """
+        verifier = state.agentid_verifier
+        if verifier is not None:
+            verified = await verify_bearer(verifier, authorization)
+            if verified.agent_id != agent_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail=ErrorResponse(
+                        error=ErrorDetail(
+                            code=ErrorCodes.AUTH_REQUIRED,
+                            message="Token identity does not match the target agent",
+                        )
+                    ).model_dump(by_alias=True),
+                )
         try:
             if await state.adapter.unregister_agent(agent_id, request.session_key):
                 return {"message": "Unregistered successfully"}

@@ -685,7 +685,11 @@ class TestGatewayServer:
         assert response.status_code == 403
 
     def test_reconnect_nonexistent_agent(self, client, mock_broker):
-        """Test reconnection for unregistered agent fails."""
+        """Reconnecting an unregistered agent returns 403 NOT_REGISTERED.
+
+        403 (not 404) is the house convention for "not registered" and the only
+        status the client maps to ``NotRegisteredError``.
+        """
         response = client.post(
             "/agents/reconnect",
             json={
@@ -693,7 +697,7 @@ class TestGatewayServer:
                 "sessionKey": "some-key",
             },
         )
-        assert response.status_code == 404
+        assert response.status_code == 403
 
 
 class TestAuthProvider:

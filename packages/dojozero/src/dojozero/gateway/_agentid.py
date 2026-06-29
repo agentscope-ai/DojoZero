@@ -179,4 +179,4 @@ async def verify_bearer(verifier: Any, authorization: str | None) -> "VerifiedAg
         )
 
 
-__all__ = ["agentid_verifier_from_env"]
+__all__ = ["agentid_verifier_from_env", "verify_bearer"]
