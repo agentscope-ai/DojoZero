@@ -51,6 +51,15 @@ def test_agentid_coexists_with_api_key(creds):
     assert creds.load_agentid() == _IDENT
 
 
+def test_delete_api_key_preserves_agentid(creds):
+    """Rotating the api_key (delete + save-new) must not destroy the agentid."""
+    creds.save_api_key("sk-123")
+    creds.save_agentid(dict(_IDENT))
+    assert creds.delete_api_key() is True
+    assert creds.load_api_key() is None
+    assert creds.load_agentid() == _IDENT  # survives the api-key delete
+
+
 def _write_pem(path):
     key = Ed25519PrivateKey.generate()
     path.write_bytes(

@@ -92,8 +92,10 @@ class GatewayTransport:
             agent_id: Agent ID from registration response
         """
         self.agent_id = agent_id
-        # Update client headers if already initialized
-        if self._client:
+        # Update client-level headers only in legacy (X-Agent-ID) mode. In
+        # AgentID mode the Bearer is attached per-request; writing X-Agent-ID to
+        # the client here would send it redundantly alongside every Bearer.
+        if self._client and self._agentid_client is None:
             self._client.headers.update(self._auth_headers())
 
     def set_last_event_id(self, event_id: int | str) -> None:

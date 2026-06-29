@@ -66,3 +66,24 @@ async def test_falls_back_to_x_agent_id_without_agentid_client():
     await transport.request("GET", "/balance")
     assert captured["xid"] == "agent-bob"
     assert captured["auth"] is None
+
+
+@pytest.mark.asyncio
+async def test_set_agent_id_does_not_leak_x_agent_id_in_agentid_mode():
+    """set_agent_id must not write X-Agent-ID to client headers in AgentID mode."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["xid"] = request.headers.get("x-agent-id")
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"ok": True})
+
+    fake = _FakeAgentIDClient(token="abc.def")
+    transport = _transport_with(handler, agentid_client=fake, agentid_audience="hub_x")
+    transport.set_agent_id(
+        "agent-leaked"
+    )  # would leak as a client-level header pre-fix
+
+    await transport.request("GET", "/balance")
+    assert captured["xid"] is None
+    assert captured["auth"] == "Bearer abc.def"

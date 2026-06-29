@@ -1010,9 +1010,10 @@ class UnifiedDaemon:
         # Sanity check: refuse to start if no API key is configured at all.
         # We deliberately do NOT cache the value here — every call site reads
         # the credentials file freshly via `_get_api_key()`.
-        if not self._get_api_key():
+        if not self._get_api_key() and not self._get_agentid():
             raise RuntimeError(
-                "No API key configured. Run 'dojozero-agent config --api-key <key>'"
+                "No API key or AgentID configured. Run 'dojozero-agent config "
+                "--api-key <key>' (or --agentid-* for ModelScope)."
             )
 
         self._write_pid()
@@ -1081,7 +1082,10 @@ class UnifiedDaemon:
         if agentid is not None:
             from dojozero_client._agentid import build_agentid_client
 
-            agentid_client, agentid_audience = build_agentid_client(agentid)
+            try:
+                agentid_client, agentid_audience = build_agentid_client(agentid)
+            except (ValueError, RuntimeError) as e:
+                raise RPCError("INVALID_AGENTID", str(e)) from e
 
         handler = TrialHandler(
             trial_id=trial_id,

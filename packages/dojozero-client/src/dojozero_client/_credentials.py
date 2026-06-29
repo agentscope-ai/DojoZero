@@ -111,14 +111,18 @@ def delete_api_key(profile: str | None = None) -> bool:
         profile = data.get("default", DEFAULT_PROFILE)
 
     profiles = data.get("profiles", {})
-    if profile in profiles:
+    if profile not in profiles:
+        return False
+    # Remove only the api_key — preserve other creds on the profile (e.g. the
+    # ModelScope AgentID identity). Drop the profile entirely only if nothing
+    # else is stored on it.
+    had_key = profiles[profile].pop("api_key", None) is not None
+    if not profiles[profile]:
         del profiles[profile]
-        # Update default if we deleted the default profile
         if data.get("default") == profile:
             data["default"] = next(iter(profiles), DEFAULT_PROFILE)
-        _save_credentials(data)
-        return True
-    return False
+    _save_credentials(data)
+    return had_key
 
 
 def has_api_key(profile: str | None = None) -> bool:
