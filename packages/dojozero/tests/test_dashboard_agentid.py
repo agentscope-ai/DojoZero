@@ -38,7 +38,9 @@ def _app(verifier):
 def _real_verifier_with_local_key():
     """Real Verifier whose only JWKS key is one we control (offline, no network)."""
     pytest.importorskip("agent_id_service_sdk")
-    from agent_id_service_sdk import Verifier
+    from agent_id_service_sdk import (  # pyright: ignore[reportMissingImports]
+        Verifier,
+    )
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     key = Ed25519PrivateKey.generate()

@@ -26,7 +26,10 @@ def build_agentid_client(agentid: dict) -> tuple[Any, str]:
         raise ValueError(f"AgentID config missing fields: {', '.join(missing)}")
 
     try:
-        from agent_id_client_sdk import Client, Identity
+        from agent_id_client_sdk import (  # pyright: ignore[reportMissingImports]
+            Client,
+            Identity,
+        )
     except ImportError as exc:  # optional extra
         raise RuntimeError(
             "ModelScope AgentID auth needs the optional dependency. "
