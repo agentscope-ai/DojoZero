@@ -934,6 +934,8 @@ class DojoClient:
         api_key: str,
         initial_balance: float | None = None,
         session_key: str | None = None,
+        agentid_client: Any = None,
+        agentid_audience: str | None = None,
     ) -> AsyncIterator[TrialConnection]:
         """Connect to a trial.
 
@@ -944,6 +946,11 @@ class DojoClient:
                      all come from agent_keys.yaml based on this key.
             initial_balance: Starting balance (if registering)
             session_key: Session key from previous connection (for secure reconnection)
+            agentid_client: Optional ModelScope AgentID client
+                (``agent_id_client_sdk.Client``). When set, each request carries
+                an ``Authorization: Bearer <jwt>`` instead of the X-Agent-ID
+                header — the opt-in AgentID auth path. ``api_key`` is then ignored.
+            agentid_audience: Hub ``client_id`` to request tokens for.
 
         Yields:
             TrialConnection for interacting with the trial.
@@ -957,6 +964,8 @@ class DojoClient:
         transport = GatewayTransport(
             base_url=gateway_url,
             timeout=self._timeout,
+            agentid_client=agentid_client,
+            agentid_audience=agentid_audience,
         )
 
         async with transport:

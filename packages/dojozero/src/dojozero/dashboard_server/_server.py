@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine
 
-from fastapi import Depends, FastAPI, Header, Query, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 
 if TYPE_CHECKING:
     from dojozero.gateway import AgentAuthenticator
@@ -571,6 +571,16 @@ def create_dashboard_app(
             http_session=shared_aiohttp_session,
             http_client=shared_httpx_client,
         )
+
+        # Dashboard-level AgentID verifier. The hub identity (ModelScope
+        # client_id) is deployment-wide, so the dashboard verifies agent JWTs
+        # too — not only per-trial gateways. ``None`` when AgentID is
+        # unconfigured; gateways verify the same stateless JWT independently.
+        from dojozero.gateway._agentid import agentid_verifier_from_env
+
+        app.state.agentid_verifier = agentid_verifier_from_env()
+        if app.state.agentid_verifier is not None:
+            LOGGER.info("Dashboard-level AgentID verification enabled")
 
         # Start trial manager worker
         await trial_manager.start()
@@ -2114,6 +2124,34 @@ def create_dashboard_app(
             },
             "scheduling_enabled": state.schedule_manager is not None,
             "gateway_enabled": enable_gateway,
+        }
+
+    @app.get("/api/agents/whoami")
+    async def agent_whoami(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ):
+        """Verify a ModelScope AgentID Bearer token at the dashboard level.
+
+        Hub identity is deployment-wide, so an agent can prove its identity to
+        the dashboard with no trial running. Returns the verified identity;
+        401 on a missing/invalid token, 503 when AgentID isn't configured.
+        """
+        from dojozero.gateway._agentid import verify_bearer
+
+        verifier = getattr(request.app.state, "agentid_verifier", None)
+        if verifier is None:
+            raise HTTPException(
+                status_code=503,
+                detail="AgentID verification is not configured on this dashboard",
+            )
+        verified = await verify_bearer(verifier, authorization)
+        return {
+            "agent_id": verified.agent_id,
+            "issuer": verified.issuer,
+            "expires_at": (
+                verified.expires_at.isoformat() if verified.expires_at else None
+            ),
         }
 
     # -------------------------------------------------------------------------
