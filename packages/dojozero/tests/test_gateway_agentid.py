@@ -8,8 +8,6 @@ path is guarded with ``importorskip``.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 from fastapi import HTTPException
 
@@ -51,80 +49,67 @@ def _state(verifier=None) -> GatewayState:
     )
 
 
-def test_get_agent_id_verifies_bearer():
+@pytest.mark.asyncio
+async def test_get_agent_id_verifies_bearer():
     verifier = _FakeVerifier(agent_id="aip:localhost:agent_42")
-    agent_id = asyncio.run(
-        get_agent_id(
-            x_agent_id=None, authorization="Bearer the.jwt", state=_state(verifier)
-        )
+    agent_id = await get_agent_id(
+        x_agent_id=None, authorization="Bearer the.jwt", state=_state(verifier)
     )
     assert agent_id == "aip:localhost:agent_42"
     assert verifier.calls == ["Bearer the.jwt"]
 
 
-def test_get_agent_id_rejects_invalid_bearer():
+@pytest.mark.asyncio
+async def test_get_agent_id_rejects_invalid_bearer():
     verifier = _FakeVerifier(error=ValueError("bad signature"))
-    try:
-        asyncio.run(
-            get_agent_id(
-                x_agent_id=None, authorization="Bearer bad", state=_state(verifier)
-            )
+    with pytest.raises(HTTPException) as exc:
+        await get_agent_id(
+            x_agent_id=None, authorization="Bearer bad", state=_state(verifier)
         )
-    except HTTPException as exc:
-        assert exc.status_code == 401
-    else:
-        raise AssertionError("expected 401")
+    assert exc.value.status_code == 401
 
 
-def test_bearer_takes_precedence_over_header():
+@pytest.mark.asyncio
+async def test_bearer_takes_precedence_over_header():
     """A verified token is authoritative — a spoofed X-Agent-ID can't override."""
     verifier = _FakeVerifier(agent_id="aip:localhost:agent_token")
-    agent_id = asyncio.run(
-        get_agent_id(
-            x_agent_id="spoofed-header-id",
-            authorization="Bearer the.jwt",
-            state=_state(verifier),
-        )
+    agent_id = await get_agent_id(
+        x_agent_id="spoofed-header-id",
+        authorization="Bearer the.jwt",
+        state=_state(verifier),
     )
     assert agent_id == "aip:localhost:agent_token"
 
 
-def test_falls_back_to_header_without_verifier():
-    agent_id = asyncio.run(
-        get_agent_id(x_agent_id="agent-bob", authorization=None, state=_state(None))
+@pytest.mark.asyncio
+async def test_falls_back_to_header_without_verifier():
+    agent_id = await get_agent_id(
+        x_agent_id="agent-bob", authorization=None, state=_state(None)
     )
     assert agent_id == "agent-bob"
 
 
-def test_verifier_set_rejects_bare_x_agent_id():
+@pytest.mark.asyncio
+async def test_verifier_set_rejects_bare_x_agent_id():
     """With a verifier configured, a bare X-Agent-ID (no Bearer) is rejected.
 
     Honoring the unverified header would let a caller impersonate a registered
     agent — so AgentID-enabled gateways require a Bearer token.
     """
     verifier = _FakeVerifier(agent_id="should-not-be-used")
-    try:
-        asyncio.run(
-            get_agent_id(
-                x_agent_id="agent-carol", authorization=None, state=_state(verifier)
-            )
+    with pytest.raises(HTTPException) as exc:
+        await get_agent_id(
+            x_agent_id="agent-carol", authorization=None, state=_state(verifier)
         )
-    except HTTPException as exc:
-        assert exc.status_code == 401
-    else:
-        raise AssertionError("expected 401")
+    assert exc.value.status_code == 401
     assert verifier.calls == []
 
 
-def test_requires_some_identity():
-    try:
-        asyncio.run(
-            get_agent_id(x_agent_id=None, authorization=None, state=_state(None))
-        )
-    except HTTPException as exc:
-        assert exc.status_code == 401
-    else:
-        raise AssertionError("expected 401")
+@pytest.mark.asyncio
+async def test_requires_some_identity():
+    with pytest.raises(HTTPException) as exc:
+        await get_agent_id(x_agent_id=None, authorization=None, state=_state(None))
+    assert exc.value.status_code == 401
 
 
 def test_verifier_from_env_unconfigured(monkeypatch):

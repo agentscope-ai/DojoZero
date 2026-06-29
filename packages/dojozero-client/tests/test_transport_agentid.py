@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import httpx
+import pytest
 
 from dojozero_client._transport import GatewayTransport
 
@@ -29,7 +28,8 @@ def _transport_with(handler, **kwargs) -> GatewayTransport:
     return transport
 
 
-def test_attaches_bearer_from_agentid_client():
+@pytest.mark.asyncio
+async def test_attaches_bearer_from_agentid_client():
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -42,7 +42,7 @@ def test_attaches_bearer_from_agentid_client():
         handler, agentid_client=fake, agentid_audience="hub_4abb08"
     )
 
-    result = asyncio.run(transport.request("GET", "/balance"))
+    result = await transport.request("GET", "/balance")
     assert result == {"ok": True}
     # Bearer token from the AgentID client; no X-Agent-ID.
     assert captured["auth"] == "Bearer abc.def"
@@ -51,7 +51,8 @@ def test_attaches_bearer_from_agentid_client():
     assert fake.calls == ["hub_4abb08"]
 
 
-def test_falls_back_to_x_agent_id_without_agentid_client():
+@pytest.mark.asyncio
+async def test_falls_back_to_x_agent_id_without_agentid_client():
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -62,6 +63,6 @@ def test_falls_back_to_x_agent_id_without_agentid_client():
     transport = _transport_with(handler)
     transport.agent_id = "agent-bob"
 
-    asyncio.run(transport.request("GET", "/balance"))
+    await transport.request("GET", "/balance")
     assert captured["xid"] == "agent-bob"
     assert captured["auth"] is None
