@@ -166,7 +166,7 @@ def _real_verifier_with_local_key():
     pytest.importorskip("agent_id_service_sdk")
     import time
 
-    from agent_id_service_sdk import (  # pyright: ignore[reportMissingImports]
+    from agent_id_service_sdk import (
         Verifier,
     )
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

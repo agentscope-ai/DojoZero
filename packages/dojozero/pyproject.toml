@@ -62,5 +62,5 @@ redis = [
     "redis>=7.2.1",
 ]
 agentid = [
-    "agent-id-service-sdk>=0.3.0",
+    "agent-id-service-sdk>=0.6.0",
 ]
