@@ -28,8 +28,9 @@ class AgentRegistrationRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    # Authentication (required)
-    api_key: str = Field(alias="apiKey")
+    # Authentication. Optional: an AgentID Bearer token (verified server-side)
+    # may be presented instead, in which case identity comes from the JWT.
+    api_key: str = Field(default="", alias="apiKey")
 
     # Optional override for initial balance (otherwise uses broker default)
     initial_balance: float | str | None = Field(default=None, alias="initialBalance")
@@ -44,7 +45,9 @@ class AgentReconnectRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    api_key: str = Field(alias="apiKey")
+    # Optional: an AgentID Bearer token (verified server-side) may be presented
+    # instead of an api_key, in which case identity comes from the JWT.
+    api_key: str = Field(default="", alias="apiKey")
     session_key: str = Field(alias="sessionKey")
 
 

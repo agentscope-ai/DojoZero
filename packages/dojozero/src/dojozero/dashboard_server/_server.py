@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine
 
-from fastapi import Depends, FastAPI, Header, Query, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 
 if TYPE_CHECKING:
     from dojozero.gateway import AgentAuthenticator
@@ -515,6 +515,13 @@ def create_dashboard_app(
         )
         shared_httpx_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
 
+        # Build the AgentID verifier ONCE for this dashboard: hub identity is
+        # deployment-wide, so the same Verifier (one JWKS cache) backs both the
+        # dashboard's /api/agents/whoami and every gateway TrialManager launches.
+        from dojozero.gateway._agentid import agentid_verifier_from_env
+
+        agentid_verifier = agentid_verifier_from_env()
+
         # Create trial manager with gateway router if enabled
         trial_manager = TrialManager(
             orchestrator=orchestrator,
@@ -526,6 +533,7 @@ def create_dashboard_app(
             authenticator=authenticator,
             server_id=server_id,
             peer_registry=peer_registry_instance,
+            agentid_verifier=agentid_verifier,
         )
 
         # Helper to create and start the ScheduleManager
@@ -571,6 +579,13 @@ def create_dashboard_app(
             http_session=shared_aiohttp_session,
             http_client=shared_httpx_client,
         )
+
+        # The dashboard verifies agent JWTs too (not only per-trial gateways);
+        # reuse the single verifier built above so the dashboard and all gateways
+        # share one Verifier / JWKS cache.
+        app.state.agentid_verifier = agentid_verifier
+        if agentid_verifier is not None:
+            LOGGER.info("AgentID verification enabled (dashboard + gateways)")
 
         # Start trial manager worker
         await trial_manager.start()
@@ -2114,6 +2129,34 @@ def create_dashboard_app(
             },
             "scheduling_enabled": state.schedule_manager is not None,
             "gateway_enabled": enable_gateway,
+        }
+
+    @app.get("/api/agents/whoami")
+    async def agent_whoami(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ):
+        """Verify a ModelScope AgentID Bearer token at the dashboard level.
+
+        Hub identity is deployment-wide, so an agent can prove its identity to
+        the dashboard with no trial running. Returns the verified identity;
+        401 on a missing/invalid token, 503 when AgentID isn't configured.
+        """
+        from dojozero.gateway import verify_bearer
+
+        verifier = getattr(request.app.state, "agentid_verifier", None)
+        if verifier is None:
+            raise HTTPException(
+                status_code=503,
+                detail="AgentID verification is not configured on this dashboard",
+            )
+        verified = await verify_bearer(verifier, authorization)
+        return {
+            "agent_id": verified.agent_id,
+            "issuer": verified.issuer,
+            "expires_at": (
+                verified.expires_at.isoformat() if verified.expires_at else None
+            ),
         }
 
     # -------------------------------------------------------------------------

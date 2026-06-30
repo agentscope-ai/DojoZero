@@ -94,6 +94,7 @@ class TrialManager:
         authenticator: "AgentAuthenticator | None" = None,
         server_id: str | None = None,
         peer_registry: "PeerRegistry | None" = None,
+        agentid_verifier: Any = None,
     ):
         """Initialize the TrialManager.
 
@@ -123,6 +124,9 @@ class TrialManager:
         self._authenticator = authenticator
         self._server_id = server_id
         self._peer_registry: PeerRegistry | None = peer_registry
+        # One AgentID verifier shared across every gateway this manager launches
+        # (a single Verifier → a single JWKS cache). Built once by the dashboard.
+        self._agentid_verifier = agentid_verifier
 
         # Queue for pending trials
         self._pending: asyncio.Queue[QueuedTrial] = asyncio.Queue()
@@ -160,7 +164,10 @@ class TrialManager:
             return False
 
         try:
-            from dojozero.gateway import create_gateway_app, GatewayState
+            from dojozero.gateway import (
+                create_gateway_app,
+                GatewayState,
+            )
             from dojozero.gateway._adapter import ExternalAgentAdapter
             from dojozero.betting import ContestOperator
 
@@ -221,6 +228,10 @@ class TrialManager:
             ):  # Dataclass instance
                 metadata = asdict(spec.metadata)
 
+            # Reuse the dashboard's single AgentID verifier (one JWKS cache for
+            # all gateways) instead of rebuilding one per gateway registration.
+            agentid_verifier = self._agentid_verifier
+
             # Create gateway app (note: lifespan won't run since we're not using uvicorn)
             app = create_gateway_app(
                 trial_id=trial_id,
@@ -228,6 +239,7 @@ class TrialManager:
                 broker=broker,
                 metadata=metadata,
                 authenticator=self._authenticator,
+                agentid_verifier=agentid_verifier,
             )
 
             # Create adapter and state manually since lifespan doesn't run for in-process routing
@@ -243,6 +255,7 @@ class TrialManager:
                 broker=broker,
                 adapter=adapter,
                 authenticator=self._authenticator or NoOpAuthenticator(),
+                agentid_verifier=agentid_verifier,
                 metadata=metadata,
             )
 

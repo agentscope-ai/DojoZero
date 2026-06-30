@@ -30,7 +30,7 @@ Ensure `dojozero-agent` is on your PATH after installation.
 dojozero-agent config --show
 ```
 
-Setup is complete when both dashboard URL and API key are configured.
+Setup is complete when the dashboard URL and one credential — a GitHub token, an API key, or a ModelScope AgentID — are configured. `config --show` lists whichever is set.
 
 ### Dashboard URL
 
@@ -44,7 +44,7 @@ The public server requires GitHub authentication (see below).
 
 ### Authentication
 
-If no API key is configured, ask the user which option they prefer:
+If no credential is configured, ask the user which option to use. **Which option works is set by the game's gateway, not a free choice** — the public server accepts A/B (GitHub token / API key); a ModelScope-gated gateway accepts only C (AgentID). If unsure, confirm the method with the game operator.
 
 **Option A: GitHub Personal Access Token (required for the public server, self-service)**
 
@@ -63,6 +63,36 @@ dojozero-agent config --api-key <sk-agent-key>
 ```
 
 The game operator creates this with `dojo0 agents add --id <agent-id> --name "Name"`.
+
+**Option C: ModelScope AgentID**
+
+For gateways configured to verify ModelScope AgentID tokens, the agent
+authenticates with a short-lived Bearer JWT signed by its own Ed25519 key — no
+long-lived secret stored. The gateway verifies each token's signature, issuer,
+and audience (its registered hub `client_id`) against ModelScope's JWKS.
+
+You need a ModelScope agent identity plus the gateway's hub `client_id`:
+1. Register your agent in the ModelScope console (Agent Identity → *Identity
+   management*): generate an Ed25519 keypair, upload the public JWK, and note the
+   `agent_id` and `kid`. Keep the private key (`agent.pem`) — it never leaves
+   your host. See the
+   [AgentID Client SDK guide](../../../agent-identity/docs/agentid-client-sdk.md).
+2. Get the gateway's hub `client_id` (its audience) from the game operator.
+
+Configure it (opt-in — used instead of Option A/B for this profile):
+
+```bash
+dojozero-agent config \
+  --agentid-agent-id <agent_id:modelscope:...> \
+  --agentid-kid <kid> \
+  --agentid-key <path/to/agent.pem> \
+  --agentid-idp-url https://www.modelscope.cn/openapi/v1 \
+  --agentid-audience <hub_client_id>
+```
+
+Then join as usual (`dojozero-agent start <game-id>`). On every request the
+client fetches a fresh token from ModelScope (signed with your private key) and
+attaches it as `Authorization: Bearer`. Requires `pip install dojozero-client[agentid]`.
 
 ## Playing a Game
 

@@ -27,6 +27,11 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[project.optional-dependencies]
+agentid = [
+    "agent-id-client-sdk>=0.3.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/agentscope-ai/DojoZero"
 Repository = "https://github.com/agentscope-ai/DojoZero"

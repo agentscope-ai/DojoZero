@@ -36,9 +36,12 @@ from dojozero_client._config import (
 from dojozero_client._credentials import (
     get_default_profile,
     get_profile_dir,
+    has_agentid,
     has_api_key,
     list_profiles,
+    load_agentid,
     load_api_key,
+    save_agentid,
     save_api_key,
     set_default_profile,
 )
@@ -83,10 +86,10 @@ def _ensure_daemon_running(profile: str | None) -> bool:
     if is_daemon_running():
         return True
 
-    if not has_api_key(profile):
+    if not has_api_key(profile) and not has_agentid(profile):
         profile_hint = f" --profile {profile}" if profile else ""
         print(
-            f"Error: No API key configured. Run 'dojozero-agent config{profile_hint} --api-key <key>' first.",
+            f"Error: No credentials configured. Run 'dojozero-agent config{profile_hint} --api-key <key>' (or --agentid-* for ModelScope) first.",
             file=sys.stderr,
         )
         return False
@@ -166,8 +169,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         daemon = UnifiedDaemon(profile=profile)
         # Start daemon, then auto-join the trial
         daemon._stop_event = asyncio.Event()
-        if not daemon._get_api_key():
-            raise RuntimeError("No API key configured")
+        if not daemon._get_api_key() and not has_agentid(profile):
+            raise RuntimeError("No API key or AgentID configured")
         daemon._write_pid()
         daemon._setup_signals()
         daemon._running = True
@@ -989,10 +992,10 @@ def cmd_daemon_start(args: argparse.Namespace) -> int:
         print("Unified daemon already running")
         return 1
 
-    if not has_api_key(profile):
+    if not has_api_key(profile) and not has_agentid(profile):
         profile_hint = f" --profile {profile}" if profile else ""
         print(
-            f"Error: No API key configured. Run 'dojozero-agent config{profile_hint} --api-key <key>' first.",
+            f"Error: No credentials configured. Run 'dojozero-agent config{profile_hint} --api-key <key>' (or --agentid-* for ModelScope) first.",
             file=sys.stderr,
         )
         return 1
@@ -1094,6 +1097,31 @@ def cmd_config(args: argparse.Namespace) -> int:
         print(f"API key saved to ~/.dojozero/credentials.json{profile_msg}")
         return 0
 
+    # Save ModelScope AgentID identity (opt-in alternative to api_key)
+    agentid = {
+        "agent_id": getattr(args, "agentid_agent_id", None),
+        "kid": getattr(args, "agentid_kid", None),
+        "key_path": getattr(args, "agentid_key", None),
+        "idp_url": getattr(args, "agentid_idp_url", None),
+        "audience": getattr(args, "agentid_audience", None),
+    }
+    if any(agentid.values()):
+        missing = [k for k, v in agentid.items() if not v]
+        if missing:
+            print(
+                "Error: --agentid requires all of agent-id, kid, key, idp-url, "
+                f"audience (missing: {', '.join(missing)})",
+                file=sys.stderr,
+            )
+            return 1
+        agentid["key_path"] = str(Path(str(agentid["key_path"])).expanduser().resolve())
+        save_agentid(agentid, profile=profile)
+        profile_msg = f" (profile: {profile})" if profile else ""
+        print(f"ModelScope AgentID identity saved{profile_msg}")
+        print(f"  agent_id: {agentid['agent_id']}")
+        print(f"  audience: {agentid['audience']}")
+        return 0
+
     # Show current config
     if args.show:
         # Show config (dashboard URL)
@@ -1112,32 +1140,53 @@ def cmd_config(args: argparse.Namespace) -> int:
         print("Credentials (~/.dojozero/credentials.json):")
         profiles = list_profiles()
         if not profiles:
-            print("  (no API key configured)")
+            print("  (no credentials configured)")
             print("")
-            print("  To configure:")
+            print("  To configure (pick one):")
             print("    dojozero-agent config --api-key <your-api-key>")
+            print("    dojozero-agent config --github-token <ghp_...>")
+            print(
+                "    dojozero-agent config --agentid-agent-id <id> --agentid-kid <kid> \\"
+            )
+            print("      --agentid-key <agent.pem> --agentid-idp-url <url> \\")
+            print("      --agentid-audience <hub_client_id>   # ModelScope AgentID")
         else:
             default = get_default_profile()
+
+            def _print_api_key(key: str, label: str) -> None:
+                masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
+                print(f"  {label}: {masked} ({_detect_token_type(key)})")
+
+            def _print_agentid(ident: dict) -> None:
+                print("  AgentID (ModelScope):")
+                print(f"    agent_id: {ident.get('agent_id')}")
+                print(f"    kid:      {ident.get('kid')}")
+                print(f"    audience: {ident.get('audience')}")
+                print(f"    idp_url:  {ident.get('idp_url')}")
+                print(f"    key_path: {ident.get('key_path')}")
+
             if profile:
-                # Show specific profile
+                # Show specific profile (api key and/or AgentID)
                 key = load_api_key(profile=profile)
-                if key:
-                    masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
-                    token_type = _detect_token_type(key)
-                    print(f"  Profile: {profile}")
-                    print(f"  API key: {masked} ({token_type})")
-                else:
+                ident = load_agentid(profile=profile)
+                if not key and not ident:
                     print(f"  Profile '{profile}' not found")
                     return 1
+                print(f"  Profile: {profile}")
+                if key:
+                    _print_api_key(key, "API key")
+                if ident:
+                    _print_agentid(ident)
             else:
                 # Show all profiles
                 print(f"  Default profile: {default}")
                 print(f"  Profiles: {', '.join(profiles)}")
                 key = load_api_key()
                 if key:
-                    masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
-                    token_type = _detect_token_type(key)
-                    print(f"  API key ({default}): {masked} ({token_type})")
+                    _print_api_key(key, f"API key ({default})")
+                ident = load_agentid()
+                if ident:
+                    _print_agentid(ident)
         return 0
 
     print("Usage:")
@@ -1195,9 +1244,29 @@ def cmd_leave(args: argparse.Namespace) -> int:
 
     gateway_url = load_config().get_gateway_url(trial_id)
 
+    # AgentID mode: build the client so the offline DELETE carries a Bearer
+    # (an AgentID gateway rejects the X-Agent-ID path with 401).
+    agentid_client = None
+    agentid_audience = None
+    agentid = load_agentid(profile=_get_profile(args))
+    if agentid is not None:
+        from dojozero_client._agentid import build_agentid_client
+
+        try:
+            agentid_client, agentid_audience = build_agentid_client(agentid)
+        except (ValueError, RuntimeError) as e:
+            print(f"Error: invalid AgentID config: {e}", file=sys.stderr)
+            return 1
+
     try:
         result = asyncio.run(
-            DojoClient.unregister_agent(gateway_url, agent_id, session_key)
+            DojoClient.unregister_agent(
+                gateway_url,
+                agent_id,
+                session_key,
+                agentid_client=agentid_client,
+                agentid_audience=agentid_audience,
+            )
         )
         print(f"Left trial {trial_id}: {result.get('message', 'OK')}")
         state["status"] = "unregistered"
@@ -1412,6 +1481,23 @@ def create_parser() -> argparse.ArgumentParser:
     p_config.add_argument(
         "--github-token",
         help="Set GitHub Personal Access Token as API key",
+    )
+    p_config.add_argument(
+        "--agentid-agent-id",
+        help="ModelScope AgentID: agent_id (e.g. agent_id:modelscope:agent_xxx)",
+    )
+    p_config.add_argument("--agentid-kid", help="ModelScope AgentID: key id (kid)")
+    p_config.add_argument(
+        "--agentid-key",
+        help="ModelScope AgentID: path to the Ed25519 private key (e.g. agent.pem)",
+    )
+    p_config.add_argument(
+        "--agentid-idp-url",
+        help="ModelScope AgentID: IdP base (e.g. https://pre.modelscope.cn/openapi/v1)",
+    )
+    p_config.add_argument(
+        "--agentid-audience",
+        help="ModelScope AgentID: hub client_id (token audience, e.g. hub_xxxxxx)",
     )
     p_config.add_argument(
         "--show",

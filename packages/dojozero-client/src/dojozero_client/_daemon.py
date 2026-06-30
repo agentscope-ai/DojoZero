@@ -26,7 +26,7 @@ from dojozero_client._config import (
     TRIALS_DIR,
     load_config,
 )
-from dojozero_client._credentials import load_api_key
+from dojozero_client._credentials import load_agentid, load_api_key
 from dojozero_client._rpc import RPCError, RPCServer
 
 if TYPE_CHECKING:
@@ -197,6 +197,8 @@ class TrialHandler:
         api_key: str,
         client: DojoClient,
         filters: list[str] | None = None,
+        agentid_client: Any = None,
+        agentid_audience: str | None = None,
     ):
         """Initialize trial handler.
 
@@ -205,11 +207,15 @@ class TrialHandler:
             api_key: API key for authentication
             client: Shared DojoClient instance
             filters: Event type filters
+            agentid_client: Optional ModelScope AgentID client (Bearer auth)
+            agentid_audience: Hub client_id for AgentID token requests
         """
         self.trial_id = trial_id
         self.api_key = api_key
         self.client = client
         self.filters = filters or ["event.*", "odds.*"]
+        self.agentid_client = agentid_client
+        self.agentid_audience = agentid_audience
 
         self.state_dir = TRIALS_DIR / trial_id
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -264,6 +270,8 @@ class TrialHandler:
             api_key=self.api_key,
             initial_balance=1000.0,
             session_key=stored_session_key,
+            agentid_client=self.agentid_client,
+            agentid_audience=self.agentid_audience,
         )
         # Enter the context manager manually
         self._trial = await self._context_manager.__aenter__()
@@ -398,7 +406,13 @@ class TrialHandler:
         from dojozero_client._config import load_config
 
         gateway_url = load_config().get_gateway_url(self.trial_id)
-        return await DojoClient.unregister_agent(gateway_url, agent_id, session_key)
+        return await DojoClient.unregister_agent(
+            gateway_url,
+            agent_id,
+            session_key,
+            agentid_client=self.agentid_client,
+            agentid_audience=self.agentid_audience,
+        )
 
     async def place_bet(
         self,
@@ -993,14 +1007,19 @@ class UnifiedDaemon:
         """
         return load_api_key(profile=self._profile)
 
+    def _get_agentid(self) -> dict | None:
+        """Load the profile's ModelScope AgentID identity (None if unset)."""
+        return load_agentid(profile=self._profile)
+
     async def start(self) -> None:
         """Start the unified daemon."""
         # Sanity check: refuse to start if no API key is configured at all.
         # We deliberately do NOT cache the value here — every call site reads
         # the credentials file freshly via `_get_api_key()`.
-        if not self._get_api_key():
+        if not self._get_api_key() and not self._get_agentid():
             raise RuntimeError(
-                "No API key configured. Run 'dojozero-agent config --api-key <key>'"
+                "No API key or AgentID configured. Run 'dojozero-agent config "
+                "--api-key <key>' (or --agentid-* for ModelScope)."
             )
 
         self._write_pid()
@@ -1059,15 +1078,28 @@ class UnifiedDaemon:
                 "agent_id": handler.agent_id,
             }
 
-        api_key = self._get_api_key()
-        if not api_key:
-            raise RPCError("NO_API_KEY", "No API key configured")
+        api_key = self._get_api_key() or ""
+        agentid = self._get_agentid()
+        if not api_key and agentid is None:
+            raise RPCError("NO_CREDENTIALS", "No API key or AgentID configured")
+
+        agentid_client = None
+        agentid_audience = None
+        if agentid is not None:
+            from dojozero_client._agentid import build_agentid_client
+
+            try:
+                agentid_client, agentid_audience = build_agentid_client(agentid)
+            except (ValueError, RuntimeError) as e:
+                raise RPCError("INVALID_AGENTID", str(e)) from e
 
         handler = TrialHandler(
             trial_id=trial_id,
             api_key=api_key,
             client=self._client,
             filters=filters,
+            agentid_client=agentid_client,
+            agentid_audience=agentid_audience,
         )
 
         try:

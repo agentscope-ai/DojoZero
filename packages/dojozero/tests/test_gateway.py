@@ -685,7 +685,11 @@ class TestGatewayServer:
         assert response.status_code == 403
 
     def test_reconnect_nonexistent_agent(self, client, mock_broker):
-        """Test reconnection for unregistered agent fails."""
+        """Reconnecting an unregistered agent returns 403 NOT_REGISTERED.
+
+        403 (not 404) is the house convention for "not registered" and the only
+        status the client maps to ``NotRegisteredError``.
+        """
         response = client.post(
             "/agents/reconnect",
             json={
@@ -693,7 +697,7 @@ class TestGatewayServer:
                 "sessionKey": "some-key",
             },
         )
-        assert response.status_code == 404
+        assert response.status_code == 403
 
 
 class TestAuthProvider:
@@ -1932,8 +1936,13 @@ class TestGatewayAuthIntegration:
 
         assert response.status_code == 401
 
-    def test_register_without_api_key_missing_field(self, client_with_auth):
-        """Test registration without apiKey field returns 422 validation error."""
+    def test_register_without_api_key_or_token_rejected(self, client_with_auth):
+        """Registration with neither apiKey nor an AgentID Bearer token is 401.
+
+        apiKey is now optional (a verified AgentID Bearer token may be presented
+        instead), so omitting it is an auth failure (empty key fails validation),
+        not a 422 missing-field schema error.
+        """
         response = client_with_auth.post(
             "/agents",
             json={
@@ -1941,8 +1950,7 @@ class TestGatewayAuthIntegration:
             },
         )
 
-        # Pydantic validation error for missing required field
-        assert response.status_code == 422
+        assert response.status_code == 401
 
     def test_register_with_noop_auth(self, client_no_auth):
         """Test registration with NoOpAuthenticator uses apiKey as agent_id."""

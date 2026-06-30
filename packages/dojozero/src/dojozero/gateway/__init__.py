@@ -50,6 +50,7 @@ from dojozero.gateway._rate_limit import (
     RateLimiter,
     create_rate_limit_dependency,
 )
+from dojozero.gateway._agentid import agentid_verifier_from_env, verify_bearer
 from dojozero.gateway._server import GatewayState, create_gateway_app
 from dojozero.gateway._sse import SSEConnection, create_sse_response
 
@@ -57,6 +58,8 @@ __all__ = [
     # Server
     "create_gateway_app",
     "GatewayState",
+    "agentid_verifier_from_env",
+    "verify_bearer",
     # Adapter
     "ExternalAgentAdapter",
     "ExternalAgentState",

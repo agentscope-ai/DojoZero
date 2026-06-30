@@ -60,7 +60,8 @@ def save_api_key(api_key: str, profile: str | None = None) -> None:
 
     if "profiles" not in data:
         data["profiles"] = {}
-    data["profiles"][profile] = {"api_key": api_key}
+    # Merge into the profile so other credentials (e.g. agentid) are preserved.
+    data["profiles"].setdefault(profile, {})["api_key"] = api_key
 
     # Set default profile if not set
     if "default" not in data:
@@ -110,14 +111,18 @@ def delete_api_key(profile: str | None = None) -> bool:
         profile = data.get("default", DEFAULT_PROFILE)
 
     profiles = data.get("profiles", {})
-    if profile in profiles:
+    if profile not in profiles:
+        return False
+    # Remove only the api_key — preserve other creds on the profile (e.g. the
+    # ModelScope AgentID identity). Drop the profile entirely only if nothing
+    # else is stored on it.
+    had_key = profiles[profile].pop("api_key", None) is not None
+    if not profiles[profile]:
         del profiles[profile]
-        # Update default if we deleted the default profile
         if data.get("default") == profile:
             data["default"] = next(iter(profiles), DEFAULT_PROFILE)
-        _save_credentials(data)
-        return True
-    return False
+    _save_credentials(data)
+    return had_key
 
 
 def has_api_key(profile: str | None = None) -> bool:
@@ -191,6 +196,38 @@ def get_profile_dir(profile: str | None = None) -> Path:
     return CONFIG_DIR / "profiles" / profile
 
 
+# ---------------------------------------------------------------------------
+# ModelScope AgentID identity (opt-in alternative to api_key / github_token)
+# ---------------------------------------------------------------------------
+
+
+def save_agentid(agentid: dict, profile: str | None = None) -> None:
+    """Save a profile's ModelScope AgentID identity.
+
+    ``agentid`` keys: ``agent_id``, ``kid``, ``key_path``, ``idp_url``,
+    ``audience``. Stored alongside (not replacing) any api_key on the profile.
+    """
+    profile = profile or DEFAULT_PROFILE
+    data = _load_credentials()
+    data.setdefault("profiles", {}).setdefault(profile, {})["agentid"] = agentid
+    if "default" not in data:
+        data["default"] = profile
+    _save_credentials(data)
+
+
+def load_agentid(profile: str | None = None) -> dict | None:
+    """Load a profile's AgentID identity, or None if not configured."""
+    data = _load_credentials()
+    if profile is None:
+        profile = data.get("default", DEFAULT_PROFILE)
+    return (data.get("profiles", {}).get(profile) or {}).get("agentid")
+
+
+def has_agentid(profile: str | None = None) -> bool:
+    """Return True if the profile has a ModelScope AgentID identity configured."""
+    return load_agentid(profile) is not None
+
+
 __all__ = [
     "CREDENTIALS_FILE",
     "DEFAULT_PROFILE",
@@ -198,6 +235,9 @@ __all__ = [
     "load_api_key",
     "delete_api_key",
     "has_api_key",
+    "save_agentid",
+    "load_agentid",
+    "has_agentid",
     "get_default_profile",
     "set_default_profile",
     "list_profiles",

@@ -460,6 +460,12 @@ class LocalAgentAuthenticator:
 
     async def validate(self, api_key: str) -> AgentIdentity | None:
         """Validate API key and return agent identity."""
+        # Reject empty/missing keys outright. ``api_key`` now defaults to "" on
+        # the request models (a missing apiKey no longer 422s at the schema), so
+        # a stray empty-string entry in agent_keys.yaml must not authenticate an
+        # unauthenticated request. Mirrors NoOpAuthenticator.validate.
+        if not api_key:
+            return None
         # Check local keys first
         if api_key in self._keys:
             return self._keys[api_key]
