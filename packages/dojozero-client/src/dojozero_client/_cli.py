@@ -1244,9 +1244,29 @@ def cmd_leave(args: argparse.Namespace) -> int:
 
     gateway_url = load_config().get_gateway_url(trial_id)
 
+    # AgentID mode: build the client so the offline DELETE carries a Bearer
+    # (an AgentID gateway rejects the X-Agent-ID path with 401).
+    agentid_client = None
+    agentid_audience = None
+    agentid = load_agentid(profile=_get_profile(args))
+    if agentid is not None:
+        from dojozero_client._agentid import build_agentid_client
+
+        try:
+            agentid_client, agentid_audience = build_agentid_client(agentid)
+        except (ValueError, RuntimeError) as e:
+            print(f"Error: invalid AgentID config: {e}", file=sys.stderr)
+            return 1
+
     try:
         result = asyncio.run(
-            DojoClient.unregister_agent(gateway_url, agent_id, session_key)
+            DojoClient.unregister_agent(
+                gateway_url,
+                agent_id,
+                session_key,
+                agentid_client=agentid_client,
+                agentid_audience=agentid_audience,
+            )
         )
         print(f"Left trial {trial_id}: {result.get('message', 'OK')}")
         state["status"] = "unregistered"

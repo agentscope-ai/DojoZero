@@ -406,7 +406,13 @@ class TrialHandler:
         from dojozero_client._config import load_config
 
         gateway_url = load_config().get_gateway_url(self.trial_id)
-        return await DojoClient.unregister_agent(gateway_url, agent_id, session_key)
+        return await DojoClient.unregister_agent(
+            gateway_url,
+            agent_id,
+            session_key,
+            agentid_client=self.agentid_client,
+            agentid_audience=self.agentid_audience,
+        )
 
     async def place_bet(
         self,

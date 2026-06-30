@@ -87,3 +87,52 @@ async def test_set_agent_id_does_not_leak_x_agent_id_in_agentid_mode():
     await transport.request("GET", "/balance")
     assert captured["xid"] is None
     assert captured["auth"] == "Bearer abc.def"
+
+
+@pytest.mark.asyncio
+async def test_offline_unregister_passes_agentid_client(monkeypatch):
+    """DojoClient.unregister_agent (offline leave path) threads the AgentID client
+    into the transport, so the DELETE carries a Bearer instead of X-Agent-ID.
+
+    Without this, an AgentID gateway 401s an offline `leave --unregister`.
+    """
+    from dojozero_client import _client
+
+    recorded: dict = {}
+
+    class _FakeTransport:
+        def __init__(
+            self, base_url, timeout=30.0, agentid_client=None, agentid_audience=None
+        ):
+            recorded["agentid_client"] = agentid_client
+            recorded["agentid_audience"] = agentid_audience
+
+        def set_agent_id(self, agent_id):
+            recorded["agent_id"] = agent_id
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def request(self, method, path, json=None):
+            recorded.update(method=method, path=path, json=json)
+            return {"message": "Unregistered successfully"}
+
+    monkeypatch.setattr(_client, "GatewayTransport", _FakeTransport)
+
+    fake_agentid = _FakeAgentIDClient()
+    out = await _client.DojoClient.unregister_agent(
+        "http://gw",
+        "agent_x",
+        "sk-1",
+        agentid_client=fake_agentid,
+        agentid_audience="hub_x",
+    )
+    assert out == {"message": "Unregistered successfully"}
+    assert recorded["agentid_client"] is fake_agentid
+    assert recorded["agentid_audience"] == "hub_x"
+    assert recorded["method"] == "DELETE"
+    assert recorded["path"] == "/agents/agent_x"
+    assert recorded["json"] == {"sessionKey": "sk-1"}

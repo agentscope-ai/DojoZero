@@ -842,12 +842,23 @@ class DojoClient:
         agent_id: str,
         session_key: str,
         timeout: float = 30.0,
+        agentid_client: Any = None,
+        agentid_audience: str | None = None,
     ) -> dict[str, Any]:
         """Unregister an agent from the server without a full connection.
 
         WARNING: This deletes the broker account — balance and bets are lost.
+
+        In AgentID mode pass ``agentid_client`` / ``agentid_audience`` so the
+        DELETE carries a verified Bearer — an AgentID gateway rejects the
+        X-Agent-ID path with 401.
         """
-        transport = GatewayTransport(base_url=gateway_url, timeout=timeout)
+        transport = GatewayTransport(
+            base_url=gateway_url,
+            timeout=timeout,
+            agentid_client=agentid_client,
+            agentid_audience=agentid_audience,
+        )
         transport.set_agent_id(agent_id)
         async with transport:
             return await transport.request(
