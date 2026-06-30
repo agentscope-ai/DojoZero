@@ -26,7 +26,7 @@ from fastapi import HTTPException
 from dojozero.gateway._models import ErrorCodes, ErrorDetail, ErrorResponse
 
 if TYPE_CHECKING:
-    from agent_id_service_sdk import (  # pyright: ignore[reportMissingImports]
+    from agent_id_service_sdk import (
         VerifiedAgent,
         Verifier,
     )
@@ -108,7 +108,7 @@ def agentid_verifier_from_env() -> "Verifier | None":
         return None
 
     try:
-        from agent_id_service_sdk import Verifier  # pyright: ignore[reportMissingImports]
+        from agent_id_service_sdk import Verifier
     except ImportError:
         logger.warning(
             "AgentID auth is configured (DOJOZERO_AGENTID_TRUSTED_PROVIDERS / "

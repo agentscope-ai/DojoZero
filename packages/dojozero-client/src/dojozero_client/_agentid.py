@@ -26,7 +26,7 @@ def build_agentid_client(agentid: dict) -> tuple[Any, str]:
         raise ValueError(f"AgentID config missing fields: {', '.join(missing)}")
 
     try:
-        from agent_id_client_sdk import (  # pyright: ignore[reportMissingImports]
+        from agent_id_client_sdk import (
             Client,
             Identity,
         )

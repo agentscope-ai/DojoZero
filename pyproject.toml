@@ -16,6 +16,8 @@ dojozero-client = { workspace = true }
 dev = [
     "dojozero",
     "dojozero-client",
+    "agent-id-service-sdk>=0.6.0",
+    "agent-id-client-sdk>=0.4.0",
     "oss2>=2.18.0",
     "alibabacloud-credentials>=1.0.0",
     "aliyun-log-python-sdk",
