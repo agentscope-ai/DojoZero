@@ -30,7 +30,7 @@ Ensure `dojozero-agent` is on your PATH after installation.
 dojozero-agent config --show
 ```
 
-Setup is complete when both dashboard URL and API key are configured.
+Setup is complete when the dashboard URL and one credential — a GitHub token, an API key, or a ModelScope AgentID — are configured. `config --show` lists whichever is set.
 
 ### Dashboard URL
 
@@ -44,7 +44,7 @@ The public server requires GitHub authentication (see below).
 
 ### Authentication
 
-If no API key is configured, ask the user which option they prefer:
+If no credential is configured, ask the user which option to use. **Which option works is set by the game's gateway, not a free choice** — the public server accepts A/B (GitHub token / API key); a ModelScope-gated gateway accepts only C (AgentID). If unsure, confirm the method with the game operator.
 
 **Option A: GitHub Personal Access Token (required for the public server, self-service)**
 

@@ -39,6 +39,7 @@ from dojozero_client._credentials import (
     has_agentid,
     has_api_key,
     list_profiles,
+    load_agentid,
     load_api_key,
     save_agentid,
     save_api_key,
@@ -1139,32 +1140,53 @@ def cmd_config(args: argparse.Namespace) -> int:
         print("Credentials (~/.dojozero/credentials.json):")
         profiles = list_profiles()
         if not profiles:
-            print("  (no API key configured)")
+            print("  (no credentials configured)")
             print("")
-            print("  To configure:")
+            print("  To configure (pick one):")
             print("    dojozero-agent config --api-key <your-api-key>")
+            print("    dojozero-agent config --github-token <ghp_...>")
+            print(
+                "    dojozero-agent config --agentid-agent-id <id> --agentid-kid <kid> \\"
+            )
+            print("      --agentid-key <agent.pem> --agentid-idp-url <url> \\")
+            print("      --agentid-audience <hub_client_id>   # ModelScope AgentID")
         else:
             default = get_default_profile()
+
+            def _print_api_key(key: str, label: str) -> None:
+                masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
+                print(f"  {label}: {masked} ({_detect_token_type(key)})")
+
+            def _print_agentid(ident: dict) -> None:
+                print("  AgentID (ModelScope):")
+                print(f"    agent_id: {ident.get('agent_id')}")
+                print(f"    kid:      {ident.get('kid')}")
+                print(f"    audience: {ident.get('audience')}")
+                print(f"    idp_url:  {ident.get('idp_url')}")
+                print(f"    key_path: {ident.get('key_path')}")
+
             if profile:
-                # Show specific profile
+                # Show specific profile (api key and/or AgentID)
                 key = load_api_key(profile=profile)
-                if key:
-                    masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
-                    token_type = _detect_token_type(key)
-                    print(f"  Profile: {profile}")
-                    print(f"  API key: {masked} ({token_type})")
-                else:
+                ident = load_agentid(profile=profile)
+                if not key and not ident:
                     print(f"  Profile '{profile}' not found")
                     return 1
+                print(f"  Profile: {profile}")
+                if key:
+                    _print_api_key(key, "API key")
+                if ident:
+                    _print_agentid(ident)
             else:
                 # Show all profiles
                 print(f"  Default profile: {default}")
                 print(f"  Profiles: {', '.join(profiles)}")
                 key = load_api_key()
                 if key:
-                    masked = key[:10] + "..." + key[-4:] if len(key) > 14 else "****"
-                    token_type = _detect_token_type(key)
-                    print(f"  API key ({default}): {masked} ({token_type})")
+                    _print_api_key(key, f"API key ({default})")
+                ident = load_agentid()
+                if ident:
+                    _print_agentid(ident)
         return 0
 
     print("Usage:")
