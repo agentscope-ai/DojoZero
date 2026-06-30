@@ -123,7 +123,12 @@ class RedisClient:
         try:
             import redis.asyncio as redis
 
-            self._client = redis.from_url(url, decode_responses=True)
+            self._client = redis.from_url(
+                url,
+                decode_responses=True,
+                socket_connect_timeout=40,
+                socket_timeout=40,
+            )
             await self._client.ping()
             self._connected = True
 
@@ -312,6 +317,32 @@ class RedisClient:
         except Exception as e:
             LOGGER.warning("Failed to get all trial info: %s", e)
             return {}
+
+    async def get_schedules(self) -> list[dict[str, Any]]:
+        """Get all scheduled trials written by the dashboard scheduler.
+
+        Reads the ``dojozero:schedules`` hash (schedule_id -> JSON), which the
+        dashboard server populates from the ESPN schedule and which therefore
+        contains upcoming (``phase == "waiting"``) games before any trial runs.
+        Note: this key is NOT under the ``arena:`` prefix.
+
+        Returns:
+            List of schedule dicts (see dashboard ScheduledTrial.to_dict()).
+        """
+        if not self._connected:
+            return []
+        try:
+            data = await self._client.hgetall("dojozero:schedules")
+            schedules: list[dict[str, Any]] = []
+            for value in data.values():
+                try:
+                    schedules.append(json.loads(value))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            return schedules
+        except Exception as e:
+            LOGGER.warning("Failed to get schedules: %s", e)
+            return []
 
     async def set_trial_info(self, trial_id: str, info: dict[str, Any]) -> None:
         """Set trial info for a specific trial.

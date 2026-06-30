@@ -42,6 +42,7 @@ class AgentProfileStats(BaseModel):
     win_rate: float = Field(default=0.0, serialization_alias="winRate")
     total_bets: int = Field(default=0, serialization_alias="totalBets")
     roi: float = 0.0
+    sharpe: float = 0.0
 
 
 class AgentProfileResponse(BaseModel):
@@ -75,11 +76,20 @@ class StatsResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
+    # serialization_alias matches the field name; kept for consistency with the
+    # rest of the model (every field declares its wire name) and rename-safety.
+    mode: Literal["betting", "prediction", "mixed"] = Field(
+        default="betting", serialization_alias="mode"
+    )
     games_played: int = Field(default=0, serialization_alias="gamesPlayed")
     live_now: int = Field(default=0, serialization_alias="liveNow")
     wagered_today: int = Field(default=0, serialization_alias="wageredToday")
     total_agents: int = Field(default=0, serialization_alias="totalAgents")
     bet_counts: int = Field(default=0, serialization_alias="betCounts")
+    prediction_count: int = Field(default=0, serialization_alias="predictionCount")
+    prediction_points: float = Field(
+        default=0.0, serialization_alias="predictionPoints"
+    )
 
 
 class GameCardData(BaseModel):
@@ -89,6 +99,11 @@ class GameCardData(BaseModel):
 
     id: str
     league: str = ""
+    # Contest type for sports run as multiple trials per match (e.g. World Cup
+    # runs both a window-pool "prediction" trial and a moneyline "betting"
+    # trial). Empty when unknown / not applicable. Used by the landing dedup to
+    # prefer the prediction trial. See _detect_contest_kind.
+    contest_kind: str = Field(default="", serialization_alias="contestKind")
     home_team: TeamIdentity = Field(
         default_factory=TeamIdentity,
         serialization_alias="homeTeam",

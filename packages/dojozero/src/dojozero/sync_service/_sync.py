@@ -25,6 +25,7 @@ from dojozero.arena_server._cache import (
     LandingPageCache,
 )
 from dojozero.arena_server._utils import (
+    _build_upcoming_games_from_schedules,
     _compute_leaderboard_from_spans,
     _compute_stats,
     _extract_agent_actions_from_spans,
@@ -32,6 +33,7 @@ from dojozero.arena_server._utils import (
     _extract_trial_info_from_spans,
     _filter_trials_by_league,
     TRIAL_INFO_OPERATION_NAMES,
+    trial_id_for_span_grouping,
 )
 from dojozero.core._tracing import SpanData, TraceReader, create_trace_reader
 from dojozero.betting import AgentInfo
@@ -275,10 +277,27 @@ class SyncService:
         if self._temp_cache is None:
             self._temp_cache = LandingPageCache(config=self.config)
 
-        # 1. Get trial list
-        start_dt = datetime.now(timezone.utc) - timedelta(
-            days=self.config.trials_lookback_days
-        )
+        # 1. Get trial list — single SLS query with the maximum lookback across
+        #    all configured leagues. Per-league differentiation is applied later
+        #    in `_refresh_aggregated_data` by filtering on game_date.
+        #
+        #    NOTE: We previously tried per-league SLS server-side filtering via
+        #    `list_trials(sport_type=...)`, but the SLS logstore's
+        #    `trial_sport_type` field is not enabled for SQL analysis, so the
+        #    server returns 400. To re-enable SLS-side filtering: open the SLS
+        #    console -> logstore -> index settings -> enable statistical
+        #    analysis on `trial_sport_type`, then switch this block to call
+        #    `list_trials` per league using `self.config.league_lookback_days`.
+        now = datetime.now(timezone.utc)
+        league_lookbacks = self.config.league_lookback_days
+        if league_lookbacks:
+            effective_lookback_days = max(
+                max(league_lookbacks.values()), self.config.trials_lookback_days
+            )
+        else:
+            effective_lookback_days = self.config.trials_lookback_days
+
+        start_dt = now - timedelta(days=effective_lookback_days)
         trial_ids = await self.trace_reader.list_trials(
             start_time=start_dt, limit=self.config.trials_limit
         )
@@ -287,13 +306,19 @@ class SyncService:
             LOGGER.info("SyncService: No trials found, skipping sync")
             return
 
-        LOGGER.info("SyncService: [2/8] Trial list fetched (%d trials)", len(trial_ids))
+        LOGGER.info(
+            "SyncService: [2/8] Trial list fetched (%d trials, lookback=%dd)",
+            len(trial_ids),
+            effective_lookback_days,
+        )
 
-        # 2. Fetch spans - full or incremental
-        now = datetime.now(timezone.utc)
+        # 2. Fetch spans - full or incremental.
+        #    Span fetch is a time-window bulk query and cannot be filtered by
+        #    sport_type at the SLS level. Use the maximum league lookback as
+        #    the window so all per-league windows are covered.
         if is_initial or self._last_sync_time is None:
             # Full fetch with lookback buffer
-            spans_start_dt = now - timedelta(days=self.config.trials_lookback_days + 1)
+            spans_start_dt = now - timedelta(days=effective_lookback_days + 1)
             all_spans = await self.trace_reader.get_all_spans(start_time=spans_start_dt)
             LOGGER.info(
                 "SyncService: [3/8] Full fetch complete (%d spans)", len(all_spans)
@@ -315,7 +340,7 @@ class SyncService:
         # 3. Group spans by trial_id, tracking which trials got new spans
         trials_with_new_spans: set[str] = set()
         for span in all_spans:
-            trial_id = span.trace_id
+            trial_id = trial_id_for_span_grouping(span)
             if trial_id not in self._spans_by_trial:
                 self._spans_by_trial[trial_id] = []
             self._spans_by_trial[trial_id].append(span)
@@ -417,6 +442,35 @@ class SyncService:
             if info is not None:
                 trial_metadata[tid] = info
 
+        # Helper: per-league trial id list, additionally filtered by per-league
+        # lookback (game_date >= now - league_lookback_days).
+        now_for_league = datetime.now(timezone.utc)
+
+        async def _league_trial_ids(league: str) -> list[str]:
+            ids = await _filter_trials_by_league(
+                self.trace_reader, trial_ids, league, self._temp_cache
+            )
+            league_lookback = self.config.get_league_lookback(league)
+            # Skip date filter if league lookback is >= global (no narrowing).
+            if league_lookback >= self.config.trials_lookback_days:
+                return ids
+            cutoff = (now_for_league - timedelta(days=league_lookback)).strftime(
+                "%Y-%m-%d"
+            )
+            return self._filter_trials_by_date(ids, trial_metadata, start_date=cutoff)
+
+        # The per-league filtered id list is identical for stats, games,
+        # leaderboard, and agent actions within a sync cycle — compute it once.
+        #
+        # Kept sequential on purpose (do NOT asyncio.gather): every league filters
+        # the same trial_ids and _filter_trials_by_league caches trial_info in the
+        # shared _temp_cache. The first league warms that cache so the rest hit it
+        # in-memory; parallelizing would race cold-cache misses and re-fetch the
+        # same trial_info concurrently.
+        league_trial_ids: dict[str, list[str]] = {
+            league: await _league_trial_ids(league) for league in CACHEABLE_LEAGUES
+        }
+
         # Stats (global + per-league)
         stats = await _compute_stats(
             self.trace_reader, trial_ids, self._temp_cache, self._spans_by_trial
@@ -424,26 +478,41 @@ class SyncService:
         self._temp_cache.set_stats(stats, league=None)
 
         for league in CACHEABLE_LEAGUES:
-            filtered_ids = await _filter_trials_by_league(
-                self.trace_reader, trial_ids, league, self._temp_cache
-            )
+            filtered_ids = league_trial_ids[league]
             league_stats = await _compute_stats(
                 self.trace_reader, filtered_ids, self._temp_cache, self._spans_by_trial
             )
             self._temp_cache.set_stats(league_stats, league=league)
 
-        # Games (global + per-league)
+        # Games (global + per-league). Upcoming games come from the dashboard
+        # schedule (future games have no spans yet), so merge them in here.
+        schedules = await self.redis_client.get_schedules()
+
         games = await _extract_games_from_trials(
-            self.trace_reader, trial_ids, self._temp_cache
+            self.trace_reader,
+            trial_ids,
+            self._temp_cache,
+            spans_by_trial=self._spans_by_trial,
+        )
+        games = games.model_copy(
+            update={"upcoming_games": _build_upcoming_games_from_schedules(schedules)}
         )
         self._temp_cache.set_games(games, league=None)
 
         for league in CACHEABLE_LEAGUES:
-            filtered_ids = await _filter_trials_by_league(
-                self.trace_reader, trial_ids, league, self._temp_cache
-            )
+            filtered_ids = league_trial_ids[league]
             league_games = await _extract_games_from_trials(
-                self.trace_reader, filtered_ids, self._temp_cache
+                self.trace_reader,
+                filtered_ids,
+                self._temp_cache,
+                spans_by_trial=self._spans_by_trial,
+            )
+            league_games = league_games.model_copy(
+                update={
+                    "upcoming_games": _build_upcoming_games_from_schedules(
+                        schedules, league=league
+                    )
+                }
             )
             self._temp_cache.set_games(league_games, league=league)
 
@@ -459,13 +528,20 @@ class SyncService:
         self._temp_cache.set_agent_bets_index(result.agent_bets_index)
 
         for league in CACHEABLE_LEAGUES:
-            league_ids = [
-                tid for tid in trial_ids if self._trial_matches_league(tid, league)
-            ]
+            league_ids = league_trial_ids[league]
             league_result = _compute_leaderboard_from_spans(
                 self._spans_by_trial, agent_info_cache, league_ids
             )
             self._temp_cache.set_leaderboard(league_result.leaderboard, league=league)
+
+        # Per-league id sets, reused for intersecting the period boards below.
+        # Using the same pre-computed `league_trial_ids` as the all-time board
+        # keeps both consistent: the period board applies the identical league
+        # filter *and* per-league lookback cutoff, instead of re-deriving league
+        # membership from a cache-only sport_type check.
+        league_id_sets = {
+            league: set(league_trial_ids[league]) for league in CACHEABLE_LEAGUES
+        }
 
         # Period leaderboards (7d/14d/30d) — global + per-league
         period_days = {"7d": 7, "14d": 14, "30d": 30}
@@ -490,9 +566,7 @@ class SyncService:
             )
             for league in CACHEABLE_LEAGUES:
                 league_period_ids = [
-                    tid
-                    for tid in period_trial_ids
-                    if self._trial_matches_league(tid, league)
+                    tid for tid in period_trial_ids if tid in league_id_sets[league]
                 ]
                 lp_result = _compute_leaderboard_from_spans(
                     self._spans_by_trial,
@@ -517,9 +591,7 @@ class SyncService:
         self._temp_cache.set_agent_actions(actions, league=None)
 
         for league in CACHEABLE_LEAGUES:
-            league_ids = [
-                tid for tid in trial_ids if self._trial_matches_league(tid, league)
-            ]
+            league_ids = league_trial_ids[league]
             league_actions = _extract_agent_actions_from_spans(
                 self._spans_by_trial,
                 agent_info_cache,
@@ -528,17 +600,6 @@ class SyncService:
                 max_trials=self.config.agent_actions_max_trials,
             )
             self._temp_cache.set_agent_actions(league_actions, league=league)
-
-    def _trial_matches_league(self, trial_id: str, league: str) -> bool:
-        """Check if a trial matches a specific league."""
-        if self._temp_cache is None:
-            return False
-        trial_info = self._temp_cache.get_trial_info(trial_id)
-        if trial_info is None:
-            return False
-        metadata = trial_info.get("metadata", {})
-        trial_league = metadata.get("sport_type", "")
-        return trial_league.upper() == league.upper()
 
     @staticmethod
     def _filter_trials_by_date(
@@ -566,6 +627,10 @@ class SyncService:
             meta = info.get("metadata", {})
             gd = meta.get("game_date", "")
             if not gd:
+                # By design: a trial with no game_date cannot be placed in a
+                # date-windowed view (per-league lookback / period boards), so it
+                # is excluded here. Such trials still appear on the global board,
+                # which applies no date filter.
                 continue
             if start_date and gd < start_date:
                 continue

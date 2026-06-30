@@ -40,7 +40,21 @@ class CacheConfig:
     trials_limit: int = 500
 
     # Time range
-    trials_lookback_days: int = 90
+    trials_lookback_days: int = 365
+    # Per-league lookback override (in days). League name uppercase.
+    # Used to filter per-league cached views (leaderboard/games/stats/agent_actions).
+    # May exceed trials_lookback_days: the SLS fetch window auto-expands to
+    # max(trials_lookback_days, max(league_lookback_days.values())) in _sync, so a
+    # larger per-league window is still fully covered.
+    league_lookback_days: dict[str, int] = field(
+        default_factory=lambda: {"NBA": 90, "NFL": 365}
+    )
+
+    def get_league_lookback(self, league: str | None) -> int:
+        """Effective lookback (days) for a given league. Falls back to global."""
+        if league is None:
+            return self.trials_lookback_days
+        return self.league_lookback_days.get(league.upper(), self.trials_lookback_days)
 
     @classmethod
     def from_arena_config(cls, config: "ArenaServerConfig") -> "CacheConfig":
@@ -55,6 +69,7 @@ class CacheConfig:
             leaderboard_limit=config.query_limits.leaderboard_limit,
             trials_limit=config.cache.trials_limit,
             trials_lookback_days=config.cache.trials_lookback_days,
+            league_lookback_days=dict(config.cache.league_lookback_days),
         )
 
 

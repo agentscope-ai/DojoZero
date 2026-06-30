@@ -4,6 +4,7 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -58,6 +59,23 @@ TRIAL_INFO_OPERATION_NAMES = [
     "event.ncaa_game_update",
     "event.world_cup_game_update",
 ]
+
+# World Cup half/extra-time/penalty period labels mapped to ordinal period ids.
+# Module-level constant so it is not rebuilt on every _coerce_period call in
+# replay-heavy paths.
+_PERIOD_LABELS = {"1H": 1, "2H": 2, "ET1": 3, "ET2": 4, "PEN": 5}
+
+
+@dataclass(slots=True, frozen=True)
+class BrokerStatsAggregate:
+    """Aggregate broker stats used by landing page summary cards."""
+
+    total_wagered: float = 0.0
+    betting_count: int = 0
+    prediction_count: int = 0
+    prediction_points: float = 0.0
+    has_betting_data: bool = False
+    has_prediction_data: bool = False
 
 
 def _build_arena_rendered_operations() -> list[str]:
@@ -114,6 +132,46 @@ def _trial_counts_as_live_for_arena(trial_info: dict[str, Any]) -> bool:
         or (bool(home) and home != "TBD")
         or (bool(away) and away != "TBD")
     )
+
+
+def _detect_contest_kind(spans: list[SpanData]) -> str:
+    """Classify a trial's contest type: "prediction", "betting", or "".
+
+    World Cup games run as both a window-pool prediction trial and a moneyline
+    betting trial, so the landing dedup uses this to prefer the prediction one.
+
+    Primary signal is the ``broker.final_stats`` span's ``contest_kind``
+    (``window_pool_prediction`` vs ``classic_betting``): it is in
+    ``ARENA_RENDERED_OPERATIONS``, so it survives the dev-mode span whitelist.
+    For trials still in progress (no final_stats yet) we fall back to the broker
+    ``operator.registered`` span.
+
+    Single pass: ``broker.final_stats`` is authoritative and returns immediately,
+    while ``operator.registered`` is only recorded as a fallback (span order is
+    not guaranteed, so a later final_stats must still win over an earlier
+    registration).
+    """
+    fallback = ""
+    for span in spans:
+        if not span.tags:
+            continue
+        if span.operation_name == "broker.final_stats":
+            kind = str(
+                span.tags.get("broker.contest_kind")
+                or span.tags.get("contest_kind")
+                or ""
+            ).lower()
+            if "prediction" in kind:
+                return "prediction"
+            if kind:  # classic_betting / any other broker-shaped contest
+                return "betting"
+        elif span.operation_name == "operator.registered" and not fallback:
+            actor = span.tags.get("actor.id", "")
+            if "prediction_broker" in actor:
+                fallback = "prediction"
+            elif "betting_broker" in actor:
+                fallback = "betting"
+    return fallback
 
 
 def trial_id_for_span_grouping(span: SpanData) -> str:
@@ -438,6 +496,104 @@ def _overlay_live_scores_from_spans(
             metadata[key] = sm[key]
 
 
+_TEAM_LOGO_BY_LEAGUE: dict[str, str] = {
+    "NBA": "https://a.espncdn.com/i/teamlogos/nba/500/{code}.png",
+    "NFL": "https://a.espncdn.com/i/teamlogos/nfl/500/{code}.png",
+    "WORLD_CUP": "https://a.espncdn.com/i/teamlogos/countries/500/{code}.png",
+}
+
+
+def _upcoming_logo_url(league: str, tricode: str) -> str:
+    """Build an ESPN logo URL from a team tricode (World Cup uses country codes)."""
+    template = _TEAM_LOGO_BY_LEAGUE.get(league.upper())
+    code = (tricode or "").strip().lower()
+    if not template or not code:
+        return ""
+    return template.format(code=code)
+
+
+def _build_upcoming_games_from_schedules(
+    schedules: list[dict[str, Any]],
+    league: str | None = None,
+) -> list[GameCardData]:
+    """Build upcoming game cards from dashboard schedule entries.
+
+    The dashboard scheduler stores future games (``phase == "waiting"``) with
+    team metadata before any trial runs, so this is the source for "upcoming"
+    cards on the landing page. Each match is scheduled as two trials (betting +
+    prediction); we de-duplicate by ESPN game id, preferring the prediction
+    entry to stay consistent with the contest the landing dedup surfaces. Only
+    schedules whose kickoff is still in the future are returned, sorted by time.
+    """
+    league_filter = league.upper() if league else None
+    now = datetime.now(timezone.utc)
+    by_game: dict[str, GameCardData] = {}
+    stored_is_prediction: dict[str, bool] = {}
+
+    for sched in schedules:
+        if sched.get("phase") != "waiting":
+            continue
+
+        sport_type = str(sched.get("sport_type") or "")
+        league_code = sport_type.upper()
+        if league_filter and league_code != league_filter:
+            continue
+
+        try:
+            event_time = datetime.fromisoformat(str(sched.get("event_time") or ""))
+        except ValueError:
+            continue
+        if event_time.tzinfo is None:
+            event_time = event_time.replace(tzinfo=timezone.utc)
+        if event_time <= now:
+            continue
+
+        game_id = str(sched.get("game_id") or "")
+        if not game_id:
+            continue
+        game_key = f"{league_code}:{game_id}"
+
+        meta = sched.get("metadata") or {}
+        source_id = str(meta.get("source_id") or sched.get("scenario_name") or "")
+        is_prediction = "prediction" in source_id.lower()
+        if game_key in by_game and (
+            not is_prediction or stored_is_prediction[game_key]
+        ):
+            continue
+
+        home_tricode = str(meta.get("home_tricode") or "")
+        away_tricode = str(meta.get("away_tricode") or "")
+        home_team = TeamIdentity(
+            name=str(meta.get("home_team") or home_tricode),
+            tricode=home_tricode,
+            logo_url=_upcoming_logo_url(league_code, home_tricode),
+        )
+        away_team = TeamIdentity(
+            name=str(meta.get("away_team") or away_tricode),
+            tricode=away_tricode,
+            logo_url=_upcoming_logo_url(league_code, away_tricode),
+        )
+
+        by_game[game_key] = GameCardData(
+            id=f"{sport_type}-game-{game_id}-upcoming",
+            league=league_code,
+            home_team=home_team,
+            away_team=away_team,
+            status="upcoming",
+            date=event_time.isoformat(),
+            quarter="",
+            clock="",
+            bets=[],
+            contest_kind="prediction" if is_prediction else "betting",
+        )
+        stored_is_prediction[game_key] = is_prediction
+
+    # Sort by actual kickoff time, not the ISO string: aware datetimes with
+    # non-UTC offsets (e.g. World Cup local kickoffs) do not order correctly
+    # lexicographically.
+    return sorted(by_game.values(), key=lambda g: datetime.fromisoformat(g.date))
+
+
 async def _extract_games_from_trials(
     trace_reader: TraceReader,
     trial_ids: list[str],
@@ -474,8 +630,11 @@ async def _extract_games_from_trials(
 
         phase = trial_info["phase"]
         metadata = dict(trial_info.get("metadata") or {})
+        contest_kind = ""
         if spans_by_trial is not None:
-            _overlay_live_scores_from_spans(metadata, spans_by_trial.get(trial_id, []))
+            trial_spans = spans_by_trial.get(trial_id, [])
+            _overlay_live_scores_from_spans(metadata, trial_spans)
+            contest_kind = _detect_contest_kind(trial_spans)
         # Normalize league to uppercase for frontend compatibility
         league = metadata.get("sport_type", "NBA").upper()
 
@@ -562,6 +721,7 @@ async def _extract_games_from_trials(
         game_card = GameCardData(
             id=trial_id,
             league=league,
+            contest_kind=contest_kind,
             home_team=home_team,
             away_team=away_team,
             home_score=metadata.get("home_score", 0),
@@ -756,51 +916,51 @@ async def _compute_stats(
         elif _trial_counts_as_live_for_arena(trial_info):
             live_now += 1
 
-    # Calculate total wagered from broker.final_stats spans
-    wagered_today = await _compute_total_wagered(
-        trace_reader, trial_ids, spans_by_trial
-    )
-
-    # Calculate total bet counts from broker.final_stats spans
-    bet_counts = await _compute_total_bet_counts(
-        trace_reader, trial_ids, spans_by_trial
-    )
+    broker_stats = await _compute_broker_stats(trace_reader, trial_ids, spans_by_trial)
+    wagered_today = broker_stats.total_wagered
+    # bet_counts is betting-only; predictions are exposed separately via
+    # prediction_count so a pure-prediction (e.g. World Cup) trial reads as
+    # 0 bets rather than conflating wagers with predictions.
+    bet_counts = broker_stats.betting_count
+    mode: Literal["betting", "prediction", "mixed"] = "betting"
+    if broker_stats.has_prediction_data and broker_stats.has_betting_data:
+        mode = "mixed"
+    elif broker_stats.has_prediction_data:
+        mode = "prediction"
 
     # Get total agents from cache
     total_agents = cache.get_total_agents() if cache else 0
 
     return StatsResponse(
+        mode=mode,
         games_played=games_played,
         live_now=live_now,
         wagered_today=int(wagered_today),
         total_agents=total_agents,
         bet_counts=bet_counts,
+        prediction_count=broker_stats.prediction_count,
+        prediction_points=broker_stats.prediction_points,
     )
 
 
-async def _compute_total_wagered(
+async def _compute_broker_stats(
     trace_reader: TraceReader,
     trial_ids: list[str],
     spans_by_trial: dict[str, list[SpanData]] | None = None,
-) -> float:
-    """Compute total wagered amount from broker.final_stats spans.
+) -> BrokerStatsAggregate:
+    """Compute betting and prediction stats from broker.final_stats spans."""
 
-    Args:
-        trace_reader: Trace reader for fetching spans
-        trial_ids: List of trial IDs to process
-        spans_by_trial: Optional pre-fetched spans grouped by trial_id
-
-    Returns:
-        Total wagered amount across all trials
-    """
     total_wagered = 0.0
+    betting_count = 0
+    prediction_count = 0
+    prediction_points = 0.0
+    has_betting_data = False
+    has_prediction_data = False
 
     for trial_id in trial_ids:
         try:
-            # Use pre-fetched spans if available, otherwise query
             if spans_by_trial is not None:
                 spans = spans_by_trial.get(trial_id, [])
-                # Filter to broker.final_stats spans
                 final_stats_spans = [
                     s for s in spans if s.operation_name == "broker.final_stats"
                 ]
@@ -810,12 +970,39 @@ async def _compute_total_wagered(
                     operation_names=["broker.final_stats"],
                 )
 
-            # Extract total_wagered from BrokerFinalStats
             for span in final_stats_spans:
                 typed = deserialize_span(span)
-                if isinstance(typed, BrokerFinalStats):
-                    for stats in typed.statistics.values():
-                        total_wagered += float(stats.total_wagered)
+                if not isinstance(typed, BrokerFinalStats):
+                    continue
+
+                # Symmetric with the prediction check below: use contest_kind as
+                # a signal, not just activity counts, so a betting trial where
+                # nobody bet (statistics={}, bets_count=0) is still detected as
+                # betting and not misclassified as prediction-only.
+                if (
+                    typed.statistics
+                    or typed.bets_count
+                    or typed.contest_kind == "classic_betting"
+                ):
+                    has_betting_data = True
+                for stats in typed.statistics.values():
+                    total_wagered += float(stats.total_wagered)
+                betting_count += typed.bets_count
+
+                if (
+                    typed.prediction_statistics
+                    or typed.predictions
+                    or typed.window_pools
+                    or typed.contest_kind == "window_pool_prediction"
+                ):
+                    has_prediction_data = True
+
+                if typed.prediction_statistics:
+                    for pred_stat in typed.prediction_statistics.values():
+                        prediction_count += pred_stat.total_predictions
+                        prediction_points += float(pred_stat.total_score)
+                elif typed.predictions:
+                    prediction_count += len(typed.predictions)
 
         except Exception as e:
             LOGGER.warning(
@@ -825,56 +1012,14 @@ async def _compute_total_wagered(
             )
             continue
 
-    return total_wagered
-
-
-async def _compute_total_bet_counts(
-    trace_reader: TraceReader,
-    trial_ids: list[str],
-    spans_by_trial: dict[str, list[SpanData]] | None = None,
-) -> int:
-    """Compute total bet counts from broker.final_stats spans.
-
-    Args:
-        trace_reader: Trace reader for fetching spans
-        trial_ids: List of trial IDs to process
-        spans_by_trial: Optional pre-fetched spans grouped by trial_id
-
-    Returns:
-        Total bet counts across all trials
-    """
-    total_bet_counts = 0
-
-    for trial_id in trial_ids:
-        try:
-            # Use pre-fetched spans if available, otherwise query
-            if spans_by_trial is not None:
-                spans = spans_by_trial.get(trial_id, [])
-                # Filter to broker.final_stats spans
-                final_stats_spans = [
-                    s for s in spans if s.operation_name == "broker.final_stats"
-                ]
-            else:
-                final_stats_spans = await trace_reader.get_spans(
-                    trial_id,
-                    operation_names=["broker.final_stats"],
-                )
-
-            # Extract bets_count from BrokerFinalStats
-            for span in final_stats_spans:
-                typed = deserialize_span(span)
-                if isinstance(typed, BrokerFinalStats):
-                    total_bet_counts += typed.bets_count
-
-        except Exception as e:
-            LOGGER.warning(
-                "Failed to get broker.final_stats for trial '%s': %s",
-                trial_id,
-                e,
-            )
-            continue
-
-    return total_bet_counts
+    return BrokerStatsAggregate(
+        total_wagered=total_wagered,
+        betting_count=betting_count,
+        prediction_count=prediction_count,
+        prediction_points=prediction_points,
+        has_betting_data=has_betting_data,
+        has_prediction_data=has_prediction_data,
+    )
 
 
 @dataclass
@@ -1186,9 +1331,11 @@ def _compute_leaderboard_from_spans(
             # Calculate prediction stats
             pred_score = None
             accuracy = None
+            total_predictions = None
             if agent_id in agent_pred_stats:
                 stats = agent_pred_stats[agent_id]
                 pred_score = round(stats["total_score"], 2)
+                total_predictions = stats["total_predictions"]
                 if stats["total_predictions"] > 0:
                     accuracy = round(
                         (stats["correct_predictions"] / stats["total_predictions"])
@@ -1212,6 +1359,7 @@ def _compute_leaderboard_from_spans(
                     createdAt=agent_info.created_at,
                     predictionScore=pred_score,
                     accuracy=accuracy,
+                    totalPredictions=total_predictions,
                 )
             )
     else:
@@ -1239,20 +1387,12 @@ def _compute_leaderboard_from_spans(
                 )
             )
 
-    # Determine which field to sort by based on available data.
-    # In prediction mode there is no balance/ROI/win-rate, so all betting sort
-    # keys must remap to prediction_score — otherwise the lambdas return 0 for
-    # every entry and the sort is deterministically wrong.
-    effective_sort_by = sort_by
-    if has_prediction_data and sort_by in (
-        "winnings",
-        "win_rate",
-        "roi",
-        "total_bets",
-    ):
-        effective_sort_by = "prediction_score"
-
-    # Sort by requested field
+    # Sort by the requested field only. The prediction-view remap (betting sort
+    # keys -> prediction_score for WORLD_CUP / mode=prediction) is intentionally
+    # NOT applied here: the cache stores a neutral, request-sorted baseline and the
+    # serving layer (_endpoints.get_leaderboard) owns the view-specific remap, so
+    # the two cannot diverge. Remapping at this layer also wrongly reordered the
+    # mixed global board by prediction_score and buried pure-bettor agents.
     sort_key_map: dict[str, Any] = {
         "winnings": lambda x: x.winnings,
         "win_rate": lambda x: x.win_rate,
@@ -1263,8 +1403,11 @@ def _compute_leaderboard_from_spans(
             x.prediction_score if x.prediction_score is not None else -float("inf")
         ),
         "accuracy": lambda x: x.accuracy if x.accuracy is not None else -float("inf"),
+        "total_predictions": lambda x: (
+            x.total_predictions if x.total_predictions is not None else -float("inf")
+        ),
     }
-    key_fn = sort_key_map.get(effective_sort_by, sort_key_map["winnings"])
+    key_fn = sort_key_map.get(sort_by, sort_key_map["winnings"])
     leaderboard.sort(key=key_fn, reverse=(sort_order != "asc"))
 
     entries = leaderboard[:limit] if limit is not None else leaderboard
@@ -1317,6 +1460,7 @@ def _compute_agent_profile(
             win_rate=entry.win_rate,
             total_bets=entry.total_bets,
             roi=entry.roi,
+            sharpe=entry.sharpe,
         )
         # Use the agent from leaderboard (has is_external/created_at filled)
         agent_info = entry.agent
@@ -1407,6 +1551,21 @@ def _compute_replay_meta(
 
     current_period: int = 1  # Default period
 
+    def _coerce_period(raw_period: Any) -> int:
+        if isinstance(raw_period, str):
+            label_period = _PERIOD_LABELS.get(raw_period.strip().upper())
+            if label_period is not None:
+                return label_period
+
+        try:
+            period = int(raw_period)
+        except (TypeError, ValueError):
+            return current_period
+
+        if period <= 0:
+            return max(current_period, 1)
+        return period
+
     for item_index, item in enumerate(items):
         category = item.get("category", "")
         data = item.get("data", {})
@@ -1432,8 +1591,8 @@ def _compute_replay_meta(
 
             # Get period from play data
             period = data.get("period")
-            if period is not None and isinstance(period, int):
-                current_period = period
+            if period is not None:
+                current_period = _coerce_period(period)
 
             # Track period stats
             if current_period not in period_play_counts:

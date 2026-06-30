@@ -58,3 +58,21 @@ def test_seek_to_play_index_prefers_final_stats_over_state_update():
 
     assert "final_stats" in categories
     assert "state_update" not in categories
+
+
+def test_replay_meta_folds_period_zero_into_first_period():
+    items = [
+        _item("game_update", period=0, game_clock="0'", home_score=0, away_score=0),
+        _item("play", period=0, game_clock="0'", description="pregame touch"),
+        _item("game_update", period=1, game_clock="1'", home_score=0, away_score=0),
+        _item("play", period=1, game_clock="1'", description="first half"),
+        _item("game_update", period=2, game_clock="46'", home_score=0, away_score=0),
+        _item("play", period=2, game_clock="46'", description="second half"),
+    ]
+
+    meta = _compute_replay_meta(items, ["play", "game_update"])
+
+    assert [(p.period, p.start_play_index, p.play_count) for p in meta.periods] == [
+        (1, 0, 4),
+        (2, 4, 2),
+    ]
