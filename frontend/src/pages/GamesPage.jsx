@@ -551,7 +551,9 @@ function GameRow({ game, index }) {
               game.home_team.abbrev
             )}
           </span>
-          <span>{game.home_team.name}</span>
+          <span style={game.status === "completed" && game.winning_team === "home" ? styles.winningTeamName : undefined}>
+            {game.home_team.name}
+          </span>
         </div>
         <span style={styles.gameRowVs}>vs</span>
         <div style={styles.gameRowTeam}>
@@ -565,7 +567,9 @@ function GameRow({ game, index }) {
               game.away_team.abbrev
             )}
           </span>
-          <span>{game.away_team.name}</span>
+          <span style={game.status === "completed" && game.winning_team === "away" ? styles.winningTeamName : undefined}>
+            {game.away_team.name}
+          </span>
         </div>
       </div>
 
@@ -583,6 +587,9 @@ function GameRow({ game, index }) {
         {game.status === "completed" && (
           <span style={styles.finalScore}>
             Final: {game.home_score} - {game.away_score}
+            {game.result_note && (
+              <span style={styles.resultNote}> ({game.result_note})</span>
+            )}
           </span>
         )}
       </div>
@@ -1198,6 +1205,13 @@ const styles = {
   finalScore: {
     fontSize: 14,
     color: "var(--text-secondary)",
+  },
+  resultNote: {
+    fontStyle: "italic",
+  },
+  winningTeamName: {
+    fontWeight: 700,
+    color: "var(--text-primary)",
   },
   gameRowResult: {},
   winnerInfo: {
