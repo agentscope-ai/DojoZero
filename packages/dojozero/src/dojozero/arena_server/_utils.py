@@ -43,7 +43,12 @@ from dojozero.core import (
     TraceReader,
     TrialLifecycleSpan,
 )
-from dojozero.data import BaseGameUpdateEvent, GameInitializeEvent, TeamIdentity
+from dojozero.data import (
+    BaseGameUpdateEvent,
+    GameInitializeEvent,
+    GameResultEvent,
+    TeamIdentity,
+)
 
 LOGGER = logging.getLogger("dojozero.arena_server.utils")
 
@@ -264,6 +269,15 @@ def _extract_trial_info_from_spans(spans: list[SpanData]) -> dict[str, Any]:
             if span_time > latest_game_update_time:
                 latest_game_update_time = span_time
                 latest_game_update = typed
+
+        elif isinstance(typed, GameResultEvent):
+            has_game_result = True
+            # "home"/"away"/"even" -- the actual match winner. Distinct from
+            # the score comparison below: knockout games decided by a penalty
+            # shootout still have a winner even though home_score/away_score
+            # (regulation + extra time only) come out tied.
+            if typed.winner:
+                metadata["result_winner"] = typed.winner
 
         elif "game_result" in span.operation_name:
             has_game_result = True
@@ -718,6 +732,29 @@ async def _extract_games_from_trials(
             clock_raw = metadata.get("clock")
         clock_str = "" if clock_raw is None else str(clock_raw)
 
+        # Actual match winner ("home"/"away"/"even"). For World Cup knockouts,
+        # also note how a win beyond regulation was reached: extra time
+        # (period 3/4) is decided by a goal, so the score is decisive and the
+        # winner comes from the score; a penalty shootout (period 5) leaves the
+        # score level -- the shootout does not change home_score/away_score --
+        # so a tied score is a real winner, not an impossible draw, and the
+        # winner is resolved upstream from ESPN's competitor flag.
+        winning_team = ""
+        result_note = ""
+        if phase in ("completed", "stopped"):
+            winning_team = str(metadata.get("result_winner", "") or "")
+            if league == "WORLD_CUP" and winning_team in ("home", "away"):
+                try:
+                    final_period = (
+                        int(period_raw) if period_raw not in (None, "") else 0
+                    )
+                except (TypeError, ValueError):
+                    final_period = 0
+                if final_period == 5:
+                    result_note = "Decided on penalties"
+                elif final_period in (3, 4):
+                    result_note = "Decided in extra time"
+
         game_card = GameCardData(
             id=trial_id,
             league=league,
@@ -737,6 +774,8 @@ async def _extract_games_from_trials(
             win_amount=metadata.get("win_amount", 0)
             if phase in ("completed", "stopped")
             else 0,
+            winning_team=winning_team,
+            result_note=result_note,
         )
 
         if phase == "running" or has_game_hint:

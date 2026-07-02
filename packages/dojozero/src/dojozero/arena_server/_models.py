@@ -123,6 +123,15 @@ class GameCardData(BaseModel):
     # Completed-only fields
     winner: str | None = None
     win_amount: float = Field(default=0, serialization_alias="winAmount")
+    # Actual match result winner ("home"/"away"/"even"), independent of the
+    # `winner` field above (which names the top-earning betting agent, not a
+    # team). Needed because a tied score after regulation/extra time does not
+    # mean the match was a draw -- knockout games are decided by a penalty
+    # shootout, which does not change home_score/away_score.
+    winning_team: str = Field(default="", serialization_alias="winningTeam")
+    # Human-readable note for how the match was decided, e.g. "Decided on
+    # penalties" or "Decided in extra time". Empty when not applicable.
+    result_note: str = Field(default="", serialization_alias="resultNote")
 
 
 class GamesResponse(BaseModel):
