@@ -732,10 +732,13 @@ async def _extract_games_from_trials(
             clock_raw = metadata.get("clock")
         clock_str = "" if clock_raw is None else str(clock_raw)
 
-        # Actual match winner ("home"/"away"/"even") and, for World Cup
-        # knockout matches, a note explaining a tied home_score/away_score
-        # (extra time goals count toward the score; a penalty shootout does
-        # not, so the score alone can look like an impossible draw).
+        # Actual match winner ("home"/"away"/"even"). For World Cup knockouts,
+        # also note how a win beyond regulation was reached: extra time
+        # (period 3/4) is decided by a goal, so the score is decisive and the
+        # winner comes from the score; a penalty shootout (period 5) leaves the
+        # score level -- the shootout does not change home_score/away_score --
+        # so a tied score is a real winner, not an impossible draw, and the
+        # winner is resolved upstream from ESPN's competitor flag.
         winning_team = ""
         result_note = ""
         if phase in ("completed", "stopped"):

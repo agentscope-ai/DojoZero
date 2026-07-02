@@ -1,9 +1,12 @@
-"""World Cup elimination games decided by a penalty shootout keep a tied
-home_score/away_score (extra-time goals count toward the score; the shootout
-itself does not), but the match still has a winner. Regression tests for
-`_extract_trial_info_from_spans`/`_extract_games_from_trials` surfacing that
-winner (and a "decided on penalties/extra time" note) to the games API
-instead of silently dropping it -- see issue #254.
+"""World Cup elimination games can't end in a draw: a tie after regulation is
+settled in extra time or, if still level, by a penalty shootout -- so both
+must surface a real winner (and a "decided in extra time" / "decided on
+penalties" note) to the games API. The two cases differ: an extra-time win is
+decisive on the score (the winner comes from the score comparison), whereas a
+shootout win keeps a tied home_score/away_score (the shootout does not change
+the score) and is resolved from ESPN's competitor winner flag. Regression
+tests for `_extract_trial_info_from_spans` / `_extract_games_from_trials`
+surfacing that winner instead of silently dropping it -- see issue #254.
 """
 
 from __future__ import annotations
