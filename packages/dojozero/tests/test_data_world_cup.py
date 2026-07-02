@@ -366,6 +366,77 @@ class TestSummaryParsing:
 # =============================================================================
 
 
+def _ko_summary(
+    *,
+    status: str,
+    home_score: str,
+    away_score: str,
+    home_winner: bool | None = None,
+    away_winner: bool | None = None,
+    game_id: str = "ko-1",
+) -> dict[str, Any]:
+    """Minimal ESPN summary for a knockout game (issue #254 regression tests)."""
+
+    def _competitor(side: str, score: str, winner: bool | None) -> dict[str, Any]:
+        c: dict[str, Any] = {
+            "homeAway": side,
+            "score": score,
+            "team": {
+                "id": "1" if side == "home" else "2",
+                "displayName": "Home FC" if side == "home" else "Away FC",
+                "abbreviation": "HOM" if side == "home" else "AWY",
+            },
+        }
+        if winner is not None:
+            c["winner"] = winner
+        return c
+
+    return {
+        "header": {
+            "id": game_id,
+            "season": {"year": 2026, "type": 3},
+            "competitions": [
+                {
+                    "id": game_id,
+                    "date": "2026-06-30T19:00Z",
+                    "status": {"type": {"name": status}},
+                    "competitors": [
+                        _competitor("home", home_score, home_winner),
+                        _competitor("away", away_score, away_winner),
+                    ],
+                }
+            ],
+        }
+    }
+
+
+def _terminal_play(
+    *,
+    slug: str,
+    period: int,
+    clock: str,
+    home: int,
+    away: int,
+    text: str,
+    game_id: str = "ko-1",
+) -> dict[str, Any]:
+    """Minimal ESPN plays payload ending on a terminal play of ``slug``."""
+    return {
+        "eventId": game_id,
+        "items": [
+            {
+                "id": f"{slug}-{period}",
+                "type": {"id": "999", "text": text, "type": slug},
+                "period": {"number": period},
+                "clock": {"displayValue": clock},
+                "homeScore": home,
+                "awayScore": away,
+                "text": text,
+            }
+        ],
+    }
+
+
 class TestPlaysParsing:
     def test_plays_emit_165_play_events_plus_lifecycle(
         self, world_cup_store: WorldCupStore, plays_payload: dict[str, Any]
@@ -580,6 +651,165 @@ class TestPlaysParsing:
 
         assert not any(isinstance(e, GameResultEvent) for e in events)
         assert "before summary winner was known" in caplog.text
+
+    def test_knockout_level_at_regulation_defers_result(self) -> None:
+        """A knockout tied at full time (ESPN still in-progress) must NOT emit a
+        result: the match continues to extra time / penalties. Emitting an
+        "even" result here would settle predictions and self-stop the trial
+        before the real winner is known (issue #254).
+        """
+        store = WorldCupStore(store_id="ko_reg", league="fifa.world")
+        summary = _ko_summary(
+            status="STATUS_SECOND_HALF", home_score="1", away_score="1"
+        )
+        plays = _terminal_play(
+            slug="end-regular-time",
+            period=2,
+            clock="90'+7'",
+            home=1,
+            away=1,
+            text="End of second half, level at 1-1.",
+        )
+        list(store._parse_api_response({"summary": summary}))
+        events = list(store._parse_api_response({"plays": plays}))
+
+        assert not any(isinstance(e, GameResultEvent) for e in events)
+
+    def test_knockout_shootout_emits_true_winner_after_regulation_defer(self) -> None:
+        """Full penalty-shootout flow (cf. ESPN event 760488, Netherlands 1-1
+        Morocco, Morocco win on penalties). Regulation is deferred; once ESPN
+        reports FINAL_PEN with the winning side, exactly one result is emitted
+        with the true winner -- not "even".
+        """
+        store = WorldCupStore(store_id="ko_pens", league="fifa.world")
+
+        # Regulation: level, ESPN in-progress -> deferred.
+        list(
+            store._parse_api_response(
+                {
+                    "summary": _ko_summary(
+                        status="STATUS_SECOND_HALF", home_score="1", away_score="1"
+                    )
+                }
+            )
+        )
+        reg_events = list(
+            store._parse_api_response(
+                {
+                    "plays": _terminal_play(
+                        slug="end-regular-time",
+                        period=2,
+                        clock="90'+7'",
+                        home=1,
+                        away=1,
+                        text="End of second half, level at 1-1.",
+                    )
+                }
+            )
+        )
+        assert not any(isinstance(e, GameResultEvent) for e in reg_events)
+
+        # Shootout final: ESPN marks FINAL_PEN and flags the away side as winner.
+        events = list(
+            store._parse_api_response(
+                {
+                    "summary": _ko_summary(
+                        status="STATUS_FINAL_PEN",
+                        home_score="1",
+                        away_score="1",
+                        home_winner=False,
+                        away_winner=True,
+                    )
+                }
+            )
+        )
+        events += list(
+            store._parse_api_response(
+                {
+                    "plays": _terminal_play(
+                        slug="end-shootout",
+                        period=5,
+                        clock="PEN",
+                        home=1,
+                        away=1,
+                        text="Penalty Shootout ends, 2-3.",
+                    )
+                }
+            )
+        )
+
+        results = [e for e in events if isinstance(e, GameResultEvent)]
+        assert len(results) == 1
+        assert results[0].winner == "away"
+        assert results[0].home_score == 1
+        assert results[0].away_score == 1
+
+    def test_knockout_extra_time_decisive_goal_emits_winner(self) -> None:
+        """A knockout decided by a goal in extra time (cf. ESPN event 760493,
+        Belgium 3-2 Senegal AET) finalizes on the decisive score, not "even".
+        """
+        store = WorldCupStore(store_id="ko_aet", league="fifa.world")
+
+        # Regulation: level 2-2, ESPN in-progress -> deferred.
+        list(
+            store._parse_api_response(
+                {
+                    "summary": _ko_summary(
+                        status="STATUS_SECOND_HALF", home_score="2", away_score="2"
+                    )
+                }
+            )
+        )
+        reg_events = list(
+            store._parse_api_response(
+                {
+                    "plays": _terminal_play(
+                        slug="end-regular-time",
+                        period=2,
+                        clock="90'",
+                        home=2,
+                        away=2,
+                        text="Level at 2-2.",
+                    )
+                }
+            )
+        )
+        assert not any(isinstance(e, GameResultEvent) for e in reg_events)
+
+        # Extra time: home scores the winner -> 3-2, ESPN FINAL_AET.
+        events = list(
+            store._parse_api_response(
+                {
+                    "summary": _ko_summary(
+                        status="STATUS_FINAL_AET",
+                        home_score="3",
+                        away_score="2",
+                        home_winner=True,
+                        away_winner=False,
+                    )
+                }
+            )
+        )
+        events += list(
+            store._parse_api_response(
+                {
+                    "plays": _terminal_play(
+                        slug="end-extra-time",
+                        period=4,
+                        clock="AET",
+                        home=3,
+                        away=2,
+                        text="Full time (AET), Home FC 3, Away FC 2.",
+                    )
+                }
+            )
+        )
+
+        results = [e for e in events if isinstance(e, GameResultEvent)]
+        assert len(results) == 1
+        assert results[0].winner == "home"
+        assert results[0].home_score == 3
+        assert results[0].away_score == 2
 
     @pytest.mark.asyncio
     async def test_store_state_round_trip(

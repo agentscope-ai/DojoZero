@@ -506,6 +506,14 @@ class WorldCupStore(DataStore):
             )
             return
 
+        # Capture ESPN's match status now, before the GameStart block below
+        # resets it to IN_PROGRESS. The result-emission guard uses it to tell a
+        # genuine (final) group-stage draw from a knockout that is still level
+        # and heading to extra time / penalties. See issue #254.
+        espn_final = (
+            self._state.get_previous_status(game_id) == self._state.STATUS_FINAL
+        )
+
         # GameStart on first observation of plays for this match.
         if not self._state.is_pbp_available(game_id):
             self._state.mark_pbp_available(game_id)
@@ -614,11 +622,34 @@ class WorldCupStore(DataStore):
         # final event in the stream.
         if game_ended and not self._state.has_game_result_emitted(game_id):
             winner_side = self._state.get_winner_side(game_id)
+            tied = last_home_score == last_away_score
+
+            # A level score at the end of regulation / extra time only means the
+            # match is over when ESPN has marked it terminal (a genuine group
+            # draw). In a knockout a draw is impossible: the match continues to
+            # extra time / penalties and ESPN keeps it in-progress. Emitting an
+            # "even" result here would lock it in via mark_game_result_emitted --
+            # and because GameResultEvent self-stops the trial and settles
+            # predictions, the trial would stop polling before the real ET /
+            # shootout winner is ever known. So defer while ESPN is not final;
+            # the decisive ET goal, the end-shootout play, or the STATUS_FINAL
+            # summary settles it. See issue #254.
             if (
-                last_home_score == last_away_score
-                and terminal_type_slug == "end-shootout"
-                and not winner_side
+                tied
+                and not espn_final
+                and terminal_type_slug in ("end-regular-time", "end-extra-time")
             ):
+                logger.debug(
+                    "World Cup game %s level at %s but ESPN not final; deferring "
+                    "result emission (match continues to extra time / penalties)",
+                    game_id,
+                    terminal_type_slug,
+                )
+                return
+
+            # A shootout always decides the match, but ESPN may not have
+            # published the winning side yet -- defer until the summary sets it.
+            if tied and terminal_type_slug == "end-shootout" and not winner_side:
                 logger.warning(
                     "World Cup shootout ended for game %s before summary winner "
                     "was known; deferring result emission",

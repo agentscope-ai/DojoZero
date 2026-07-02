@@ -131,3 +131,128 @@ async def test_extract_games_from_trials_flags_penalty_shootout_result() -> None
     assert game.away_score == 1
     assert game.winning_team == "home"
     assert game.result_note == "Decided on penalties"
+
+
+def _e2e_summary(
+    status: str, hs: str, aws: str, hw: bool | None = None, aw: bool | None = None
+) -> dict[str, Any]:
+    def comp(side: str, score: str, winner: bool | None) -> dict[str, Any]:
+        c: dict[str, Any] = {
+            "homeAway": side,
+            "score": score,
+            "team": {
+                "id": "449" if side == "home" else "2869",
+                "displayName": "Netherlands" if side == "home" else "Morocco",
+                "abbreviation": "NED" if side == "home" else "MAR",
+            },
+        }
+        if winner is not None:
+            c["winner"] = winner
+        return c
+
+    return {
+        "header": {
+            "id": "760488",
+            "season": {"year": 2026, "type": 3},
+            "competitions": [
+                {
+                    "id": "760488",
+                    "date": "2026-06-30T19:00Z",
+                    "status": {"type": {"name": status}},
+                    "competitors": [comp("home", hs, hw), comp("away", aws, aw)],
+                }
+            ],
+        }
+    }
+
+
+def _e2e_play(slug: str, period: int, clock: str, text: str) -> dict[str, Any]:
+    return {
+        "eventId": "760488",
+        "items": [
+            {
+                "id": f"{slug}-{period}",
+                "type": {"id": "999", "text": text, "type": slug},
+                "period": {"number": period},
+                "clock": {"displayValue": clock},
+                "homeScore": 1,
+                "awayScore": 1,
+                "text": text,
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_store_to_arena_penalty_shootout() -> None:
+    """Drive a real ESPN-shaped shootout sequence (cf. event 760488, Netherlands
+    1-1 Morocco, Morocco win on pens) through WorldCupStore, then the arena
+    extraction -- proving the whole issue #254 fix: the store emits the true
+    winner (not "even") and the arena surfaces it with the penalties note.
+    """
+    from dojozero.data.world_cup import WorldCupStore
+
+    store = WorldCupStore(store_id="e2e_pens", league="fifa.world")
+
+    store_events: list[Any] = []
+    # Regulation ends level while ESPN is still in-progress -> deferred.
+    store_events += store._parse_api_response(
+        {"summary": _e2e_summary("STATUS_SECOND_HALF", "1", "1")}
+    )
+    store_events += store._parse_api_response(
+        {"plays": _e2e_play("end-regular-time", 2, "90'+7'", "Level at 1-1.")}
+    )
+    assert not any(isinstance(e, GameResultEvent) for e in store_events)
+
+    # Shootout final: ESPN marks FINAL_PEN and flags Morocco (away) as winner.
+    store_events += store._parse_api_response(
+        {"summary": _e2e_summary("STATUS_FINAL_PEN", "1", "1", hw=False, aw=True)}
+    )
+    store_events += store._parse_api_response(
+        {"plays": _e2e_play("end-shootout", 5, "PEN", "Penalty Shootout ends, 2-3.")}
+    )
+    # A trailing final summary now that PBP has reached period 5, so the games
+    # API sees a period-5 update (the source of the "penalties" note).
+    store_events += store._parse_api_response(
+        {"summary": _e2e_summary("STATUS_FINAL_PEN", "1", "1", hw=False, aw=True)}
+    )
+
+    # The store emits exactly one result, and it is the true winner -- not even.
+    results = [e for e in store_events if isinstance(e, GameResultEvent)]
+    assert len(results) == 1
+    assert results[0].winner == "away"
+
+    # Serialize the store's own events to spans and run the arena extraction.
+    spans: list[SpanData] = [
+        SpanData(
+            trace_id="e2e",
+            span_id="trial-started",
+            operation_name="trial.started",
+            start_time=0,
+            duration=0,
+            tags={
+                "trial.home_tricode": "NED",
+                "trial.away_tricode": "MAR",
+                "trial.home_team_name": "Netherlands",
+                "trial.away_team_name": "Morocco",
+                "trial.game_date": "2026-06-30T19:00:00+00:00",
+                "trial.sport_type": "world_cup",
+                "trial.espn_game_id": "760488",
+            },
+        )
+    ]
+    for idx, ev in enumerate(store_events, start=1):
+        spans.append(_span_from_event(ev, start_time=idx))
+
+    response = await _extract_games_from_trials(
+        trace_reader=_StubTraceReader(spans),  # type: ignore[arg-type]
+        trial_ids=["world_cup-760488"],
+        cache=None,
+    )
+
+    assert len(response.completed_games) == 1
+    game = response.completed_games[0]
+    assert game.home_score == 1
+    assert game.away_score == 1
+    assert game.winning_team == "away"
+    assert game.result_note == "Decided on penalties"
