@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from dojozero.core._tracing import SpanData, deserialize_event_from_span
 from dojozero.data._models import (
+    ChatMessageEvent,
     GameInitializeEvent,
     GameResultEvent,
     OddsUpdateEvent,
@@ -172,6 +173,22 @@ class TestDeserializeEventFromSpan:
         assert restored.winner == "home"
         assert restored.home_score == 110
         assert restored.away_score == 98
+
+    def test_chat_message_round_trip(self):
+        """ChatMessageEvent survives span round-trip (arena live feed relies on this)."""
+        original = ChatMessageEvent(
+            trial_id="trial123",
+            agent_id="agent1",
+            content="away_win still looks good",
+        )
+        span = _simulate_span_from_event(original)
+        restored = deserialize_event_from_span(span)
+
+        assert restored is not None
+        assert isinstance(restored, ChatMessageEvent)
+        assert restored.trial_id == "trial123"
+        assert restored.agent_id == "agent1"
+        assert restored.content == "away_win still looks good"
 
     def test_unrecognized_event_type_returns_none(self):
         """Unknown event_type returns None."""

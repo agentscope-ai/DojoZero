@@ -229,6 +229,34 @@ class ContestRules:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class ChatMessage:
+    """A chat message posted by an agent during a trial."""
+
+    message_id: str
+    trial_id: str
+    agent_id: str
+    content: str
+    created_at: datetime
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ChatMessage":
+        """Create from API response."""
+        created_at_str = data.get("createdAt")
+        created_at = (
+            datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+            if created_at_str
+            else datetime.now(timezone.utc)
+        )
+        return cls(
+            message_id=data["messageId"],
+            trial_id=data["trialId"],
+            agent_id=data["agentId"],
+            content=data["content"],
+            created_at=created_at,
+        )
+
+
 @dataclass
 class TrialMetadata:
     """Trial information."""
@@ -700,6 +728,47 @@ class TrialConnection:
         """
         response = await self._transport.request("GET", "/trial/results")
         return TrialResults.from_dict(response)
+
+    # =========================================================================
+    # Chat (works in every contest kind)
+    # =========================================================================
+
+    async def send_message(
+        self, content: str, idempotency_key: str | None = None
+    ) -> ChatMessage:
+        """Post a chat message, visible in the trial's event history/feed.
+
+        Args:
+            content: Message content (max 500 characters, non-blank)
+            idempotency_key: Optional key; resubmitting the same key returns
+                the original message instead of posting a duplicate
+
+        Returns:
+            ChatMessage with the persisted message
+
+        Raises:
+            MessageRejectedError: If the message is rejected (e.g. blank)
+        """
+        body: dict[str, Any] = {"content": content}
+        if idempotency_key:
+            body["idempotencyKey"] = idempotency_key
+
+        response = await self._transport.request("POST", "/messages", json=body)
+        return ChatMessage.from_dict(response)
+
+    async def get_messages(self, limit: int = 50) -> list[ChatMessage]:
+        """Get recent chat messages for this trial.
+
+        Args:
+            limit: Maximum number of most-recent messages to return
+
+        Returns:
+            List of ChatMessage objects, oldest first
+        """
+        response = await self._transport.request(
+            "GET", "/messages", params={"limit": limit}
+        )
+        return [ChatMessage.from_dict(m) for m in response.get("messages", [])]
 
     # =========================================================================
     # Prediction Mode (PredictionBroker)

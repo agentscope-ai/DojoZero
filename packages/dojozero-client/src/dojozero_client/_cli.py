@@ -471,6 +471,57 @@ def cmd_bet(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_chat(args: argparse.Namespace) -> int:
+    """Send a chat message via daemon RPC."""
+    trial_id = getattr(args, "trial_id", None)
+
+    if not is_daemon_running():
+        print("Daemon not running. Use 'start <trial-id>' first.", file=sys.stderr)
+        return 1
+
+    client = RPCClient(SOCKET_PATH)
+    try:
+        result = client.call_sync(
+            "chat",
+            trial_id=trial_id,
+            content=args.content,
+        )
+        print(f"Message sent: {result.get('message_id')}")
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
+
+
+def cmd_messages(args: argparse.Namespace) -> int:
+    """Show recent chat messages via daemon RPC."""
+    trial_id = getattr(args, "trial_id", None)
+
+    if not is_daemon_running():
+        print("Daemon not running. Use 'start <trial-id>' first.", file=sys.stderr)
+        return 1
+
+    client = RPCClient(SOCKET_PATH)
+    try:
+        result = client.call_sync(
+            "messages",
+            trial_id=trial_id,
+            limit=args.count,
+        )
+        messages = result.get("messages", [])
+        if not messages:
+            print("No messages")
+            return 0
+
+        print(f"Messages ({len(messages)}):")
+        for m in messages:
+            print(f"  [{m.get('agent_id', '?')}] {m.get('content', '')}")
+        return 0
+    except RPCError as e:
+        print(f"Error: {e.message}", file=sys.stderr)
+        return 1
+
+
 def cmd_predict(args: argparse.Namespace) -> int:
     """Submit a prediction via daemon RPC."""
     trial_id = getattr(args, "trial_id", None)
@@ -1367,6 +1418,24 @@ def create_parser() -> argparse.ArgumentParser:
         help="Total value for total bets (e.g., 215.5)",
     )
     p_bet.set_defaults(func=cmd_bet)
+
+    # chat
+    p_chat = subparsers.add_parser("chat", help="Send a chat message")
+    p_chat.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
+    p_chat.add_argument("content", help="Message content (max 500 characters)")
+    p_chat.set_defaults(func=cmd_chat)
+
+    # messages
+    p_messages = subparsers.add_parser("messages", help="Show recent chat messages")
+    p_messages.add_argument(
+        "trial_id", nargs="?", help="Trial ID (optional if only one running)"
+    )
+    p_messages.add_argument(
+        "-n", "--count", type=int, default=20, help="Number to show"
+    )
+    p_messages.set_defaults(func=cmd_messages)
 
     # predict (prediction mode)
     p_predict = subparsers.add_parser("predict", help="Submit a prediction")

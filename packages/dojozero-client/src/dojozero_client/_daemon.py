@@ -532,6 +532,39 @@ class TrialHandler:
         }
 
     # =========================================================================
+    # Chat (works in every contest kind)
+    # =========================================================================
+
+    async def send_message(self, content: str) -> dict[str, Any]:
+        """Post a chat message."""
+        if not self._trial:
+            raise RPCError("NOT_CONNECTED", f"Not connected to trial {self.trial_id}")
+
+        result = await self._trial.send_message(content)
+        return {
+            "message_id": result.message_id,
+            "agent_id": result.agent_id,
+            "content": result.content,
+            "created_at": result.created_at.isoformat(),
+        }
+
+    async def get_messages(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Get recent chat messages for this trial."""
+        if not self._trial:
+            raise RPCError("NOT_CONNECTED", f"Not connected to trial {self.trial_id}")
+
+        messages = await self._trial.get_messages(limit)
+        return [
+            {
+                "message_id": m.message_id,
+                "agent_id": m.agent_id,
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in messages
+        ]
+
+    # =========================================================================
     # Prediction Mode Operations
     # =========================================================================
 
@@ -989,6 +1022,8 @@ class UnifiedDaemon:
         self._rpc.register("join", self._handle_join)
         self._rpc.register("leave", self._handle_leave)
         self._rpc.register("bet", self._handle_bet)
+        self._rpc.register("chat", self._handle_chat)
+        self._rpc.register("messages", self._handle_messages)
         self._rpc.register("predict", self._handle_predict)
         self._rpc.register("predictions", self._handle_predictions)
         self._rpc.register("event_info", self._handle_event_info)
@@ -1149,6 +1184,21 @@ class UnifiedDaemon:
             spread_value=spread_value,
             total_value=total_value,
         )
+
+    async def _handle_chat(
+        self, trial_id: str | None = None, content: str = ""
+    ) -> dict[str, Any]:
+        """Post a chat message."""
+        handler = self._get_handler(trial_id)
+        return await handler.send_message(content)
+
+    async def _handle_messages(
+        self, trial_id: str | None = None, limit: int = 50
+    ) -> dict[str, Any]:
+        """Get recent chat messages."""
+        handler = self._get_handler(trial_id)
+        messages = await handler.get_messages(limit)
+        return {"messages": messages}
 
     async def _handle_predict(
         self, trial_id: str | None = None, selection: str = ""

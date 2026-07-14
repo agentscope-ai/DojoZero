@@ -24,6 +24,9 @@ from dojozero.gateway._models import (
     BetRequest,
     BetResponse,
     BetsListResponse,
+    ChatMessageRequest,
+    ChatMessageResponse,
+    ChatMessagesListResponse,
     CurrentOddsResponse,
     ErrorCodes,
     ErrorDetail,
@@ -111,6 +114,10 @@ __all__ = [
     "PredictionResponse",
     "PredictionsListResponse",
     "EventInfoResponse",
+    # Models - Chat
+    "ChatMessageRequest",
+    "ChatMessageResponse",
+    "ChatMessagesListResponse",
     # Models - Errors
     "ErrorCodes",
     "ErrorDetail",

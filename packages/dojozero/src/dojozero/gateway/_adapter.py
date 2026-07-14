@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -23,6 +24,7 @@ from dojozero.betting._models import (
     BetRequestTotal,
     OrderType,
 )
+from dojozero.data._models import ChatMessageEvent
 from dojozero.data._subscriptions import (
     Subscription,
     SubscriptionFilter,
@@ -34,6 +36,8 @@ from dojozero.gateway._models import (
     BalanceResponse,
     BetRequest,
     BetResponse,
+    ChatMessageRequest,
+    ChatMessageResponse,
     CurrentOddsResponse,
     EventInfoResponse,
     HoldingResponse,
@@ -43,6 +47,11 @@ from dojozero.gateway._models import (
     TrialEndedMessage,
     TrialResultsResponse,
 )
+
+# Max chat messages kept in memory per trial for GET /messages. Older
+# messages are still persisted/replayable via DataHub; this cap only bounds
+# the adapter's own recent-messages cache.
+MAX_STORED_CHAT_MESSAGES = 500
 
 if TYPE_CHECKING:
     from dojozero.betting._broker import BrokerOperator
@@ -116,6 +125,13 @@ class ExternalAgentAdapter:
 
         # Idempotency tracking for bet deduplication
         self._idempotency_keys: dict[str, str] = {}  # key -> bet_id
+
+        # Recent chat messages (capped) for GET /messages; and idempotency
+        # tracking for chat message resubmission (key -> response).
+        self._chat_messages: deque[ChatMessageResponse] = deque(
+            maxlen=MAX_STORED_CHAT_MESSAGES
+        )
+        self._chat_idempotency: dict[str, ChatMessageResponse] = {}
 
         # Trial ended signaling for SSE connections
         self._trial_ended_event = asyncio.Event()
@@ -701,6 +717,81 @@ class ExternalAgentAdapter:
                 bets.append(bet)
 
         return bets
+
+    # =========================================================================
+    # Chat Messages
+    # =========================================================================
+
+    async def send_message(
+        self, agent_id: str, request: ChatMessageRequest
+    ) -> ChatMessageResponse:
+        """Post a chat message on behalf of an agent (any contest kind).
+
+        Content validation (length, blank rejection) already happened in
+        ``ChatMessageRequest``. Persists via ``DataHub.receive_event`` so the
+        message appears in event history, replays during backtests, and
+        streams to gateway SSE/polling subscribers like any other event.
+
+        Args:
+            agent_id: Agent posting the message (from verified identity)
+            request: Chat message request
+
+        Returns:
+            ChatMessageResponse with the persisted message
+
+        Raises:
+            ValueError: If agent not registered
+        """
+        if not self.is_registered(agent_id):
+            raise ValueError(f"Agent {agent_id} not registered")
+
+        if request.idempotency_key:
+            cached = self._chat_idempotency.get(request.idempotency_key)
+            if cached is not None:
+                return cached
+
+        event = ChatMessageEvent(
+            trial_id=self._trial_id,
+            agent_id=agent_id,
+            content=request.content,
+        )
+        await self._data_hub.receive_event(event, source_actor_id=agent_id)
+
+        response = ChatMessageResponse(
+            message_id=event.uid,
+            trial_id=self._trial_id,
+            agent_id=agent_id,
+            content=event.content,
+            created_at=event.timestamp,
+        )
+        self._chat_messages.append(response)
+        if request.idempotency_key:
+            self._chat_idempotency[request.idempotency_key] = response
+
+        self._agents[agent_id].last_activity_at = datetime.now(timezone.utc)
+
+        logger.info(
+            "Chat message from agent %s: message_id=%s, len=%d",
+            agent_id,
+            event.uid,
+            len(event.content),
+        )
+
+        return response
+
+    def get_messages(self, limit: int = 50) -> list[ChatMessageResponse]:
+        """Get recent chat messages for this trial.
+
+        Args:
+            limit: Maximum number of most-recent messages to return
+
+        Returns:
+            List of chat messages, oldest first
+        """
+        if limit <= 0:
+            return []
+        recent = list(self._chat_messages)[-limit:]
+        return recent
 
     # =========================================================================
     # Balance & Bets Queries

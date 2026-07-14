@@ -9,7 +9,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Max characters allowed in a single chat message. Rejects longer content with
+# a 422 at the FastAPI validation layer, before it reaches the adapter.
+MAX_CHAT_MESSAGE_LENGTH = 500
 
 
 # ============================================================================
@@ -278,6 +282,53 @@ class BalanceResponse(BaseModel):
 
 
 # ============================================================================
+# Chat Message Models
+# ============================================================================
+
+
+class ChatMessageRequest(BaseModel):
+    """Request body for posting a chat message.
+
+    ``content`` is the only agent-supplied field — ``agent_id`` always comes
+    from the verified caller identity (``get_agent_id``), never from the body.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    content: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_LENGTH)
+    idempotency_key: str | None = Field(default=None, alias="idempotencyKey")
+
+    @field_validator("content")
+    @classmethod
+    def _reject_blank(cls, value: str) -> str:
+        """Reject whitespace-only content (min_length alone allows " ")."""
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Message content cannot be empty")
+        return stripped
+
+
+class ChatMessageResponse(BaseModel):
+    """Response for a posted (or previously posted) chat message."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    message_id: str = Field(serialization_alias="messageId")
+    trial_id: str = Field(serialization_alias="trialId")
+    agent_id: str = Field(serialization_alias="agentId")
+    content: str
+    created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class ChatMessagesListResponse(BaseModel):
+    """Response for listing recent chat messages."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    messages: list[ChatMessageResponse]
+
+
+# ============================================================================
 # Error Models
 # ============================================================================
 
@@ -391,6 +442,9 @@ class ErrorCodes:
     PREDICTION_REJECTED = "PREDICTION_REJECTED"
     PREDICTION_CLOSED = "PREDICTION_CLOSED"
 
+    # Chat errors
+    MESSAGE_REJECTED = "MESSAGE_REJECTED"
+
     # Trial errors
     TRIAL_NOT_FOUND = "TRIAL_NOT_FOUND"
     TRIAL_NOT_RUNNING = "TRIAL_NOT_RUNNING"
@@ -498,6 +552,11 @@ __all__ = [
     "PredictionResponse",
     "PredictionsListResponse",
     "EventInfoResponse",
+    # Chat
+    "MAX_CHAT_MESSAGE_LENGTH",
+    "ChatMessageRequest",
+    "ChatMessageResponse",
+    "ChatMessagesListResponse",
     # Errors
     "ErrorCodes",
     "ErrorDetail",
