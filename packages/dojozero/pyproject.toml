@@ -39,7 +39,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "tavily-python>=0.7.12",
     "dashscope>=1.0.0",
-    "xdk>=0.9.0",
+    "xdk>=0.10,<0.11",
 ]
 
 [project.urls]

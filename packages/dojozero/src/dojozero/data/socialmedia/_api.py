@@ -125,7 +125,7 @@ class SocialMediaAPI(ExternalAPI):
             page_iterator = self.client.posts.search_recent(
                 query=query,
                 max_results=max_results,
-                tweet_fields=["created_at", "author_id", "public_metrics", "text"],
+                post_fields=["created_at", "public_metrics", "text"],
             )
             first_page = next(page_iterator, None)
 
