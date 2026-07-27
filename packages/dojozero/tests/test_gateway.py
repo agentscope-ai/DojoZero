@@ -18,6 +18,8 @@ from dojozero.gateway._models import (
     BalanceResponse,
     BetRequest,
     BetResponse,
+    ChatMessageRequest,
+    ChatMessageResponse,
     CurrentOddsResponse,
     ErrorCodes,
     ErrorDetail,
@@ -191,6 +193,33 @@ class TestModels:
         hb = HeartbeatMessage(timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc))
         assert hb.type == "heartbeat"
 
+    def test_chat_message_request_strips_and_validates(self):
+        """ChatMessageRequest strips whitespace and rejects blank content."""
+        request = ChatMessageRequest(content="  gg, good game  ")
+        assert request.content == "gg, good game"
+
+        with pytest.raises(ValueError):
+            ChatMessageRequest(content="   ")
+
+    def test_chat_message_request_rejects_over_max_length(self):
+        """ChatMessageRequest rejects content over the max length."""
+        with pytest.raises(ValueError):
+            ChatMessageRequest(content="x" * 501)
+
+    def test_chat_message_response_serialization(self):
+        """Test ChatMessageResponse serializes to camelCase."""
+        response = ChatMessageResponse(
+            message_id="msg123",
+            trial_id="trial123",
+            agent_id="agent1",
+            content="away_win still looks good",
+            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        )
+        dumped = response.model_dump(by_alias=True)
+        assert dumped["messageId"] == "msg123"
+        assert dumped["trialId"] == "trial123"
+        assert dumped["agentId"] == "agent1"
+
 
 class TestExternalAgentState:
     """Tests for ExternalAgentState."""
@@ -222,6 +251,7 @@ class TestExternalAgentAdapter:
         hub.subscription_manager.global_sequence = 100
         hub.subscription_manager.subscribe = AsyncMock()
         hub.subscription_manager.unsubscribe = AsyncMock(return_value=True)
+        hub.receive_event = AsyncMock()
         return hub
 
     @pytest.fixture
@@ -453,6 +483,57 @@ class TestExternalAgentAdapter:
         assert odds.home_probability == 0.55
         assert odds.betting_open is True
 
+    @pytest.mark.asyncio
+    async def test_send_message_persists_via_data_hub(self, adapter, mock_data_hub):
+        """send_message persists a ChatMessageEvent via DataHub.receive_event."""
+        await adapter.register_agent(agent_id="agent1")
+
+        response = await adapter.send_message(
+            "agent1", ChatMessageRequest(content="away_win still looks good")
+        )
+
+        assert response.agent_id == "agent1"
+        assert response.trial_id == "trial123"
+        assert response.content == "away_win still looks good"
+        mock_data_hub.receive_event.assert_called_once()
+        _, kwargs = mock_data_hub.receive_event.call_args
+        assert kwargs["source_actor_id"] == "agent1"
+
+    @pytest.mark.asyncio
+    async def test_send_message_unregistered_agent(self, adapter):
+        """send_message rejects an unregistered agent."""
+        with pytest.raises(ValueError, match="not registered"):
+            await adapter.send_message("unknown", ChatMessageRequest(content="hi"))
+
+    @pytest.mark.asyncio
+    async def test_send_message_idempotency(self, adapter, mock_data_hub):
+        """Resubmitting the same idempotency key returns the original message."""
+        await adapter.register_agent(agent_id="agent1")
+        request = ChatMessageRequest(content="gg", idempotencyKey="key-1")
+
+        first = await adapter.send_message("agent1", request)
+        second = await adapter.send_message("agent1", request)
+
+        assert first.message_id == second.message_id
+        mock_data_hub.receive_event.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_messages_returns_recent(self, adapter):
+        """get_messages returns posted messages, most-recent-limited."""
+        await adapter.register_agent(agent_id="agent1")
+        for i in range(3):
+            await adapter.send_message(
+                "agent1", ChatMessageRequest(content=f"message {i}")
+            )
+
+        messages = adapter.get_messages(limit=2)
+        assert len(messages) == 2
+        assert [m.content for m in messages] == ["message 1", "message 2"]
+
+    def test_get_messages_empty(self, adapter):
+        """get_messages returns an empty list when no messages posted."""
+        assert adapter.get_messages() == []
+
 
 class TestSSEConnection:
     """Tests for SSEConnection."""
@@ -497,6 +578,7 @@ class TestGatewayServer:
         hub.subscription_manager = MagicMock()
         hub.subscription_manager.global_sequence = 100
         hub.get_recent_events.return_value = []
+        hub.receive_event = AsyncMock()
         return hub
 
     @pytest.fixture
@@ -643,6 +725,59 @@ class TestGatewayServer:
             },
         )
         assert response.status_code == 401
+
+    def test_post_message_requires_auth(self, client):
+        """Test posting a chat message requires auth."""
+        response = client.post("/messages", json={"content": "hello"})
+        assert response.status_code == 401
+
+    def test_post_message_requires_registration(self, client):
+        """Test posting a chat message requires registration."""
+        response = client.post(
+            "/messages",
+            json={"content": "hello"},
+            headers={"X-Agent-ID": "unknown"},
+        )
+        assert response.status_code == 403
+
+    def test_post_and_get_message(self, client, mock_broker):
+        """Test posting a chat message and reading it back."""
+        mock_broker.create_account = AsyncMock()
+        client.post("/agents", json={"apiKey": "agent1"})
+
+        post_response = client.post(
+            "/messages",
+            json={"content": "Spain pressure is building"},
+            headers={"X-Agent-ID": "agent1"},
+        )
+        assert post_response.status_code == 200
+        data = post_response.json()
+        assert data["agentId"] == "agent1"
+        assert data["content"] == "Spain pressure is building"
+        assert data["messageId"]
+
+        get_response = client.get("/messages", headers={"X-Agent-ID": "agent1"})
+        assert get_response.status_code == 200
+        messages = get_response.json()["messages"]
+        assert len(messages) == 1
+        assert messages[0]["content"] == "Spain pressure is building"
+
+    def test_post_message_rejects_blank_content(self, client, mock_broker):
+        """Test blank content is rejected with a 422 (Pydantic validation)."""
+        mock_broker.create_account = AsyncMock()
+        client.post("/agents", json={"apiKey": "agent1"})
+
+        response = client.post(
+            "/messages",
+            json={"content": "   "},
+            headers={"X-Agent-ID": "agent1"},
+        )
+        assert response.status_code == 422
+
+    def test_get_messages_requires_registration(self, client):
+        """Test reading chat messages requires registration."""
+        response = client.get("/messages", headers={"X-Agent-ID": "unknown"})
+        assert response.status_code == 403
 
     def test_reconnect_agent(self, client, mock_broker):
         """Test agent reconnection with session key."""
@@ -1587,6 +1722,19 @@ class TestRateLimiter:
 
         assert exc_info.value.status_code == 429
 
+    def test_rate_limiter_check_chat(self):
+        """Test chat rate limiting."""
+        config = RateLimitConfig(chat_rpm=2, window_seconds=60)
+        limiter = RateLimiter(config)
+
+        limiter.check_rate_limit("agent1", RateLimitType.CHAT)
+        limiter.check_rate_limit("agent1", RateLimitType.CHAT)
+
+        with pytest.raises(HTTPException) as exc_info:
+            limiter.check_rate_limit("agent1", RateLimitType.CHAT)
+
+        assert exc_info.value.status_code == 429
+
     def test_rate_limiter_sse_connections(self):
         """Test SSE connection limiting."""
         config = RateLimitConfig(max_sse_connections=2)
@@ -1845,6 +1993,7 @@ class TestGatewayAuthIntegration:
         hub.subscription_manager = MagicMock()
         hub.subscription_manager.global_sequence = 100
         hub.get_recent_events.return_value = []
+        hub.receive_event = AsyncMock()
         return hub
 
     @pytest.fixture

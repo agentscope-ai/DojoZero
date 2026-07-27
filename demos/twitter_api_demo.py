@@ -86,7 +86,7 @@ def search_account_posts(
         page_iterator = client.posts.search_recent(
             query=query,
             max_results=10,
-            tweet_fields=["created_at", "author_id", "public_metrics", "text"],
+            post_fields=["created_at", "public_metrics", "text"],
         )
         first_page = next(page_iterator, None)
 

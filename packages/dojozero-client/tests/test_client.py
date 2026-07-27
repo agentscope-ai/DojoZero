@@ -1,13 +1,119 @@
 """Tests for DojoClient."""
 
+from datetime import datetime, timezone
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from dojozero_client._client import (
+    ChatMessage,
     DojoClient,
     GatewayInfo,
+    TrialConnection,
 )
 from dojozero_client._exceptions import ConnectionError as DojoConnectionError
+
+
+class TestChatMessage:
+    """Tests for ChatMessage dataclass."""
+
+    def test_from_dict(self):
+        """Test creating ChatMessage from a gateway API response."""
+        data = {
+            "messageId": "msg123",
+            "trialId": "trial123",
+            "agentId": "agent1",
+            "content": "away_win still looks good",
+            "createdAt": "2024-01-01T00:00:00Z",
+        }
+        message = ChatMessage.from_dict(data)
+        assert message.message_id == "msg123"
+        assert message.trial_id == "trial123"
+        assert message.agent_id == "agent1"
+        assert message.content == "away_win still looks good"
+        assert message.created_at == datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+
+class TestTrialConnectionChat:
+    """Tests for TrialConnection chat methods."""
+
+    def _make_connection(self):
+        transport = MagicMock()
+        transport.request = AsyncMock()
+        return TrialConnection(
+            transport=transport, agent_id="agent1", trial_id="trial123"
+        ), transport
+
+    @pytest.mark.asyncio
+    async def test_send_message_posts_content(self):
+        """send_message POSTs to /messages and parses the response."""
+        connection, transport = self._make_connection()
+        transport.request.return_value = {
+            "messageId": "msg123",
+            "trialId": "trial123",
+            "agentId": "agent1",
+            "content": "gg",
+            "createdAt": "2024-01-01T00:00:00Z",
+        }
+
+        result = await connection.send_message("gg")
+
+        assert result.message_id == "msg123"
+        transport.request.assert_called_once_with(
+            "POST", "/messages", json={"content": "gg"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_message_includes_idempotency_key(self):
+        """send_message forwards an idempotency key when provided."""
+        connection, transport = self._make_connection()
+        transport.request.return_value = {
+            "messageId": "msg123",
+            "trialId": "trial123",
+            "agentId": "agent1",
+            "content": "gg",
+            "createdAt": "2024-01-01T00:00:00Z",
+        }
+
+        await connection.send_message("gg", idempotency_key="key-1")
+
+        transport.request.assert_called_once_with(
+            "POST",
+            "/messages",
+            json={"content": "gg", "idempotencyKey": "key-1"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_messages_parses_list(self):
+        """get_messages GETs /messages and parses each message."""
+        connection, transport = self._make_connection()
+        transport.request.return_value = {
+            "messages": [
+                {
+                    "messageId": "msg1",
+                    "trialId": "trial123",
+                    "agentId": "agent1",
+                    "content": "first",
+                    "createdAt": "2024-01-01T00:00:00Z",
+                },
+                {
+                    "messageId": "msg2",
+                    "trialId": "trial123",
+                    "agentId": "agent2",
+                    "content": "second",
+                    "createdAt": "2024-01-01T00:01:00Z",
+                },
+            ]
+        }
+
+        result = await connection.get_messages(limit=10)
+
+        assert len(result) == 2
+        assert result[0].content == "first"
+        assert result[1].agent_id == "agent2"
+        transport.request.assert_called_once_with(
+            "GET", "/messages", params={"limit": 10}
+        )
 
 
 class TestGatewayInfo:

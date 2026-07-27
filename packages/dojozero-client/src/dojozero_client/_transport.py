@@ -230,6 +230,10 @@ class GatewayTransport:
                 from dojozero_client._exceptions import PredictionRejectedError
 
                 raise PredictionRejectedError(message, code, details)
+            elif code == "MESSAGE_REJECTED":
+                from dojozero_client._exceptions import MessageRejectedError
+
+                raise MessageRejectedError(message, code, details)
             else:
                 from dojozero_client._exceptions import BetRejectedError
 

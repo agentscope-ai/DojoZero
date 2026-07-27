@@ -26,6 +26,9 @@ from dojozero.gateway._models import (
     BetRequest,
     BetResponse,
     BetsListResponse,
+    ChatMessageRequest,
+    ChatMessageResponse,
+    ChatMessagesListResponse,
     CurrentOddsResponse,
     ErrorCodes,
     ErrorDetail,
@@ -40,6 +43,7 @@ from dojozero.gateway._models import (
     TrialMetadataResponse,
     TrialResultsResponse,
 )
+from dojozero.gateway._rate_limit import RateLimiter, RateLimitType
 from dojozero.gateway._sse import SSEConnection, create_sse_response
 
 if TYPE_CHECKING:
@@ -64,6 +68,7 @@ class GatewayState:
     # optional SDK at module load.
     agentid_verifier: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    rate_limiter: RateLimiter = field(default_factory=RateLimiter)
 
 
 def get_gateway_state(request: Request) -> GatewayState:
@@ -508,6 +513,62 @@ def create_gateway_app(
             )
 
         return await state.adapter.get_results()
+
+    # =========================================================================
+    # Chat Messages (applies to every contest kind)
+    # =========================================================================
+
+    @app.post("/messages", response_model=ChatMessageResponse)
+    async def post_message(
+        request: ChatMessageRequest,
+        agent_id: str = Depends(get_agent_id),
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> ChatMessageResponse:
+        """Post a chat message, visible in the trial's event history/feed."""
+        if not state.adapter.is_registered(agent_id):
+            raise HTTPException(
+                status_code=403,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.NOT_REGISTERED,
+                        message="Agent not registered",
+                    )
+                ).model_dump(by_alias=True),
+            )
+
+        state.rate_limiter.check_rate_limit(agent_id, RateLimitType.CHAT)
+
+        try:
+            return await state.adapter.send_message(agent_id, request)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.MESSAGE_REJECTED,
+                        message=str(e),
+                    )
+                ).model_dump(by_alias=True),
+            )
+
+    @app.get("/messages", response_model=ChatMessagesListResponse)
+    async def get_messages(
+        agent_id: str = Depends(get_agent_id),
+        limit: int = Query(default=50, ge=1, le=200),
+        state: GatewayState = Depends(get_gateway_state),
+    ) -> ChatMessagesListResponse:
+        """List recent chat messages for this trial."""
+        if not state.adapter.is_registered(agent_id):
+            raise HTTPException(
+                status_code=403,
+                detail=ErrorResponse(
+                    error=ErrorDetail(
+                        code=ErrorCodes.NOT_REGISTERED,
+                        message="Agent not registered",
+                    )
+                ).model_dump(by_alias=True),
+            )
+        return ChatMessagesListResponse(messages=state.adapter.get_messages(limit))
 
     # =========================================================================
     # Event Streaming

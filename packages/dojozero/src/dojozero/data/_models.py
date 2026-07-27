@@ -408,6 +408,11 @@ class EventTypes(str, Enum):
     # =========================================================================
     PREGAME_STATS = "event.pregame_stats"
 
+    # =========================================================================
+    # Agent Chat (non-sport)
+    # =========================================================================
+    CHAT_MESSAGE = "event.chat_message"
+
 
 def register_event(event_class: type[EventT]) -> type[EventT]:
     """No-op decorator, retained for source compatibility.
@@ -532,6 +537,28 @@ class DataEvent(BaseModel, ABC):
         - Continuous events: "{game_id}_{event_type}_{unique_id}"
         """
         return None
+
+
+# =============================================================================
+# Chat Message Event (non-sport; trial-scoped agent communication)
+# =============================================================================
+
+
+@register_event
+class ChatMessageEvent(DataEvent):
+    """Chat message posted by an agent (internal or external) during a trial.
+
+    Persisted like any other ``DataEvent`` so chat appears in event history,
+    replays during backtests, and streams to gateway subscribers. Not
+    deduplicated — legitimate repeated content (e.g. "gg") from the same
+    agent should not be silently dropped.
+    """
+
+    trial_id: str = ""
+    agent_id: str = ""
+    content: str = ""
+
+    event_type: Literal["event.chat_message"] = "event.chat_message"
 
 
 # =============================================================================

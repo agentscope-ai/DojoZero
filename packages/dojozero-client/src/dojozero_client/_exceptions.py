@@ -90,6 +90,20 @@ class PredictionClosedError(PredictionRejectedError):
     pass
 
 
+class MessageRejectedError(DojoClientError):
+    """Chat message was rejected by the gateway (e.g. blank or too long)."""
+
+    def __init__(
+        self,
+        message: str,
+        code: str | None = None,
+        details: dict[str, Any] | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.details: dict[str, Any] = details or {}
+
+
 class RateLimitedError(DojoClientError):
     """Request was rate limited."""
 
@@ -134,6 +148,7 @@ __all__ = [
     "BettingClosedError",
     "PredictionRejectedError",
     "PredictionClosedError",
+    "MessageRejectedError",
     "RateLimitedError",
     "StreamDisconnectedError",
     "TrialEndedError",

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Clock, TrendingUp, Users, Play, Activity, Wifi, WifiOff } from "lucide-react";
+import { ArrowLeft, Clock, TrendingUp, Users, Play, Activity, Wifi, WifiOff, MessageCircle } from "lucide-react";
 import { motion } from "framer-motion";
 import { useTrialWebSocket } from "../hooks/useTrialWebSocket";
 import AgentAvatar, { getAgentDisplayName } from "../components/AgentAvatar";
@@ -221,9 +221,10 @@ function FeedItem({ event, gameInfo }) {
   const agentAvatar = agentName.charAt(0).toUpperCase();
   const agentColor = data.color || "#6B7280";
 
-  // Agent Response (reasoning/thinking)
+  // Agent Response (reasoning/thinking) or an external agent chat message
   // Check for response_message or content fields
   const agentContent = data.response_message || data.content;
+  const isChatMessage = category.includes("chat_message");
   if (category.includes("agent.response") || category.includes("response") || agentContent) {
     return (
       <motion.div style={styles.feedItem} initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
@@ -231,7 +232,14 @@ function FeedItem({ event, gameInfo }) {
           <div style={styles.postHeader}>
             <div style={{ ...styles.postAvatar, background: agentColor }}>{agentAvatar}</div>
             <div style={styles.postMeta}>
-              <div style={styles.postAuthor}>{agentName}</div>
+              <div style={styles.postAuthor}>
+                {agentName}
+                {isChatMessage && (
+                  <span style={styles.chatBadge}>
+                    <MessageCircle size={11} /> chat
+                  </span>
+                )}
+              </div>
               <div style={styles.postTime}>{event.time}</div>
             </div>
           </div>
@@ -1528,6 +1536,19 @@ const styles = {
     fontWeight: 600,
     color: "var(--text-primary)",
     marginBottom: 2,
+  },
+  chatBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 3,
+    marginLeft: 6,
+    padding: "1px 6px",
+    borderRadius: 10,
+    fontSize: 10,
+    fontWeight: 500,
+    color: "var(--text-muted)",
+    background: "var(--bg-tertiary)",
+    verticalAlign: "middle",
   },
   postTime: {
     fontSize: 11,

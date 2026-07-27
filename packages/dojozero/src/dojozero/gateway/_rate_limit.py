@@ -27,6 +27,7 @@ class RateLimitType(Enum):
     GENERAL = "general"  # General API requests
     BET = "bet"  # Bet placement
     SSE = "sse"  # SSE connections
+    CHAT = "chat"  # Chat message posting
 
 
 @dataclass
@@ -36,6 +37,7 @@ class RateLimitConfig:
     # Requests per minute
     general_rpm: int = 300
     bet_rpm: int = 60
+    chat_rpm: int = 20
 
     # Maximum concurrent SSE connections per agent
     max_sse_connections: int = 5
@@ -94,6 +96,7 @@ class AgentRateLimitState:
     agent_id: str
     general_bucket: RateLimitBucket
     bet_bucket: RateLimitBucket
+    chat_bucket: RateLimitBucket
     sse_connections: int = 0
 
     @classmethod
@@ -110,6 +113,11 @@ class AgentRateLimitState:
                 tokens=config.bet_rpm,
                 capacity=config.bet_rpm,
                 refill_rate=config.bet_rpm / config.window_seconds,
+            ),
+            chat_bucket=RateLimitBucket(
+                tokens=config.chat_rpm,
+                capacity=config.chat_rpm,
+                refill_rate=config.chat_rpm / config.window_seconds,
             ),
         )
 
@@ -166,6 +174,8 @@ class RateLimiter:
             bucket = state.general_bucket
         elif limit_type == RateLimitType.BET:
             bucket = state.bet_bucket
+        elif limit_type == RateLimitType.CHAT:
+            bucket = state.chat_bucket
         else:
             return  # SSE handled separately
 
@@ -263,6 +273,7 @@ class RateLimiter:
                 "agent_id": agent_id,
                 "general_remaining": self.config.general_rpm,
                 "bet_remaining": self.config.bet_rpm,
+                "chat_remaining": self.config.chat_rpm,
                 "sse_connections": 0,
                 "sse_remaining": self.config.max_sse_connections,
             }
@@ -271,6 +282,7 @@ class RateLimiter:
             "agent_id": agent_id,
             "general_remaining": int(state.general_bucket.tokens),
             "bet_remaining": int(state.bet_bucket.tokens),
+            "chat_remaining": int(state.chat_bucket.tokens),
             "sse_connections": state.sse_connections,
             "sse_remaining": self.config.max_sse_connections - state.sse_connections,
         }

@@ -12,6 +12,7 @@ from dojozero.data._models import (
     BaseGameUpdateEvent,
     BasePlayEvent,
     BaseSegmentEvent,
+    ChatMessageEvent,
     DataEvent,
     EventTypes,
     GameEvent,
@@ -117,6 +118,7 @@ AnyDataEvent = Annotated[
         GameInitializeEvent,
         GameStartEvent,
         GameResultEvent,
+        ChatMessageEvent,
         OddsUpdateEvent,
         PreGameInsightEvent,
         WebSearchInsightEvent,
@@ -179,6 +181,7 @@ __all__ = [
     "GameInitializeEvent",
     "GameStartEvent",
     "GameResultEvent",
+    "ChatMessageEvent",
     "OddsUpdateEvent",
     # Shared models
     "PlayerIdentity",
