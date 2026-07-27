@@ -26,6 +26,7 @@ dependencies = [
     "PyYAML>=6.0",
     "pydantic>=2.12.4",
     "aiohttp>=3.9.0",
+    "cryptography>=48.0.1",
     "agentscope[gemini]>=1.0.14,<2",
     "py-clob-client>=0.1.0",
     "fastapi>=0.128.0",
