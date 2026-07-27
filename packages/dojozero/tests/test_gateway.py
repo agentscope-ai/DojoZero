@@ -756,9 +756,7 @@ class TestGatewayServer:
         assert data["content"] == "Spain pressure is building"
         assert data["messageId"]
 
-        get_response = client.get(
-            "/messages", headers={"X-Agent-ID": "agent1"}
-        )
+        get_response = client.get("/messages", headers={"X-Agent-ID": "agent1"})
         assert get_response.status_code == 200
         messages = get_response.json()["messages"]
         assert len(messages) == 1
